@@ -27,17 +27,33 @@ Durum: `bg` (float32, w×h). Boyut değişirse sıfırlanır; yoksa ilk kareyle 
 
 ## 4. İzleme
 Akış ekseni: `down/up → y`, `right/left → x`. İşaret `s = +1 (down/right)`, `−1 (up/left)`. Çizgi: `linePosition`.
+Her izin durumu: konum, hız `v`, `hits`, `missed`, `startedBefore`, `countedSoFar`, çarpan geçmişi (son 5), alan geçmişi (son 9), son lekenin kutusu `bbox` ve o lekeden ize düşen çarpan `lastMult`.
+`MERGE_MARGIN = 0.05`. **Yuvarlama:** tüm `round` işlemleri en yakın çifte yuvarlar (2,5 → 2; Python `round`, Swift `.rounded(.toNearestOrEven)`).
 
-Her karede:
-1. **Aday eşleşmeler:** her (iz, leke) için tahmini konum `p̂ = (x+vx, y+vy)`. `s·(leke_eksen − iz_eksen) < −0.03` ise aday değil (geri gitme yok). `d = ‖leke − p̂‖ ≤ maxDistEff` ise aday.
+**Gözlem** (iz bir lekeyle güncellendiğinde, çarpan `m`, alan `a`): `bbox = leke.bbox`, `lastMult = m`, `hits += 1`, `missed = 0`, geçmişlere `m` ve `a` eklenir, ardından §4.4 sayım kuralı.
+
+Her karede, tahmini konum `p̂ = konum + v`:
+0. **Birleşik gruplar:** her leke için `p̂`'si lekenin kutusunun içinde (kenarlar `MERGE_MARGIN · kutu boyutu` kadar genişletilmiş) olan izler bulunur. Bir iz birden fazla grup adayı lekenin içindeyse merkezi `p̂`'ye en yakın lekeye ait olur. **≥ 2 izi olan** leke bir gruptur (birbirine değen ayrı ürünler):
+   - Üyeler akışta öndeki önce sıralanır (`−s · p̂_eksen` artan).
+   - **Demirleme:** `δ = leke.merkez − ortalama(p̂_üyeler)`; her üye için `yeni = p̂ + δ`, `v = 0.6·v + 0.4·(yeni − konum)`, `konum = yeni`. Üyeler lekenin ortasına zıplamaz (yoksa ayrıldıklarında geri gitme kuralı yüzünden kendi ürünlerini bulamazlar); demirlenmezlerse şişmiş hızla lekeden kopup öne kaçarlar.
+   - **Çarpan paylaşımı:** `toplam = max(leke.çarpan, n)`; `k`. üyeye `toplam div n + (k < toplam mod n ? 1 : 0)`, alan `leke.alan / n`. Her üye bu değerlerle gözlemlenir.
+   - Gruptaki izler ve leke sonraki adımlarda kullanılmış sayılır.
+1. **Aday eşleşmeler** (grupta olmayan iz ve lekeler): `s·(leke_eksen − iz_eksen) < −0.03` ise aday değil (geri gitme yok). `d = ‖leke − p̂‖ ≤ maxDistEff` ise aday. Bu adımdan önce her izin `bbox` ve `lastMult` değeri `önceki` olarak saklanır.
 2. **Açgözlü atama:** adayları `d`'ye göre artan sırala; iz ve leke kullanılmamışsa eşle.
-3. **Eşleşen iz güncellemesi:** `v = 0.6·v + 0.4·(leke − konum)`, `konum = leke`, `hits += 1`, `missed = 0`. Çarpan geçmişi son 5, alan geçmişi son 9 değer.
-4. **Sayım kuralı:**
+3. **Eşleşen iz güncellemesi:** `v = 0.6·v + 0.4·(leke − konum)`, `konum = leke`, sonra leke çarpanı ve alanıyla gözlem.
+4. **Sayım kuralı** (her gözlemde):
    - Henüz sayılmadıysa (`countedSoFar = 0`): `startedBefore` **ve** `hits ≥ minHits` **ve** `s·(eksen − line) ≥ 0` ise say. `delta = max(1, round(mean(çarpan geçmişi)))`, `countedSoFar = delta`. Olay: `isFirstCrossing = true`, `medianArea = median(alan geçmişi)`.
    - Sayıldıysa: son 3 çarpanın **minimumu** `countedSoFar`'dan büyükse farkı ekle (arkadan gelen ürün lekeye katıldı). `isFirstCrossing = false`.
-5. **Eşleşmeyen izler:** `missed += 1`, konum `+= v` (öteleme). `missed > maxMissedEff` ya da konum [−0.1, 1.1] dışına çıktıysa sil.
-6. **Yeni izler:** eşleşmeyen her leke için iz; `startedBefore = s·(eksen − line) < 0`. Çizgiden sonra doğan iz **asla** sayılmaz (çift sayım koruması).
-7. İz kimliği artan tamsayı; ekranda `hex(id)` gösterilir.
+5. **Bölünme:** 2. adımda eşleşmiş ve `önceki.lastMult ≥ 2` olan izler ebeveyn adayıdır. Hâlâ eşleşmemiş her leke için, merkezi ebeveynin `önceki.bbox`'ının `v` kadar ötelenmiş ve `MERGE_MARGIN` kadar genişletilmiş hâlinin içindeyse, merkezi ebeveynin (güncel) konumuna en yakın ebeveyn seçilir ve leke onun **çocuğu** olur:
+   - `keep = min(ebeveyn.countedSoFar, ebeveyn.lastMult)`.
+   - Çocuk: konum = leke, `v = ebeveyn.v`, `hits = ebeveyn.hits`, `startedBefore = ebeveyn.startedBefore`, `countedSoFar = min(ebeveyn.countedSoFar − keep, leke.çarpan)`, geçmişler `[leke.çarpan]`, `[leke.alan]`, `bbox = leke.bbox`, `lastMult = leke.çarpan`.
+   - Ebeveyn: `countedSoFar = keep`, çarpan geçmişi `[lastMult]`; `önceki` değeri güncellenir (aynı ebeveyn aynı karede ikinci kez bölünmez).
+   - Çocuk, 6. adımdaki silmeye girmez ve 7. adımdaki yeni izlerden sonra listeye eklenir. Bölünmeyi tanımadan, çizgiden sonra ayrılan çiftin ikinci ürünü "çizgiden sonra doğdu" diye hiç sayılmazdı.
+6. **Eşleşmeyen izler:** `missed += 1`, konum `+= v` (öteleme). `missed > maxMissedEff` ya da konum [−0.1, 1.1] dışına çıktıysa sil.
+7. **Yeni izler:** hâlâ eşleşmemiş her leke için iz; `startedBefore = s·(eksen − line) < 0`, `bbox` ve `lastMult` lekeden. **Başlangıç hızı:** 6. adımdan sonra kalan, `hits ≥ 3` ve `missed = 0` olan izlerin `vx` ve `vy` medyanları (yoksa 0). Banttaki her ürün aynı hızla gider; sıfır hızla doğan iz bir sonraki karede geride tahmin edilir ve gruba giremez. Çizgiden sonra doğan iz **asla** sayılmaz (çift sayım koruması).
+8. İz kimliği artan tamsayı; ekranda `hex(id)` gösterilir.
+
+**Neden:** Birbirine hafifçe değen yumurtalar kareden kareye bir birleşik (×2) bir ayrık görünür. Bu kurallar olmadan 100 yumurtalık render videoda 110 sayılıyordu (her birleşmede yeni iz doğuyor, izler lekeden kopuyordu). Testler: `test_synthetic.py::flicker_pairs`, `test_rendered.py`.
 
 ## 5. Kalibrasyon
 **Boş bant öğrenme** (`backgroundSeconds = 1.0`, `N = round(fps · 1.0)`, en az 15 kare):

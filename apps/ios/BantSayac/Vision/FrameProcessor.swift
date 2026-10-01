@@ -132,7 +132,7 @@ final class FrameProcessor: @unchecked Sendable {
                 let ratio = blobs[i].area / expected
                 blobs[i].multiplicity = ratio < 1.5
                     ? 1
-                    : min(profile.maxMultiplicity, max(1, Int(ratio.rounded())))
+                    : min(profile.maxMultiplicity, max(1, roundHalfEven(ratio)))
             }
         }
 

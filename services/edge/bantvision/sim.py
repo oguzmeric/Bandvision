@@ -1,6 +1,7 @@
 """Sentetik bant videosu üretici (testler ve Swift eşdeğerlik vektörleri için)."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import cv2
@@ -15,6 +16,8 @@ class Item:
     ry: float = 72
     spot: bool = False      # koyu leke
     bite: bool = False      # kenarından ısırılmış (kırık/ezik)
+    wobble: float = 0.0     # akış ekseninde salınım genliği (px): bitişik ürünlerin değip ayrılması
+    wobble_hz: float = 3.0
 
 
 @dataclass
@@ -48,7 +51,7 @@ class Scenario:
             img = np.full((self.height, self.width), float(self.belt), np.float32)
             img += rng.normal(0, self.noise, img.shape).astype(np.float32)
             for it in self.items:
-                y = it.start_y + t * self.speed_px_s
+                y = it.start_y + t * self.speed_px_s + it.wobble * math.sin(2 * math.pi * it.wobble_hz * t)
                 if -it.ry * 1.2 < y < self.height + it.ry * 1.2:
                     c = (int(it.x), int(y))
                     cv2.ellipse(img, c, (int(it.rx), int(it.ry)), 0, 0, 360, float(self.product), -1)
@@ -93,4 +96,16 @@ def touching_side(n: int = 10, **kw) -> Scenario:
     return Scenario("touching_side", items, **kw)
 
 
-ALL = [single_file, three_lanes, touching_vertical, touching_side]
+def flicker_pairs(n: int = 10, **kw) -> Scenario:
+    """Arka arkaya çiftler; arkadaki öndekine bir değip bir ayrılır (gerçek yumurtada sık).
+
+    Leke kareden kareye bir birleşik (×2) bir ayrık görünür; izleyici aynı çifti birden fazla saymamalı.
+    """
+    items: list[Item] = []
+    for i in range(n):
+        y = -120 - i * 430
+        items += [Item(y, 360), Item(y - 146, 360, wobble=5.0, wobble_hz=4.0 + 0.37 * i)]
+    return Scenario("flicker_pairs", items, **kw)
+
+
+ALL = [single_file, three_lanes, touching_vertical, touching_side, flicker_pairs]
