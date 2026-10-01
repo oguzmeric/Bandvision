@@ -11,7 +11,7 @@ Telefonla veya mevcut güvenlik kameralarıyla banttaki ürünleri sayan ve kali
 | Uyarı akışları | `n8n` | spesifikasyon |
 | Ortak sözleşmeler | `contracts` | v1 |
 
-Başlangıç: `CLAUDE.md` → `docs/00-overview.md` → `docs/01-roadmap.md`.
+Başlangıç: `CLAUDE.md` → `docs/00-overview.md` → `docs/01-roadmap.md`. Güncel durum: `docs/12-durum.md`.
 
 ```bash
 # Python referans çekirdeğini test et
