@@ -84,3 +84,18 @@ Ortak alanlar: `schema` (`bantvision.event.v1`), `eventId`, `ts`, `deviceId`, `c
 
 ## 5. Edge yerel API
 Bkz. `05-edge-service.md` §4. iOS uygulaması bu API'nin istemcisidir; profil gövdeleri §1 ile aynıdır.
+
+## 6. Doğrulama (CI)
+
+```bash
+pip install "jsonschema[format-nongpl]" pytest
+python tools/validate_contracts.py   # şemalar + tüm örnekler
+pytest -q tools/tests                # olumlu + olumsuz (bozulmuş örnek) testleri
+```
+
+- Örnekler `contracts/examples/` altında; hangi şemaya ait oldukları **dosya adı önekinden** anlaşılır:
+  `profile-*` → profil, `event-*` → olay, `batch*` → paket, `device-pair-request*` / `device-pair-response*` → `device.schema.json` içindeki `$defs`.
+  Eşlenmeyen bir örnek dosyası CI'ı kırar (eşleme: `tools/validate_contracts.py` → `EXAMPLE_SCHEMAS`).
+- `uuid` ve `date-time` formatları denetlenir. `format-nongpl` eki kurulu değilse `date-time` sessizce geçer, bu yüzden CI bu eki kurar.
+- `tools/tests/test_contracts.py` içindeki olumsuz testler, geçerli bir örneği tek noktadan bozup şemanın doğru kuraldan reddettiğini kontrol eder. Bir kısıtı gevşetirsen ilgili test kırılır; bilinçli bir değişiklikse testi de güncelle.
+- `services/edge/tests/test_profile_contract.py`, Python `Profile` modelinin ürettiği JSON'un şemaya uyduğunu ve örneklerin model üzerinden kayıpsız gidip geldiğini doğrular. Swift tarafı için aynı test F0.2/F1'de eklenecek.

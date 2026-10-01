@@ -1,0 +1,11 @@
+{
+  "schema": "bantvision.event.v1",
+  "eventId": "0b8f3c3e-1d1a-4c2e-9a77-5f0a2b3c4d04",
+  "ts": "2026-10-01T09:21:40.500Z",
+  "deviceId": "dev_7Q2K9",
+  "cameraId": "iphone",
+  "lineId": "line_a",
+  "profileId": "6f1c2a8e-3b7d-4c55-9a10-0e2f4b1d7c11",
+  "type": "state",
+  "state": { "running": false, "reason": "no_motion" }
+}

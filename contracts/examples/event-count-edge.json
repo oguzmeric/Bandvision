@@ -1,0 +1,11 @@
+{
+  "schema": "bantvision.event.v1",
+  "eventId": "9d3e7a10-4c2b-4f8e-b1a5-2c7d9e0f1a22",
+  "ts": "2026-10-01T09:30:11.040Z",
+  "deviceId": "dev_EDGE01",
+  "cameraId": "cam_2",
+  "lineId": null,
+  "profileId": null,
+  "type": "count",
+  "count": { "delta": 2, "total": 88 }
+}

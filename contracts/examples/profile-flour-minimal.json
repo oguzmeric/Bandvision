@@ -1,0 +1,19 @@
+{
+  "schema": "bantvision.profile.v1",
+  "id": "2a4e9c71-8b3f-4d16-a2e5-7c0b1f9d3e48",
+  "name": "Un torbası",
+  "roi": { "x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9 },
+  "linePosition": 0.5,
+  "direction": "right",
+  "diffThreshold": 22,
+  "expectedArea": 0,
+  "minAreaFactor": 0.45,
+  "minAreaAbs": 0.01,
+  "splitTouching": true,
+  "maxMultiplicity": 3,
+  "closeIterations": 2,
+  "processingWidth": 160,
+  "minHits": 2,
+  "maxMatchDistance": 0.2,
+  "backgroundRate": 0.02
+}

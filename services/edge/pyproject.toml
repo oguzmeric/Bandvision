@@ -10,7 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 service = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "pydantic>=2.7", "httpx>=0.27", "pyyaml>=6", "zeroconf>=0.132", "wsdiscovery>=2.0", "onvif-zeep>=0.2.12", "zxing-cpp>=2.2"]
-dev = ["pytest>=8", "ruff>=0.5", "jsonschema>=4.22"]
+dev = ["pytest>=8", "ruff>=0.5", "jsonschema[format-nongpl]>=4.22"]
 
 [build-system]
 requires = ["setuptools>=68"]

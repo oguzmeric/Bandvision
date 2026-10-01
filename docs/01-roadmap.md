@@ -18,7 +18,7 @@ Fazlar sırayla yapılır. Her görev bağımsız bir PR olacak büyüklüktedir
 - [ ] 4 sentetik senaryoda Swift ve Python aynı toplam sayıyı veriyor (bkz. `services/edge/tests/test_synthetic.py`)
 
 **F0.3 Sözleşme doğrulama**
-- [ ] `contracts/*.schema.json` için örnek JSON'lar `contracts/examples/` altında, CI'da şema doğrulaması (Python `jsonschema`)
+- [x] `contracts/*.schema.json` için örnek JSON'lar `contracts/examples/` altında, CI'da şema doğrulaması (Python `jsonschema`)
 
 ---
 

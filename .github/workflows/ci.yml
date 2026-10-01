@@ -17,17 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install jsonschema
-      - run: |
-          python - <<'PY'
-          import json, pathlib, jsonschema
-          from referencing import Registry, Resource
-          c = pathlib.Path("contracts")
-          ev = json.loads((c / "event.schema.json").read_text())
-          reg = Registry().with_resource("event.schema.json", Resource.from_contents(ev))
-          jsonschema.Draft202012Validator(json.loads((c / "product-profile.schema.json").read_text())).validate(
-              json.loads((c / "examples/profile-egg.json").read_text()))
-          jsonschema.Draft202012Validator(json.loads((c / "batch.schema.json").read_text()), registry=reg).validate(
-              json.loads((c / "examples/batch.json").read_text()))
-          print("contracts ok")
-          PY
+      # format-nongpl: uuid ve date-time formatlarının gerçekten denetlenmesi için gerekli
+      - run: pip install "jsonschema[format-nongpl]>=4.22" pytest
+      - run: python tools/validate_contracts.py
+      - run: pytest -q tools/tests
