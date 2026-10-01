@@ -213,16 +213,16 @@ final class CountingViewModel: ObservableObject {
         source.speed = videoSpeed
         videoSource = source
         let processor = self.processor
+        // ViewModel uygulama boyunca yaşar; ilerleme bildirimi için güçlü referans güvenli (ve Sendable).
+        let onProgress: @Sendable (Double) -> Void = { [self] p in
+            Task { @MainActor in self.videoProgressed(p, source: source) }
+        }
         Task { [weak self] in
             do {
                 let info = try await source.run(
                     url: url, processingQueue: processor.queue,
                     onFrame: { pb, ts in processor.process(pb, ts: ts) },
-                    onProgress: { p in
-                        Task { @MainActor [weak self] in
-                            if self?.videoSource === source { self?.video?.progress = p }
-                        }
-                    })
+                    onProgress: onProgress)
                 self?.videoEnded(source: source, duration: info.duration, error: nil)
             } catch {
                 self?.videoEnded(source: source, duration: 0, error: error.localizedDescription)
@@ -247,6 +247,11 @@ final class CountingViewModel: ObservableObject {
         processor.setTotal(liveTotal)
         processor.setCounting(isRunning)
         startCamera()
+    }
+
+    private func videoProgressed(_ p: Double, source: VideoFileSource) {
+        guard videoSource === source else { return }
+        video?.progress = p
     }
 
     private func videoEnded(source: VideoFileSource, duration: Double, error: String?) {
