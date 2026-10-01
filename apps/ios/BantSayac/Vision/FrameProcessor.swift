@@ -2,6 +2,7 @@ import Foundation
 import CoreVideo
 import CoreGraphics
 import QuartzCore
+import CoreImage
 
 struct EngineSnapshot {
     var frameSize: CGSize
@@ -9,10 +10,12 @@ struct EngineSnapshot {
     var tracks: [TrackMarker]
     var fps: Double
     var mask: CGImage?
+    /// Video modunda işlenen kare (kamerada önizleme katmanı kullanıldığı için nil).
+    var image: CGImage?
 
     static var empty: EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
-                       blobs: [], tracks: [], fps: 0, mask: nil)
+                       blobs: [], tracks: [], fps: 0, mask: nil, image: nil)
     }
 }
 
@@ -41,6 +44,13 @@ final class FrameProcessor: @unchecked Sendable {
     private var showMask = false
     private var calib: CalibState = .none
 
+    /// Profil parametrelerinin tanımlı olduğu kare hızı (§7). F1.1'de ProductProfile'a `source.referenceFps` olarak girer.
+    private let referenceFps = 60.0
+    /// Kaynak kare zaman damgaları (son 2 sn): §7 ölçeklemesinde kullanılan gerçek fps.
+    private var stamps: [Double] = []
+    private var emitFrameImages = false
+    private lazy var ciContext = CIContext()
+
     private var lastPublish: CFTimeInterval = 0
     private var fpsWindowStart: CFTimeInterval = 0
     private var fpsFrames = 0
@@ -50,8 +60,6 @@ final class FrameProcessor: @unchecked Sendable {
     var onSnapshot: (@MainActor (EngineSnapshot) -> Void)?
     var onCount: (@MainActor (_ delta: Int, _ total: Int) -> Void)?
     var onCalibration: (@MainActor (CalibrationEvent) -> Void)?
-
-    private let backgroundFrames = 60
 
     init(queue: DispatchQueue) {
         self.queue = queue
@@ -63,6 +71,10 @@ final class FrameProcessor: @unchecked Sendable {
     func setCounting(_ on: Bool) { queue.async { self.counting = on } }
     func setTotal(_ t: Int) { queue.async { self.total = t } }
     func setShowMask(_ on: Bool) { queue.async { self.showMask = on } }
+    /// Video modunda işlenen kareyi de anlık görüntüyle yayınla.
+    func setEmitFrameImages(_ on: Bool) { queue.async { self.emitFrameImages = on } }
+    /// Kaynak değişti (kamera ↔ video): fps penceresini sıfırla.
+    func resetClock() { queue.async { self.stamps.removeAll() } }
 
     func resetTracking(resetBackground: Bool) {
         queue.async {
@@ -89,19 +101,31 @@ final class FrameProcessor: @unchecked Sendable {
 
     // MARK: - Kare işleme (queue üzerinde)
 
-    func process(_ pixelBuffer: CVPixelBuffer) {
+    /// ts: kaynağın sunum zamanı (sn). Kamera ve video aynı yoldan gelir.
+    func process(_ pixelBuffer: CVPixelBuffer, ts: Double) {
         guard let frame = GrayFrame.make(from: pixelBuffer, targetWidth: profile.processingWidth) else { return }
-        tickFPS()
+        process(gray: frame, ts: ts, pixelBuffer: pixelBuffer)
+    }
 
-        // Boş bant öğrenme
+    func process(gray frame: GrayFrame, ts: Double, pixelBuffer: CVPixelBuffer? = nil) {
+        tickFPS()
+        // §7: gerçek fps'e göre profil parametrelerini ölçekle (Python Pipeline.process ile aynı)
+        let fps = updateSourceFPS(ts)
+        let k = referenceFps / max(1.0, fps)
+        let maxDist = min(0.5, profile.maxMatchDistance * k)
+        let rate = 1 - pow(1 - profile.backgroundRate, k)
+        let maxMissed = max(2, roundHalfEven(6 / k))
+
+        // §5 Boş bant öğrenme: ~1 sn (en az 15 kare)
         if case .background(let n, let maxDiff) = calib {
+            let nTotal = max(15, roundHalfEven(fps * 1.0))
             segmenter.learn(frame, rate: n == 0 ? 1 : 0.15)
             var m = maxDiff
-            if n >= 25 {
+            if n >= Int(0.4 * Double(nTotal)) {
                 m = max(m, segmenter.diffPercentile(frame, roi: profile.roi, percentile: 0.995))
             }
             let next = n + 1
-            if next >= backgroundFrames {
+            if next >= nTotal {
                 let th = min(100, max(12, Int(Double(m) * 1.5) + 8))
                 profile.diffThreshold = th
                 calib = .none
@@ -109,9 +133,9 @@ final class FrameProcessor: @unchecked Sendable {
                 emit(.backgroundDone(threshold: th))
             } else {
                 calib = .background(frame: next, maxDiff: m)
-                if next % 6 == 0 { emit(.backgroundProgress(Double(next) / Double(backgroundFrames))) }
+                if next % 6 == 0 { emit(.backgroundProgress(Double(next) / Double(nTotal))) }
             }
-            publish(frame: frame, blobs: [])
+            publish(frame: frame, blobs: [], pixelBuffer: pixelBuffer)
             return
         }
 
@@ -122,7 +146,7 @@ final class FrameProcessor: @unchecked Sendable {
         let raw = segmenter.segment(frame, roi: profile.roi,
                                     threshold: profile.diffThreshold,
                                     closeIterations: profile.closeIterations,
-                                    backgroundRate: Float(profile.backgroundRate),
+                                    backgroundRate: Float(rate),
                                     keepMask: showMask)
         let minArea = expected > 0 ? expected * profile.minAreaFactor : profile.minAreaAbs
         var blobs = raw.filter { $0.area >= minArea }
@@ -139,10 +163,11 @@ final class FrameProcessor: @unchecked Sendable {
         let events = tracker.update(blobs: blobs,
                                     direction: profile.direction,
                                     line: Double(profile.linePosition),
-                                    maxDistance: profile.maxMatchDistance,
-                                    minHits: profile.minHits)
+                                    maxDistance: maxDist,
+                                    minHits: profile.minHits,
+                                    maxMissed: maxMissed)
         if !events.isEmpty { handle(events) }
-        publish(frame: frame, blobs: blobs)
+        publish(frame: frame, blobs: blobs, pixelBuffer: pixelBuffer)
     }
 
     private func handle(_ events: [CountEvent]) {
@@ -169,6 +194,16 @@ final class FrameProcessor: @unchecked Sendable {
 
     // MARK: - Yardımcılar
 
+    private func updateSourceFPS(_ ts: Double) -> Double {
+        if let last = stamps.last, ts <= last { stamps.removeAll() }   // geri sarma / kaynak değişimi
+        stamps.append(ts)
+        while stamps.count > 2 && ts - stamps[0] > 2.0 { stamps.removeFirst() }
+        if stamps.count >= 3, let last = stamps.last, last > stamps[0] {
+            return Double(stamps.count - 1) / (last - stamps[0])
+        }
+        return referenceFps
+    }
+
     private func tickFPS() {
         let now = CACurrentMediaTime()
         if fpsWindowStart == 0 { fpsWindowStart = now }
@@ -184,7 +219,7 @@ final class FrameProcessor: @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in self?.onCalibration?(e) }
     }
 
-    private func publish(frame: GrayFrame, blobs: [Blob]) {
+    private func publish(frame: GrayFrame, blobs: [Blob], pixelBuffer: CVPixelBuffer?) {
         let now = CACurrentMediaTime()
         guard now - lastPublish >= 1.0 / 12.0 else { return }
         lastPublish = now
@@ -192,8 +227,15 @@ final class FrameProcessor: @unchecked Sendable {
         if showMask, let m = segmenter.lastMask {
             maskImage = Self.makeMaskImage(m, w: frame.width, h: frame.height)
         }
+        var frameImage: CGImage?
+        if emitFrameImages, let pb = pixelBuffer {
+            frameImage = ciContext.createCGImage(CIImage(cvPixelBuffer: pb),
+                                                from: CGRect(x: 0, y: 0, width: frame.sourceWidth,
+                                                             height: frame.sourceHeight))
+        }
         let snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
-                                  blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage)
+                                  blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
+                                  image: frameImage)
         DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
     }
 

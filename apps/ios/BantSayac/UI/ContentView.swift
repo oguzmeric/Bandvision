@@ -1,11 +1,18 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var vm = CountingViewModel()
     @State private var showProfiles = false
     @State private var showSettings = false
     @State private var confirmReset = false
+    @State private var showPhotoPicker = false
+    @State private var showFileImporter = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var pickedVideo: URL?
+    @State private var videoError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,6 +20,8 @@ struct ContentView: View {
             cameraArea
             if vm.isCalibrating {
                 CalibrationPanel(vm: vm)
+            } else if vm.isVideoMode {
+                VideoPanel(vm: vm)
             } else {
                 controlPanel
             }
@@ -28,6 +37,44 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSettings, onDismiss: { vm.applySettings() }) {
             SettingsView(settings: vm.settings, logger: vm.logger)
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .videos)
+        .onChange(of: photoItem) { _, item in
+            guard let item else { return }
+            photoItem = nil
+            Task {
+                do {
+                    if let video = try await item.loadTransferable(type: PickedVideo.self) {
+                        pickedVideo = video.url
+                    }
+                } catch {
+                    videoError = "Video alınamadı: \(error.localizedDescription)"
+                }
+            }
+        }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.movie]) { result in
+            do {
+                let url = try result.get()
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                pickedVideo = try PickedVideo.copyToTemporary(url)
+            } catch {
+                videoError = "Video alınamadı: \(error.localizedDescription)"
+            }
+        }
+        .confirmationDialog("Video boş bantla mı başlıyor?",
+                            isPresented: Binding(get: { pickedVideo != nil },
+                                                 set: { if !$0 { pickedVideo = nil } }),
+                            titleVisibility: .visible) {
+            Button("Evet, ilk 1 sn'den arka planı öğren") { startPicked(learnBackground: true) }
+            Button("Hayır, profilin eşiğini kullan") { startPicked(learnBackground: false) }
+        } message: {
+            Text("Arka plan (boş bant) doğru öğrenilmezse sayım yanlış olur. Video ürünle başlıyorsa, oynarken Kalibre → Boş bandı öğren'i bant boş göründüğünde kullan.")
+        }
+        .alert("Video", isPresented: Binding(get: { videoError != nil }, set: { if !$0 { videoError = nil } })) {
+            Button("Tamam", role: .cancel) {}
+        } message: {
+            Text(videoError ?? "")
         }
     }
 
@@ -54,6 +101,17 @@ struct ContentView: View {
             Text(String(format: "%.0f fps", vm.snapshot.fps))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+            Menu {
+                Button { showPhotoPicker = true } label: {
+                    Label("Fotoğraflar'dan video", systemImage: "photo.on.rectangle")
+                }
+                Button { showFileImporter = true } label: {
+                    Label("Dosyalar'dan video", systemImage: "folder")
+                }
+            } label: {
+                Image(systemName: "film").font(.title3)
+            }
+            .disabled(vm.isCalibrating)
             Button { showSettings = true } label: {
                 Image(systemName: "gearshape").font(.title3)
             }
@@ -69,8 +127,18 @@ struct ContentView: View {
                 ? AVMakeRect(aspectRatio: vm.snapshot.frameSize, insideRect: bounds)
                 : bounds
             ZStack(alignment: .topLeading) {
-                CameraPreview(session: vm.camera.session)
-                    .frame(width: geo.size.width, height: geo.size.height)
+                if vm.isVideoMode {
+                    Color.black
+                    if let frame = vm.snapshot.image {
+                        Image(decorative: frame, scale: 1)
+                            .resizable()
+                            .frame(width: fit.width, height: fit.height)
+                            .position(x: fit.midX, y: fit.midY)
+                    }
+                } else {
+                    CameraPreview(session: vm.camera.session)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
 
                 if let mask = vm.snapshot.mask {
                     Image(decorative: mask, scale: 1)
@@ -96,6 +164,12 @@ struct ContentView: View {
             }
         }
         .background(Color.black)
+    }
+
+    private func startPicked(learnBackground: Bool) {
+        guard let url = pickedVideo else { return }
+        pickedVideo = nil
+        vm.startVideo(url: url, learnBackground: learnBackground)
     }
 
     private var controlPanel: some View {

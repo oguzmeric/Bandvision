@@ -99,7 +99,7 @@ Profil parametreleri `referenceFps` (varsayılan 60) için tanımlıdır. Gerçe
 - `maxMissedEff = max(2, round(6 / k))`
 - `minHits` değişmez (en az 1).
 
-Not: iOS v1 kodu bu ölçeklemeyi yapmıyor (60 fps varsayıyor). F2 ile birlikte iOS'a da eklenmeli; ayrıca RTSP'de 25 fps tipiktir.
+Hem Python hem Swift uygular: fps, kaynağın kare zaman damgalarından (kamerada sunum zamanı, videoda kare zamanı) hesaplanır; zaman geri giderse (kaynak değişti) pencere sıfırlanır. §5 boş bant öğrenme süresi de aynı fps ile `N = max(15, round(F))` karedir. RTSP'de 25 fps, telefon videolarında 30 fps tipiktir.
 
 ## 8. Bant çalışıyor/durdu
 - Son `idleSeconds` (varsayılan 30, cihaz ayarı) içinde en az bir leke görüldüyse ya da sayım olduysa `running = true`.

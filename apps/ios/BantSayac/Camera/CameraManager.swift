@@ -11,8 +11,8 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     private var device: AVCaptureDevice?
     private var configured = false
 
-    /// processingQueue üzerinde çağrılır.
-    var frameHandler: ((CVPixelBuffer) -> Void)?
+    /// processingQueue üzerinde çağrılır: (kare, sunum zamanı sn).
+    var frameHandler: ((CVPixelBuffer, Double) -> Void)?
 
     /// completion ana kuyrukta çağrılır.
     func requestAccess(_ completion: @escaping @MainActor @Sendable (Bool) -> Void) {
@@ -92,7 +92,7 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        frameHandler?(pb)
+        frameHandler?(pb, CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
     }
 
     // MARK: - Kurulum
