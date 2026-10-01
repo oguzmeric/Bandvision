@@ -26,8 +26,23 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: |
           [ -n "$ASC_KEY_P8" ] || { echo "::error::ASC_KEY_P8 secret'ı tanımlı değil"; exit 1; }
-          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
-          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+          # Yapıştırma biçiminden bağımsız temiz PEM üret: tarayıcı formları satır sonlarını CRLF yapar,
+          # başlıklar eksik ya da her şey tek satır olabilir, dosyanın base64'ü yapıştırılmış olabilir.
+          # CryptoKit bunların hepsinde invalidPEMDocument verir.
+          raw=$(printf '%s' "$ASC_KEY_P8" | tr -d '\r')
+          strip() { sed -E 's/-----(BEGIN|END)[A-Z ]*-----//g' | tr -d ' \t\n'; }
+          body=$(printf '%s\n' "$raw" | strip)
+          case "$body" in
+            LS0tLS1*) body=$(printf '%s' "$body" | base64 -D | tr -d '\r' | strip) ;;
+          esac
+          f="$RUNNER_TEMP/AuthKey.p8"
+          umask 077
+          { echo "-----BEGIN PRIVATE KEY-----"; printf '%s\n' "$body" | fold -w 64; echo "-----END PRIVATE KEY-----"; } > "$f"
+          if ! openssl pkey -in "$f" -noout 2>/dev/null; then
+            echo "::error::ASC_KEY_P8 geçerli bir özel anahtar değil. .p8 dosyasının tamamını (BEGIN/END satırları dahil) yeniden yapıştır."
+            exit 1
+          fi
+          echo "API anahtarı biçimi geçerli ($(printf '%s' "$body" | wc -c | tr -d ' ') karakter gövde)"
 
       - run: brew install xcodegen
       - run: xcodegen generate
