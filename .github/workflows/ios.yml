@@ -1,0 +1,25 @@
+name: ios
+on:
+  push:
+    paths: ["apps/ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["apps/ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # F0.1: imzasız derleme. Sadece "derleniyor mu?" kontrolü; TestFlight ayrı iş olacak.
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults: { run: { working-directory: apps/ios } }
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodebuild -version
+      - run: xcodegen generate
+      - name: Build (Release, iphoneos, imzasız)
+        run: |
+          xcodebuild -project BantSayac.xcodeproj -target BantSayac \
+            -configuration Release -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            build -quiet
