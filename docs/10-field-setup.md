@@ -24,6 +24,31 @@
 | Gürültü azaltma (3D DNR) | Düşük | Yüksek DNR hareketli üründe iz bırakır |
 | Odak | Manuel, kilitli | Otomatik odak dolaşması |
 
+## 3b. Marka bazında bağlantı (IP kameralar)
+Hedef markalar: Dahua, Hikvision, Axis, Pelco, TRASSIR, Vivotek, Karel, Milesight, Mobotix. Hepsi IP kamera; neredeyse tamamı ONVIF Profile S + RTSP destekler.
+
+**Birincil yol: ONVIF (F2/F6).** Edge kutusu WS-Discovery ile kameraları bulur, kullanıcı adı/şifreyle `GetProfiles` + `GetStreamUri` çağırıp alt ve ana akış RTSP adreslerini kameradan alır. Marka bilgisi gerekmez.
+
+**Yedek yol: elle RTSP adresi.** Aşağıdakiler *tipik* adreslerdir; model ve yazılım sürümüne göre değişir, sahada doğrulanmadı.
+
+| Marka | Alt akış (sayım) | Ana akış (QC/barkod) | Not |
+|---|---|---|---|
+| Hikvision | `/Streaming/Channels/102` | `/Streaming/Channels/101` | NVR'da kanal N: `N01`/`N02` |
+| Dahua | `/cam/realmonitor?channel=1&subtype=1` | `...&subtype=0` | XVR/NVR'da `channel=N` |
+| Axis | `/axis-media/media.amp?resolution=640x360&fps=25` | `/axis-media/media.amp` | Çözünürlük/fps URL'de |
+| Vivotek | `/live1s2.sdp` | `/live1s1.sdp` | |
+| Milesight | `/sub` | `/main` | |
+| Pelco, TRASSIR, Karel | ONVIF | ONVIF | Seriye göre değişken; Karel çoğunlukla OEM |
+| Mobotix | ONVIF (MOVE serisi) | | Klasik Mx serisi MJPEG ağırlıklı, çoğu balıkgözü lens: tepeden sayımda dar açılı lens şart |
+
+Biçim: `rtsp://kullanıcı:şifre@IP:554<yol>`. Şifrede özel karakter varsa URL kodlaması gerekir.
+
+**Akıllı kodek adları** (mutlaka kapalı; sabit sahnede fps/GOP düşürür, izlemeyi bozar): Hikvision *H.264+/H.265+*, Dahua *Smart Codec*, Axis *Zipstream* (kapalı ya da "low", dinamik fps/GOP kapalı), Milesight *Smart Stream*, Vivotek *Smart Stream II*.
+
+**Lens:** varifokal 2,8–12 mm; balıkgözü/çok geniş açı kenarlarda ürünü bozar. **Konum:** bandın tam tepesinde, dik (§1). Mevcut güvenlik kameraları çoğu zaman eğik baktığı için sayım için ayrı kamera gerekebilir.
+
+**Uygunluk ön testi:** NVR/XVR'dan bandın birkaç dakikalık kaydını MP4 dışa aktar, `python -m bantvision.video kayit.mp4 --truth N` ya da iPhone video moduyla say. ≥ %98 ise kamera ve açı uygundur.
+
 ## 4. Kalibrasyon prosedürü
 1. ROI'yi bandın kullanılan kısmına, sayım çizgisini ROI'nin ortasına yerleştir; akış yönünü seç.
 2. **Boş bant öğren** (bant çalışırken, üzerinde ürün yokken). Önerilen eşik otomatik gelir.
