@@ -34,6 +34,23 @@ Klasik hat sahada çalışırken veri biriktirir; ML onun zorlandığı yerlerde
 - Eğitim: `tools/train/` (F7'de) — veri bölme (gün bazlı, sızıntı olmasın), artırma (parlaklık, bulanıklık, hareket bulanıklığı), dışa aktarma: iOS **CoreML** (NMS dahil), edge **OpenVINO** (Intel) / ONNX.
 - Sahada aktif öğrenme: düşük güvenli tespitler ve klasik/ML uyuşmazlıkları `datasets/review/` altına.
 
+## 4b. Öneri: "Örnekle öğret" — iyi/kötü işaretle, dakikalar içinde öğrensin (F7.0, karar bekliyor)
+
+Kaynak fikir: `11-market-notes-enao.md`. Amaç, model eğitimi yapmadan, sahada operatörün birkaç dokunuşla görünüm tabanlı OK/NOK kriteri tanımlaması.
+
+- **Neden şimdiki mimariye uyuyor:** Klasik hat her ürünü zaten ayırıyor ve çizgiyi geçtiği anda en iyi karede tam çözünürlüklü kırpıntıyı çıkarıyor (QC adımı). Bu kırpıntıdan bir **öznitelik vektörü (embedding)** almak, eğitimsiz bir sınıflandırıcı için yeterli.
+- **iOS:** Apple Vision `VNGenerateImageFeaturePrintRequest` cihaz üstünde çalışıyor. Model dosyası taşımak ve lisans sorunu yok; `computeDistance` ile benzerlik hesaplanıyor.
+- **Edge:** Apple FeaturePrint olmadığından Apache/BSD lisanslı küçük bir omurga (ör. MobileNetV3, §3'tekiyle aynı) ONNX Runtime / OpenVINO ile kullanılır. Embedding'ler modele özgü olduğu için **profil vektör değil örnek kırpıntı referansı taşır**. Her taraf kendi bankasını örneklerden yeniden üretir; parity (eşdeğerlik) burada sayı değil karar düzeyinde ölçülür.
+- **Karar:** k-en yakın komşu (k=3). En yakın OK ve NOK örneklerine uzaklık oranı + güven eşiği. Yalnızca OK örneği varsa §3'teki anomali skoruna düşer.
+- **Akış:**
+  1. Çalışırken ekranın altında son geçen ürünlerin kırpıntıları şerit olarak akar.
+  2. Operatör bir kırpıntıya dokunup "İyi" ya da "Kötü" der; kötüde isteğe bağlı neden seçer.
+  3. ~10 iyi + ~5 kötü örnekten sonra "Öğrenildi", ardından **gölge modu**: karar verir, ama ejektöre sinyal göndermez.
+  4. Operatör yanlışları düzelttikçe banka büyür.
+- **Sözleşme taslağı:** `qc.examples = {enabled, bankRef, k, minConfidence}`, NOK nedeni `appearance`. Belirsiz kararlar `uncertain` olarak işaretlenir ve inceleme kuyruğuna (F1.3 veri toplama) gider.
+- **Riskler:** Işık değişimi embedding'i kaydırır (tutarlı aydınlatma şart, `11` §2). Çok ince hatalar (kılcal çatlak) global embedding'de kaybolabilir; o durumda §3'teki yama tabanlı yöntem gerekir.
+- **Doğrulama:** `10-field-setup.md` §6 kabul testinin aynısı (500 ürün, bilinen 20 hata).
+
 ## 5. Lisans uyarısı (karar F7.2 öncesi)
 - **Ultralytics YOLO (v8/11) AGPL-3.0 lisanslıdır.** Kapalı kaynak ticari üründe kullanmak için Ultralytics Enterprise lisansı gerekir. Aksi halde tüm uygulama kaynağını açma yükümlülüğü doğabilir.
 - Apache-2.0 alternatifler: YOLOX, RTMDet (MMDetection), D-FINE / RT-DETR'in Apache lisanslı uygulamaları. Doğruluk/hız karşılaştırması F7.2'nin ilk görevi.
