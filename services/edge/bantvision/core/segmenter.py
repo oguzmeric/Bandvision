@@ -9,6 +9,8 @@ import numpy as np
 from .profile import Roi
 
 _K3 = np.ones((3, 3), np.uint8)
+# §2.4: ürün altındaki arka plan güncelleme katsayısı (yoğun akışta kaymayı önlemek için çok küçük)
+FG_RATE_FACTOR = 0.002
 
 
 @dataclass
@@ -96,7 +98,7 @@ class BackgroundSegmenter:
             mask = cv2.erode(cv2.dilate(mask, _K3), _K3)
 
         # seçici arka plan güncellemesi
-        r = np.where(mask == 0, rate, rate * 0.05).astype(np.float32)
+        r = np.where(mask == 0, rate, rate * FG_RATE_FACTOR).astype(np.float32)
         self.bg += r * (g - self.bg)
 
         n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)

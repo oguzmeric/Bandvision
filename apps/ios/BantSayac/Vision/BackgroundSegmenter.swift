@@ -128,7 +128,8 @@ final class BackgroundSegmenter {
 
         // 3) Seçici arka plan güncellemesi (ürün altındaki pikseller çok yavaş)
         let rate = backgroundRate
-        let fgRate = backgroundRate * 0.05
+        // §2.4: ürün altında çok yavaş; 0.05 yoğun akışta arka planı ürüne kaydırıp sayımı durduruyordu
+        let fgRate = backgroundRate * 0.002
         f.pixels.withUnsafeBufferPointer { src in
             mask.withUnsafeBufferPointer { m in
                 bg.withUnsafeMutableBufferPointer { b in

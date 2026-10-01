@@ -92,3 +92,14 @@ def test_profile_roundtrip_matches_contract() -> None:
     jsonschema.validate(p.to_dict(), schema)
     assert p.expectedArea == example["expectedArea"]
     assert p.qc.spots.enabled is True
+
+
+@pytest.mark.parametrize("gap", [190, 160, 152], ids=["doluluk76", "doluluk90", "doluluk95"])
+def test_dense_flow_background_does_not_drift(egg_profile: Profile, gap: int) -> None:
+    """§2.4: ürün altındaki arka plan güncellemesi çok yavaş olmalı.
+
+    Katsayı 0,05 iken %76 dolulukta denge kayması ≈ 0,05·(0,76/0,24)·130 ≈ 20 gri seviye eşiği (12) aşıyor,
+    boşluklar ön plana geçiyor, şerit tek lekeye dönüşüp sayım duruyordu (60 üründen 26).
+    """
+    sc = sim.Scenario(f"dense{gap}", [sim.Item(-120 - i * gap, 360) for i in range(60)])
+    assert run(egg_profile, sc) == sc.expected_count

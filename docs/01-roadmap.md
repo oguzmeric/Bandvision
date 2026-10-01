@@ -4,6 +4,14 @@ Fazlar sırayla yapılır. Her görev bağımsız bir PR olacak büyüklüktedir
 
 ---
 
+## Genel kabul ölçütü: sayım doğruluğu
+
+- Her ürün profili için **sayım doğruluğu ≥ %98, hedef %99** (|sayılan − gerçek| / gerçek ≤ %2).
+- Ölçüm: o ürünün sahadan, sabit kamerayla çekilmiş en az 3 videosu (her biri ≥ 200 ürün), elle sayımla: `python -m bantvision.video video.mp4 --profile profil.json --truth N`. Sentetik testler her senaryoda %100.
+- Profil ürüne özeldir: her ürün tipi kendi kalibrasyonuyla (boş bant + tek tek geçen örnekler) kaydedilir.
+
+---
+
 ## F0 — Temel (repo, sözleşmeler, iOS derleme)
 
 **F0.1 iOS kodunu derle ve düzelt**

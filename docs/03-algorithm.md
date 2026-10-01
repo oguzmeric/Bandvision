@@ -15,7 +15,8 @@ Durum: `bg` (float32, w×h). Boyut değişirse sıfırlanır; yoksa ilk kareyle 
 1. **Eşik:** ROI içinde `mask = |gray − bg| > diffThreshold` (kesin büyüktür). ROI dışı 0.
 2. **Açma:** 3×3 erozyon, ardından 3×3 genişleme. Görüntü kenarında yalnızca görüntü içindeki komşular dikkate alınır.
 3. **Kapama:** `closeIterations` kez (3×3 genişleme → 3×3 erozyon).
-4. **Seçici arka plan güncellemesi:** her piksel için `bg += r · (gray − bg)`; `r = rateEff` (mask=0) ya da `rateEff · 0.05` (mask=1). `rateEff` §7'ye göre.
+4. **Seçici arka plan güncellemesi:** her piksel için `bg += r · (gray − bg)`; `r = rateEff` (mask=0) ya da `rateEff · 0.002` (mask=1). `rateEff` §7'ye göre.
+   - Ürün altındaki katsayı çok küçük olmalı. Yoğun akışta bir piksel zamanın `c` kadarında üründür; arka planın ürüne doğru denge kayması ≈ `k · c/(1−c) · kontrast` (`k` = ürün altı katsayısı). Eski değer `k = 0.05` ile %76 dolulukta (c/(1−c) ≈ 3,2, kontrast 130) kayma ≈ 20 gri seviyeydi; eşiği aşıp ürün arası boşlukları ön plana çeviriyor, şerit tek lekeye dönüşüp sayım duruyordu. `k = 0.002` ile %95 dolulukta bile kayma < 5. Tamamen 0 yapılmaz: banda kalıcı bırakılan bir nesne çok uzun sürede (60 fps'te ~7 dk) arka plana karışabilsin.
 5. **Bağlı bileşenler:** 8-komşuluk. Her bileşen için: piksel sayısı, ağırlık merkezi, sınırlayıcı kutu.
 6. **Normalizasyon:** `cx = meanX / w`, `cy = meanY / h`, `area = pixels / (w·h)`, kutu da w/h'ye bölünür.
 
