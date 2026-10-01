@@ -44,6 +44,50 @@ jobs:
           fi
           echo "API anahtarı biçimi geçerli ($(printf '%s' "$body" | wc -c | tr -d ' ') karakter gövde)"
 
+      - name: Kimlik bilgilerini doğrula (değerler yazdırılmaz)
+        run: |
+          # Yapıştırırken kalan boşluk / satır sonlarını temizle ve sonraki adımlara aktar
+          kid=$(printf '%s' "$ASC_KEY_ID" | tr -d ' \t\r\n')
+          iss=$(printf '%s' "$ASC_ISSUER_ID" | tr -d ' \t\r\n' | tr 'A-F' 'a-f')
+          team=$(printf '%s' "$APPLE_TEAM_ID" | tr -d ' \t\r\n')
+          { echo "ASC_KEY_ID_N=$kid"; echo "ASC_ISSUER_ID_N=$iss"; echo "APPLE_TEAM_ID_N=$team"; } >> "$GITHUB_ENV"
+          ok=1
+          [[ "$kid"  =~ ^[A-Z0-9]{10}$ ]] || { echo "::error::ASC_KEY_ID biçimi yanlış (10 karakter, büyük harf/rakam olmalı; ${#kid} karakter)"; ok=0; }
+          [[ "$iss"  =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "::error::ASC_ISSUER_ID biçimi yanlış (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx olmalı; ${#iss} karakter)"; ok=0; }
+          [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || { echo "::error::APPLE_TEAM_ID biçimi yanlış (10 karakter; ${#team} karakter)"; ok=0; }
+          [ "$ok" = 1 ] || exit 1
+          echo "Biçimler doğru."
+
+          # Apple API'sine doğrudan dene: 401 ise Key ID / Issuer ID / .p8 birbirine ait değil
+          python3 -m pip install --quiet --disable-pip-version-check pyjwt cryptography
+          ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" python3 - <<'PY'
+          import json, os, sys, time, urllib.error, urllib.request
+          import jwt
+          key = open(os.path.join(os.environ["RUNNER_TEMP"], "AuthKey.p8")).read()
+          now = int(time.time())
+          tok = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600,
+                            "aud": "appstoreconnect-v1"}, key, algorithm="ES256",
+                           headers={"kid": os.environ["ASC_KEY_ID"]})
+          url = "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=com.oguzmeric.bantsayac"
+          req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+          try:
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  data = json.load(r)
+          except urllib.error.HTTPError as e:
+              print(f"::error::App Store Connect API {e.code} döndü.")
+              if e.code == 401:
+                  print("::error::Key ID, Issuer ID ve .p8 aynı anahtara ait değil ya da anahtar iptal edilmiş. "
+                        "ASC_KEY_ID'nin 'GitHub CI' anahtarının Key ID'si olduğundan emin ol.")
+              elif e.code == 403:
+                  print("::error::Anahtarın yetkisi yetersiz; 'Admin' erişimiyle oluşturulmalı.")
+              sys.exit(1)
+          apps = data.get("data", [])
+          print(f"API kimlik doğrulaması tamam. Bu bundle ID ile kayıtlı uygulama: {len(apps)}")
+          if not apps:
+              print("::error::App Store Connect'te com.oguzmeric.bantsayac için uygulama kaydı yok (Apps → + → New App).")
+              sys.exit(1)
+          PY
+
       - run: brew install xcodegen
       - run: xcodegen generate
 
@@ -52,12 +96,12 @@ jobs:
           xcodebuild -project BantSayac.xcodeproj -scheme BantSayac \
             -configuration Release -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/BantSayac.xcarchive" \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID_N" CODE_SIGN_STYLE=Automatic \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyID "$ASC_KEY_ID_N" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID_N" \
             archive -quiet
 
       - name: Dışa aktar ve TestFlight'a yükle
@@ -68,7 +112,7 @@ jobs:
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
             <key>destination</key><string>upload</string>
-            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID_N</string>
             <key>signingStyle</key><string>automatic</string>
             <key>manageAppVersionAndBuildNumber</key><false/>
           </dict></plist>
@@ -79,8 +123,8 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -authenticationKeyID "$ASC_KEY_ID_N" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID_N"
           echo "Yüklendi: derleme ${{ github.run_number }}. App Store Connect'te işlenmesi 5-15 dk sürer."
 
       - name: Anahtarı sil
