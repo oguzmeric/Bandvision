@@ -17,3 +17,22 @@ Başlangıç: `CLAUDE.md` → `docs/00-overview.md` → `docs/01-roadmap.md`.
 # Python referans çekirdeğini test et
 cd services/edge && pip install -e ".[dev]" && pytest -q
 ```
+
+## Videodan sayım (masa başı test)
+
+Bant videosunu (telefonla çekilmiş ya da lisanslı stok video) çekirdekten geçirir; işaretli video, sayı ve profil üretir.
+
+```bash
+cd services/edge && pip install -e ".[dev]"
+python -m bantvision.video bant.mp4 --truth 57      # 57 = elle sayılan doğru adet
+```
+
+Çıktı `bant_analiz/` klasörüne yazılır: `isaretli.mp4` (ROI, sayım çizgisi, iz kimlikleri, sayaç), `ozet.json`
+(sayı, hata %, bulunan ayarlar), `profil.json` (sözleşmeye uygun profil), `sayimlar.csv`.
+
+- Arka plan, eşik, akış yönü ve tek ürün alanı videodan **otomatik** bulunur; boş bant görüntüsü gerekmez.
+- Ürünler hep bitişik geliyorsa (ör. çift çift yumurta) alan tek başına belirsizdir: önce ürünlerin **tek tek**
+  geçtiği kısa bir videoyla kalibre et, sonra yoğun videoyu o profille say:
+  `python -m bantvision.video yogun.mp4 --profile kalibrasyon_analiz/profil.json`
+- Elle ayar: `--direction`, `--roi x,y,g,y`, `--line`, `--expected-area`, `--width`. Tümü: `--help`.
+- Sabit kamera şart: kayan, zoom yapan ya da kurgulu videolarda klasik yöntem güvenilmez.
