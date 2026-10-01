@@ -13,7 +13,15 @@ Konum: `apps/ios` (XcodeGen: `project.yml`). Swift 5 dil modu, SwiftUI, iOS 17+,
 | `Core/*` | Profil modeli/deposu, ayarlar, kayıt + webhook (eski format) |
 | `UI/*` | Ana ekran, sürüklenebilir ROI/çizgi, kalibrasyon paneli, profiller, ayarlar |
 
-E�zamanlılık modeli: kamera kareleri `processingQueue`'da gelir; `FrameProcessor` durumu yalnızca bu kuyrukta değişir; UI'a `DispatchQueue.main.async` ile `@MainActor` callback'ler gider. ViewModel ve depolar `@MainActor`.
+Eşzamanlılık modeli: kamera kareleri `processingQueue`'da gelir; `FrameProcessor` durumu yalnızca bu kuyrukta değişir; UI'a `DispatchQueue.main.async` ile `@MainActor` callback'ler gider. ViewModel ve depolar `@MainActor`.
+
+## 1b. Video modu (manuel test)
+Üst çubuktaki film simgesi → **Fotoğraflar'dan** ya da **Dosyalar'dan** video. Kamera durur, video aynı işleme hattından geçer.
+- `Camera/VideoFileSource.swift`: `AVAssetReader` + video kompozisyonu (videonun yönü uygulanır), kareler kamerayla aynı biçimde (420f). Okuma ayrı kuyrukta, her kare `processingQueue.sync` ile işlenir; kalibrasyon komutları kareler arasında çalışır. Hız 1×/2×/hızlı; zaman damgası her zaman videonunkidir (§7 ölçekleme doğru çalışır).
+- Başlarken sorulur: video boş bantla başlıyorsa ilk ~1 sn'den arka plan ve eşik öğrenilir (§5). Video oynarken Kalibre akışı kullanılabilir.
+- Video sayımı canlı oturumdan ayrıdır: kayıt/webhook'a yazılmaz, "Kameraya dön" önceki sayıyı geri yükler.
+- Sonuçta isteğe bağlı "Doğru adet" girilir; doğruluk % gösterilir (≥ %98 yeşil).
+- Masaüstü karşılığı: `python -m bantvision.video` (README). Sayısı bilinen test videoları: `tools/make_test_video.py`.
 
 ## 2. Görevler
 
