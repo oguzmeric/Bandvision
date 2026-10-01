@@ -90,6 +90,15 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Xcode 26 seç (App Store yüklemesi iOS 26 SDK istiyor)
+        working-directory: .
+        run: |
+          ls -d /Applications/Xcode*.app
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          [ -n "$x" ] || x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] || { echo "::error::Bu sunucuda Xcode 26 yok; runs-on etiketini güncelle"; exit 1; }
+          sudo xcode-select -s "$x/Contents/Developer"
+          xcodebuild -version
       - run: brew install xcodegen
       - run: xcodegen generate
 
