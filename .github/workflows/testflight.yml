@@ -59,8 +59,10 @@ jobs:
           echo "Biçimler doğru."
 
           # Apple API'sine doğrudan dene: 401 ise Key ID / Issuer ID / .p8 birbirine ait değil
-          python3 -m pip install --quiet --disable-pip-version-check pyjwt cryptography
-          ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" python3 - <<'PY'
+          # Homebrew Python sisteme pip kurulumunu engelliyor (PEP 668); geçici sanal ortam kullan
+          python3 -m venv "$RUNNER_TEMP/asc-venv"
+          "$RUNNER_TEMP/asc-venv/bin/pip" install --quiet --disable-pip-version-check pyjwt cryptography
+          ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" "$RUNNER_TEMP/asc-venv/bin/python" - <<'PY'
           import json, os, sys, time, urllib.error, urllib.request
           import jwt
           key = open(os.path.join(os.environ["RUNNER_TEMP"], "AuthKey.p8")).read()
