@@ -107,31 +107,62 @@ class Calibration:
     flow: tuple[float, float]          # medyan (dx, dy), işleme pikseli / kare
     expected_area: float = 0.0
     area_samples: int = 0
+    background_from: str = "medyan"
     notes: list[str] = field(default_factory=list)
 
 
-def estimate_background(info: VideoInfo, profile: Profile, window: float, samples: int = 60
-                        ) -> tuple[np.ndarray, int, list[np.ndarray]]:
-    """Pencere içinden eşit aralıklı karelerin piksel medyanı = arka plan.
+def _noise_threshold(p995: float) -> int:
+    """Canlı kalibrasyonla (§5) aynı formül: gürültünün %99,5'i × 1,5 + 8, [12, 100]."""
+    return int(min(100, max(12, int(p995 * 1.5) + 8)))
 
-    Ürünler hareket ettiği için her pikselde çoğu örnek banttır, medyan ürünleri siler.
-    Eşik, canlı kalibrasyonla (§5) aynı formülle: medyan fark haritasının %99,5'i × 1,5 + 8.
+
+def temporal_noise_p995(info: VideoInfo, profile: Profile, window: float, pairs: int = 40) -> float:
+    """Ardışık kare farklarından gürültü: ürünlerin nerede ne kadar beklediğinden bağımsızdır.
+
+    İki ardışık karede piksellerin çoğu değişmez (yalnızca hareketli kenarlar değişir), bu yüzden
+    |f(t) - f(t+1)| medyanı sensör/sıkıştırma gürültüsünü verir. Gauss gürültüde
+    medyan = 0,6745·σ·√2 ve |N(0,σ)|'nın %99,5'i = 2,807·σ.
     """
     end = min(info.duration, window)
-    n_avail = max(1, int(end * info.fps))
+    step = max(1, int(end * info.fps) // pairs)
+    meds: list[float] = []
+    prev: np.ndarray | None = None
+    for k, _, f in read_frames(info, 0.0, end):
+        g = downsample(to_gray(f, profile.rotation), profile.processingWidth)[0].astype(np.float32)
+        if prev is not None and k % step == 0:
+            h, w = g.shape
+            x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+            meds.append(float(np.median(np.abs(g - prev)[y0:y1, x0:x1])))
+        prev = g
+    sigma = (float(np.median(meds)) if meds else 0.0) / (0.6745 * math.sqrt(2))
+    return 2.807 * sigma
+
+
+def estimate_background(info: VideoInfo, profile: Profile, window: float, samples: int = 60,
+                        bg_range: tuple[float, float] | None = None) -> tuple[np.ndarray, int, list[np.ndarray]]:
+    """Arka plan = örnek karelerin piksel medyanı.
+
+    `bg_range` verilirse (videoda boş bandın göründüğü aralık) yalnızca oradan öğrenilir ve eşik canlı
+    kalibrasyondaki gibi |kare - arka plan| dağılımından hesaplanır. Verilmezse tüm pencereden öğrenilir:
+    ürünler hareket ettiği için her pikselde çoğu örnek bant olur ve medyan ürünleri siler. Bu varsayım
+    bant %50'den fazla dolu olduğunda bozulur (bkz. testler); eşik bu yüzden ardışık kare farkından alınır.
+    """
+    start, end = bg_range if bg_range else (0.0, min(info.duration, window))
+    n_avail = max(1, int((end - start) * info.fps))
     step = max(1, n_avail // samples)
     smalls = [downsample(to_gray(f, profile.rotation), profile.processingWidth)[0]
-              for _, _, f in read_frames(info, 0.0, end, step)]
-    if len(smalls) < 5:
-        raise SystemExit("Kalibrasyon için yeterli kare okunamadı (video çok kısa ya da bozuk).")
+              for _, _, f in read_frames(info, start, end, step)]
+    if len(smalls) < (3 if bg_range else 5):
+        raise SystemExit("Kalibrasyon için yeterli kare okunamadı (video ya da --bg-range çok kısa).")
     stack = np.stack(smalls).astype(np.float32)
     bg = np.median(stack, axis=0)
-    noise = np.median(np.abs(stack - bg), axis=0)   # hareketli ürünler medyan dışında kalır
-    h, w = bg.shape
-    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
-    p995 = float(np.percentile(noise[y0:y1, x0:x1], 99.5))
-    threshold = int(min(100, max(12, int(p995 * 1.5) + 8)))
-    return bg, threshold, smalls
+    if bg_range:
+        h, w = bg.shape
+        x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+        p995 = float(np.percentile(np.abs(stack - bg)[:, y0:y1, x0:x1], 99.5))
+    else:
+        p995 = temporal_noise_p995(info, profile, window)
+    return bg, _noise_threshold(p995), smalls
 
 
 def estimate_direction(info: VideoInfo, profile: Profile, bg: np.ndarray,
@@ -202,9 +233,11 @@ def estimate_expected_area(info: VideoInfo, profile: Profile, bg: np.ndarray, wi
 
 
 def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction: bool,
-              fixed_area: bool) -> Calibration:
-    bg, th, _ = estimate_background(info, profile, window)
+              fixed_area: bool, bg_range: tuple[float, float] | None = None) -> Calibration:
+    bg, th, _ = estimate_background(info, profile, window, bg_range=bg_range)
     cal = Calibration(bg, th, profile.direction, (0.0, 0.0))
+    if bg_range:
+        cal.background_from = f"aralık {bg_range[0]:.1f}-{bg_range[1]:.1f} sn"
     profile.diffThreshold = th
     if not fixed_direction:
         d, flow = estimate_direction(info, profile, bg, th, window)
@@ -363,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
     ap.add_argument("--width", type=int, help="işleme genişliği (px), ör. 160/240/360")
     ap.add_argument("--expected-area", type=float, help="tek ürün alanı (vermezsen otomatik öğrenilir)")
+    ap.add_argument("--bg-range", help="boş bandın göründüğü aralık (sn), ör. 0,1.5; bant çok doluysa gerekli")
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
@@ -376,8 +410,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Video: {src.name}  {info.width}x{info.height}  {info.fps:.1f} fps  {info.duration:.1f} sn")
     print("1/2 Kalibrasyon...")
+    bg_range = tuple(float(v) for v in a.bg_range.split(",")) if a.bg_range else None
     cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction),
-                    fixed_area=a.expected_area is not None or profile.expectedArea > 0)
+                    fixed_area=a.expected_area is not None or profile.expectedArea > 0,
+                    bg_range=bg_range)  # type: ignore[arg-type]
+    cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
+        cal.background.astype(np.uint8), (cal.background.shape[1] * 3, cal.background.shape[0] * 3),
+        interpolation=cv2.INTER_NEAREST))
+    print(f"  arka plan: {cal.background_from} (bkz. arka_plan.png; boş bant görünmeli)")
     print(f"  eşik={cal.threshold}  yön={profile.direction} (akış dx={cal.flow[0]:+.2f} dy={cal.flow[1]:+.2f})"
           f"  tek ürün alanı={profile.expectedArea:.5f} ({cal.area_samples} örnek)")
     for note in cal.notes:
@@ -391,6 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         "size": [info.width, info.height], "count": res.total, "truth": a.truth,
         "errorPct": (round(100 * (res.total - a.truth) / a.truth, 2) if a.truth else None),
         "calibration": {"threshold": cal.threshold, "direction": profile.direction,
+                        "background": cal.background_from,
                         "flow": [round(cal.flow[0], 3), round(cal.flow[1], 3)],
                         "expectedArea": profile.expectedArea, "areaSamples": cal.area_samples,
                         "notes": cal.notes},
@@ -408,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.truth:
         diff = res.total - a.truth
         print(f"   doğru: {a.truth}   fark: {diff:+d} ({100 * diff / a.truth:+.1f}%)", end="")
-    print(f"\nÇıktılar: {out_dir}" + ("" if a.no_video else "  (isaretli.mp4, ozet.json, profil.json, sayimlar.csv)"))
+    print(f"\nÇıktılar: {out_dir}" + ("" if a.no_video else "  (isaretli.mp4, arka_plan.png, ozet.json, profil.json, sayimlar.csv)"))
     if not math.isfinite(profile.expectedArea) or profile.expectedArea == 0:
         print("İpucu: ürünler birbirine değiyorsa --expected-area ile tek ürün alanını elle ver.")
     return 0

@@ -120,3 +120,31 @@ def test_manual_overrides_skip_auto_calibration(tmp_path: pathlib.Path) -> None:
     assert s["calibration"]["flow"] == [0.0, 0.0]          # yön tahmini çalışmadı
     assert s["calibration"]["areaSamples"] == 0            # alan tahmini çalışmadı
     assert s["count"] == 5
+
+
+def dense(gap: float, n: int = 25, lead: float = 0.0) -> sim.Scenario:
+    """Tek şeritte sık akış: doluluk ≈ 144 / gap. lead > 0 ise video başında o kadar piksel boş bant."""
+    return sim.Scenario(f"dense{gap:.0f}", [sim.Item(-120 - lead - i * gap, 360) for i in range(n)], fps=30.0)
+
+
+def test_threshold_not_inflated_when_belt_mostly_covered(tmp_path: pathlib.Path) -> None:
+    # %65 doluluk: eski tahmin (|kare - medyan| haritasının %99,5'i) eşiği 43'e çıkarıyordu
+    sc = dense(220)
+    s = analyze(write_video(sc, tmp_path / "d220.mp4"), "--preset", "egg")
+    assert s["calibration"]["threshold"] <= 20, s["calibration"]
+    assert s["count"] == sc.expected_count
+
+
+def test_mostly_covered_belt_needs_bg_range(tmp_path: pathlib.Path) -> None:
+    """%76 doluluk: her pikselde ürün çoğunlukta olduğu için medyan arka plan ürünün kendisi olur ve
+    boşluklar ürün sanılır. Bu, videonun kendisinden ayırt edilemez (şekil, doluluk oranı ölçüldü; ayırt
+    etmiyor). Çözüm: videoda boş bandın göründüğü aralığı vermek. Bilinen sınır olarak belgelenir."""
+    sc = dense(190, n=60, lead=700)                  # ilk ~0,6 sn boş bant, sonra ~11 sn %76 dolu
+    path = write_video(sc, tmp_path / "d190.mp4")
+    auto = analyze(path, "--preset", "egg")
+    assert auto["count"] != sc.expected_count        # bilinen sınır
+    assert auto["calibration"]["background"] == "medyan"
+    fixed = analyze(path, "--preset", "egg", "--bg-range", "0,0.4")
+    assert fixed["calibration"]["background"] == "aralık 0.0-0.4 sn"
+    assert fixed["count"] == sc.expected_count
+    assert (tmp_path / "d190" / "arka_plan.png").exists()

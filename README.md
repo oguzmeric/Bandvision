@@ -34,5 +34,6 @@ python -m bantvision.video bant.mp4 --truth 57      # 57 = elle sayılan doğru 
 - Ürünler hep bitişik geliyorsa (ör. çift çift yumurta) alan tek başına belirsizdir: önce ürünlerin **tek tek**
   geçtiği kısa bir videoyla kalibre et, sonra yoğun videoyu o profille say:
   `python -m bantvision.video yogun.mp4 --profile kalibrasyon_analiz/profil.json`
+- Bant çoğu zaman **%75'ten fazla doluysa** videonun kendisinden arka plan çıkarılamaz (her pikselde ürün çoğunluktadır). Videonun başında 1–2 sn boş bant çek ve `--bg-range 0,1.5` ver. Öğrenilen arka plan `arka_plan.png`'ye yazılır: orada ürün görünmemeli.
 - Elle ayar: `--direction`, `--roi x,y,g,y`, `--line`, `--expected-area`, `--width`. Tümü: `--help`.
 - Sabit kamera şart: kayan, zoom yapan ya da kurgulu videolarda klasik yöntem güvenilmez.
