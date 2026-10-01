@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bantvision.profile.v1",
+  "title": "BantVision ürün profili",
+  "type": "object",
+  "required": ["schema", "id", "name", "roi", "linePosition", "direction", "diffThreshold",
+               "expectedArea", "minAreaFactor", "minAreaAbs", "splitTouching", "maxMultiplicity",
+               "closeIterations", "processingWidth", "minHits", "maxMatchDistance", "backgroundRate"],
+  "properties": {
+    "schema": { "const": "bantvision.profile.v1" },
+    "id": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "roi": {
+      "type": "object", "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "linePosition": { "type": "number", "minimum": 0, "maximum": 1 },
+    "direction": { "enum": ["down", "up", "right", "left"] },
+    "diffThreshold": { "type": "integer", "minimum": 5, "maximum": 120 },
+    "expectedArea": { "type": "number", "minimum": 0 },
+    "minAreaFactor": { "type": "number", "minimum": 0.05, "maximum": 1 },
+    "minAreaAbs": { "type": "number", "minimum": 0 },
+    "splitTouching": { "type": "boolean" },
+    "maxMultiplicity": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "closeIterations": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "processingWidth": { "type": "integer", "minimum": 64, "maximum": 640 },
+    "minHits": { "type": "integer", "minimum": 1, "maximum": 10 },
+    "maxMatchDistance": { "type": "number", "minimum": 0.01, "maximum": 0.5 },
+    "backgroundRate": { "type": "number", "minimum": 0.0005, "maximum": 0.2 },
+    "source": {
+      "type": "object",
+      "properties": {
+        "rotation": { "enum": [0, 90, 180, 270] },
+        "referenceFps": { "type": "number", "minimum": 5, "maximum": 240, "default": 60 }
+      }
+    },
+    "scale": {
+      "type": "object",
+      "properties": { "mmPerPixel": { "type": ["number", "null"], "exclusiveMinimum": 0 } }
+    },
+    "qc": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "geometry": {
+          "type": "object",
+          "properties": {
+            "areaMinFactor": { "type": "number" }, "areaMaxFactor": { "type": "number" },
+            "aspectMin": { "type": "number" }, "aspectMax": { "type": "number" },
+            "solidityMin": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "spots": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "darkDelta": { "type": "integer", "minimum": 5, "maximum": 200 },
+            "maxSpotAreaRatio": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "barcode": {
+          "type": "object",
+          "properties": {
+            "required": { "type": "boolean" },
+            "symbologies": { "type": "array", "items": { "enum": ["ean13", "ean8", "code128", "code39", "qr", "datamatrix"] } },
+            "pattern": { "type": ["string", "null"] }
+          }
+        },
+        "text": {
+          "type": "object",
+          "properties": { "required": { "type": "boolean" }, "pattern": { "type": ["string", "null"] } }
+        },
+        "sizeClasses": {
+          "type": "array",
+          "items": { "type": "object", "required": ["name", "maxMm"],
+                     "properties": { "name": { "type": "string" }, "maxMm": { "type": "number" } } }
+        },
+        "saveNokImages": { "type": "boolean" }
+      }
+    },
+    "io": {
+      "type": "object",
+      "properties": {
+        "bridgeHost": { "type": ["string", "null"] },
+        "countPulse": {
+          "type": "object",
+          "properties": { "enabled": { "type": "boolean" }, "channel": { "type": "integer", "minimum": 1, "maximum": 4 },
+                          "widthMs": { "type": "integer", "minimum": 5, "maximum": 2000 } }
+        },
+        "eject": {
+          "type": "object",
+          "properties": { "enabled": { "type": "boolean" }, "channel": { "type": "integer", "minimum": 1, "maximum": 4 },
+                          "distanceMm": { "type": "number", "minimum": 0 },
+                          "widthMs": { "type": "integer", "minimum": 5, "maximum": 2000 },
+                          "latencyCompensationMs": { "type": "integer" } }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema": "bantvision.profile.v1",
+  "id": "6f1c2a8e-3b7d-4c55-9a10-0e2f4b1d7c11",
+  "name": "Yumurta",
+  "roi": { "x": 0.05, "y": 0.1, "width": 0.9, "height": 0.8 },
+  "linePosition": 0.5,
+  "direction": "down",
+  "diffThreshold": 28,
+  "expectedArea": 0.0131,
+  "minAreaFactor": 0.35,
+  "minAreaAbs": 0.0008,
+  "splitTouching": true,
+  "maxMultiplicity": 6,
+  "closeIterations": 0,
+  "processingWidth": 240,
+  "minHits": 2,
+  "maxMatchDistance": 0.10,
+  "backgroundRate": 0.02,
+  "source": { "rotation": 90, "referenceFps": 60 },
+  "scale": { "mmPerPixel": 0.42 },
+  "qc": {
+    "enabled": true,
+    "geometry": { "areaMinFactor": 0.8, "areaMaxFactor": 1.25, "aspectMin": 1.15, "aspectMax": 1.5, "solidityMin": 0.92 },
+    "spots": { "enabled": true, "darkDelta": 35, "maxSpotAreaRatio": 0.004 },
+    "barcode": { "required": false, "symbologies": [], "pattern": null },
+    "text": { "required": false, "pattern": null },
+    "sizeClasses": [ {"name":"S","maxMm":42}, {"name":"M","maxMm":45}, {"name":"L","maxMm":48}, {"name":"XL","maxMm":999} ],
+    "saveNokImages": true
+  },
+  "io": {
+    "bridgeHost": "192.168.1.50",
+    "countPulse": { "enabled": true, "channel": 1, "widthMs": 50 },
+    "eject": { "enabled": false, "channel": 2, "distanceMm": 600, "widthMs": 80, "latencyCompensationMs": 0 }
+  }
+}

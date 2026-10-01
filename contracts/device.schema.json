@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bantvision.device.v1",
+  "title": "Eşleme isteği ve yanıtı",
+  "$defs": {
+    "pairRequest": {
+      "type": "object", "required": ["code", "deviceInfo"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[0-9A-Z]{8}$" },
+        "deviceInfo": {
+          "type": "object", "required": ["kind", "model", "appVersion"],
+          "properties": { "kind": { "enum": ["iphone", "edge"] }, "model": { "type": "string" },
+                          "appVersion": { "type": "string" }, "hostname": { "type": "string" } }
+        }
+      }
+    },
+    "pairResponse": {
+      "type": "object", "required": ["deviceId", "deviceKey", "lineId", "orgId"],
+      "properties": { "deviceId": { "type": "string" }, "deviceKey": { "type": "string" },
+                      "lineId": { "type": "string" }, "orgId": { "type": "string" } }
+    }
+  }
+}

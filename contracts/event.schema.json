@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bantvision.event.v1",
+  "title": "BantVision olayı",
+  "type": "object",
+  "required": ["schema", "eventId", "ts", "deviceId", "cameraId", "type"],
+  "properties": {
+    "schema": { "const": "bantvision.event.v1" },
+    "eventId": { "type": "string", "format": "uuid" },
+    "ts": { "type": "string", "format": "date-time" },
+    "deviceId": { "type": "string" },
+    "cameraId": { "type": "string" },
+    "lineId": { "type": ["string", "null"] },
+    "profileId": { "type": ["string", "null"] },
+    "type": { "enum": ["count", "inspection", "state", "heartbeat"] },
+    "count": {
+      "type": "object", "required": ["delta", "total"],
+      "properties": { "delta": { "type": "integer", "minimum": 1 }, "total": { "type": "integer", "minimum": 0 },
+                      "trackId": { "type": "integer" } }
+    },
+    "inspection": {
+      "type": "object", "required": ["trackId", "result", "reasons"],
+      "properties": {
+        "trackId": { "type": "integer" },
+        "result": { "enum": ["ok", "nok"] },
+        "reasons": { "type": "array", "items": { "enum": ["area_low", "area_high", "aspect_out", "solidity_low", "spots",
+          "barcode_missing", "barcode_mismatch", "text_missing", "text_mismatch", "anomaly"] } },
+        "metrics": { "type": "object", "additionalProperties": { "type": ["number", "string", "null"] } },
+        "sizeClass": { "type": ["string", "null"] },
+        "imageRef": { "type": ["string", "null"] }
+      }
+    },
+    "state": {
+      "type": "object", "required": ["running"],
+      "properties": { "running": { "type": "boolean" },
+                      "reason": { "enum": ["motion", "no_motion", "calibration_start", "calibration_end", "manual", "source_lost", "source_restored"] } }
+    },
+    "heartbeat": {
+      "type": "object",
+      "properties": { "fps": { "type": "number" }, "temperatureState": { "enum": ["nominal", "fair", "serious", "critical", "unknown"] },
+                      "queueDepth": { "type": "integer" }, "uptimeSec": { "type": "integer" }, "appVersion": { "type": "string" } }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "count" } } }, "then": { "required": ["count"] } },
+    { "if": { "properties": { "type": { "const": "inspection" } } }, "then": { "required": ["inspection"] } },
+    { "if": { "properties": { "type": { "const": "state" } } }, "then": { "required": ["state"] } },
+    { "if": { "properties": { "type": { "const": "heartbeat" } } }, "then": { "required": ["heartbeat"] } }
+  ]
+}

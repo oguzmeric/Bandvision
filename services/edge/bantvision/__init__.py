@@ -1,0 +1,1 @@
+"""BantVision edge paketi."""

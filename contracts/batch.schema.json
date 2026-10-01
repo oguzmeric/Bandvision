@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bantvision.batch.v1",
+  "type": "object",
+  "required": ["schema", "deviceId", "sentAt", "events"],
+  "properties": {
+    "schema": { "const": "bantvision.batch.v1" },
+    "deviceId": { "type": "string" },
+    "sentAt": { "type": "string", "format": "date-time" },
+    "events": { "type": "array", "maxItems": 500, "items": { "$ref": "event.schema.json" } }
+  }
+}

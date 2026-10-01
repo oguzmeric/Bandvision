@@ -1,0 +1,19 @@
+{
+  "schema": "bantvision.batch.v1",
+  "deviceId": "dev_7Q2K9",
+  "sentAt": "2026-10-01T09:15:05.000Z",
+  "events": [
+    { "schema": "bantvision.event.v1", "eventId": "0b8f3c3e-1d1a-4c2e-9a77-5f0a2b3c4d01", "ts": "2026-10-01T09:15:02.123Z",
+      "deviceId": "dev_7Q2K9", "cameraId": "iphone", "lineId": "line_a", "profileId": "6f1c2a8e-3b7d-4c55-9a10-0e2f4b1d7c11",
+      "type": "count", "count": { "delta": 1, "total": 1532, "trackId": 4410 } },
+    { "schema": "bantvision.event.v1", "eventId": "0b8f3c3e-1d1a-4c2e-9a77-5f0a2b3c4d02", "ts": "2026-10-01T09:15:02.125Z",
+      "deviceId": "dev_7Q2K9", "cameraId": "iphone", "lineId": "line_a", "profileId": "6f1c2a8e-3b7d-4c55-9a10-0e2f4b1d7c11",
+      "type": "inspection",
+      "inspection": { "trackId": 4410, "result": "nok", "reasons": ["spots"],
+                      "metrics": { "areaRatio": 1.02, "aspect": 1.31, "solidity": 0.97, "spotRatio": 0.011 },
+                      "sizeClass": "M", "imageRef": "nok/line_a/2026-10-01/4410.jpg" } },
+    { "schema": "bantvision.event.v1", "eventId": "0b8f3c3e-1d1a-4c2e-9a77-5f0a2b3c4d03", "ts": "2026-10-01T09:15:04.000Z",
+      "deviceId": "dev_7Q2K9", "cameraId": "iphone", "lineId": "line_a", "profileId": null,
+      "type": "heartbeat", "heartbeat": { "fps": 58.7, "temperatureState": "fair", "queueDepth": 0, "uptimeSec": 3600, "appVersion": "1.1.0" } }
+  ]
+}
