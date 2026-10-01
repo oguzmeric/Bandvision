@@ -23,3 +23,11 @@ jobs:
             -configuration Release -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             build -quiet
+      - name: Concurrency denetimi (SWIFT_STRICT_CONCURRENCY=complete, uyarılar)
+        run: |
+          xcodebuild -project BantSayac.xcodeproj -target BantSayac \
+            -configuration Release -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete \
+            SYMROOT=build-strict \
+            build -quiet 2>&1 | tee strict.log
+          echo "concurrency uyarısı: $(grep -c 'warning:' strict.log || true)"
