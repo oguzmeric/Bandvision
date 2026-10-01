@@ -1,0 +1,73 @@
+name: testflight
+# Elle tetiklenir: Actions → testflight → Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults: { run: { working-directory: apps/ios } }
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gizli anahtarları kontrol et
+        run: |
+          for v in ASC_KEY_ID ASC_ISSUER_ID APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || { echo "::error::$v secret'ı tanımlı değil (Settings → Secrets and variables → Actions)"; exit 1; }
+          done
+
+      - name: App Store Connect API anahtarını yaz
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          [ -n "$ASC_KEY_P8" ] || { echo "::error::ASC_KEY_P8 secret'ı tanımlı değil"; exit 1; }
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
+
+      - run: brew install xcodegen
+      - run: xcodegen generate
+
+      - name: Arşivle (Release, otomatik imzalama)
+        run: |
+          xcodebuild -project BantSayac.xcodeproj -scheme BantSayac \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/BantSayac.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            archive -quiet
+
+      - name: Dışa aktar ve TestFlight'a yükle
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/BantSayac.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          echo "Yüklendi: derleme ${{ github.run_number }}. App Store Connect'te işlenmesi 5-15 dk sürer."
+
+      - name: Anahtarı sil
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"

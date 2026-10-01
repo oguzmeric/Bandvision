@@ -30,4 +30,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO SWIFT_STRICT_CONCURRENCY=complete \
             SYMROOT=build-strict \
             build -quiet 2>&1 | tee strict.log
-          echo "concurrency uyarısı: $(grep -c 'warning:' strict.log || true)"
+          n=$(grep -c 'warning:' strict.log || true)
+          echo "concurrency uyarısı: $n"
+          # Swift 6'ya geçişte hata olacak uyarıların geri gelmesini engelle
+          test "$n" -eq 0

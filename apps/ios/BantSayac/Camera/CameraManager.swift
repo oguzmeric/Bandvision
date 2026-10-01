@@ -15,7 +15,7 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     var frameHandler: ((CVPixelBuffer) -> Void)?
 
     /// completion ana kuyrukta çağrılır.
-    func requestAccess(_ completion: @escaping @MainActor (Bool) -> Void) {
+    func requestAccess(_ completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             DispatchQueue.main.async { completion(true) }
@@ -29,7 +29,7 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     }
 
     /// completion ana kuyrukta çağrılır.
-    func configureAndStart(_ completion: @escaping @MainActor (Bool) -> Void) {
+    func configureAndStart(_ completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         sessionQueue.async {
             let ok = self.configured || self.configure()
             if ok && !self.session.isRunning { self.session.startRunning() }
@@ -97,7 +97,7 @@ final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
     // MARK: - Kurulum
 
-    private func withDevice(_ body: @escaping (AVCaptureDevice) -> Void) {
+    private func withDevice(_ body: @escaping @Sendable (AVCaptureDevice) -> Void) {
         sessionQueue.async {
             guard let d = self.device else { return }
             do {

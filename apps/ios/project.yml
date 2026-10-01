@@ -6,6 +6,9 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    # CI'da her TestFlight yüklemesinde github.run_number ile ezilir
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   BantSayac:
     type: application
@@ -15,13 +18,19 @@ targets:
       path: BantSayac/Info.plist
       properties:
         CFBundleDisplayName: Bant Sayaç
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCameraUsageDescription: Banttan geçen ürünleri saymak için kamera kullanılır.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         UILaunchScreen: {}
+        # Yalnızca standart HTTPS kullanılıyor; TestFlight'ta ihracat uyumluluk sorusunu atlar
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.oguzmeric.bantsayac
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme: {}
