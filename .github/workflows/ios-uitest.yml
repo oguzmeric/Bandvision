@@ -96,7 +96,7 @@ jobs:
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=UITEST \
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
-          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM|AĞ DURUMU|TEST KANCASI" uitest.log | tail -40
+          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM|AĞ DURUMU|AĞ SAYAÇLARI|TEST KANCASI" uitest.log | tail -40
           # Test başarısız olunca yazdırdığı ekran ağacı (teşhis)
           sed -n '/=== EKRAN/,/=== SON/p' uitest.log | head -300
           exit $status

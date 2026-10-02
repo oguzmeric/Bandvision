@@ -195,6 +195,20 @@ final class H26xDecoder: @unchecked Sendable {
     /// VideoToolbox iş parçacığında: (kare, akış başından beri saniye)
     var onFrame: ((CVPixelBuffer, Double) -> Void)?
 
+    // Teşhis sayaçları (kilitli: çözücü geri çağrısı ayrı iş parçacığında)
+    private let statsLock = NSLock()
+    private var units = 0, decodedFrames = 0, decodeErrors = 0, rebuilds = 0
+    private var lastSize = ""
+
+    var statsText: String {
+        statsLock.lock(); defer { statsLock.unlock() }
+        return "birim \(units) · çözülen \(decodedFrames) · çözme hatası \(decodeErrors) · kurulum \(rebuilds) · \(lastSize)"
+    }
+
+    private func bump(_ body: () -> Void) {
+        statsLock.lock(); body(); statsLock.unlock()
+    }
+
     func configure(_ info: RTSPClient.StreamInfo) {
         reset()
         codec = info.codec
@@ -215,6 +229,7 @@ final class H26xDecoder: @unchecked Sendable {
     }
 
     func decode(_ nalus: [Data], rtpTimestamp: UInt32) {
+        bump { units += 1 }
         var slices: [Data] = []
         var keyframe = false
         var changed = false
@@ -236,9 +251,16 @@ final class H26xDecoder: @unchecked Sendable {
         guard let sample = makeSample(slices, format: format, pts: unwrap(rtpTimestamp)) else { return }
         let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) {
             [weak self] status, _, imageBuffer, pts, _ in
-            guard status == noErr, let pb = imageBuffer, let self else { return }
+            guard let self else { return }
+            guard status == noErr, let pb = imageBuffer else {
+                self.bump { self.decodeErrors += 1 }
+                return
+            }
+            let size = "\(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))"
+            self.bump { self.decodedFrames += 1; self.lastSize = size }
             self.onFrame?(pb, pts.seconds)
         }
+        if status != noErr { bump { decodeErrors += 1 } }
         if status == kVTInvalidSessionErr {           // uygulama arka plandan dönünce oturum geçersizleşebilir
             rebuildSession()
             waitingForKeyframe = true
@@ -297,6 +319,7 @@ final class H26xDecoder: @unchecked Sendable {
                                                   imageBufferAttributes: attrs as CFDictionary,
                                                   outputCallback: nil, decompressionSessionOut: &s)
         guard status == noErr, let s else { return }
+        bump { rebuilds += 1 }
         format = fmt
         session = s
         waitingForKeyframe = true
@@ -370,16 +393,23 @@ final class H26xDecoder: @unchecked Sendable {
 final class FrameGate: @unchecked Sendable {
     private let lock = NSLock()
     private var busy = false
-    private(set) var dropped = 0
+    private var droppedCount = 0
+    private var passedCount = 0
+
+    var statsText: String {
+        lock.lock(); defer { lock.unlock() }
+        return "işlenen \(passedCount) · atlanan \(droppedCount)"
+    }
 
     func submit(_ pb: CVPixelBuffer, ts: Double, to processor: FrameProcessor) {
         lock.lock()
         if busy {
-            dropped += 1
+            droppedCount += 1
             lock.unlock()
             return
         }
         busy = true
+        passedCount += 1
         lock.unlock()
         let frame = UncheckedSendable(value: pb)
         processor.queue.async { [self] in

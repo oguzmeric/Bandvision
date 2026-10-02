@@ -27,6 +27,9 @@ struct RootView: View {
                 if ProcessInfo.processInfo.environment["BS_TEST_VIDEO"] != nil
                     || ProcessInfo.processInfo.environment["BS_TEST_RTSP_URL"] != nil {
                     Text(vm.snapshot.perf).font(.caption2).accessibilityIdentifier("perfStats")
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(vm.networkDebugText).font(.caption2).accessibilityIdentifier("networkStats")
+                    }
                 }
             }
         }

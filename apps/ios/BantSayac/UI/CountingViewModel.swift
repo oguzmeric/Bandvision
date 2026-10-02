@@ -359,6 +359,12 @@ final class CountingViewModel: ObservableObject {
         setRunning(true)
     }
 
+    /// UI testi teşhisi: ağ kaynağı ve kapı sayaçları
+    var networkDebugText: String {
+        guard let networkSource else { return "" }
+        return networkSource.decoder.statsText + " · " + frameGate.statsText
+    }
+
     /// UI testinde video açılamazsa ekranda gösterilir (teşhis için).
     @Published var testHookError: String?
     #endif

@@ -75,6 +75,10 @@ final class FrameProcessor: @unchecked Sendable {
     // Ölçüm (üssel ortalama, ms)
     private var perfGap = 0.0, perfCore = 0.0, perfImage = 0.0
     private var perfLastEnd: CFTimeInterval = 0
+    private var lastTs: Double?
+    private var maxGapMs = 0.0
+    private var backwardsTs = 0
+    private var sourceFps = 0.0
     private var fpsWindowStart: CFTimeInterval = 0
     private var fpsFrames = 0
     private var fps: Double = 0
@@ -144,6 +148,7 @@ final class FrameProcessor: @unchecked Sendable {
         tickFPS()
         // §7: gerçek fps'e göre profil parametrelerini ölçekle (Python Pipeline.process ile aynı)
         let fps = updateSourceFPS(ts)
+        sourceFps = fps
         let k = referenceFps / max(1.0, fps)
         let maxDist = min(0.5, profile.maxMatchDistance * k)
         let rate = 1 - pow(1 - profile.backgroundRate, k)
@@ -254,6 +259,10 @@ final class FrameProcessor: @unchecked Sendable {
     // MARK: - Yardımcılar
 
     private func updateSourceFPS(_ ts: Double) -> Double {
+        if let last = lastTs {
+            if ts <= last { backwardsTs += 1 } else { maxGapMs = max(maxGapMs, (ts - last) * 1000) }
+        }
+        lastTs = ts
         if let last = stamps.last, ts <= last { stamps.removeAll() }   // geri sarma / kaynak değişimi
         stamps.append(ts)
         while stamps.count > 2 && ts - stamps[0] > 2.0 { stamps.removeFirst() }
@@ -288,8 +297,8 @@ final class FrameProcessor: @unchecked Sendable {
         }
         let snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
                                   blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
-                                  perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms",
-                                               perfGap, perfCore, perfImage))
+                                  perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms · en uzun aralık %.0f ms · geri giden %d · kaynak fps %.1f · son ts %.2f",
+                                               perfGap, perfCore, perfImage, maxGapMs, backwardsTs, sourceFps, lastTs ?? -1))
         DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
     }
 

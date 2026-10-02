@@ -45,8 +45,17 @@ final class BantSayacUITests: XCTestCase {
 
         let state = app.descendants(matching: .any)["networkState"].firstMatch
         XCTAssertTrue(waitForLabel(state, containing: "Canlı", timeout: 60), "yayın başlamadı: \(state.label)")
+        for second in [5, 10] {                       // teşhis: oynatma sırasında ekran
+            sleep(5)
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "ag-kamerasi-\(second)sn"
+            shot.lifetime = .keepAlways
+            add(shot)
+            print("AĞ SAYAÇLARI \(second) sn: \(app.staticTexts["networkStats"].label) | sayı \(app.staticTexts["liveCount"].label)")
+        }
         let ended = waitForLabel(state, containing: "Yayın bitti", timeout: 180)
         print("AĞ DURUMU: \(state.label)")
+        print("AĞ SAYAÇLARI son: \(app.staticTexts["networkStats"].label)")
         let hook = app.staticTexts["testHookError"]
         if hook.exists { print("TEST KANCASI: \(hook.label)") }
         print("ÖLÇÜM: \(app.staticTexts["perfStats"].label)")
