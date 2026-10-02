@@ -16,6 +16,8 @@ struct CalibrationPanel: View {
                 .pickerStyle(.menu)
             }
 
+            areaShapePicker
+
             Text(vm.calibrationMessage)
                 .font(.callout)
                 .foregroundStyle(.yellow)
@@ -62,5 +64,32 @@ struct CalibrationPanel: View {
         }
         .padding()
         .background(Color(white: 0.08))
+    }
+
+    /// İlgi alanı biçimi: dikdörtgen ya da banda göre çizilen çokgen (algoritma §2.0)
+    private var areaShapePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Picker("Alan", selection: Binding(
+                    get: { vm.profile.roiPolygon != nil },
+                    set: { polygon in vm.profile.setPolygon(polygon ? vm.profile.roiCorners : nil) }
+                )) {
+                    Text("Dikdörtgen").tag(false)
+                    Text("Çokgen").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("roiShape")
+                if vm.profile.roiPolygon != nil {
+                    Button("Köşeleri sıfırla") { vm.profile.setPolygon(vm.profile.roiCorners) }
+                        .font(.caption)
+                        .accessibilityIdentifier("resetPolygon")
+                }
+            }
+            Text(vm.profile.roiPolygon == nil
+                 ? "Köşelerden sürükleyerek alanı ayarla."
+                 : "Köşeleri sürükle · sarı + ile köşe ekle (en çok 12) · köşeye çift dokun: sil")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
