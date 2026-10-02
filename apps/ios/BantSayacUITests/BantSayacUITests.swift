@@ -188,7 +188,13 @@ final class BantSayacUITests: XCTestCase {
             warning.buttons["Tamam"].tap()
         }
         let live = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Canlı ·")).firstMatch
-        XCTAssertTrue(live.waitForExistence(timeout: 60), "kaydettikten sonra yayın başlamadı")
+        let playing = live.waitForExistence(timeout: 60)
+        if !playing {
+            let states = app.staticTexts.allElementsBoundByIndex.map(\.label)
+                .filter { $0.contains("Yayın") || $0.contains("Bağlan") || $0.contains("yeniden") }
+            print("KAYIT CİHAZI yayın durumu: \(states)")
+        }
+        XCTAssertTrue(playing, "kaydettikten sonra yayın başlamadı")
         print("KAYIT CİHAZI yayın: \(live.label)")
     }
 
