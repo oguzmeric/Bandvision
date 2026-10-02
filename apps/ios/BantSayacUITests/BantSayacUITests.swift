@@ -181,6 +181,12 @@ final class BantSayacUITests: XCTestCase {
         let save = element(app, "saveNetworkCamera")
         XCTAssertTrue(reveal(app, save))
         save.tap()
+        // İmzasız simülatörde Keychain yazılamaz (-34018): uygulama uyarır, kullanıcı "Tamam" der (cihazda çıkmaz)
+        let warning = app.alerts["Şifre"]
+        if warning.waitForExistence(timeout: 5) {
+            print("KAYIT CİHAZI uyarı: \(warning.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))")
+            warning.buttons["Tamam"].tap()
+        }
         let live = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Canlı ·")).firstMatch
         XCTAssertTrue(live.waitForExistence(timeout: 60), "kaydettikten sonra yayın başlamadı")
         print("KAYIT CİHAZI yayın: \(live.label)")
