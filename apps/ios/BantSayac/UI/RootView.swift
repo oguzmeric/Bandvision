@@ -20,6 +20,13 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
+            #if DEBUG
+            let env = ProcessInfo.processInfo.environment
+            if let path = env["BS_TEST_VIDEO"] {
+                vm.runUITestVideo(path: path, expectedArea: env["BS_TEST_EXPECTED_AREA"].flatMap(Double.init))
+                return
+            }
+            #endif
             vm.startCamera()
         }
     }

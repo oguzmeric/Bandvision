@@ -176,7 +176,9 @@ struct VideoPanel: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    if run.finished { Text("Bitti").foregroundStyle(.green) }
+                    if run.finished {
+                        Text("Bitti").foregroundStyle(.green).accessibilityIdentifier("videoFinished")
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -185,6 +187,7 @@ struct VideoPanel: View {
 
                 HStack(alignment: .lastTextBaseline) {
                     Text("\(vm.total)")
+                        .accessibilityIdentifier("videoCount")
                         .font(.system(size: 60, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)

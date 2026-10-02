@@ -1,0 +1,18 @@
+{
+ "count": 28,
+ "expectedArea": 0.013172437402190923,
+ "profile": "egg",
+ "roi": [
+  0.05,
+  0.1,
+  0.9,
+  0.8
+ ],
+ "emptySeconds": 1.5,
+ "seed": 5,
+ "groups": {
+  "single": 16,
+  "pair_vertical": 8,
+  "pair_side": 4
+ }
+}

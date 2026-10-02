@@ -1,6 +1,16 @@
 import SwiftUI
 import UIKit
 
+/// Menü öğesinden pencere (alert/sheet) açarken: menünün kapanma animasyonu bitmeden sunum başlatılırsa
+/// SwiftUI zaman zaman yok sayıyor (video menüsünde yaşandı). Sunumu menü kapandıktan sonra yapar.
+@MainActor
+func presentAfterMenuCloses(_ action: @escaping @MainActor () -> Void) {
+    Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(350))
+        action()
+    }
+}
+
 /// JPEG küçük resim (kart ve örnek ızgaraları).
 struct JPEGThumb: View {
     let jpeg: Data?
@@ -125,7 +135,7 @@ struct InspectionDetailView: View {
                             ForEach(teach.defects, id: \.self) { d in
                                 Button(d) { teachAs(d) }
                             }
-                            Button("Yeni kusur türü…") { askNewDefect = true }
+                            Button("Yeni kusur türü…") { presentAfterMenuCloses { askNewDefect = true } }
                         } label: {
                             Label("Kusurlu", systemImage: "xmark").frame(maxWidth: .infinity)
                         }

@@ -212,7 +212,7 @@ final class CountingViewModel: ObservableObject {
         let source = try await VideoFileSource.open(url: url)
         if let old = videoSource {
             old.stop()
-            if old.url != url { try? FileManager.default.removeItem(at: old.url) }
+            if old.url != url { Self.removeIfTemporaryCopy(old.url) }
         }
         if video == nil { liveTotal = total }
         camera.stop()
@@ -273,7 +273,7 @@ final class CountingViewModel: ObservableObject {
     func exitVideo() {
         if let source = videoSource {
             source.stop()
-            try? FileManager.default.removeItem(at: source.url)
+            Self.removeIfTemporaryCopy(source.url)
         }
         videoSource = nil
         video = nil
@@ -287,6 +287,23 @@ final class CountingViewModel: ObservableObject {
         processor.setCounting(isRunning)
         startCamera()
     }
+
+    /// Yalnızca uygulamanın seçim sırasında oluşturduğu geçici kopyaları sil (kullanıcının dosyasını asla).
+    private static func removeIfTemporaryCopy(_ url: URL) {
+        let tmp = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+        guard url.resolvingSymlinksInPath().path.hasPrefix(tmp) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    #if DEBUG
+    /// UI testi: kamera izni istemeden verilen videoyu yumurta profiliyle en hızlı modda sayar.
+    func runUITestVideo(path: String, expectedArea: Double?) {
+        if let area = expectedArea { profile.expectedArea = area }
+        videoSpeed = 0
+        videoLearnBackground = true
+        Task { try? await openVideo(url: URL(fileURLWithPath: path)) }
+    }
+    #endif
 
     private func videoPositionChanged(_ pos: Double, source: VideoFileSource) {
         guard videoSource === source, video?.finished == false else { return }
@@ -369,6 +386,7 @@ final class CountingViewModel: ObservableObject {
     func deleteProfile(_ id: UUID) {
         let wasSelected = id == store.selectedID
         store.delete(id)
+        if !store.profiles.contains(where: { $0.id == id }) { TeachStore.deleteData(profileID: id) }
         if wasSelected { selectProfile(store.selectedID) }
     }
 }

@@ -33,4 +33,18 @@ targets:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    scheme: {}
+    scheme:
+      testTargets: [BantSayacUITests]
+  BantSayacUITests:
+    # Uçtan uca test: simülatörde sayısı bilinen klibi sayar (tools/make_ui_test_clip.py)
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [BantSayacUITests]
+    dependencies:
+      - target: BantSayac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.oguzmeric.bantsayac.uitests
+        TEST_TARGET_NAME: BantSayac
+        TARGETED_DEVICE_FAMILY: "1"

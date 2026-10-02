@@ -1,0 +1,50 @@
+name: ios-uitest
+# Simülatörde uçtan uca test. Elle (Actions → ios-uitest → Run workflow) ya da TestFlight yüklemesinden önce çalışır.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  uitest:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults: { run: { working-directory: apps/ios } }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode 26 seç
+        working-directory: .
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          [ -n "$x" ] || { echo "::error::Bu sunucuda Xcode 26 yok"; exit 1; }
+          sudo xcode-select -s "$x/Contents/Developer"
+          xcodebuild -version
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: Simülatör seç (en yeni iOS, ilk iPhone)
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = json.load(sys.stdin)["devices"]
+          for runtime in sorted((k for k in devs if ".iOS-" in k), reverse=True):
+              phones = [d for d in devs[runtime] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"]); break
+          ')
+          [ -n "$UDID" ] || { echo "::error::uygun iPhone simülatörü yok"; exit 1; }
+          xcrun simctl list devices available | grep "$UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+      - name: UI testi (video uçtan uca + ekranlar)
+        run: |
+          set +e   # hata olsa da günlüğü göster, sonra xcodebuild'in çıkış koduyla bitir
+          xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac \
+            -destination "id=$UDID" -resultBundlePath "$RUNNER_TEMP/uitest.xcresult" \
+            CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
+          status=$?
+          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST" uitest.log | tail -40
+          exit $status
+      - name: Test sonuç paketini sakla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uitest-result
+          path: ${{ runner.temp }}/uitest.xcresult

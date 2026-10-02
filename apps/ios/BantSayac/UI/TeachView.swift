@@ -39,7 +39,7 @@ struct TeachView: View {
                                     QuickTeachTile(record: record, defects: teach.defects,
                                                    onGood: { vm.teachExample(record, as: TeachLabel.good) },
                                                    onDefect: { vm.teachExample(record, as: $0) },
-                                                   onNewDefect: { pendingRecord = record; askNewDefect = true })
+                                                   onNewDefect: { pendingRecord = record; presentAfterMenuCloses { askNewDefect = true } })
                                 }
                             }
                             .padding(.vertical, 4)

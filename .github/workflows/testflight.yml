@@ -4,7 +4,12 @@ on:
   workflow_dispatch:
 
 jobs:
+  uitest:
+    # Yükleme yalnızca simülatördeki uçtan uca test geçerse yapılır
+    uses: ./.github/workflows/ios-uitest.yml
+
   upload:
+    needs: uitest
     runs-on: macos-15
     timeout-minutes: 45
     defaults: { run: { working-directory: apps/ios } }

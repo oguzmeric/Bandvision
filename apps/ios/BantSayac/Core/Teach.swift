@@ -242,6 +242,13 @@ final class TeachStore: ObservableObject {
 
     // MARK: - Disk
 
+    /// Profil silinince örneklerini de sil.
+    nonisolated static func deleteData(profileID id: UUID) {
+        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                      appropriateFor: nil, create: false) else { return }
+        try? FileManager.default.removeItem(at: base.appendingPathComponent("teach/\(id.uuidString)", isDirectory: true))
+    }
+
     private var directory: URL? {
         guard let id = profileID,
               let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
