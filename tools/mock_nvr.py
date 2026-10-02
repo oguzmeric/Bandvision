@@ -167,6 +167,7 @@ def main() -> int:
     ap.add_argument("--key", required=True)
     ap.add_argument("--snapshot", required=True)
     a = ap.parse_args()
+    print(f"başlıyor: python {sys.version.split()[0]}", flush=True)
     with open(a.snapshot, "rb") as f:
         Base.snapshot = f.read()
 

@@ -125,13 +125,22 @@ jobs:
           (cd "$RUNNER_TEMP/mtx555" && nohup "$RUNNER_TEMP/mtx/mediamtx" mediamtx.yml > "$RUNNER_TEMP/mediamtx555.log" 2>&1 &)
           # Sahte kayıt cihazları (tools/mock_nvr.py): Hikvision/Dahua HTTP 8081 (Digest), TRASSIR SDK HTTPS 8080
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/nvr.key" -out "$RUNNER_TEMP/nvr.crt" \
-            -days 2 -subj "/CN=127.0.0.1" 2>/dev/null
-          "$FF" -v error -y -ss 5 -i "$CLIP" -frames:v 1 -vf scale=640:-2 "$RUNNER_TEMP/nvr.jpg"
-          nohup python3 tools/mock_nvr.py --http-port 8081 --https-port 8080 --cert "$RUNNER_TEMP/nvr.crt" \
-            --key "$RUNNER_TEMP/nvr.key" --snapshot "$RUNNER_TEMP/nvr.jpg" > "$RUNNER_TEMP/mock_nvr.log" 2>&1 &
+            -days 2 -subj "/CN=127.0.0.1" < /dev/null
+          ls -l "$RUNNER_TEMP/nvr.key" "$RUNNER_TEMP/nvr.crt"
+          "$FF" -nostdin -v error -y -ss 5 -i "$CLIP" -frames:v 1 -vf scale=640:-2 "$RUNNER_TEMP/nvr.jpg"
+          lsof -nP -iTCP:8080 -sTCP:LISTEN || true      # teşhis: portu başka süreç tutuyor mu
+          nohup "$RUNNER_TEMP/ff/bin/python" -u tools/mock_nvr.py --http-port 8081 --https-port 8080 \
+            --cert "$RUNNER_TEMP/nvr.crt" --key "$RUNNER_TEMP/nvr.key" --snapshot "$RUNNER_TEMP/nvr.jpg" \
+            < /dev/null > "$RUNNER_TEMP/mock_nvr.log" 2>&1 &
           for port in 555 8080 8081; do
             for i in $(seq 1 40); do nc -z 127.0.0.1 $port && break; sleep 0.5; done
-            nc -z 127.0.0.1 $port || { echo "::error::port $port açılmadı"; cat "$RUNNER_TEMP"/mediamtx555.log "$RUNNER_TEMP"/mock_nvr.log; exit 1; }
+            if ! nc -z 127.0.0.1 $port; then
+              echo "::error::port $port açılmadı"
+              cat "$RUNNER_TEMP"/mediamtx555.log; echo "--- mock_nvr.log"; cat "$RUNNER_TEMP"/mock_nvr.log
+              ps aux | grep -E "mock_nvr|mediamtx" | grep -v grep || true
+              lsof -nP -iTCP -sTCP:LISTEN | grep -E ":(555|8080|8081|8554) " || true
+              exit 1
+            fi
           done
           curl -sk "https://127.0.0.1:8080/login?username=admin&password=test123" | head -c 80; echo
           echo "TEST_RUNNER_BS_NVR_HOST=127.0.0.1" >> "$GITHUB_ENV"

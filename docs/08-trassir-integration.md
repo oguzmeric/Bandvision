@@ -12,8 +12,7 @@ TRASSIR kullanan müşterilerde ek kutu olmadan ya da mevcut sunucu altyapısıy
 Önerilen sıra: **A + C** (çekirdek aynı kalır, operatör deneyimi TRASSIR içinde), B ancak script ortamı yeterliyse.
 
 ## Saha bilgisi (kullanıcı, 2026-10-02)
-- Ofiste: **TRASSIR NeuroStation 64 kanal**, yazılım `Trassir-4.7.4.2-1268296-NeuroStation-64-Release`, 8 kamera bağlı.
-- Piyasada kayıt cihazları çoğunlukla TRASSIR, Dahua, Hikvision; 4/8/16/32/64/128 kanal.
+- Hedef: TRASSIR kayıt cihazları (yazılım 4.x); sahada TRASSIR, Dahua ve Hikvision yaygın; 4/8/16/32/64/128 kanal.
 
 ## iPhone'dan TRASSIR (uygulandı: `04-ios-app.md` §1g)
 Telefon, TRASSIR SDK'sı üzerinden kanal listesini ve kısa ömürlü jetonla RTSP akışını alır (seçenek A'nın telefondaki karşılığı).

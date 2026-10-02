@@ -52,7 +52,7 @@ Saha gerçeği: kameraların çoğu bir kayıt cihazına bağlı (TRASSIR, Dahua
 - **Ayar kaydı:** `NetworkCameraConfig` eski sürümlerin kaydını okur (eksik alan = varsayılan; derleme 12 kaydı birim testli). Kayıt cihazı şifresi Keychain'de ayrı hesapta (`recorder`).
 - **ATS:** `NSAllowsLocalNetworking` — kayıt cihazlarının web API'si yerel ağda çoğunlukla düz HTTP.
 - **Test:** birim (`BantSayacTests`: ayrıştırıcılar, geriye uyum, akış adresleri) ve uçtan uca UI (`BS_TEST_FORMS`; ayar ekranı gerçek kullanıcı gibi doldurulur). CI'da `tools/mock_nvr.py` sahte TRASSIR (HTTPS) ve Hikvision/Dahua (Digest), MediaMTX akışları (TRASSIR jetonları 555'te).
-- **Doğrulanmamış:** gerçek TRASSIR'da hata kodlarının metni, `?ping`'in gerekliliği, `container=jpeg` anlık görüntü yolu (olmazsa RTSP'ye düşülür). İlk gerçek deneme: kullanıcının ofisindeki TRASSIR NeuroStation (4.7).
+- **Doğrulanmamış:** gerçek TRASSIR'da hata kodlarının metni, `?ping`'in gerekliliği, `container=jpeg` anlık görüntü yolu (olmazsa RTSP'ye düşülür). Gerçek bir TRASSIR (4.x) ile denenmeli.
 
 ## 1f. Görünüm yakınlaştırma
 Kamera alanında iki parmakla 1×–6× yakınlaştırma, yakınken tek parmakla kaydırma, çift dokunuşla sıfırlama. Görüntü, maske ve ROI/çizgi/izler birlikte ölçeklenir. Yalnızca görünümdür; sayım tam kare üzerinden sürer. Kalibrasyonda tek parmak ROI'yi sürüklediği için kaydırma kapalıdır. Ekran karesi (video/ağ kamerası) ayrı kuyrukta üretilir; sayım ekranı beklemez.
