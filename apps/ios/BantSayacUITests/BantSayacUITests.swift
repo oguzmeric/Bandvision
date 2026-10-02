@@ -25,7 +25,8 @@ final class BantSayacUITests: XCTestCase {
         app.launch()
 
         // 1) Video sonuna kadar sayılır, sayı referansla aynı olmalı
-        let finished = app.staticTexts["videoFinished"].waitForExistence(timeout: 300)
+        // CI sanal makinesinde GPU yok: ekran karesi ~0,5 sn sürüyor; cihazda saniyeler içinde biter
+        let finished = app.staticTexts["videoFinished"].waitForExistence(timeout: 600)
         print("ÖLÇÜM: \(app.staticTexts["perfStats"].label)")
         if !finished {
             // Teşhis: ekranda ne var (konum, hata metni, hangi sekme)
