@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
+    /// Görüntü kaynağı bölümü için (nil: bölüm gösterilmez)
+    var vm: CountingViewModel?
     @ObservedObject var settings: AppSettings
     @ObservedObject var logger: CountLogger
     /// Sayfa olarak açıldığında "Tamam"; sekmede gizli.
@@ -11,6 +13,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let vm { VideoSourceSection(vm: vm) }
                 Section {
                     VStack(alignment: .leading) {
                         Text(verbatim: settings.torchLevel == 0 ? "Fener: kapalı" : "Fener: %\(Int(settings.torchLevel * 100))")

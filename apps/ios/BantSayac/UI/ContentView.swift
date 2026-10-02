@@ -75,9 +75,9 @@ struct ContentView: View {
                 ? AVMakeRect(aspectRatio: vm.snapshot.frameSize, insideRect: bounds)
                 : bounds
             ZStack(alignment: .topLeading) {
-                if vm.isVideoMode {
+                if vm.showsFrameImages {
                     Color.black
-                    if let frame = vm.snapshot.image {
+                    if let frame = vm.frameImage {
                         Image(decorative: frame, scale: 1)
                             .resizable()
                             .frame(width: fit.width, height: fit.height)
@@ -102,7 +102,17 @@ struct ContentView: View {
                             fitRect: fit, editable: vm.isCalibrating)
                     .frame(width: geo.size.width, height: geo.size.height)
 
-                if let err = vm.cameraError {
+                if vm.sourceKind == .network, !vm.isVideoMode, let state = vm.networkState {
+                    Label(state.text, systemImage: state.isPlaying ? "dot.radiowaves.left.and.right" : "wifi.exclamationmark")
+                        .font(.caption)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .padding(8)
+                        .accessibilityIdentifier("networkState")
+                }
+
+                if let err = vm.cameraError, vm.sourceKind == .phone {
                     Text(err)
                         .padding()
                         .background(.ultraThinMaterial)
@@ -118,6 +128,7 @@ struct ContentView: View {
         VStack(spacing: 12) {
             HStack(alignment: .lastTextBaseline) {
                 Text("\(vm.total)")
+                    .accessibilityIdentifier("liveCount")
                     .font(.system(size: 76, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)

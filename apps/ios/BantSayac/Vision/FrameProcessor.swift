@@ -11,14 +11,12 @@ struct EngineSnapshot {
     var tracks: [TrackMarker]
     var fps: Double
     var mask: CGImage?
-    /// Video modunda işlenen kare (kamerada önizleme katmanı kullanıldığı için nil).
-    var image: CGImage?
     /// DEBUG: ortalama süreler (ms) — UI testi teşhisi için
     var perf: String = ""
 
     static var empty: EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
-                       blobs: [], tracks: [], fps: 0, mask: nil, image: nil, perf: "")
+                       blobs: [], tracks: [], fps: 0, mask: nil, perf: "")
     }
 }
 
@@ -29,6 +27,12 @@ struct CountCrop: Sendable {
     let time: Date
     /// JPEG, uzun kenar en fazla 256 px
     let jpeg: Data
+}
+
+/// Eşzamanlılık denetiminde Sendable olmayan bir değeri (CVPixelBuffer, CIContext) güvenle başka kuyruğa
+/// taşımak için. Yalnızca değerin aynı anda tek kuyrukta kullanıldığı yerlerde.
+struct UncheckedSendable<T>: @unchecked Sendable {
+    let value: T
 }
 
 enum CalibrationEvent {
@@ -62,6 +66,10 @@ final class FrameProcessor: @unchecked Sendable {
     private var stamps: [Double] = []
     private var emitFrameImages = false
     private lazy var ciContext = CIContext()
+    /// Ekran karesi ayrı kuyrukta üretilir: sayım hiçbir zaman ekranı beklemez. Kuyruk meşgulse kare atlanır.
+    private let displayQueue = DispatchQueue(label: "bantsayac.display", qos: .userInitiated)
+    private var displayBusy = false            // yalnızca `queue` üzerinde
+    private var lastDisplay: CFTimeInterval = 0
 
     private var lastPublish: CFTimeInterval = 0
     // Ölçüm (üssel ortalama, ms)
@@ -76,6 +84,8 @@ final class FrameProcessor: @unchecked Sendable {
     var onCount: (@MainActor (_ delta: Int, _ total: Int) -> Void)?
     var onCrop: (@MainActor (CountCrop) -> Void)?
     var onCalibration: (@MainActor (CalibrationEvent) -> Void)?
+    /// Video ve ağ kamerası modunda ekranda gösterilen kare (iPhone kamerasında önizleme katmanı kullanılır).
+    var onFrameImage: (@MainActor (CGImage) -> Void)?
 
     init(queue: DispatchQueue) {
         self.queue = queue
@@ -159,6 +169,7 @@ final class FrameProcessor: @unchecked Sendable {
                 if next % 6 == 0 { emit(.backgroundProgress(Double(next) / Double(nTotal))) }
             }
             publish(frame: frame, blobs: [], pixelBuffer: pixelBuffer)
+            if let pb = pixelBuffer { emitDisplayImage(pb, sourceWidth: frame.sourceWidth) }
             return
         }
 
@@ -191,6 +202,7 @@ final class FrameProcessor: @unchecked Sendable {
                                     maxMissed: maxMissed)
         if !events.isEmpty { handle(events, pixelBuffer: pixelBuffer) }
         publish(frame: frame, blobs: blobs, pixelBuffer: pixelBuffer)
+        if let pb = pixelBuffer { emitDisplayImage(pb, sourceWidth: frame.sourceWidth) }
     }
 
     private func handle(_ events: [CountEvent], pixelBuffer: CVPixelBuffer?) {
@@ -274,21 +286,38 @@ final class FrameProcessor: @unchecked Sendable {
         if showMask, let m = segmenter.lastMask {
             maskImage = Self.makeMaskImage(m, w: frame.width, h: frame.height)
         }
-        var frameImage: CGImage?
-        if emitFrameImages, let pb = pixelBuffer {
-            let t0 = CACurrentMediaTime()
-            // Ekranda en fazla ~540 px genişlik gerekir; küçültüp üretmek tam çözünürlüğe göre çok ucuz
-            let scale = min(1, 540 / CGFloat(max(1, frame.sourceWidth)))
-            let small = CIImage(cvPixelBuffer: pb).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            frameImage = ciContext.createCGImage(small, from: small.extent)
-            perfImage = 0.9 * perfImage + 0.1 * (CACurrentMediaTime() - t0) * 1000
-        }
         let snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
                                   blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
-                                  image: frameImage,
                                   perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms",
                                                perfGap, perfCore, perfImage))
         DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
+    }
+
+    /// Ekran karesini ayrı kuyrukta üretir (en fazla ~24/sn). Önceki kare bitmediyse bu kare atlanır.
+    private func emitDisplayImage(_ pb: CVPixelBuffer, sourceWidth: Int) {
+        let now = CACurrentMediaTime()
+        guard emitFrameImages, !displayBusy, now - lastDisplay >= 1.0 / 24.0 else { return }
+        displayBusy = true
+        lastDisplay = now
+        let buffer = UncheckedSendable(value: pb)
+        let context = UncheckedSendable(value: ciContext)
+        displayQueue.async { [weak self] in
+            let t0 = CACurrentMediaTime()
+            // Ekranda en fazla ~540 px genişlik gerekir; küçültüp üretmek tam çözünürlüğe göre çok ucuz
+            let scale = min(1, 540 / CGFloat(max(1, sourceWidth)))
+            let small = CIImage(cvPixelBuffer: buffer.value)
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let image = context.value.createCGImage(small, from: small.extent)
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            guard let self else { return }
+            self.queue.async {
+                self.displayBusy = false
+                self.perfImage = 0.9 * self.perfImage + 0.1 * ms
+            }
+            if let image {
+                DispatchQueue.main.async { [weak self] in self?.onFrameImage?(image) }
+            }
+        }
     }
 
     private static func makeMaskImage(_ mask: [UInt8], w: Int, h: Int) -> CGImage? {

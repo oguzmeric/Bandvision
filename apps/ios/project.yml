@@ -21,6 +21,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCameraUsageDescription: Banttan geçen ürünleri saymak için kamera kullanılır.
+        NSLocalNetworkUsageDescription: Ağdaki IP kameranın görüntüsünü almak için yerel ağa bağlanılır.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         UILaunchScreen: {}

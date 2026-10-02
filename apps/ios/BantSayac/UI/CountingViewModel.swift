@@ -22,6 +22,8 @@ final class CountingViewModel: ObservableObject {
     }
     @Published private(set) var total = 0
     @Published private(set) var snapshot: EngineSnapshot = .empty
+    /// Video/ağ kamerası modunda ekranda gösterilen son kare
+    @Published private(set) var frameImage: CGImage?
     @Published private(set) var isRunning = false
     @Published private(set) var isCalibrating = false
     @Published private(set) var calibrationMessage = ""
@@ -37,6 +39,18 @@ final class CountingViewModel: ObservableObject {
         didSet { UserDefaults.standard.set(videoLearnBackground, forKey: "bs.videoLearnBg") }
     }
     var isVideoMode: Bool { video != nil }
+
+    // Görüntü kaynağı: iPhone kamerası ya da ağ kamerası (RTSP)
+    @Published private(set) var sourceKind: VideoSourceKind =
+        VideoSourceKind(rawValue: UserDefaults.standard.string(forKey: "bs.source") ?? "") ?? .phone
+    @Published private(set) var networkConfig = NetworkCameraConfig.load()
+    @Published private(set) var networkState: NetworkCameraState?
+    private var networkSource: NetworkCameraSource?
+    private let frameGate = FrameGate()
+    /// UI testi: yayın bitince yeniden bağlanma (gerçek kullanımda her zaman true)
+    private var networkReconnect = true
+    /// Önizleme katmanı yerine işlenen kare gösterilir (video ve ağ kamerası)
+    var showsFrameImages: Bool { isVideoMode || sourceKind == .network }
 
     // Kalite kontrol (A aşaması): son ürün kartları ve örnekle öğretme
     @Published private(set) var inspections: [InspectionRecord] = []
@@ -88,6 +102,10 @@ final class CountingViewModel: ObservableObject {
         processor.onCrop = { [weak self] crop in
             self?.handleCrop(crop)
         }
+        processor.onFrameImage = { [weak self] image in
+            guard let self, self.showsFrameImages else { return }   // geç gelen kare iPhone kamerasına sızmasın
+            self.frameImage = image
+        }
         teach.load(profileID: profile.id)
         camera.frameHandler = { [processor] pb, ts in processor.process(pb, ts: ts) }
 
@@ -102,7 +120,13 @@ final class CountingViewModel: ObservableObject {
 
     // MARK: - Kamera
 
+    /// Seçili kaynağı başlatır (iPhone kamerası ya da ağ kamerası).
     func startCamera() {
+        if sourceKind == .network {
+            startNetwork()
+            return
+        }
+        stopNetwork()
         camera.requestAccess { [weak self] granted in
             guard let self else { return }
             guard granted else {
@@ -216,6 +240,7 @@ final class CountingViewModel: ObservableObject {
         }
         if video == nil { liveTotal = total }
         camera.stop()
+        stopNetwork()
         if isCalibrating { cancelCalibration() }
         source.speed = videoSpeed
         videoSource = source
@@ -279,6 +304,7 @@ final class CountingViewModel: ObservableObject {
         video = nil
         if isCalibrating { cancelCalibration() }
         processor.setEmitFrameImages(false)
+        frameImage = nil
         processor.resetClock()
         processor.resetTracking(resetBackground: true)
         clearInspections()
@@ -310,6 +336,22 @@ final class CountingViewModel: ObservableObject {
         }
     }
 
+    /// UI testi: ağ kamerasından (RTSP) yumurta profiliyle sayım; yayın bitince yeniden bağlanmaz.
+    func runUITestNetwork(url: String, username: String, password: String, expectedArea: Double?) {
+        if let area = expectedArea { profile.expectedArea = area }
+        networkReconnect = false
+        var config = NetworkCameraConfig()
+        config.brand = .custom
+        config.customURL = url
+        config.username = username
+        networkConfig = config
+        CameraCredentialStore.setPassword(password)
+        sourceKind = .network
+        startNetwork()
+        processor.startBackgroundLearning()          // klip boş bantla başlar (§5)
+        setRunning(true)
+    }
+
     /// UI testinde video açılamazsa ekranda gösterilir (teşhis için).
     @Published var testHookError: String?
     #endif
@@ -325,6 +367,75 @@ final class CountingViewModel: ObservableObject {
         video?.playing = false
         video?.error = error
         if error == nil { video?.position = source.info.duration }
+    }
+
+    // MARK: - Ağ kamerası
+
+    /// Kaynağı değiştirir; video modundaysa seçim kaydedilir, videodan çıkınca uygulanır.
+    func setSource(_ kind: VideoSourceKind) {
+        guard kind != sourceKind else { return }
+        sourceKind = kind
+        UserDefaults.standard.set(kind.rawValue, forKey: "bs.source")
+        guard !isVideoMode else { return }
+        if isCalibrating { cancelCalibration() }
+        if kind == .phone {
+            stopNetwork()
+            processor.setEmitFrameImages(false)
+            frameImage = nil
+            processor.resetClock()
+            processor.resetTracking(resetBackground: true)
+        } else {
+            camera.stop()
+        }
+        startCamera()
+    }
+
+    /// Ayarları ve şifreyi kaydeder; ağ kamerası seçiliyse yeni ayarlarla yeniden bağlanır.
+    func saveNetworkConfig(_ config: NetworkCameraConfig, password: String) {
+        networkConfig = config
+        config.save()
+        CameraCredentialStore.setPassword(password)
+        if sourceKind == .network && !isVideoMode { startNetwork() }
+    }
+
+    private func startNetwork() {
+        stopNetwork()
+        camera.stop()
+        guard let url = networkConfig.rtspURL else {
+            networkState = .ended("Ağ kamerası ayarlanmadı (Ayarlar → Görüntü kaynağı)")
+            return
+        }
+        // Tam adreste kullanıcı adı/şifre yazılmışsa ve ayrı girilmemişse onları kullan
+        let user = networkConfig.username.isEmpty ? (url.user ?? "") : networkConfig.username
+        let stored = CameraCredentialStore.password()
+        let password = stored.isEmpty ? (url.password ?? "") : stored
+        processor.resetClock()
+        processor.resetTracking(resetBackground: true)
+        processor.setEmitFrameImages(true)
+        frameImage = nil
+        let source = NetworkCameraSource(url: url, username: user, password: password)
+        source.reconnect = networkReconnect
+        let processor = self.processor
+        let gate = frameGate
+        source.onFrame = { pb, ts in gate.submit(pb, ts: ts, to: processor) }
+        // ViewModel uygulama boyunca yaşar; durum bildirimi için güçlü referans güvenli (ve Sendable)
+        source.onState = { [self] state in
+            Task { @MainActor in self.networkStateChanged(state, source: source) }
+        }
+        networkSource = source
+        networkState = .connecting
+        source.start()
+    }
+
+    private func stopNetwork() {
+        networkSource?.stop()
+        networkSource = nil
+        networkState = nil
+    }
+
+    private func networkStateChanged(_ state: NetworkCameraState, source: NetworkCameraSource) {
+        guard networkSource === source else { return }
+        networkState = state
     }
 
     // MARK: - Kalite kontrol

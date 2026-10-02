@@ -33,6 +33,50 @@ jobs:
           [ -n "$UDID" ] || { echo "::error::uygun iPhone simülatörü yok"; exit 1; }
           xcrun simctl list devices available | grep "$UDID"
           echo "UDID=$UDID" >> "$GITHUB_ENV"
+      - name: RTSP test sunucusu (IP kamera yerine MediaMTX + ffmpeg, Digest kimlik doğrulama)
+        working-directory: .
+        run: |
+          set -e
+          curl -sSL -o "$RUNNER_TEMP/mtx.tgz" \
+            https://github.com/bluenviron/mediamtx/releases/download/v1.21.1/mediamtx_v1.21.1_darwin_arm64.tar.gz
+          mkdir -p "$RUNNER_TEMP/mtx" && tar -xzf "$RUNNER_TEMP/mtx.tgz" -C "$RUNNER_TEMP/mtx"
+          python3 -m venv "$RUNNER_TEMP/ff"
+          "$RUNNER_TEMP/ff/bin/pip" install -q imageio-ffmpeg
+          FF=$("$RUNNER_TEMP/ff/bin/python" -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+          CLIP="$GITHUB_WORKSPACE/apps/ios/BantSayacUITests/ui_test_clip.mp4"
+          # Okuyucu bağlanınca klip bir kez, gerçek zamanlı, B-karesiz H.264 olarak yayınlanır (IP kamera gibi)
+          cat > "$RUNNER_TEMP/mtx/mediamtx.yml" <<EOF
+          logLevel: info
+          authMethod: internal
+          authInternalUsers:
+            - user: any
+              pass:
+              ips: ['127.0.0.1', '::1']
+              permissions:
+                - action: publish
+            - user: test
+              pass: test123
+              ips: []
+              permissions:
+                - action: read
+          rtspTransports: [tcp]
+          rtspAuthMethods: [digest]
+          rtmp: false
+          hls: false
+          webrtc: false
+          srt: false
+          paths:
+            clip:
+              runOnDemand: $FF -re -i $CLIP -an -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 30 -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/clip
+              runOnDemandRestart: false
+          EOF
+          (cd "$RUNNER_TEMP/mtx" && nohup ./mediamtx mediamtx.yml > "$RUNNER_TEMP/mediamtx.log" 2>&1 &)
+          for i in $(seq 1 40); do nc -z 127.0.0.1 8554 && break; sleep 0.5; done
+          nc -z 127.0.0.1 8554 || { echo "::error::MediaMTX başlamadı"; cat "$RUNNER_TEMP/mediamtx.log"; exit 1; }
+          # TEST_RUNNER_ önekli değişkenler test sürecine öneksiz geçer
+          echo "TEST_RUNNER_BS_RTSP_URL=rtsp://127.0.0.1:8554/clip" >> "$GITHUB_ENV"
+          echo "TEST_RUNNER_BS_RTSP_USER=test" >> "$GITHUB_ENV"
+          echo "TEST_RUNNER_BS_RTSP_PASS=test123" >> "$GITHUB_ENV"
       - name: UI testi (video uçtan uca + ekranlar)
         run: |
           set +e   # hata olsa da günlüğü göster, sonra xcodebuild'in çıkış koduyla bitir
@@ -43,7 +87,7 @@ jobs:
             SWIFT_ACTIVE_COMPILATION_CONDITIONS=UITEST \
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
-          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM" uitest.log | tail -40
+          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM|AĞ DURUMU" uitest.log | tail -40
           # Test başarısız olunca yazdırdığı ekran ağacı (teşhis)
           sed -n '/=== EKRAN/,/=== SON/p' uitest.log | head -300
           exit $status
@@ -54,4 +98,9 @@ jobs:
           name: uitest-result
           path: |
             ${{ runner.temp }}/uitest.xcresult
+            ${{ runner.temp }}/mediamtx.log
             apps/ios/uitest.log
+      - name: RTSP sunucu günlüğü (son satırlar)
+        if: always()
+        working-directory: .
+        run: tail -40 "$RUNNER_TEMP/mediamtx.log" 2>/dev/null || true
