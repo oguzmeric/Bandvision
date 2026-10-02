@@ -34,7 +34,7 @@ mtv.BELT_X0, mtv.BELT_X1 = 30, 690
 mtv.SPEED = 640.0
 
 SEED = 5
-EMPTY_SECONDS = 1.5
+EMPTY_SECONDS = 4.0   # ağ testinde RTSP başlangıç gecikmesi + ~1 sn boş bant öğrenmesi için pay
 
 
 def main() -> int:

@@ -43,8 +43,12 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/ff"
           "$RUNNER_TEMP/ff/bin/pip" install -q imageio-ffmpeg
           FF=$("$RUNNER_TEMP/ff/bin/python" -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
-          CLIP="$GITHUB_WORKSPACE/apps/ios/BantSayacUITests/ui_test_clip.mp4"
-          # Okuyucu bağlanınca klip bir kez, gerçek zamanlı, B-karesiz H.264 olarak yayınlanır (IP kamera gibi)
+          # Klip bir kez önceden B-karesiz H.264'e kodlanır; yayın kopyalanarak anında başlar
+          # (canlı kodlama başlangıcı yavaş makinede uygulamanın 10 sn bağlantı süresini aşabiliyordu)
+          CLIP="$RUNNER_TEMP/clip_h264.mp4"
+          "$FF" -v error -y -i "$GITHUB_WORKSPACE/apps/ios/BantSayacUITests/ui_test_clip.mp4" -an -c:v libx264 \
+            -preset veryfast -bf 0 -g 30 -pix_fmt yuv420p "$CLIP"
+          # Okuyucu bağlanınca klip bir kez, gerçek zamanlı yayınlanır (IP kamera gibi)
           cat > "$RUNNER_TEMP/mtx/mediamtx.yml" <<EOF
           logLevel: info
           authMethod: internal
@@ -67,7 +71,7 @@ jobs:
           srt: false
           paths:
             clip:
-              runOnDemand: $FF -re -i $CLIP -an -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 30 -pix_fmt yuv420p -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/clip
+              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/clip
               runOnDemandRestart: false
           EOF
           (cd "$RUNNER_TEMP/mtx" && nohup ./mediamtx mediamtx.yml > "$RUNNER_TEMP/mediamtx.log" 2>&1 &)
