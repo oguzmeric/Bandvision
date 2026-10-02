@@ -40,7 +40,7 @@ jobs:
             -destination "id=$UDID" -resultBundlePath "$RUNNER_TEMP/uitest.xcresult" \
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
-          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST" uitest.log | tail -40
+          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM" uitest.log | tail -40
           # Test başarısız olunca yazdırdığı ekran ağacı (teşhis)
           sed -n '/=== EKRAN/,/=== SON/p' uitest.log | head -300
           exit $status

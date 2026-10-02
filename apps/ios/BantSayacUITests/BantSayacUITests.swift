@@ -25,7 +25,9 @@ final class BantSayacUITests: XCTestCase {
         app.launch()
 
         // 1) Video sonuna kadar sayılır, sayı referansla aynı olmalı
-        if !app.staticTexts["videoFinished"].waitForExistence(timeout: 300) {
+        let finished = app.staticTexts["videoFinished"].waitForExistence(timeout: 300)
+        print("ÖLÇÜM: \(app.staticTexts["perfStats"].label)")
+        if !finished {
             // Teşhis: ekranda ne var (konum, hata metni, hangi sekme)
             print("=== EKRAN (erişilebilirlik ağacı) ===")
             print(app.debugDescription)

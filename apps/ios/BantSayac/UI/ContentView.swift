@@ -130,6 +130,7 @@ struct ContentView: View {
                 Button { vm.toggleRunning() } label: {
                     Label(vm.isRunning ? "Durdur" : "Başlat",
                           systemImage: vm.isRunning ? "pause.fill" : "play.fill")
+                        .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -137,12 +138,14 @@ struct ContentView: View {
 
                 Button { confirmReset = true } label: {
                     Label("Sıfırla", systemImage: "arrow.counterclockwise")
+                        .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
 
                 Button { vm.beginCalibration() } label: {
                     Label("Kalibre", systemImage: "scope")
+                        .lineLimit(1).minimumScaleFactor(0.7)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)

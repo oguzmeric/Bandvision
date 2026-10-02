@@ -13,10 +13,12 @@ struct EngineSnapshot {
     var mask: CGImage?
     /// Video modunda işlenen kare (kamerada önizleme katmanı kullanıldığı için nil).
     var image: CGImage?
+    /// DEBUG: ortalama süreler (ms) — UI testi teşhisi için
+    var perf: String = ""
 
     static var empty: EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
-                       blobs: [], tracks: [], fps: 0, mask: nil, image: nil)
+                       blobs: [], tracks: [], fps: 0, mask: nil, image: nil, perf: "")
     }
 }
 
@@ -62,6 +64,9 @@ final class FrameProcessor: @unchecked Sendable {
     private lazy var ciContext = CIContext()
 
     private var lastPublish: CFTimeInterval = 0
+    // Ölçüm (üssel ortalama, ms)
+    private var perfGap = 0.0, perfCore = 0.0, perfImage = 0.0
+    private var perfLastEnd: CFTimeInterval = 0
     private var fpsWindowStart: CFTimeInterval = 0
     private var fpsFrames = 0
     private var fps: Double = 0
@@ -119,6 +124,13 @@ final class FrameProcessor: @unchecked Sendable {
     }
 
     func process(gray frame: GrayFrame, ts: Double, pixelBuffer: CVPixelBuffer? = nil) {
+        let start = CACurrentMediaTime()
+        if perfLastEnd > 0 { perfGap = 0.9 * perfGap + 0.1 * (start - perfLastEnd) * 1000 }
+        defer {
+            let end = CACurrentMediaTime()
+            perfCore = 0.9 * perfCore + 0.1 * (end - start) * 1000
+            perfLastEnd = end
+        }
         tickFPS()
         // §7: gerçek fps'e göre profil parametrelerini ölçekle (Python Pipeline.process ile aynı)
         let fps = updateSourceFPS(ts)
@@ -264,13 +276,18 @@ final class FrameProcessor: @unchecked Sendable {
         }
         var frameImage: CGImage?
         if emitFrameImages, let pb = pixelBuffer {
-            frameImage = ciContext.createCGImage(CIImage(cvPixelBuffer: pb),
-                                                from: CGRect(x: 0, y: 0, width: frame.sourceWidth,
-                                                             height: frame.sourceHeight))
+            let t0 = CACurrentMediaTime()
+            // Ekranda en fazla ~540 px genişlik gerekir; küçültüp üretmek tam çözünürlüğe göre çok ucuz
+            let scale = min(1, 540 / CGFloat(max(1, frame.sourceWidth)))
+            let small = CIImage(cvPixelBuffer: pb).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            frameImage = ciContext.createCGImage(small, from: small.extent)
+            perfImage = 0.9 * perfImage + 0.1 * (CACurrentMediaTime() - t0) * 1000
         }
         let snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
                                   blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
-                                  image: frameImage)
+                                  image: frameImage,
+                                  perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms",
+                                               perfGap, perfCore, perfImage))
         DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
     }
 

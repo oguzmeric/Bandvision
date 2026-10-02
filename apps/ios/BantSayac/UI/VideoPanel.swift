@@ -240,15 +240,15 @@ struct VideoPanel: View {
 
                 HStack(spacing: 10) {
                     Button { vm.beginCalibration() } label: {
-                        Label("Kalibre", systemImage: "scope").frame(maxWidth: .infinity)
+                        Label("Kalibre", systemImage: "scope").lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     Button(action: onPickVideo) {
-                        Label("Başka video", systemImage: "film.stack").frame(maxWidth: .infinity)
+                        Label("Başka video", systemImage: "film.stack").lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     Button { vm.exitVideo() } label: {
-                        Label("Kamera", systemImage: "camera").frame(maxWidth: .infinity)
+                        Label("Kamera", systemImage: "camera").lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                 }

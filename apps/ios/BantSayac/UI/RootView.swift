@@ -20,8 +20,13 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         #if DEBUG
         .overlay(alignment: .top) {
-            if let message = vm.testHookError {
-                Text(message).font(.caption).padding(6).background(.red).accessibilityIdentifier("testHookError")
+            VStack(spacing: 2) {
+                if let message = vm.testHookError {
+                    Text(message).font(.caption).padding(6).background(.red).accessibilityIdentifier("testHookError")
+                }
+                if ProcessInfo.processInfo.environment["BS_TEST_VIDEO"] != nil {
+                    Text(vm.snapshot.perf).font(.caption2).accessibilityIdentifier("perfStats")
+                }
             }
         }
         #endif

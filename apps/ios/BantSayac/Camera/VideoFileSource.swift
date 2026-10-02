@@ -35,7 +35,9 @@ final class VideoFileSource: @unchecked Sendable {
     let info: Info
     private let asset: AVURLAsset
     private let track: AVAssetTrack
-    private let composition: AVVideoComposition
+    /// Yalnızca video döndürülmüşse (ör. telefonla dik çekim) kullanılır; düz videolarda kareler doğrudan
+    /// çözücüden gelir (kompozitör her kareyi yeniden çizer; GPU'suz ortamda çok yavaştır, cihazda da gereksiz iş).
+    private let composition: AVVideoComposition?
 
     private let readQueue = DispatchQueue(label: "bantsayac.video", qos: .userInitiated)
     private let lock = NSLock()
@@ -43,7 +45,7 @@ final class VideoFileSource: @unchecked Sendable {
     private var pausedValue = false
     private var speedValue = 1.0
 
-    private init(url: URL, asset: AVURLAsset, track: AVAssetTrack, composition: AVVideoComposition, info: Info) {
+    private init(url: URL, asset: AVURLAsset, track: AVAssetTrack, composition: AVVideoComposition?, info: Info) {
         self.url = url
         self.asset = asset
         self.track = track
@@ -57,8 +59,18 @@ final class VideoFileSource: @unchecked Sendable {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw Failure.noVideoTrack }
         let duration = try await asset.load(.duration).seconds
         let fps = Double(try await track.load(.nominalFrameRate))
-        let composition = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: asset)
-        let info = Info(duration: duration.isFinite ? duration : 0, fps: fps, size: composition.renderSize)
+        let transform = try await track.load(.preferredTransform)
+        let composition: AVVideoComposition?
+        let size: CGSize
+        if transform.isIdentity {
+            composition = nil
+            size = try await track.load(.naturalSize)
+        } else {
+            let c = try await AVMutableVideoComposition.videoComposition(withPropertiesOf: asset)
+            composition = c
+            size = c.renderSize
+        }
+        let info = Info(duration: duration.isFinite ? duration : 0, fps: fps, size: size)
         return VideoFileSource(url: url, asset: asset, track: track, composition: composition, info: info)
     }
 
@@ -119,10 +131,16 @@ final class VideoFileSource: @unchecked Sendable {
             reader.timeRange = CMTimeRange(start: CMTime(seconds: begin, preferredTimescale: 600),
                                            duration: .positiveInfinity)
         }
-        let output = AVAssetReaderVideoCompositionOutput(
-            videoTracks: [track],
-            videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange])
-        output.videoComposition = composition
+        let settings: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
+        let output: AVAssetReaderOutput
+        if let composition {
+            let o = AVAssetReaderVideoCompositionOutput(videoTracks: [track], videoSettings: settings)
+            o.videoComposition = composition
+            output = o
+        } else {
+            output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        }
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw Failure.cannotRead("çıkış eklenemedi") }
         reader.add(output)
