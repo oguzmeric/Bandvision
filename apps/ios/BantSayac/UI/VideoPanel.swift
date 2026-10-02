@@ -165,6 +165,8 @@ struct VideoPanel: View {
     @ObservedObject var vm: CountingViewModel
     var onPickVideo: () -> Void
     @State private var truthText = ""
+    /// Sayısal klavyede "Tamam" tuşu yok: kapatmak için alanın yanında ve klavyenin üstünde düğme var.
+    @FocusState private var truthFocused: Bool
 
     var body: some View {
         if let run = vm.video {
@@ -217,14 +219,20 @@ struct VideoPanel: View {
                         .keyboardType(.numberPad)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 110)
+                        .focused($truthFocused)
                     Spacer()
-                    Picker("Hız", selection: $vm.videoSpeed) {
-                        Text("1×").tag(1.0)
-                        Text("2×").tag(2.0)
-                        Text("Hızlı").tag(0.0)
+                    if truthFocused {
+                        Button("Tamam") { truthFocused = false }
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Picker("Hız", selection: $vm.videoSpeed) {
+                            Text("1×").tag(1.0)
+                            Text("2×").tag(2.0)
+                            Text("Hızlı").tag(0.0)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 170)
                     }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 170)
                 }
 
                 HStack(spacing: 10) {
@@ -244,6 +252,14 @@ struct VideoPanel: View {
                 .controlSize(.large)
             }
             .padding()
+            .contentShape(Rectangle())
+            .onTapGesture { truthFocused = false }     // panelde boş bir yere dokununca klavye kapanır
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Tamam") { truthFocused = false }
+                }
+            }
         }
     }
 
