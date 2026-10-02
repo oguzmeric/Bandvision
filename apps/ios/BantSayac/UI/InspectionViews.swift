@@ -172,3 +172,69 @@ struct InspectionDetailView: View {
         taughtAs = label
     }
 }
+
+/// Canlı/video panelinde son ürünlerin yatay şeridi (Enao'daki "Recent detections" gibi). Dokununca ayrıntı.
+struct RecentInspectionStrip: View {
+    @ObservedObject var vm: CountingViewModel
+    @State private var selected: InspectionRecord?
+
+    var body: some View {
+        Group {
+            if vm.inspections.isEmpty {
+                Text("Sayılan ürünler burada görünür; öğretmek için dokun.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 8) {
+                        ForEach(vm.inspections.prefix(10)) { record in
+                            Button { selected = record } label: { MiniInspectionCard(record: record) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(height: 64)
+            }
+        }
+        .sheet(item: $selected) { record in
+            InspectionDetailView(vm: vm, teach: vm.teach, record: record)
+        }
+    }
+}
+
+struct MiniInspectionCard: View {
+    let record: InspectionRecord
+
+    var body: some View {
+        HStack(spacing: 8) {
+            JPEGThumb(jpeg: record.jpeg, size: 48)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.caption.bold()).foregroundStyle(color)
+                Text("\(record.time.formatted(date: .omitted, time: .standard))")
+                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                Text(badge).font(.caption2.bold().monospacedDigit()).foregroundStyle(color)
+            }
+        }
+        .padding(6)
+        .frame(width: 150, alignment: .leading)
+        .background(Color(white: 0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(0.6), lineWidth: 1))
+    }
+
+    private var title: String {
+        guard let v = record.verdict else { return record.pending ? "İnceleniyor" : "Sayıldı" }
+        return v.pass ? "Geçti" : "Kaldı · \(v.label)"
+    }
+
+    private var badge: String {
+        guard let v = record.verdict else { return record.shortID }
+        return "\(v.pass ? "OK" : "NOK") %\(Int(v.confidence * 100)) · \(record.shortID)"
+    }
+
+    private var color: Color {
+        guard let v = record.verdict else { return .secondary }
+        return v.pass ? .green : .red
+    }
+}

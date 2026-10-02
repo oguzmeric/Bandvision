@@ -43,7 +43,7 @@ final class BantSayacUITests: XCTestCase {
         app.launchEnvironment["BS_TEST_EXPECTED_AREA"] = String(meta.expectedArea)
         app.launch()
 
-        let state = app.descendants(matching: .any)["networkState"]
+        let state = app.descendants(matching: .any)["networkState"].firstMatch
         XCTAssertTrue(waitForLabel(state, containing: "Canlı", timeout: 60), "yayın başlamadı: \(state.label)")
         let ended = waitForLabel(state, containing: "Yayın bitti", timeout: 180)
         print("AĞ DURUMU: \(state.label)")
@@ -61,7 +61,7 @@ final class BantSayacUITests: XCTestCase {
         app.launchEnvironment["BS_TEST_RTSP_USER"] = server.user
         app.launchEnvironment["BS_TEST_RTSP_PASS"] = "yanlis-sifre"
         app.launch()
-        let state = app.descendants(matching: .any)["networkState"]
+        let state = app.descendants(matching: .any)["networkState"].firstMatch
         XCTAssertTrue(waitForLabel(state, containing: "şifre", timeout: 30), "beklenen şifre hatası yok: \(state.label)")
     }
 

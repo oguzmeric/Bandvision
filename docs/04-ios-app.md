@@ -32,6 +32,18 @@ Sekmeler: **Canlı · Genel bakış · Öğret · Ayarlar** (`UI/RootView.swift`
 - A1 cihaza özeldir; profil/olay sözleşmesine F1.1 ve B aşamasında girer (kusur türleri, `inspection` olayı, NOK görseli).
 - Ekranda iz kimlikleri (F1.2).
 
+## 1e. Ağ kamerası (telefon IP kamerayı kaynak olarak kullanır)
+Karar (2026-10-02): önce **telefon + 1 IP kamera**; çoklu kamera gerekirse web/edge tarafına (F2) taşınır.
+- **Ayarlar → Görüntü kaynağı:** iPhone kamerası / Ağ kamerası. Ağ kamerası formu: marka şablonu (Hikvision, Dahua, Axis, Vivotek, Milesight; uymazsa "Diğer" ile tam `rtsp://` adresi), IP, port, kanal, alt/ana akış, kullanıcı adı; şifre Keychain'de (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`). **Bağlantıyı test et:** ilk kare, çözünürlük, codec; hata olursa kontrol listesi.
+- **Erişim:** telefon kameranın RTSP portuna ağ üzerinden ulaşabilmeli (aynı yerel ağ ya da VPN; misafir Wi-Fi çoğu zaman kameralara erişemez; port yönlendirme önerilmez). `NSLocalNetworkUsageDescription`. Otomatik bulma (ONVIF WS-Discovery) Apple'ın multicast iznini gerektirir; şimdilik IP elle girilir.
+- `Camera/RTSPClient.swift` (dış kütüphane yok): RTSP/1.0, RTP/AVP/TCP interleaved, Basic ve Digest (qop=auth; birden çok `WWW-Authenticate` gelirse Digest tercih), SDP (`sprop-parameter-sets`, `sprop-vps/sps/pps`), H.264 (tekil, STAP-A, FU-A) ve H.265 (tekil, AP, FU), sıra numarası boşluğunda yarım NAL atılır, OPTIONS ile canlı tutma.
+- `Camera/NetworkCameraSource.swift`: VideoToolbox ile 420f'ye çözme (kamera ile aynı biçim), parametre seti değişince yeniden kurulum, ilk anahtar kareyi bekleme, RTP zaman damgası taşma açma; koparsa 1, 2, 4 … 30 sn aralıkla yeniden bağlanma (yanlış şifre ve geçersiz adreste denemez). `FrameGate`: işleme meşgulse kare atlanır, gecikme birikmez.
+- Uygulama açık ve telefon şarjda kalmalı (iOS arka plandaki uygulamayı durdurur); Rehberli Erişim önerilir.
+- Test: CI'da MediaMTX, test klibini Digest korumalı RTSP olarak yayınlar; UI testi sayımın Python referansıyla aynı olduğunu ve yanlış şifrede anlaşılır hata verildiğini doğrular.
+
+## 1f. Görünüm yakınlaştırma
+Kamera alanında iki parmakla 1×–6× yakınlaştırma, yakınken tek parmakla kaydırma, çift dokunuşla sıfırlama. Görüntü, maske ve ROI/çizgi/izler birlikte ölçeklenir. Yalnızca görünümdür; sayım tam kare üzerinden sürer. Kalibrasyonda tek parmak ROI'yi sürüklediği için kaydırma kapalıdır. Ekran karesi (video/ağ kamerası) ayrı kuyrukta üretilir; sayım ekranı beklemez.
+
 ## 1d. Uçtan uca UI testi
 `BantSayacUITests` (simülatör): `tools/make_ui_test_clip.py` ile üretilen dik klibi (28 yumurta; tek, arka arkaya ve yan yana bitişik) DEBUG test kancasıyla (`BS_TEST_VIDEO`, `BS_TEST_EXPECTED_AREA`) kamera izni istemeden en hızlı modda saydırır; sayı Python referansıyla aynı olmalı (Swift ↔ Python eşdeğerliğinin çalıştırılarak doğrulanması). Ardından sekmeleri ve video sayfasını açıp kapatır. CI: `ios-uitest.yml` (elle) ve **TestFlight yüklemesinden önce zorunlu**.
 

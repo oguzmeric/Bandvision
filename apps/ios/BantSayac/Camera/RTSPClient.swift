@@ -57,6 +57,8 @@ final class RTSPClient: @unchecked Sendable {
         let nonce: String
         let qop: String?
         let opaque: String?
+        /// "MD5" (varsayılan) ya da "SHA-256" (RFC 7616)
+        let algorithm: String
     }
 
     private let url: URL
@@ -202,7 +204,10 @@ final class RTSPClient: @unchecked Sendable {
                 guard !username.isEmpty, digest == nil, !basicAuth,
                       let header = r.headers["www-authenticate"] else { completion(.failure(.unauthorized)); return }
                 let challenges = header.components(separatedBy: "\n")
-                if let d = challenges.first(where: { $0.lowercased().hasPrefix("digest") }).flatMap(Self.parseDigest) {
+                // Sunucu birden çok Digest önerebilir (ör. SHA-256 ve MD5): MD5'i tercih et, yoksa SHA-256
+                let digests = challenges.filter { $0.lowercased().hasPrefix("digest") }.compactMap(Self.parseDigest)
+                if let d = digests.first(where: { $0.algorithm == "MD5" })
+                    ?? digests.first(where: { $0.algorithm == "SHA-256" }) {
                     digest = d
                 } else if challenges.contains(where: { $0.lowercased().hasPrefix("basic") }) {
                     basicAuth = true
@@ -245,8 +250,9 @@ final class RTSPClient: @unchecked Sendable {
     private func authorization(method: String, uri: String) -> String? {
         guard !username.isEmpty else { return nil }
         if let d = digest {
-            let ha1 = Self.md5("\(username):\(d.realm):\(password)")
-            let ha2 = Self.md5("\(method):\(uri)")
+            let h: (String) -> String = d.algorithm == "SHA-256" ? Self.sha256 : Self.md5
+            let ha1 = h("\(username):\(d.realm):\(password)")
+            let ha2 = h("\(method):\(uri)")
             var fields = ["username=\"\(username)\"", "realm=\"\(d.realm)\"", "nonce=\"\(d.nonce)\"",
                           "uri=\"\(uri)\""]
             if let qop = d.qop?.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) })
@@ -254,12 +260,12 @@ final class RTSPClient: @unchecked Sendable {
                 digestCount += 1
                 let nc = String(format: "%08x", digestCount)
                 let cnonce = String(UUID().uuidString.prefix(8)).lowercased()
-                let response = Self.md5("\(ha1):\(d.nonce):\(nc):\(cnonce):\(qop):\(ha2)")
+                let response = h("\(ha1):\(d.nonce):\(nc):\(cnonce):\(qop):\(ha2)")
                 fields += ["qop=\(qop)", "nc=\(nc)", "cnonce=\"\(cnonce)\"", "response=\"\(response)\""]
             } else {
-                fields.append("response=\"\(Self.md5("\(ha1):\(d.nonce):\(ha2)"))\"")
+                fields.append("response=\"\(h("\(ha1):\(d.nonce):\(ha2)"))\"")
             }
-            fields.append("algorithm=MD5")
+            fields.append("algorithm=\(d.algorithm)")
             if let opaque = d.opaque { fields.append("opaque=\"\(opaque)\"") }
             return "Digest " + fields.joined(separator: ", ")
         }
@@ -271,6 +277,10 @@ final class RTSPClient: @unchecked Sendable {
 
     private static func md5(_ s: String) -> String {
         Insecure.MD5.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func sha256(_ s: String) -> String {
+        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func parseDigest(_ header: String) -> DigestChallenge? {
@@ -296,7 +306,10 @@ final class RTSPClient: @unchecked Sendable {
             params[key] = value
         }
         guard let realm = params["realm"], let nonce = params["nonce"] else { return nil }
-        return DigestChallenge(realm: realm, nonce: nonce, qop: params["qop"], opaque: params["opaque"])
+        let algorithm = (params["algorithm"] ?? "MD5").uppercased()
+        guard algorithm == "MD5" || algorithm == "SHA-256" else { return nil }   // -sess türleri desteklenmez
+        return DigestChallenge(realm: realm, nonce: nonce, qop: params["qop"], opaque: params["opaque"],
+                               algorithm: algorithm)
     }
 
     // MARK: - Alım

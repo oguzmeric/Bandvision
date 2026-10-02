@@ -6,6 +6,8 @@ struct OverlayView: View {
     let snapshot: EngineSnapshot
     let fitRect: CGRect
     let editable: Bool
+    /// İz kimliği → kalite kararı (ürünün yanında etiket)
+    var verdicts: [Int: AppearanceVerdict] = [:]
 
     @State private var activeHandle: Handle?
     private enum Handle { case topLeft, bottomRight, line }
@@ -45,6 +47,20 @@ struct OverlayView: View {
                 ctx.draw(Text(hexID(t.id)).font(.caption2.monospacedDigit())
                             .foregroundColor(t.counted ? .cyan : .white),
                          at: CGPoint(x: p.x + 8, y: p.y - 8), anchor: .bottomLeading)
+                if let v = verdicts[t.id] {
+                    let color: Color = v.pass ? .green : .red
+                    if !v.pass {
+                        ctx.stroke(Path(ellipseIn: CGRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32)),
+                                   with: .color(.red), lineWidth: 3)
+                    }
+                    let text = v.pass ? "OK \(Int(v.confidence * 100))" : "NOK · \(v.label)"
+                    let resolved = ctx.resolve(Text(text).font(.caption2.bold()).foregroundColor(.white))
+                    let size = resolved.measure(in: CGSize(width: 220, height: 40))
+                    let tag = CGRect(x: p.x - size.width / 2 - 6, y: p.y + 10,
+                                     width: size.width + 12, height: size.height + 4)
+                    ctx.fill(Path(roundedRect: tag, cornerRadius: tag.height / 2), with: .color(color.opacity(0.85)))
+                    ctx.draw(resolved, at: CGPoint(x: tag.midX, y: tag.midY))
+                }
             }
 
             // Akış yönü

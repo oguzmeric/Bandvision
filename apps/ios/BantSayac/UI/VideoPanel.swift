@@ -188,7 +188,7 @@ struct VideoPanel: View {
                 HStack(alignment: .lastTextBaseline) {
                     Text("\(vm.total)")
                         .accessibilityIdentifier("videoCount")
-                        .font(.system(size: 60, weight: .bold, design: .rounded))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
@@ -215,6 +215,8 @@ struct VideoPanel: View {
                 if let err = run.error {
                     Text(err).font(.callout).foregroundStyle(.red)
                 }
+
+                RecentInspectionStrip(vm: vm)
 
                 HStack(spacing: 10) {
                     Text("Doğru adet").font(.callout)

@@ -73,6 +73,15 @@ jobs:
           (cd "$RUNNER_TEMP/mtx" && nohup ./mediamtx mediamtx.yml > "$RUNNER_TEMP/mediamtx.log" 2>&1 &)
           for i in $(seq 1 40); do nc -z 127.0.0.1 8554 && break; sleep 0.5; done
           nc -z 127.0.0.1 8554 || { echo "::error::MediaMTX başlamadı"; cat "$RUNNER_TEMP/mediamtx.log"; exit 1; }
+          # Teşhis: sunucunun kimlik doğrulama önerileri ve ffmpeg ile aynı şifreyle okuma (sunucu tarafını doğrular)
+          printf 'DESCRIBE rtsp://127.0.0.1:8554/clip RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n' \
+            | nc -w 3 127.0.0.1 8554 | grep -i -E "RTSP/1.0|WWW-Authenticate" || true
+          if "$FF" -v error -rtsp_transport tcp -i rtsp://test:test123@127.0.0.1:8554/clip -t 2 -f null -; then
+            echo "ffmpeg Digest okuma: TAMAM"
+          else
+            echo "::warning::ffmpeg Digest okuma başarısız (sunucu yapılandırması)"
+          fi
+          sleep 12   # isteğe bağlı yayıncı kapansın; test klibi baştan başlasın (runOnDemandCloseAfter 10 sn)
           # TEST_RUNNER_ önekli değişkenler test sürecine öneksiz geçer
           echo "TEST_RUNNER_BS_RTSP_URL=rtsp://127.0.0.1:8554/clip" >> "$GITHUB_ENV"
           echo "TEST_RUNNER_BS_RTSP_USER=test" >> "$GITHUB_ENV"

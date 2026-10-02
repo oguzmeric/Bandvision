@@ -107,7 +107,7 @@ struct ContentView: View {
                     }
 
                     OverlayView(profile: $vm.profile, snapshot: vm.snapshot,
-                                fitRect: fit, editable: vm.isCalibrating)
+                                fitRect: fit, editable: vm.isCalibrating, verdicts: vm.trackVerdicts)
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -122,6 +122,7 @@ struct ContentView: View {
                         .background(.ultraThinMaterial)
                         .clipShape(Capsule())
                         .padding(8)
+                        .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("networkState")
                 }
 
@@ -191,18 +192,26 @@ struct ContentView: View {
     }
 
     private var controlPanel: some View {
-        VStack(spacing: 12) {
-            HStack(alignment: .lastTextBaseline) {
+        VStack(spacing: 10) {
+            HStack(alignment: .lastTextBaseline, spacing: 16) {
                 Text("\(vm.total)")
                     .accessibilityIdentifier("liveCount")
-                    .font(.system(size: 76, weight: .bold, design: .rounded))
+                    .font(.system(size: 56, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 Text("adet").foregroundStyle(.secondary)
                 Spacer()
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(vm.inspectionStats.failRate.map { String(format: "%%%.1f", $0 * 100) } ?? "—")
+                        .font(.title2.bold())
+                        .monospacedDigit()
+                        .foregroundStyle(.orange)
+                    Text("kusur").font(.caption).foregroundStyle(.secondary)
+                }
                 RateView(logger: vm.logger)
             }
+            RecentInspectionStrip(vm: vm)
             HStack(spacing: 10) {
                 Button { vm.toggleRunning() } label: {
                     Label(vm.isRunning ? "Durdur" : "Başlat",

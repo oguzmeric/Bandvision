@@ -55,6 +55,8 @@ final class CountingViewModel: ObservableObject {
     // Kalite kontrol (A aşaması): son ürün kartları ve örnekle öğretme
     @Published private(set) var inspections: [InspectionRecord] = []
     @Published private(set) var inspectionStats = InspectionStats()
+    /// Kararı verilmiş izler: görüntüde ürünün yanında "OK 96" / "NOK · Kırık" etiketi
+    @Published private(set) var trackVerdicts: [Int: AppearanceVerdict] = [:]
     let teach = TeachStore()
 
     let camera: CameraManager
@@ -466,6 +468,13 @@ final class CountingViewModel: ObservableObject {
         guard let i = inspections.firstIndex(where: { $0.id == id }) else { return }   // sıfırlandı
         inspections[i].verdict = verdict
         inspections[i].pending = false
+        if let v = verdict {
+            trackVerdicts[inspections[i].trackId] = v
+            if trackVerdicts.count > 2 * InspectionLog.capacity {      // yalnızca son kartlarınkini tut
+                trackVerdicts = Dictionary(inspections.compactMap { r in r.verdict.map { (r.trackId, $0) } },
+                                           uniquingKeysWith: { a, _ in a })
+            }
+        }
     }
 
     /// Karttaki ürünü örnek olarak öğret ("İyi" ya da kusur adı).
@@ -476,6 +485,7 @@ final class CountingViewModel: ObservableObject {
     private func clearInspections() {
         inspections.removeAll()
         inspectionStats = InspectionStats()
+        trackVerdicts.removeAll()
     }
 
     // MARK: - Profiller
