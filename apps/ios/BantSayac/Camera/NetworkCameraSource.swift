@@ -70,9 +70,19 @@ final class NetworkCameraSource: @unchecked Sendable {
         announcedPlaying = false
         decoder.reset()
         let c = RTSPClient(url: url, username: username, password: password)
-        c.onStreamInfo = { [weak self] info in self?.queue.async { self?.decoder.configure(info) } }
-        c.onAccessUnit = { [weak self] nalus, ts in self?.queue.async { self?.decoder.decode(nalus, rtpTimestamp: ts) } }
-        c.onClose = { [weak self] failure in self?.queue.async { self?.closed(failure, client: c) } }
+        // İç kapanışa zayıf değişkeni değil, açılmış güçlü referansı ver (eşzamanlılık denetimi)
+        c.onStreamInfo = { [weak self] info in
+            guard let self else { return }
+            self.queue.async { self.decoder.configure(info) }
+        }
+        c.onAccessUnit = { [weak self] nalus, ts in
+            guard let self else { return }
+            self.queue.async { self.decoder.decode(nalus, rtpTimestamp: ts) }
+        }
+        c.onClose = { [weak self] failure in
+            guard let self else { return }
+            self.queue.async { self.closed(failure, client: c) }
+        }
         client = c
         onState?(.connecting)
         c.start()
