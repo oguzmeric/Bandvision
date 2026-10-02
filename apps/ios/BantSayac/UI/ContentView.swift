@@ -2,9 +2,8 @@ import SwiftUI
 import AVFoundation
 
 struct ContentView: View {
-    @StateObject private var vm = CountingViewModel()
+    @ObservedObject var vm: CountingViewModel
     @State private var showProfiles = false
-    @State private var showSettings = false
     @State private var confirmReset = false
     @State private var showVideoSheet = false
 
@@ -27,15 +26,8 @@ struct ContentView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .onAppear {
-            UIApplication.shared.isIdleTimerDisabled = true
-            vm.startCamera()
-        }
         .sheet(isPresented: $showProfiles) {
             ProfilesView(vm: vm, store: vm.store)
-        }
-        .sheet(isPresented: $showSettings, onDismiss: { vm.applySettings() }) {
-            SettingsView(settings: vm.settings, logger: vm.logger)
         }
         .sheet(isPresented: $showVideoSheet) {
             VideoPickerSheet(vm: vm)
@@ -71,9 +63,6 @@ struct ContentView: View {
             }
             .accessibilityLabel("Video ile test")
             .disabled(vm.isCalibrating)
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape").font(.title3)
-            }
         }
         .padding(.horizontal)
         .padding(.vertical, 8)

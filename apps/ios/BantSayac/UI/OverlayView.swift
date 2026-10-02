@@ -42,6 +42,9 @@ struct OverlayView: View {
                 let p = viewPoint(t.x, t.y)
                 ctx.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
                          with: .color(t.counted ? .cyan : .white))
+                ctx.draw(Text(hexID(t.id)).font(.caption2.monospacedDigit())
+                            .foregroundColor(t.counted ? .cyan : .white),
+                         at: CGPoint(x: p.x + 8, y: p.y - 8), anchor: .bottomLeading)
             }
 
             // Akış yönü

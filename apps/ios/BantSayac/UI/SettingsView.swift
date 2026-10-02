@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var logger: CountLogger
+    /// Sayfa olarak açıldığında "Tamam"; sekmede gizli.
+    var showsDone = true
     @Environment(\.dismiss) private var dismiss
     @State private var csvURL: URL?
 
@@ -60,8 +62,10 @@ struct SettingsView: View {
             .navigationTitle("Ayarlar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Tamam") { dismiss() }
+                if showsDone {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Tamam") { dismiss() }
+                    }
                 }
             }
         }

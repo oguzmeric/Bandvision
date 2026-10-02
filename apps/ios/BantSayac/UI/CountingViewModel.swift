@@ -38,6 +38,11 @@ final class CountingViewModel: ObservableObject {
     }
     var isVideoMode: Bool { video != nil }
 
+    // Kalite kontrol (A aşaması): son ürün kartları ve örnekle öğretme
+    @Published private(set) var inspections: [InspectionRecord] = []
+    @Published private(set) var inspectionStats = InspectionStats()
+    let teach = TeachStore()
+
     let camera: CameraManager
     let processor: FrameProcessor
     let store: ProfileStore
@@ -80,6 +85,10 @@ final class CountingViewModel: ObservableObject {
         processor.onCalibration = { [weak self] event in
             self?.handleCalibration(event)
         }
+        processor.onCrop = { [weak self] crop in
+            self?.handleCrop(crop)
+        }
+        teach.load(profileID: profile.id)
         camera.frameHandler = { [processor] pb, ts in processor.process(pb, ts: ts) }
 
         NotificationCenter.default
@@ -131,6 +140,7 @@ final class CountingViewModel: ObservableObject {
     }
 
     func reset() {
+        clearInspections()
         total = 0
         processor.setTotal(0)
         processor.resetTracking(resetBackground: false)
@@ -221,6 +231,7 @@ final class CountingViewModel: ObservableObject {
         guard let source = videoSource, video != nil else { return }
         let target = max(0, min(t, source.info.duration))
         let fromStart = target < 0.05
+        clearInspections()
         total = 0
         processor.setTotal(0)
         processor.resetClock()
@@ -270,6 +281,7 @@ final class CountingViewModel: ObservableObject {
         processor.setEmitFrameImages(false)
         processor.resetClock()
         processor.resetTracking(resetBackground: true)
+        clearInspections()
         total = liveTotal
         processor.setTotal(liveTotal)
         processor.setCounting(isRunning)
@@ -289,11 +301,52 @@ final class CountingViewModel: ObservableObject {
         if error == nil { video?.position = source.info.duration }
     }
 
+    // MARK: - Kalite kontrol
+
+    private func handleCrop(_ crop: CountCrop) {
+        let judge = teach.enabled && teach.isReady
+        var record = InspectionRecord(trackId: crop.trackId, delta: crop.delta, time: crop.time, jpeg: crop.jpeg)
+        record.pending = judge
+        inspections.insert(record, at: 0)
+        if inspections.count > InspectionLog.capacity { inspections.removeLast(inspections.count - InspectionLog.capacity) }
+        inspectionStats.counted += crop.delta
+        guard judge else {
+            inspectionStats.unknown += crop.delta
+            return
+        }
+        let id = record.id
+        teach.classifier.classify(jpeg: crop.jpeg) { [self] verdict in
+            Task { @MainActor in self.applyVerdict(verdict, to: id, delta: crop.delta) }
+        }
+    }
+
+    private func applyVerdict(_ verdict: AppearanceVerdict?, to id: UUID, delta: Int) {
+        if let v = verdict {
+            if v.pass { inspectionStats.pass += delta } else { inspectionStats.fail += delta }
+        } else {
+            inspectionStats.unknown += delta
+        }
+        guard let i = inspections.firstIndex(where: { $0.id == id }) else { return }   // sıfırlandı
+        inspections[i].verdict = verdict
+        inspections[i].pending = false
+    }
+
+    /// Karttaki ürünü örnek olarak öğret ("İyi" ya da kusur adı).
+    func teachExample(_ record: InspectionRecord, as label: String) {
+        teach.addExample(jpeg: record.jpeg, label: label)
+    }
+
+    private func clearInspections() {
+        inspections.removeAll()
+        inspectionStats = InspectionStats()
+    }
+
     // MARK: - Profiller
 
     func selectProfile(_ id: UUID) {
         store.select(id)
         profile = store.selectedProfile
+        teach.load(profileID: profile.id)
         logger.profileName = profile.name
         processor.resetTracking(resetBackground: true)
     }

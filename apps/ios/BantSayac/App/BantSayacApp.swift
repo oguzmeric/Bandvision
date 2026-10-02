@@ -4,7 +4,7 @@ import SwiftUI
 struct BantSayacApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }

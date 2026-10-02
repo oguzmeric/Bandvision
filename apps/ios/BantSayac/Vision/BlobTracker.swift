@@ -13,6 +13,15 @@ struct CountEvent {
     /// true: iz çizgiyi ilk kez geçti. false: geçtikten sonra birleşme ile çarpan arttı.
     let isFirstCrossing: Bool
     let medianArea: Double
+    let trackId: Int
+    /// Sayımın olduğu karedeki lekenin kutusu (normalize); ürün kırpıntısı için.
+    let bbox: CGRect
+}
+
+/// Ekranda ve kartlarda gösterilen kısa kimlik (ardışık iz numaralarında bile ayırt edilebilir).
+/// Python `bantvision.video._hex_id` ile aynı.
+func hexID(_ id: Int) -> String {
+    String(format: "%04X", (UInt64(truncatingIfNeeded: id) &* 2_654_435_761) & 0xFFFF)
 }
 
 func median(_ a: [Double]) -> Double {
@@ -78,12 +87,14 @@ final class BlobTracker {
                     let mean = Double(t.multHistory.reduce(0, +)) / Double(t.multHistory.count)
                     let m = max(1, roundHalfEven(mean))
                     t.countedSoFar = m
-                    events.append(CountEvent(delta: m, isFirstCrossing: true, medianArea: median(t.areaHistory)))
+                    events.append(CountEvent(delta: m, isFirstCrossing: true, medianArea: median(t.areaHistory),
+                                             trackId: t.id, bbox: blob.bbox))
                 }
             } else {
                 let recent = t.multHistory.suffix(3)
                 if recent.count == 3, let low = recent.min(), low > t.countedSoFar {
-                    events.append(CountEvent(delta: low - t.countedSoFar, isFirstCrossing: false, medianArea: 0))
+                    events.append(CountEvent(delta: low - t.countedSoFar, isFirstCrossing: false, medianArea: 0,
+                                             trackId: t.id, bbox: blob.bbox))
                     t.countedSoFar = low
                 }
             }

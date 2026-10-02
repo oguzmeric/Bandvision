@@ -3,6 +3,7 @@ import CoreVideo
 import CoreGraphics
 import QuartzCore
 import CoreImage
+import ImageIO
 
 struct EngineSnapshot {
     var frameSize: CGSize
@@ -17,6 +18,15 @@ struct EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
                        blobs: [], tracks: [], fps: 0, mask: nil, image: nil)
     }
+}
+
+/// Çizgiyi ilk kez geçen ürünün tam çözünürlüklü kırpıntısı (kalite kontrol kartı için).
+struct CountCrop: Sendable {
+    let trackId: Int
+    let delta: Int
+    let time: Date
+    /// JPEG, uzun kenar en fazla 256 px
+    let jpeg: Data
 }
 
 enum CalibrationEvent {
@@ -59,6 +69,7 @@ final class FrameProcessor: @unchecked Sendable {
     // Hepsi ana kuyrukta çağrılır.
     var onSnapshot: (@MainActor (EngineSnapshot) -> Void)?
     var onCount: (@MainActor (_ delta: Int, _ total: Int) -> Void)?
+    var onCrop: (@MainActor (CountCrop) -> Void)?
     var onCalibration: (@MainActor (CalibrationEvent) -> Void)?
 
     init(queue: DispatchQueue) {
@@ -166,11 +177,11 @@ final class FrameProcessor: @unchecked Sendable {
                                     maxDistance: maxDist,
                                     minHits: profile.minHits,
                                     maxMissed: maxMissed)
-        if !events.isEmpty { handle(events) }
+        if !events.isEmpty { handle(events, pixelBuffer: pixelBuffer) }
         publish(frame: frame, blobs: blobs, pixelBuffer: pixelBuffer)
     }
 
-    private func handle(_ events: [CountEvent]) {
+    private func handle(_ events: [CountEvent], pixelBuffer: CVPixelBuffer?) {
         if case .sample(var areas, let target) = calib {
             areas += events.filter { $0.isFirstCrossing && $0.medianArea > 0 }.map { $0.medianArea }
             if areas.count >= target {
@@ -190,6 +201,30 @@ final class FrameProcessor: @unchecked Sendable {
         total += delta
         let t = total
         DispatchQueue.main.async { [weak self] in self?.onCount?(delta, t) }
+
+        guard let pb = pixelBuffer else { return }
+        for e in events where e.isFirstCrossing {
+            guard let jpeg = cropJPEG(pb, bbox: e.bbox) else { continue }
+            let crop = CountCrop(trackId: e.trackId, delta: e.delta, time: Date(), jpeg: jpeg)
+            DispatchQueue.main.async { [weak self] in self?.onCrop?(crop) }
+        }
+    }
+
+    /// Lekenin kutusunu %15 payla genişletip tam çözünürlüklü kareden kırpar.
+    private func cropJPEG(_ pb: CVPixelBuffer, bbox: CGRect) -> Data? {
+        let w = CGFloat(CVPixelBufferGetWidth(pb)), h = CGFloat(CVPixelBufferGetHeight(pb))
+        var r = CGRect(x: bbox.minX * w, y: bbox.minY * h, width: bbox.width * w, height: bbox.height * h)
+        let pad = 0.15 * max(r.width, r.height)
+        r = r.insetBy(dx: -pad, dy: -pad).intersection(CGRect(x: 0, y: 0, width: w, height: h))
+        guard r.width >= 8, r.height >= 8 else { return nil }
+        // CIImage'ın orijini sol alttadır
+        let image = CIImage(cvPixelBuffer: pb)
+            .cropped(to: CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height))
+        let scale = min(1, 256 / max(r.width, r.height))
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return ciContext.jpegRepresentation(
+            of: scaled, colorSpace: CGColorSpaceCreateDeviceRGB(),
+            options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.8])
     }
 
     // MARK: - Yardımcılar
