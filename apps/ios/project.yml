@@ -21,7 +21,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCameraUsageDescription: Banttan geçen ürünleri saymak için kamera kullanılır.
-        NSLocalNetworkUsageDescription: Ağdaki IP kameranın görüntüsünü almak için yerel ağa bağlanılır.
+        NSLocalNetworkUsageDescription: Ağdaki IP kameranın ya da kayıt cihazının görüntüsünü almak için yerel ağa bağlanılır.
+        # Kayıt cihazlarının web API'si (Hikvision/Dahua) yerel ağda çoğunlukla düz HTTP; yalnızca yerel ağ serbest
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         UILaunchScreen: {}
@@ -35,7 +38,19 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     scheme:
-      testTargets: [BantSayacUITests]
+      testTargets: [BantSayacTests, BantSayacUITests]
+  BantSayacTests:
+    # Birim testleri: kayıt cihazı yanıt ayrıştırıcıları, ayarların eski kayıtlarla uyumu
+    type: bundle.unit-test
+    platform: iOS
+    sources: [BantSayacTests]
+    dependencies:
+      - target: BantSayac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.oguzmeric.bantsayac.tests
+        TARGETED_DEVICE_FAMILY: "1"
   BantSayacUITests:
     # Uçtan uca test: simülatörde sayısı bilinen klibi sayar (tools/make_ui_test_clip.py)
     type: bundle.ui-testing

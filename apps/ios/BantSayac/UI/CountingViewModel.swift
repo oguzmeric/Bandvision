@@ -47,8 +47,8 @@ final class CountingViewModel: ObservableObject {
     @Published private(set) var networkConfig = NetworkCameraConfig.load()
     @Published private(set) var networkState: NetworkCameraState?
     private var networkSource: NetworkCameraSource?
-    /// Kaydedilen şifre bellekte de tutulur: Keychain yazılamasa bile oturum boyunca bağlantı çalışır
-    private var networkPassword: String?
+    /// Kaydedilen şifreler bellekte de tutulur: Keychain yazılamasa bile oturum boyunca bağlantı çalışır
+    private var networkPasswords: [NetworkDeviceKind: String] = [:]
     private let frameGate = FrameGate()
     /// UI testi: yayın bitince yeniden bağlanma (gerçek kullanımda her zaman true)
     private var networkReconnect = true
@@ -350,13 +350,24 @@ final class CountingViewModel: ObservableObject {
         config.customURL = url
         config.username = username
         networkConfig = config
-        networkPassword = password
-        let status = CameraCredentialStore.setPassword(password)
+        networkPasswords[.camera] = password
+        let status = CameraCredentialStore.setPassword(password, for: .camera)
         if status != errSecSuccess { testHookError = "Keychain kaydı başarısız (durum \(status))" }
         sourceKind = .network
         startNetwork()
         processor.startBackgroundLearning()          // klip boş bantla başlar (§5)
         setRunning(true)
+    }
+
+    /// UI testi (ayar ekranları): önceki testten kalan ağ ayarı ve şifreler silinir, kamera açılmaz.
+    func prepareUITestForms() {
+        networkReconnect = false
+        networkPasswords = [:]
+        networkConfig = NetworkCameraConfig()
+        networkConfig.save()
+        sourceKind = .phone                               // kaydedince ağ kaynağına geçiş de sınansın
+        UserDefaults.standard.set(VideoSourceKind.phone.rawValue, forKey: "bs.source")
+        for kind in NetworkDeviceKind.allCases { CameraCredentialStore.setPassword("", for: kind) }
     }
 
     /// UI testi teşhisi: ağ kaynağı ve kapı sayaçları
@@ -409,29 +420,30 @@ final class CountingViewModel: ObservableObject {
     func saveNetworkConfig(_ config: NetworkCameraConfig, password: String) -> String? {
         networkConfig = config
         config.save()
-        networkPassword = password
-        let status = CameraCredentialStore.setPassword(password)
+        networkPasswords[config.kind] = password
+        let status = CameraCredentialStore.setPassword(password, for: config.kind)
         if sourceKind == .network && !isVideoMode { startNetwork() }
         return status == errSecSuccess ? nil
             : "Şifre güvenli depoya kaydedilemedi (kod \(status)). Bu oturumda kullanılır; uygulama yeniden açılınca tekrar girmen gerekebilir."
     }
 
+    /// Kayıtlı şifre: önce bu oturumda girilen, yoksa Keychain
+    func storedPassword(for kind: NetworkDeviceKind) -> String {
+        networkPasswords[kind] ?? CameraCredentialStore.password(for: kind)
+    }
+
     private func startNetwork() {
         stopNetwork()
         camera.stop()
-        guard let url = networkConfig.rtspURL else {
+        guard let plan = NetworkStreamPlan.make(networkConfig, password: storedPassword(for: networkConfig.kind)) else {
             networkState = .ended("Ağ kamerası ayarlanmadı (Ayarlar → Görüntü kaynağı)")
             return
         }
-        // Tam adreste kullanıcı adı/şifre yazılmışsa ve ayrı girilmemişse onları kullan
-        let user = networkConfig.username.isEmpty ? (url.user ?? "") : networkConfig.username
-        let stored = networkPassword ?? CameraCredentialStore.password()
-        let password = stored.isEmpty ? (url.password ?? "") : stored
         processor.resetClock()
         processor.resetTracking(resetBackground: true)
         processor.setEmitFrameImages(true)
         frameImage = nil
-        let source = NetworkCameraSource(url: url, username: user, password: password)
+        let source = plan.makeSource()
         source.reconnect = networkReconnect
         let processor = self.processor
         let gate = frameGate

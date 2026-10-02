@@ -42,6 +42,10 @@ struct RootView: View {
                 vm.runUITestVideo(path: path, expectedArea: env["BS_TEST_EXPECTED_AREA"].flatMap(Double.init))
                 return
             }
+            if env["BS_TEST_FORMS"] != nil {
+                vm.prepareUITestForms()                  // ayar ekranı testleri: kamera açılmaz, ayarlar temiz
+                return
+            }
             if let url = env["BS_TEST_RTSP_URL"] {
                 vm.runUITestNetwork(url: url, username: env["BS_TEST_RTSP_USER"] ?? "",
                                     password: env["BS_TEST_RTSP_PASS"] ?? "",

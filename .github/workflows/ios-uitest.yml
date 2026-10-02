@@ -63,6 +63,11 @@ jobs:
               ips: []
               permissions:
                 - action: read
+            - user: admin
+              pass: test123
+              ips: []
+              permissions:
+                - action: read
           rtspTransports: [tcp]
           rtspAuthMethods: [digest]
           rtmp: false
@@ -73,6 +78,11 @@ jobs:
             clip:
               runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/clip
               runOnDemandRestart: false
+            # Sahte Hikvision (kanal 1 alt akış) ve Dahua kayıt cihazı yolları (sorgu dizgesi yola girmez)
+            Streaming/Channels/102:
+              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
+            cam/realmonitor:
+              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
           EOF
           (cd "$RUNNER_TEMP/mtx" && nohup ./mediamtx mediamtx.yml > "$RUNNER_TEMP/mediamtx.log" 2>&1 &)
           for i in $(seq 1 40); do nc -z 127.0.0.1 8554 && break; sleep 0.5; done
@@ -85,6 +95,47 @@ jobs:
           else
             echo "::warning::ffmpeg Digest okuma başarısız (sunucu yapılandırması)"
           fi
+          # Sahte TRASSIR'ın görüntü portu: jeton yolları (tok…) 555'te, kimlik doğrulamasız (gerçekte jeton yeterli)
+          mkdir -p "$RUNNER_TEMP/mtx555"
+          cat > "$RUNNER_TEMP/mtx555/mediamtx.yml" <<EOF
+          logLevel: info
+          rtspAddress: :555
+          rtspsAddress: :18322
+          rtpAddress: :18000
+          rtcpAddress: :18001
+          authMethod: internal
+          authInternalUsers:
+            - user: any
+              pass:
+              ips: []
+              permissions:
+                - action: publish
+                - action: read
+          rtspTransports: [tcp]
+          rtmp: false
+          hls: false
+          webrtc: false
+          srt: false
+          paths:
+            "~^tok":
+              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:555/\$MTX_PATH
+          EOF
+          (cd "$RUNNER_TEMP/mtx555" && nohup "$RUNNER_TEMP/mtx/mediamtx" mediamtx.yml > "$RUNNER_TEMP/mediamtx555.log" 2>&1 &)
+          # Sahte kayıt cihazları (tools/mock_nvr.py): Hikvision/Dahua HTTP 8081 (Digest), TRASSIR SDK HTTPS 8080
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RUNNER_TEMP/nvr.key" -out "$RUNNER_TEMP/nvr.crt" \
+            -days 2 -subj "/CN=127.0.0.1" 2>/dev/null
+          "$FF" -v error -y -ss 5 -i "$CLIP" -frames:v 1 -vf scale=640:-2 "$RUNNER_TEMP/nvr.jpg"
+          nohup python3 tools/mock_nvr.py --http-port 8081 --https-port 8080 --cert "$RUNNER_TEMP/nvr.crt" \
+            --key "$RUNNER_TEMP/nvr.key" --snapshot "$RUNNER_TEMP/nvr.jpg" > "$RUNNER_TEMP/mock_nvr.log" 2>&1 &
+          for port in 555 8080 8081; do
+            for i in $(seq 1 40); do nc -z 127.0.0.1 $port && break; sleep 0.5; done
+            nc -z 127.0.0.1 $port || { echo "::error::port $port açılmadı"; cat "$RUNNER_TEMP"/mediamtx555.log "$RUNNER_TEMP"/mock_nvr.log; exit 1; }
+          done
+          curl -sk "https://127.0.0.1:8080/login?username=admin&password=test123" | head -c 80; echo
+          echo "TEST_RUNNER_BS_NVR_HOST=127.0.0.1" >> "$GITHUB_ENV"
+          echo "TEST_RUNNER_BS_NVR_HTTP_PORT=8081" >> "$GITHUB_ENV"
+          echo "TEST_RUNNER_BS_NVR_RTSP_PORT=8554" >> "$GITHUB_ENV"
+          echo "TEST_RUNNER_BS_NVR_PASS=test123" >> "$GITHUB_ENV"
           sleep 12   # isteğe bağlı yayıncı kapansın; test klibi baştan başlasın (runOnDemandCloseAfter 10 sn)
           # TEST_RUNNER_ önekli değişkenler test sürecine öneksiz geçer
           echo "TEST_RUNNER_BS_RTSP_URL=rtsp://127.0.0.1:8554/clip" >> "$GITHUB_ENV"
@@ -97,10 +148,10 @@ jobs:
           # UITEST: test kancalarını açar; TestFlight arşivinde bu bayrak yoktur.
           xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac -configuration Release \
             -destination "id=$UDID" -resultBundlePath "$RUNNER_TEMP/uitest.xcresult" \
-            SWIFT_ACTIVE_COMPILATION_CONDITIONS=UITEST \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=UITEST ENABLE_TESTABILITY=YES \
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
-          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM|AĞ DURUMU|AĞ SAYAÇLARI|TEST KANCASI" uitest.log | tail -40
+          grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM|AĞ DURUMU|AĞ SAYAÇLARI|TEST KANCASI|KAYIT CİHAZI" uitest.log | tail -60
           # Test başarısız olunca yazdırdığı ekran ağacı (teşhis)
           sed -n '/=== EKRAN/,/=== SON/p' uitest.log | head -300
           exit $status
@@ -112,8 +163,13 @@ jobs:
           path: |
             ${{ runner.temp }}/uitest.xcresult
             ${{ runner.temp }}/mediamtx.log
+            ${{ runner.temp }}/mediamtx555.log
+            ${{ runner.temp }}/mock_nvr.log
             apps/ios/uitest.log
       - name: RTSP sunucu günlüğü (son satırlar)
         if: always()
         working-directory: .
-        run: tail -40 "$RUNNER_TEMP/mediamtx.log" 2>/dev/null || true
+        run: |
+          tail -40 "$RUNNER_TEMP/mediamtx.log" 2>/dev/null || true
+          echo "--- 555 (TRASSIR görüntü)"; tail -20 "$RUNNER_TEMP/mediamtx555.log" 2>/dev/null || true
+          echo "--- sahte kayıt cihazı"; tail -60 "$RUNNER_TEMP/mock_nvr.log" 2>/dev/null || true

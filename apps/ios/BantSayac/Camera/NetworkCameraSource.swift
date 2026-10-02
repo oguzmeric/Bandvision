@@ -25,16 +25,23 @@ enum NetworkCameraState: Equatable, Sendable {
 
 /// Ağ kamerası: RTSP → VideoToolbox → CVPixelBuffer (420f, kamera ile aynı biçim) → işleme hattı.
 /// Bağlantı koparsa 1, 2, 4 … 30 sn aralıkla yeniden bağlanır.
+/// Adres her bağlanışta `resolver` ile yeniden alınır (TRASSIR: kısa ömürlü jeton).
 final class NetworkCameraSource: @unchecked Sendable {
-    let url: URL
+    typealias URLResolver = @Sendable () async throws -> URL
+
+    private let resolver: URLResolver
     private let username: String
     private let password: String
     private let queue = DispatchQueue(label: "bantsayac.netcam")
     private var client: RTSPClient?
+    /// Şu anki bağlantının adresi (yalnızca `queue` üzerinde)
+    private var currentURL: URL?
     let decoder = H26xDecoder()
     private var stopped = false
     private var attempt = 0
     private var announcedPlaying = false
+    /// Her bağlanma denemesinde artar; eski denemenin geç gelen sonucu yok sayılır
+    private var serial = 0
 
     /// false: bağlantı bitince yeniden denenmez (test ve sınama)
     var reconnect = true
@@ -42,9 +49,15 @@ final class NetworkCameraSource: @unchecked Sendable {
     var onState: (@Sendable (NetworkCameraState) -> Void)?
     /// Çözücü iş parçacığında; çağıran işleme hattına aktarmaktan (ve geride kalınca kare atlamaktan) sorumlu
     var onFrame: (@Sendable (CVPixelBuffer, Double) -> Void)?
+    /// Yayın açıkken 5 sn'de bir çağrılır (TRASSIR jetonunu canlı tutmak için)
+    var keepAlive: (@Sendable (URL) async -> Void)?
 
-    init(url: URL, username: String, password: String) {
-        self.url = url
+    convenience init(url: URL, username: String, password: String) {
+        self.init(resolver: { url }, username: username, password: password)
+    }
+
+    init(resolver: @escaping URLResolver, username: String, password: String) {
+        self.resolver = resolver
         self.username = username
         self.password = password
         decoder.onFrame = { [weak self] pb, ts in self?.decoded(pb, ts) }
@@ -60,8 +73,10 @@ final class NetworkCameraSource: @unchecked Sendable {
     func stop() {
         queue.async { [self] in
             stopped = true
+            serial += 1
             client?.stop()
             client = nil
+            currentURL = nil
             decoder.reset()
         }
     }
@@ -69,6 +84,31 @@ final class NetworkCameraSource: @unchecked Sendable {
     private func connect() {
         announcedPlaying = false
         decoder.reset()
+        serial += 1
+        let mine = serial
+        onState?(.connecting)
+        let resolver = self.resolver
+        Task { [weak self] in
+            let result: Result<URL, Error>
+            do { result = .success(try await resolver()) } catch { result = .failure(error) }
+            guard let self else { return }
+            self.queue.async { self.resolved(result, serial: mine) }
+        }
+    }
+
+    private func resolved(_ result: Result<URL, Error>, serial mine: Int) {
+        guard !stopped, mine == serial, client == nil else { return }
+        switch result {
+        case .failure(let error):
+            let fatal = (error as? RecorderError) == .unauthorized
+            retry(reason: error.localizedDescription, fatal: fatal)
+        case .success(let url):
+            open(url)
+        }
+    }
+
+    private func open(_ url: URL) {
+        currentURL = url
         let c = RTSPClient(url: url, username: username, password: password)
         // İç kapanışa zayıf değişkeni değil, açılmış güçlü referansı ver (eşzamanlılık denetimi)
         c.onStreamInfo = { [weak self] info in
@@ -84,25 +124,42 @@ final class NetworkCameraSource: @unchecked Sendable {
             self.queue.async { self.closed(failure, client: c) }
         }
         client = c
-        onState?(.connecting)
         c.start()
     }
 
     private func closed(_ failure: RTSPClient.Failure?, client c: RTSPClient) {
         guard client === c, !stopped else { return }
         client = nil
+        currentURL = nil
         decoder.reset()
-        let reason = failure?.errorDescription ?? "Bağlantı kapandı"
-        guard reconnect, failure != .unauthorized, failure != .badURL else {
+        retry(reason: failure?.errorDescription ?? "Bağlantı kapandı",
+              fatal: failure == .unauthorized || failure == .badURL)
+    }
+
+    /// Yalnızca `queue` üzerinde. Şifre hatası gibi kalıcı sorunlarda yeniden denenmez.
+    private func retry(reason: String, fatal: Bool) {
+        guard reconnect, !fatal else {
             onState?(.ended(reason))
             return
         }
         attempt += 1
         let delay = min(30, 1 << min(attempt - 1, 5))
         onState?(.reconnecting(seconds: delay, reason: reason))
+        let mine = serial
         queue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
-            guard let self, !self.stopped, self.client == nil else { return }
+            guard let self, !self.stopped, mine == self.serial, self.client == nil else { return }
             self.connect()
+        }
+    }
+
+    /// Yayın sürdükçe 5 sn'de bir `keepAlive`; bağlantı değişince kendiliğinden durur.
+    private func scheduleKeepAlive(serial mine: Int) {
+        guard keepAlive != nil else { return }
+        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, !self.stopped, mine == self.serial, let url = self.currentURL,
+                  let keepAlive = self.keepAlive else { return }
+            Task { await keepAlive(url) }
+            self.scheduleKeepAlive(serial: mine)
         }
     }
 
@@ -114,6 +171,7 @@ final class NetworkCameraSource: @unchecked Sendable {
             guard let self, !self.announcedPlaying, !self.stopped else { return }
             self.announcedPlaying = true
             self.attempt = 0
+            self.scheduleKeepAlive(serial: self.serial)
             self.onState?(.playing(codec: self.decoder.codec.rawValue, width: width, height: height))
         }
     }
@@ -130,8 +188,13 @@ final class NetworkCameraSource: @unchecked Sendable {
     /// Bağlanır, ilk kareyi çözer, küçük resim üretir ve kapatır (Ayarlar → Bağlantıyı test et).
     static func probe(url: URL, username: String, password: String,
                       timeout: Double = 12) async -> Result<ProbeResult, Error> {
+        await probe(resolver: { url }, username: username, password: password, timeout: timeout)
+    }
+
+    static func probe(resolver: @escaping URLResolver, username: String, password: String,
+                      timeout: Double = 12) async -> Result<ProbeResult, Error> {
         await withCheckedContinuation { (cont: CheckedContinuation<Result<ProbeResult, Error>, Never>) in
-            let source = NetworkCameraSource(url: url, username: username, password: password)
+            let source = NetworkCameraSource(resolver: resolver, username: username, password: password)
             source.reconnect = false
             let once = Once()
             // Geri çağrılar kaynağı zayıf tutar (döngü olmasın); kaynağı zaman aşımı kapanışı canlı tutar.

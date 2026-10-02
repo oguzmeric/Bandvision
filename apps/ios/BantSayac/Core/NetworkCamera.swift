@@ -41,19 +41,72 @@ enum CameraBrand: String, Codable, CaseIterable, Identifiable {
 }
 
 struct NetworkCameraConfig: Codable, Equatable {
+    /// Doğrudan kamera ya da kayıt cihazı (NVR/XVR)
+    var kind: NetworkDeviceKind = .camera
+
+    // Kamera
     var brand: CameraBrand = .hikvision
     var host = ""
     var port = 554
     var channel = 1
-    /// Alt akış: sayım için yeterli (640×360 / 25 fps), ağ ve işlemci dostu
+    /// Alt akış: sayım için yeterli (640×360 / 25 fps), ağ ve işlemci dostu. Kayıt cihazında da kullanılır.
     var substream = true
     var username = "admin"
     /// Yalnızca `.custom` markada: rtsp://… tam adres
     var customURL = ""
 
+    // Kayıt cihazı
+    var recorderBrand: RecorderBrand = .trassir
+    var recorderHost = ""
+    /// nil: markanın varsayılanı (TRASSIR 8080/555, Hikvision/Dahua 80/554)
+    var recorderHTTPPort: Int?
+    var recorderRTSPPort: Int?
+    var recorderUsername = "admin"
+    /// Seçilen kamera (kanal)
+    var recorderChannel: RecorderChannel?
+
+    init() {}
+
+    /// Eski sürümlerin kaydında yeni alanlar yok: eksik alan varsayılanla okunur (kayıtlı kamera kaybolmasın).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = NetworkCameraConfig()
+        kind = try c.decodeIfPresent(NetworkDeviceKind.self, forKey: .kind) ?? d.kind
+        brand = try c.decodeIfPresent(CameraBrand.self, forKey: .brand) ?? d.brand
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? d.host
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? d.port
+        channel = try c.decodeIfPresent(Int.self, forKey: .channel) ?? d.channel
+        substream = try c.decodeIfPresent(Bool.self, forKey: .substream) ?? d.substream
+        username = try c.decodeIfPresent(String.self, forKey: .username) ?? d.username
+        customURL = try c.decodeIfPresent(String.self, forKey: .customURL) ?? d.customURL
+        recorderBrand = try c.decodeIfPresent(RecorderBrand.self, forKey: .recorderBrand) ?? d.recorderBrand
+        recorderHost = try c.decodeIfPresent(String.self, forKey: .recorderHost) ?? d.recorderHost
+        recorderHTTPPort = try c.decodeIfPresent(Int.self, forKey: .recorderHTTPPort)
+        recorderRTSPPort = try c.decodeIfPresent(Int.self, forKey: .recorderRTSPPort)
+        recorderUsername = try c.decodeIfPresent(String.self, forKey: .recorderUsername) ?? d.recorderUsername
+        recorderChannel = try c.decodeIfPresent(RecorderChannel.self, forKey: .recorderChannel)
+    }
+
+    /// Kayıt cihazının temizlenmiş adresi
+    var cleanRecorderHost: String { Self.clean(recorderHost) }
+    var effectiveHTTPPort: Int { recorderHTTPPort ?? recorderBrand.defaultHTTPPort }
+    var effectiveRTSPPort: Int { recorderRTSPPort ?? recorderBrand.defaultRTSPPort }
+
+    /// Kayıt cihazına bağlanmak için gereken bilgiler tamam mı (kanal seçimi hariç)
+    var recorderReady: Bool {
+        !cleanRecorderHost.isEmpty && (1...65535).contains(effectiveHTTPPort) && (1...65535).contains(effectiveRTSPPort)
+    }
+
+    /// Bağlanılabilir mi: kamera adresi geçerli ya da kayıt cihazında kamera seçilmiş
+    var isComplete: Bool {
+        kind == .camera ? rtspURL != nil : recorderReady && recorderChannel != nil
+    }
+
     /// Kullanıcının yazdığı adresten şema, kimlik ve boşlukları ayıklar ("http://192.168.1.64/" → "192.168.1.64").
-    var cleanHost: String {
-        var h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    var cleanHost: String { Self.clean(host) }
+
+    private static func clean(_ text: String) -> String {
+        var h = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let r = h.range(of: "://") { h = String(h[r.upperBound...]) }
         if let at = h.lastIndex(of: "@") { h = String(h[h.index(after: at)...]) }
         if let slash = h.firstIndex(of: "/") { h = String(h[..<slash]) }
@@ -74,6 +127,10 @@ struct NetworkCameraConfig: Codable, Equatable {
 
     /// Ekranda gösterilecek özet
     var summary: String {
+        if kind == .recorder {
+            guard recorderReady, let ch = recorderChannel else { return "Ayarlanmadı" }
+            return "\(recorderBrand.title) · \(cleanRecorderHost) · \(ch.title)"
+        }
         guard let url = rtspURL else { return "Ayarlanmadı" }
         return "\(brand == .custom ? "RTSP" : brand.title) · \(url.host ?? "")"
     }
@@ -91,12 +148,13 @@ struct NetworkCameraConfig: Codable, Equatable {
     }
 }
 
-/// Ağ kamerası şifresi iPhone Keychain'de (cihaz kilidi açıldıktan sonra erişilebilir, yedekle taşınmaz).
+/// Ağ kamerası ve kayıt cihazı şifreleri iPhone Keychain'de (cihaz kilidi açıldıktan sonra erişilebilir,
+/// yedekle taşınmaz). Hesap: "camera" (doğrudan kamera, eski sürümlerle aynı) ve "recorder".
 enum CameraCredentialStore {
     private static let service = "com.oguzmeric.bantsayac.netcam"
-    private static let account = "camera"
 
-    static func password() -> String {
+    static func password(for kind: NetworkDeviceKind = .camera) -> String {
+        let account = kind.rawValue
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                     kSecAttrService as String: service, kSecAttrAccount as String: account,
                                     kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
@@ -108,7 +166,8 @@ enum CameraCredentialStore {
 
     /// Kaydeder; başarısızsa Keychain durum kodunu döndürür (sessizce yutulmaz).
     @discardableResult
-    static func setPassword(_ password: String) -> OSStatus {
+    static func setPassword(_ password: String, for kind: NetworkDeviceKind = .camera) -> OSStatus {
+        let account = kind.rawValue
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                    kSecAttrService as String: service, kSecAttrAccount as String: account]
         SecItemDelete(base as CFDictionary)
