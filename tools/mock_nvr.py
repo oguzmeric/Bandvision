@@ -16,6 +16,7 @@ import http.server
 import json
 import re
 import secrets
+import socketserver
 import ssl
 import sys
 import threading
@@ -159,6 +160,17 @@ class TrassirHandler(Base):
             self.send(404, b"Not Found", "text/plain")
 
 
+class Server(http.server.ThreadingHTTPServer):
+    """`HTTPServer.server_bind` dinlemeden önce `socket.getfqdn()` ile ters DNS sorgular; macOS CI makinesinde
+    bu takılıyordu (port bağlı ama dinlenmiyor). Sorgu atlanır."""
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--http-port", type=int, required=True)
@@ -171,8 +183,8 @@ def main() -> int:
     with open(a.snapshot, "rb") as f:
         Base.snapshot = f.read()
 
-    plain = http.server.ThreadingHTTPServer(("127.0.0.1", a.http_port), DigestHandler)
-    secure = http.server.ThreadingHTTPServer(("127.0.0.1", a.https_port), TrassirHandler)
+    plain = Server(("127.0.0.1", a.http_port), DigestHandler)
+    secure = Server(("127.0.0.1", a.https_port), TrassirHandler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(a.cert, a.key)
