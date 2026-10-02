@@ -30,6 +30,7 @@ EXAMPLE_SCHEMAS: list[tuple[str, str]] = [
     ("batch", "batch.schema.json"),
     ("device-pair-request", "device.schema.json#/$defs/pairRequest"),
     ("device-pair-response", "device.schema.json#/$defs/pairResponse"),
+    ("analysis-job", "analysis-job.schema.json"),
 ]
 
 

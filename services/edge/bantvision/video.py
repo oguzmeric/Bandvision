@@ -22,7 +22,7 @@ import math
 import pathlib
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import cv2
@@ -338,7 +338,8 @@ class RunResult:
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
-          out_width: int, progress: bool = True) -> RunResult:
+          out_width: int, progress: bool | Callable[[float, int], None] = True) -> RunResult:
+    """`progress`: True → konsola yüzde; fonksiyon → (0–1 oran, anlık sayı) ile çağrılır (analiz sunucusu)."""
     pipe = Pipeline(profile)
     pipe.segmenter.bg = cal.background.copy()
     writer = None
@@ -369,10 +370,15 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
         flash = max(0.0, flash - 1 / info.fps)
         n += 1
         if progress and info.frames and k % max(1, info.frames // 20) == 0:
-            print(f"\r  işleniyor %{100 * k // max(1, info.frames):3d}  sayı={pipe.total}", end="", flush=True)
+            if callable(progress):
+                progress(min(1.0, k / info.frames), pipe.total)
+            else:
+                print(f"\r  işleniyor %{100 * k // max(1, info.frames):3d}  sayı={pipe.total}", end="", flush=True)
     if writer is not None:
         writer.release()
-    if progress:
+    if callable(progress):
+        progress(1.0, pipe.total)
+    elif progress:
         print(f"\r  işleniyor %100  sayı={pipe.total}          ")
     return RunResult(pipe.total, per_minute, events, n, time.perf_counter() - t0)
 
@@ -427,7 +433,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
+    ap.add_argument("--progress-json", action="store_true",
+                    help="makinece okunur ilerleme: stdout'a JSON satırları (stage/progress; analiz sunucusu)")
     a = ap.parse_args(argv)
+
+    def emit(**kw: object) -> None:
+        if a.progress_json:
+            print(json.dumps(kw), flush=True)
 
     src = pathlib.Path(a.video)
     info = probe(src)
@@ -437,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Video: {src.name}  {info.width}x{info.height}  {info.fps:.1f} fps  {info.duration:.1f} sn")
     print("1/2 Kalibrasyon...")
+    emit(stage="calibrating", seconds=round(info.duration, 2), fps=info.fps, width=info.width, height=info.height)
     bg_range = tuple(float(v) for v in a.bg_range.split(",")) if a.bg_range else None
     cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction),
                     fixed_area=a.expected_area is not None or profile.expectedArea > 0,
@@ -451,7 +464,10 @@ def main(argv: list[str] | None = None) -> int:
         print("  ! " + note)
 
     print("2/2 Sayım...")
-    res = count(info, profile, cal, None if a.no_video else out_dir / "isaretli.mp4", a.out_width)
+    emit(stage="counting")
+    report: bool | Callable[[float, int], None] = (
+        (lambda f, n: emit(progress=round(f, 4), count=n)) if a.progress_json else True)
+    res = count(info, profile, cal, None if a.no_video else out_dir / "isaretli.mp4", a.out_width, report)
 
     summary = {
         "video": src.name, "fps": info.fps, "seconds": round(info.duration, 2),

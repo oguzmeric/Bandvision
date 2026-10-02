@@ -89,6 +89,7 @@ def _many_events(doc: Any) -> None:
 
 PROFILE = ("profile-egg.json", "product-profile.schema.json")
 POLY = ("profile-box-polygon.json", "product-profile.schema.json")
+JOB = ("analysis-job-done.json", "analysis-job.schema.json")
 EVENT = ("event-state.json", "event.schema.json")
 BATCH = ("batch.json", "batch.schema.json")
 PAIR = ("device-pair-request.json", "device.schema.json#/$defs/pairRequest")
@@ -109,6 +110,14 @@ NEGATIVE_CASES = [
     ("profil çokgen köşesinde y yok", *POLY, _del(["roiPolygon", 0, "y"]), "required", ["roiPolygon", 0]),
     ("profil çokgen 12 köşeden çok", *POLY, _set(["roiPolygon"], [{"x": 0.5, "y": i / 20} for i in range(13)]),
      "maxItems", ["roiPolygon"]),
+    ("iş durumu geçersiz", *JOB, _set(["status"], "paused"), "enum", ["status"]),
+    ("biten işte sonuç yok", *JOB, _del(["result"]), "required", []),
+    ("başarısız işte hata yok", *JOB, _set(["status"], "failed"), "required", []),
+    ("iş ilerlemesi 1'den büyük", *JOB, _set(["progress"], 1.5), "maximum", ["progress"]),
+    ("iş sonuç dosyası bilinmiyor", *JOB, _set(["result", "files"], ["../etc/passwd"]), "enum", ["result", "files", 0]),
+    ("iş seçeneğinde çokgen bozuk", *JOB, _set(["options", "roiPolygon"], [{"x": 0.1, "y": 0.1}]), "minItems",
+     ["options", "roiPolygon"]),
+    ("iş bilinmeyen alan", *JOB, _set(["sahibi"], "x"), "additionalProperties", []),
     ("olay ts tarih-saat değil", *EVENT, _set(["ts"], "2026-10-01"), "format", ["ts"]),
     ("olay eventId uuid değil", *EVENT, _set(["eventId"], "42"), "format", ["eventId"]),
     ("olay tipi geçersiz", *EVENT, _set(["type"], "pause"), "enum", ["type"]),

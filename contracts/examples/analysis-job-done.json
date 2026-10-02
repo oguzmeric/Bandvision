@@ -1,0 +1,39 @@
+{
+  "schema": "bantvision.analysis-job.v1",
+  "id": "8b0f3c2e-61a4-4d0e-9a7f-2c5d1e9b4a10",
+  "status": "done",
+  "createdAt": "2026-10-02T12:40:00Z",
+  "updatedAt": "2026-10-02T12:41:10Z",
+  "expiresAt": "2026-10-09T12:40:00Z",
+  "video": {
+    "name": "bant_100_yumurta.mp4",
+    "sizeBytes": 8388608,
+    "seconds": 41.5,
+    "fps": 30.0,
+    "width": 720,
+    "height": 1280
+  },
+  "options": {
+    "preset": "egg",
+    "truth": 100,
+    "direction": "down"
+  },
+  "progress": 1.0,
+  "result": {
+    "count": 100,
+    "truth": 100,
+    "errorPct": 0.0,
+    "calibration": {
+      "threshold": 24,
+      "direction": "down",
+      "expectedArea": 0.0131
+    },
+    "processingFps": 212.4,
+    "files": [
+      "annotated.mp4",
+      "counts.csv",
+      "profile.json",
+      "background.png"
+    ]
+  }
+}

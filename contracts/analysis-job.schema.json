@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bantvision.local/contracts/analysis-job.schema.json",
+  "title": "BantVision video analiz işi (web'den yüklenen video)",
+  "type": "object",
+  "required": ["schema", "id", "status", "createdAt", "updatedAt", "expiresAt", "video", "options", "progress"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "bantvision.analysis-job.v1" },
+    "id": { "type": "string", "format": "uuid" },
+    "status": { "enum": ["queued", "running", "done", "failed", "expired"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time", "description": "Bu andan sonra video ve sonuç dosyaları silinir; özet kalır" },
+    "video": {
+      "type": "object", "required": ["name", "sizeBytes"], "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "sizeBytes": { "type": "integer", "minimum": 1 },
+        "seconds": { "type": "number", "minimum": 0 },
+        "fps": { "type": "number", "minimum": 0 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "options": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "preset": { "enum": ["generic", "egg", "flour"] },
+        "truth": { "type": "integer", "minimum": 1, "description": "Elle sayılan doğru adet; hata yüzdesi hesaplanır" },
+        "direction": { "enum": ["down", "up", "right", "left"] },
+        "roi": {
+          "type": "object", "required": ["x", "y", "width", "height"], "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+          }
+        },
+        "roiPolygon": { "$ref": "product-profile.schema.json#/properties/roiPolygon" },
+        "line": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bgRange": {
+          "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 0 },
+          "description": "Boş bandın göründüğü aralık (sn)"
+        }
+      }
+    },
+    "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+    "stage": { "enum": ["calibrating", "counting", "encoding"] },
+    "result": {
+      "type": "object", "required": ["count", "files"], "additionalProperties": false,
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "truth": { "type": ["integer", "null"] },
+        "errorPct": { "type": ["number", "null"] },
+        "calibration": { "type": "object" },
+        "processingFps": { "type": ["number", "null"] },
+        "files": {
+          "type": "array",
+          "items": { "enum": ["annotated.mp4", "counts.csv", "profile.json", "background.png"] },
+          "uniqueItems": true
+        }
+      }
+    },
+    "error": { "type": "string" }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "done" } } }, "then": { "required": ["result"] } },
+    { "if": { "properties": { "status": { "const": "failed" } } }, "then": { "required": ["error"] } }
+  ]
+}

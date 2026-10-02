@@ -95,8 +95,22 @@ pytest -q tools/tests                # olumlu + olumsuz (bozulmuş örnek) testl
 ```
 
 - Örnekler `contracts/examples/` altında; hangi şemaya ait oldukları **dosya adı önekinden** anlaşılır:
-  `profile-*` → profil, `event-*` → olay, `batch*` → paket, `device-pair-request*` / `device-pair-response*` → `device.schema.json` içindeki `$defs`.
+  `profile-*` → profil, `event-*` → olay, `batch*` → paket, `device-pair-request*` / `device-pair-response*` → `device.schema.json` içindeki `$defs`, `analysis-job*` → analiz işi.
   Eşlenmeyen bir örnek dosyası CI'ı kırar (eşleme: `tools/validate_contracts.py` → `EXAMPLE_SCHEMAS`).
 - `uuid` ve `date-time` formatları denetlenir. `format-nongpl` eki kurulu değilse `date-time` sessizce geçer, bu yüzden CI bu eki kurar.
 - `tools/tests/test_contracts.py` içindeki olumsuz testler, geçerli bir örneği tek noktadan bozup şemanın doğru kuraldan reddettiğini kontrol eder. Bir kısıtı gevşetirsen ilgili test kırılır; bilinçli bir değişiklikse testi de güncelle.
 - `services/edge/tests/test_profile_contract.py`, Python `Profile` modelinin ürettiği JSON'un şemaya uyduğunu ve örneklerin model üzerinden kayıpsız gidip geldiğini doğrular. Swift tarafı için aynı test F0.2/F1'de eklenecek.
+
+## 7. Video analiz işi — `analysis-job.schema.json`
+Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`bantvision.analyzer`) üretir, panel okur.
+
+| Alan | Açıklama |
+|---|---|
+| `status` | `queued` → `running` → `done` / `failed`; saklama süresi dolunca `expired` (dosyalar silinir, özet kalır) |
+| `video` | ad, bayt; analizden sonra `seconds`, `fps`, `width`, `height` |
+| `options` | isteğe bağlı: `preset` (`generic/egg/flour`), `truth`, `direction`, `roi`, `roiPolygon` (profil şemasındakiyle aynı), `line`, `bgRange` |
+| `progress`, `stage` | 0–1; `calibrating` / `counting` / `encoding` |
+| `result` | `count`, `truth`, `errorPct`, `calibration`, `processingFps`, `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`) |
+| `expiresAt` | oluşturma + saklama süresi (varsayılan 7 gün) |
+
+`done` ise `result`, `failed` ise `error` zorunlu. Örnekler: `examples/analysis-job-*.json`.

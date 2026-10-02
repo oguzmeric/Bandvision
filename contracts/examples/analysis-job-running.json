@@ -1,0 +1,39 @@
+{
+  "schema": "bantvision.analysis-job.v1",
+  "id": "c41d9e77-0b2a-4f38-8e15-6a9b3f2d7c05",
+  "status": "running",
+  "createdAt": "2026-10-02T12:45:00Z",
+  "updatedAt": "2026-10-02T12:45:20Z",
+  "expiresAt": "2026-10-09T12:45:00Z",
+  "video": {
+    "name": "koli_egik_bant.mov",
+    "sizeBytes": 52428800
+  },
+  "options": {
+    "preset": "generic",
+    "roiPolygon": [
+      {
+        "x": 0.3,
+        "y": 0.05
+      },
+      {
+        "x": 0.82,
+        "y": 0.05
+      },
+      {
+        "x": 0.64,
+        "y": 0.95
+      },
+      {
+        "x": 0.12,
+        "y": 0.95
+      }
+    ],
+    "bgRange": [
+      0,
+      1.2
+    ]
+  },
+  "progress": 0.42,
+  "stage": "counting"
+}
