@@ -21,15 +21,22 @@ struct CalibrationPanel: View {
             Text(vm.calibrationMessage)
                 .font(.callout)
                 .foregroundStyle(.yellow)
+                .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 10) {
                 Button { vm.learnBackground() } label: {
                     Label("1. Boş bandı öğren", systemImage: "rectangle.dashed")
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                 }
                 Button { vm.learnSample() } label: {
                     Label("2. Örnek geçir (8)", systemImage: "shippingbox")
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.85)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -90,6 +97,7 @@ struct CalibrationPanel: View {
                  : "Köşeleri sürükle · sarı + ile köşe ekle (en çok 12) · köşeye çift dokun: sil")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

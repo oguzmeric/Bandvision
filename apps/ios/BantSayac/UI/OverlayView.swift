@@ -178,15 +178,15 @@ struct OverlayView: View {
 
     private func pickHandle(_ pt: CGPoint) -> Handle? {
         let roi = viewRect(profile.roi)
-        let (a, _) = lineEndpoints(roi)
+        let (a, b) = lineEndpoints(roi)
         // En yakın tutamaç: köşe, sayım çizgisi ya da kenar ortası (yeni köşe)
         let candidates = handleCandidates() + midpointCandidates()
         let best = candidates.min { dist($0.1, pt) < dist($1.1, pt) }
         if let best, dist(best.1, pt) < 44 { return best.0 }
-        // Çizginin herhangi bir yerinden tutmak
+        // Çizginin görünen parçasının herhangi bir yerinden tutmak
         let onLine = profile.direction.isVertical
-            ? abs(pt.y - a.y) < 30 && pt.x >= roi.minX && pt.x <= roi.maxX
-            : abs(pt.x - a.x) < 30 && pt.y >= roi.minY && pt.y <= roi.maxY
+            ? abs(pt.y - a.y) < 30 && pt.x >= min(a.x, b.x) - 20 && pt.x <= max(a.x, b.x) + 20
+            : abs(pt.x - a.x) < 30 && pt.y >= min(a.y, b.y) - 20 && pt.y <= max(a.y, b.y) + 20
         return onLine ? .line : nil
     }
 
@@ -210,7 +210,15 @@ struct OverlayView: View {
                        y: clamp((p.y - fitRect.minY) / fitRect.height, 0, 1))
     }
 
+    /// Sayım çizgisinin ekrandaki uçları. Çokgende çizgi yalnızca çokgenin içinde kalan parçadır (tutamaç onun ortası);
+    /// çizgi çokgeni kesmiyorsa sınır kutusu boyunca çizilir.
     private func lineEndpoints(_ roi: CGRect) -> (CGPoint, CGPoint) {
+        let pos = Double(profile.linePosition)
+        if let span = polygonSpan(at: pos) {
+            return profile.direction.isVertical
+                ? (viewPoint(span.lo, pos), viewPoint(span.hi, pos))
+                : (viewPoint(pos, span.lo), viewPoint(pos, span.hi))
+        }
         if profile.direction.isVertical {
             let y = fitRect.minY + profile.linePosition * fitRect.height
             return (CGPoint(x: roi.minX, y: y), CGPoint(x: roi.maxX, y: y))
@@ -218,6 +226,22 @@ struct OverlayView: View {
             let x = fitRect.minX + profile.linePosition * fitRect.width
             return (CGPoint(x: x, y: roi.minY), CGPoint(x: x, y: roi.maxY))
         }
+    }
+
+    /// Çizgi (akış eksenine dik) ile çokgen kenarlarının kesişimlerinin en küçüğü ve en büyüğü (normalize).
+    private func polygonSpan(at pos: Double) -> (lo: Double, hi: Double)? {
+        guard let poly = profile.roiPolygon, poly.count >= 3 else { return nil }
+        let vertical = profile.direction.isVertical      // çizgi yatay: y = pos; değilse x = pos
+        var hits: [Double] = []
+        for k in poly.indices {
+            let a = poly[k], b = poly[(k + 1) % poly.count]
+            let (ua, ub) = vertical ? (a.y, b.y) : (a.x, b.x)   // çizgiye dik eksen
+            let (va, vb) = vertical ? (a.x, b.x) : (a.y, b.y)   // çizgi boyunca eksen
+            guard (ua <= pos && pos <= ub) || (ub <= pos && pos <= ua), ua != ub else { continue }
+            hits.append(va + (vb - va) * (pos - ua) / (ub - ua))
+        }
+        guard let lo = hits.min(), let hi = hits.max(), hi - lo > 1e-6 else { return nil }
+        return (lo, hi)
     }
 
     private func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
