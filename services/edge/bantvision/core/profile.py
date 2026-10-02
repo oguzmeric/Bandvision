@@ -142,15 +142,20 @@ class Profile:
         return d
 
     def set_polygon(self, points: list[tuple[float, float]] | None) -> None:
-        """Çokgeni ayarlar; roi çokgenin sınır kutusu olur (sözleşme kuralı)."""
+        """Çokgeni ayarlar (§2.0; Swift `ProductProfile.setPolygon` ile aynı): köşeler [0, 1]'e kırpılır,
+        roi çokgenin sınır kutusu olur (kenar en az 0,01), sayım çizgisi kutunun içine çekilir."""
         if not points:
             self.roiPolygon = None
             return
         if not 3 <= len(points) <= 12:
             raise ValueError("çokgen 3–12 köşe olmalı")
-        xs, ys = [x for x, _ in points], [y for _, y in points]
-        self.roiPolygon = [(float(x), float(y)) for x, y in points]
-        self.roi = Roi(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        pts = [(min(max(float(x), 0.0), 1.0), min(max(float(y), 0.0), 1.0)) for x, y in points]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        self.roiPolygon = pts
+        self.roi = Roi(min(xs), min(ys), max(max(xs) - min(xs), 0.01), max(max(ys) - min(ys), 0.01))
+        lo = self.roi.y if self.vertical else self.roi.x
+        hi = lo + (self.roi.height if self.vertical else self.roi.width)
+        self.linePosition = min(max(self.linePosition, lo + 0.02), max(lo + 0.02, hi - 0.02))
 
     # --- hazır profiller ---
     @classmethod

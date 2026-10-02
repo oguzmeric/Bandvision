@@ -42,3 +42,18 @@ jobs:
           echo "concurrency uyarısı: $n"
           # Swift 6'ya geçişte hata olacak uyarıların geri gelmesini engelle
           test "$n" -eq 0
+      - name: Birim testleri (kayıt cihazı ayrıştırıcıları, çokgen ROI eşdeğerliği; simülatör)
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devs = json.load(sys.stdin)["devices"]
+          for runtime in sorted((k for k in devs if ".iOS-" in k), reverse=True):
+              phones = [d for d in devs[runtime] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"]); break
+          ')
+          [ -n "$UDID" ] || { echo "::error::uygun iPhone simülatörü yok"; exit 1; }
+          set -o pipefail
+          xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac -only-testing:BantSayacTests \
+            -destination "id=$UDID" CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES 2>&1 | tee unit.log \
+            | grep -E "Test Case .*(passed|failed)|error:|\*\* TEST" | tail -60

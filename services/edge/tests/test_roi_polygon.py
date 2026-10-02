@@ -62,6 +62,12 @@ def test_profile_round_trip_and_bbox() -> None:
     assert back.roiPolygon == MIDDLE_LANE and back.roi == p.roi
     with pytest.raises(ValueError):
         p.set_polygon([(0.1, 0.1), (0.2, 0.2)])
+    # Swift testSetPolygonUpdatesBoundingBoxAndLine ile aynı: çizgi kutunun içine çekilir
+    p.linePosition = 0.95
+    p.set_polygon([(0.36, 0.1), (0.66, 0.1), (0.64, 0.6), (0.34, 0.6)])
+    assert p.linePosition == pytest.approx(0.58)
+    p.set_polygon([(-0.2, 0.1), (1.3, 0.1), (0.5, 0.9)])            # köşeler [0, 1]'e kırpılır
+    assert p.roiPolygon[0] == (0.0, 0.1) and p.roiPolygon[1] == (1.0, 0.1)
     p.set_polygon(None)
     assert p.roiPolygon is None and "roiPolygon" not in p.to_dict()
 

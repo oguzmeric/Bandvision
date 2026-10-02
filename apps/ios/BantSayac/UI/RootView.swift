@@ -28,6 +28,8 @@ struct RootView: View {
         .fullScreenCover(isPresented: onboardingShown) {
             OnboardingView(vm: vm) { calibrate in
                 onboarded = true
+                // Video modunda canlı kaynak açılmaz (kareler videoyla karışırdı); video kapanınca kaynak açılır
+                guard !vm.isVideoMode else { return }
                 vm.startCamera()
                 if calibrate { vm.beginCalibration() }
             }

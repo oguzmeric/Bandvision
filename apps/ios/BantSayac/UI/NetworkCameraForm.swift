@@ -51,6 +51,8 @@ struct NetworkCameraForm: View {
     @State private var channelError: String?
     @State private var search = ""
     @State private var listClient: RecorderClient?
+    /// Her listeleme ve cihaz değişikliğinde artar; geç gelen eski yanıt yok sayılır
+    @State private var listRequest = 0
     @StateObject private var thumbnails = ChannelThumbnailLoader()
     @FocusState private var focused: Bool
 
@@ -126,6 +128,8 @@ struct NetworkCameraForm: View {
 
     /// Başka bir cihaz: eski liste ve seçim geçersiz
     private func recorderChanged() {
+        listRequest += 1                                  // süren listeleme eski cihaza ait: sonucu yazılmaz
+        listing = false
         channels = []
         channelError = nil
         listClient = nil
@@ -408,18 +412,25 @@ struct NetworkCameraForm: View {
         listing = true
         channelError = nil
         search = ""
+        // Satırlar kaldırılır: yeni liste gelince her satırın küçük resim görevi baştan başlar
+        // (aynı kimlikli satır kalsaydı görev yeniden çalışmaz, sıfırlanan küçük resim hiç gelmezdi)
+        channels = []
         thumbnails.reset()
+        listRequest += 1
+        let mine = listRequest
         let client = NetworkStreamPlan.recorderClient(config, password: recorderPassword)
         listClient = client
         Task { @MainActor in
             do {
                 let list = try await client.channels()
+                guard mine == listRequest else { return }  // bu arada cihaz değişti ya da yeniden listelendi
                 channels = list
                 // Seçili kamera hâlâ var mı (ad değişmiş olabilir)
                 if let selected = config.recorderChannel {
                     config.recorderChannel = list.first { $0.id == selected.id }
                 }
             } catch {
+                guard mine == listRequest else { return }
                 channels = []
                 channelError = error.localizedDescription
             }
