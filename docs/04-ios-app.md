@@ -16,11 +16,12 @@ Konum: `apps/ios` (XcodeGen: `project.yml`). Swift 5 dil modu, SwiftUI, iOS 17+,
 Eşzamanlılık modeli: kamera kareleri `processingQueue`'da gelir; `FrameProcessor` durumu yalnızca bu kuyrukta değişir; UI'a `DispatchQueue.main.async` ile `@MainActor` callback'ler gider. ViewModel ve depolar `@MainActor`.
 
 ## 1b. Video modu (manuel test)
-Üst çubuktaki film simgesi → **Fotoğraflar'dan** ya da **Dosyalar'dan** video. Kamera durur, video aynı işleme hattından geçer.
-- `Camera/VideoFileSource.swift`: `AVAssetReader` + video kompozisyonu (videonun yönü uygulanır), kareler kamerayla aynı biçimde (420f). Okuma ayrı kuyrukta, her kare `processingQueue.sync` ile işlenir; kalibrasyon komutları kareler arasında çalışır. Hız 1×/2×/hızlı; zaman damgası her zaman videonunkidir (§7 ölçekleme doğru çalışır).
-- Başlarken sorulur: video boş bantla başlıyorsa ilk ~1 sn'den arka plan ve eşik öğrenilir (§5). Video oynarken Kalibre akışı kullanılabilir.
-- Video sayımı canlı oturumdan ayrıdır: kayıt/webhook'a yazılmaz, "Kameraya dön" önceki sayıyı geri yükler.
-- Sonuçta isteğe bağlı "Doğru adet" girilir; doğruluk % gösterilir (≥ %98 yeşil).
+Üst çubuktaki film simgesi → **Video ile test** sayfası: **Fotoğraflar'dan seç** (dönüştürmeden, orijinal biçimde alınır) ya da **Dosyalar'dan seç**. Hazırlanırken "Video hazırlanıyor…" görünür; video açılınca kamera durur ve video baştan oynar.
+- Sayfadaki **"Videonun başında bant boş"** anahtarı (varsayılan açık, hatırlanır): açıksa baştan oynatmada arka plan ilk ~1 sn'den öğrenilir (§5). Video ürünle başlıyorsa kapatılır; oynarken bant boş göründüğünde Kalibre → Boş bandı öğren kullanılır.
+- **Oynatıcı:** baştan oynat, oynat/duraklat, sürüklenebilir zaman çubuğu, hız 1×/2×/hızlı. Bir noktaya atlamak sayacı sıfırlar ve sayımı oradan başlatır ("sayım başlangıcı 0:45"); doğruluk yalnızca baştan oynatmada gösterilir. Ortadan başlarken önceden öğrenilen arka plan korunur. Kalibrasyon sırasında da oynatıcı görünür.
+- `Camera/VideoFileSource.swift`: `AVAssetReader` + video kompozisyonu (videonun yönü uygulanır), kareler kamerayla aynı biçimde (420f). Her oynatma (`play(from:)`) yeni bir okuyucu ve "nesil" başlatır; önceki okuma bir sonraki karede durur. Okuma ayrı kuyrukta, her kare `processingQueue.sync` ile işlenir; zaman damgası her zaman videonunkidir (§7 ölçekleme doğru çalışır).
+- Video sayımı canlı oturumdan ayrıdır: kayıt/webhook'a yazılmaz; **Kamera** düğmesi önceki sayıyı geri yükler. Geçici video kopyaları çıkışta silinir.
+- Sonuçta isteğe bağlı "Doğru adet" → doğruluk % (≥ %98 yeşil).
 - Masaüstü karşılığı: `python -m bantvision.video` (README). Sayısı bilinen test videoları: `tools/make_test_video.py`.
 
 ## 2. Görevler

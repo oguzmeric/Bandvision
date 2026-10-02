@@ -5,10 +5,13 @@ import Combine
 /// Video dosyasından sayım oturumu (manuel test). Sayımlar canlı oturumun kaydına/webhook'una karışmaz.
 struct VideoRun: Equatable {
     var name: String
-    var progress = 0.0
-    var finished = false
-    var count = 0
     var duration = 0.0
+    /// Videodaki güncel konum (sn).
+    var position = 0.0
+    /// Sayımın başladığı konum: 0 değilse sayı videonun yalnızca bu noktadan sonrasını kapsar.
+    var countFrom = 0.0
+    var playing = false
+    var finished = false
     var error: String?
 }
 
@@ -29,6 +32,10 @@ final class CountingViewModel: ObservableObject {
     @Published var videoSpeed = 1.0 {
         didSet { videoSource?.speed = videoSpeed }
     }
+    /// Video baştan oynatılınca ilk ~1 sn'den arka plan öğrenilsin (videonun başında bant boşsa).
+    @Published var videoLearnBackground = UserDefaults.standard.object(forKey: "bs.videoLearnBg") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(videoLearnBackground, forKey: "bs.videoLearnBg") }
+    }
     var isVideoMode: Bool { video != nil }
 
     let camera: CameraManager
@@ -39,6 +46,7 @@ final class CountingViewModel: ObservableObject {
 
     private var wasRunningBeforeCalibration = false
     private var videoSource: VideoFileSource?
+    private var videoGeneration = 0
     private var liveTotal = 0
     private var cancellables = Set<AnyCancellable>()
 
@@ -62,9 +70,7 @@ final class CountingViewModel: ObservableObject {
         processor.onCount = { [weak self] delta, total in
             guard let self else { return }
             self.total = total
-            if self.video != nil {
-                self.video?.count = total
-            } else {
+            if self.video == nil {                     // video sayımı canlı kayda/webhook'a yazılmaz
                 self.logger.record(delta: delta, total: total)
             }
         }
@@ -191,52 +197,73 @@ final class CountingViewModel: ObservableObject {
 
     // MARK: - Video
 
-    /// Kamerayı durdurur, videoyu kamera yerine işleme hattına verir.
-    /// learnBackground: video boş bantla başlıyorsa ilk ~1 sn'den arka plan ve eşik öğrenilir (§5).
-    func startVideo(url: URL, learnBackground: Bool) {
-        videoSource?.cancel()
+    /// Videoyu açar, kamerayı durdurur ve baştan oynatır.
+    func openVideo(url: URL) async throws {
+        let source = try await VideoFileSource.open(url: url)
+        if let old = videoSource {
+            old.stop()
+            if old.url != url { try? FileManager.default.removeItem(at: old.url) }
+        }
         if video == nil { liveTotal = total }
         camera.stop()
         if isCalibrating { cancelCalibration() }
-        video = VideoRun(name: url.lastPathComponent)
+        source.speed = videoSpeed
+        videoSource = source
+        video = VideoRun(name: url.lastPathComponent, duration: source.info.duration)
+        processor.setEmitFrameImages(true)
+        processor.setCounting(true)
+        seekVideo(to: 0)
+    }
+
+    /// Videonun `t` saniyesinden oynatır. Sayaç sıfırlanır; 0'dan başlıyorsa ve ayar açıksa arka plan
+    /// ilk ~1 sn'den yeniden öğrenilir (§5). Ortadan başlıyorsa önceden öğrenilen arka plan korunur.
+    func seekVideo(to t: Double) {
+        guard let source = videoSource, video != nil else { return }
+        let target = max(0, min(t, source.info.duration))
+        let fromStart = target < 0.05
         total = 0
         processor.setTotal(0)
         processor.resetClock()
-        processor.resetTracking(resetBackground: true)
-        processor.setEmitFrameImages(true)
-        processor.setCounting(true)
-        if learnBackground {
+        processor.resetTracking(resetBackground: fromStart)
+        if fromStart && videoLearnBackground && !isCalibrating {
             processor.startBackgroundLearning()
         }
+        video?.position = target
+        video?.countFrom = target
+        video?.finished = false
+        video?.playing = true
+        video?.error = nil
 
-        let source = VideoFileSource()
-        source.speed = videoSpeed
-        videoSource = source
         let processor = self.processor
-        // ViewModel uygulama boyunca yaşar; ilerleme bildirimi için güçlü referans güvenli (ve Sendable).
-        let onProgress: @Sendable (Double) -> Void = { [self] p in
-            Task { @MainActor in self.videoProgressed(p, source: source) }
-        }
-        Task { [weak self] in
-            do {
-                let info = try await source.run(
-                    url: url, processingQueue: processor.queue,
-                    onFrame: { pb, ts in processor.process(pb, ts: ts) },
-                    onProgress: onProgress)
-                self?.videoEnded(source: source, duration: info.duration, error: nil)
-            } catch {
-                self?.videoEnded(source: source, duration: 0, error: error.localizedDescription)
-            }
-        }
+        // ViewModel uygulama boyunca yaşar; bildirimler için güçlü referans güvenli (ve Sendable).
+        videoGeneration = source.play(
+            from: target, processingQueue: processor.queue,
+            onFrame: { pb, ts in processor.process(pb, ts: ts) },
+            onPosition: { [self] pos in
+                Task { @MainActor in self.videoPositionChanged(pos, source: source) }
+            },
+            onEnd: { [self] g, error in
+                let message = error?.localizedDescription
+                Task { @MainActor in self.videoEnded(generation: g, source: source, error: message) }
+            })
     }
 
-    func stopVideo() {
-        videoSource?.cancel()
+    func toggleVideoPlayback() {
+        guard let source = videoSource, let run = video else { return }
+        if run.finished {
+            seekVideo(to: 0)
+            return
+        }
+        source.isPaused = run.playing
+        video?.playing = !run.playing
     }
 
     /// Video modundan çık, canlı kameraya ve önceki oturum sayısına dön.
     func exitVideo() {
-        videoSource?.cancel()
+        if let source = videoSource {
+            source.stop()
+            try? FileManager.default.removeItem(at: source.url)
+        }
         videoSource = nil
         video = nil
         if isCalibrating { cancelCalibration() }
@@ -249,17 +276,17 @@ final class CountingViewModel: ObservableObject {
         startCamera()
     }
 
-    private func videoProgressed(_ p: Double, source: VideoFileSource) {
-        guard videoSource === source else { return }
-        video?.progress = p
+    private func videoPositionChanged(_ pos: Double, source: VideoFileSource) {
+        guard videoSource === source, video?.finished == false else { return }
+        video?.position = pos
     }
 
-    private func videoEnded(source: VideoFileSource, duration: Double, error: String?) {
-        guard videoSource === source else { return }   // yerine yenisi başlatıldı
+    private func videoEnded(generation g: Int, source: VideoFileSource, error: String?) {
+        guard videoSource === source, g == videoGeneration else { return }   // yerine yenisi başladı
         video?.finished = true
-        video?.duration = duration
-        video?.count = total
+        video?.playing = false
         video?.error = error
+        if error == nil { video?.position = source.info.duration }
     }
 
     // MARK: - Profiller

@@ -1,8 +1,9 @@
 import SwiftUI
+import PhotosUI
 import CoreTransferable
 import UniformTypeIdentifiers
 
-/// Fotoğraflar'dan seçilen videoyu geçici klasöre kopyalar (seçici dosyayı yalnızca kısa süre erişilebilir tutar).
+/// Seçilen videoyu uygulamanın geçici klasörüne kopyalar (seçiciler dosyayı yalnızca kısa süre erişilebilir tutar).
 struct PickedVideo: Transferable, Sendable {
     let url: URL
 
@@ -14,7 +15,6 @@ struct PickedVideo: Transferable, Sendable {
         }
     }
 
-    /// Güvenlik kapsamlı ya da geçici bir dosyayı uygulamanın geçici klasörüne kopyalar.
     static func copyToTemporary(_ src: URL) throws -> URL {
         let ext = src.pathExtension.isEmpty ? "mov" : src.pathExtension
         let dst = FileManager.default.temporaryDirectory
@@ -24,9 +24,146 @@ struct PickedVideo: Transferable, Sendable {
     }
 }
 
-/// Video modunda alt panel: ilerleme, hız, sayı; bitince sonuç ve isteğe bağlı doğruluk hesabı.
+/// "Video ile test" sayfası: kaynak seçimi ve oynatma öncesi ayar. Seçiciler bu sayfaya bağlıdır
+/// (ana ekrandaki menüden açmak, menü kapanırken sunum çakıştığı için zaman zaman tepkisiz kalıyordu).
+struct VideoPickerSheet: View {
+    @ObservedObject var vm: CountingViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showFiles = false
+    @State private var preparing = false
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Bant videosunu kamera yerine sayar. Sonuçta doğru adedi girip doğruluğu görebilirsin.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                PhotosPicker(selection: $photoItem, matching: .videos, preferredItemEncoding: .current) {
+                    Label("Fotoğraflar'dan seç", systemImage: "photo.on.rectangle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button { showFiles = true } label: {
+                    Label("Dosyalar'dan seç", systemImage: "folder")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Toggle(isOn: $vm.videoLearnBackground) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Videonun başında bant boş")
+                        Text("Açıksa arka plan (boş bant) videonun ilk saniyesinden otomatik öğrenilir. "
+                             + "Video ürünle başlıyorsa kapat; oynarken bant boş göründüğünde "
+                             + "Kalibre → Boş bandı öğren'i kullan.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if preparing {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Video hazırlanıyor…").foregroundStyle(.secondary)
+                    }
+                }
+                if let errorText {
+                    Text(errorText).font(.callout).foregroundStyle(.red)
+                }
+                Spacer()
+            }
+            .controlSize(.large)
+            .padding()
+            .disabled(preparing)
+            .navigationTitle("Video ile test")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Kapat") { dismiss() }
+                }
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                photoItem = nil
+                prepare { try await item.loadTransferable(type: PickedVideo.self)?.url }
+            }
+            .fileImporter(isPresented: $showFiles, allowedContentTypes: [.movie]) { result in
+                guard let picked = try? result.get() else { return }
+                prepare {
+                    try await Task.detached {
+                        let scoped = picked.startAccessingSecurityScopedResource()
+                        defer { if scoped { picked.stopAccessingSecurityScopedResource() } }
+                        return try PickedVideo.copyToTemporary(picked)
+                    }.value
+                }
+            }
+        }
+    }
+
+    /// Dosyayı hazırlar (kopyalar), videoyu açar ve sayfayı kapatır; bu sırada gösterge görünür.
+    private func prepare(_ load: @escaping @MainActor @Sendable () async throws -> URL?) {
+        preparing = true
+        errorText = nil
+        Task { @MainActor in
+            defer { preparing = false }
+            do {
+                guard let url = try await load() else { return }
+                try await vm.openVideo(url: url)
+                dismiss()
+            } catch {
+                errorText = "Video açılamadı: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
+/// Oynatıcı kontrolleri: baştan, oynat/duraklat, sürüklenebilir zaman çubuğu.
+struct VideoTransportBar: View {
+    @ObservedObject var vm: CountingViewModel
+    @State private var scrub: Double?
+
+    var body: some View {
+        if let run = vm.video {
+            HStack(spacing: 12) {
+                Button { vm.seekVideo(to: 0) } label: {
+                    Image(systemName: "backward.end.fill")
+                }
+                .accessibilityLabel("Baştan oynat")
+                Button { vm.toggleVideoPlayback() } label: {
+                    Image(systemName: run.playing ? "pause.fill" : "play.fill")
+                        .frame(width: 22)
+                }
+                .accessibilityLabel(run.playing ? "Duraklat" : "Oynat")
+                Text(timeText(scrub ?? run.position))
+                    .font(.caption.monospacedDigit())
+                Slider(value: Binding(get: { scrub ?? run.position }, set: { scrub = $0 }),
+                       in: 0...max(run.duration, 0.1)) { editing in
+                    if !editing, let t = scrub {
+                        vm.seekVideo(to: t)
+                        scrub = nil
+                    }
+                }
+                Text(timeText(run.duration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .font(.title3)
+        }
+    }
+
+    private func timeText(_ t: Double) -> String {
+        let s = max(0, Int(t.rounded(.down)))
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// Video modunda alt panel: oynatıcı, sayı, doğruluk, hız.
 struct VideoPanel: View {
     @ObservedObject var vm: CountingViewModel
+    var onPickVideo: () -> Void
     @State private var truthText = ""
 
     var body: some View {
@@ -34,26 +171,32 @@ struct VideoPanel: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Label(run.name, systemImage: "film")
-                        .font(.caption)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
                     Spacer()
-                    Text(run.finished ? "Bitti" : "%\(Int(run.progress * 100))")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(run.finished ? .green : .secondary)
+                    if run.finished { Text("Bitti").foregroundStyle(.green) }
                 }
-                ProgressView(value: run.progress)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                VideoTransportBar(vm: vm)
 
                 HStack(alignment: .lastTextBaseline) {
                     Text("\(vm.total)")
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
+                        .font(.system(size: 60, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
-                    Text("adet").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("adet").foregroundStyle(.secondary)
+                        if run.countFrom > 0 {
+                            Text("sayım başlangıcı \(timeText(run.countFrom))")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
                     Spacer()
-                    if let acc = accuracy(count: vm.total) {
+                    if let acc = accuracy(count: vm.total), run.countFrom == 0 {
                         VStack(alignment: .trailing, spacing: 0) {
                             Text(String(format: "%%%.1f", acc))
                                 .font(.title2.bold())
@@ -73,7 +216,7 @@ struct VideoPanel: View {
                     TextField("isteğe bağlı", text: $truthText)
                         .keyboardType(.numberPad)
                         .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 120)
+                        .frame(maxWidth: 110)
                     Spacer()
                     Picker("Hız", selection: $vm.videoSpeed) {
                         Text("1×").tag(1.0)
@@ -85,24 +228,16 @@ struct VideoPanel: View {
                 }
 
                 HStack(spacing: 10) {
-                    if run.finished {
-                        Button { vm.beginCalibration() } label: {
-                            Label("Kalibre", systemImage: "scope").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                    } else {
-                        Button { vm.stopVideo() } label: {
-                            Label("Durdur", systemImage: "stop.fill").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        Button { vm.beginCalibration() } label: {
-                            Label("Kalibre", systemImage: "scope").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
+                    Button { vm.beginCalibration() } label: {
+                        Label("Kalibre", systemImage: "scope").frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
+                    Button(action: onPickVideo) {
+                        Label("Başka video", systemImage: "film.stack").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
                     Button { vm.exitVideo() } label: {
-                        Label("Kameraya dön", systemImage: "camera").frame(maxWidth: .infinity)
+                        Label("Kamera", systemImage: "camera").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -110,6 +245,11 @@ struct VideoPanel: View {
             }
             .padding()
         }
+    }
+
+    private func timeText(_ t: Double) -> String {
+        let s = max(0, Int(t.rounded(.down)))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     private func accuracy(count: Int) -> Double? {
