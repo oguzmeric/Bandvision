@@ -36,8 +36,11 @@ jobs:
       - name: UI testi (video uçtan uca + ekranlar)
         run: |
           set +e   # hata olsa da günlüğü göster, sonra xcodebuild'in çıkış koduyla bitir
-          xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac \
+          # Release: TestFlight'taki gibi optimizasyonlu (Debug'da piksel döngüleri 10-100 kat yavaş).
+          # UITEST: test kancalarını açar; TestFlight arşivinde bu bayrak yoktur.
+          xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac -configuration Release \
             -destination "id=$UDID" -resultBundlePath "$RUNNER_TEMP/uitest.xcresult" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS=UITEST \
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
           grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST|ÖLÇÜM" uitest.log | tail -40

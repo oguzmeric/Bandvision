@@ -18,7 +18,7 @@ struct RootView: View {
                 .tabItem { Label("Ayarlar", systemImage: "slider.horizontal.3") }
         }
         .preferredColorScheme(.dark)
-        #if DEBUG
+        #if DEBUG || UITEST
         .overlay(alignment: .top) {
             VStack(spacing: 2) {
                 if let message = vm.testHookError {
@@ -32,7 +32,7 @@ struct RootView: View {
         #endif
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
-            #if DEBUG
+            #if DEBUG || UITEST
             let env = ProcessInfo.processInfo.environment
             if let path = env["BS_TEST_VIDEO"] {
                 vm.runUITestVideo(path: path, expectedArea: env["BS_TEST_EXPECTED_AREA"].flatMap(Double.init))

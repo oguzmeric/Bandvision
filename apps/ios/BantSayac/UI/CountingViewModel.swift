@@ -295,7 +295,7 @@ final class CountingViewModel: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
-    #if DEBUG
+    #if DEBUG || UITEST
     /// UI testi: kamera izni istemeden verilen videoyu yumurta profiliyle en hızlı modda sayar.
     func runUITestVideo(path: String, expectedArea: Double?) {
         if let area = expectedArea { profile.expectedArea = area }
