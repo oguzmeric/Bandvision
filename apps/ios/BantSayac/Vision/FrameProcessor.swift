@@ -69,6 +69,10 @@ final class FrameProcessor: @unchecked Sendable {
     /// Ekran karesi ayrı kuyrukta üretilir: sayım hiçbir zaman ekranı beklemez. Kuyruk meşgulse kare atlanır.
     private let displayQueue = DispatchQueue(label: "bantsayac.display", qos: .userInitiated)
     private var displayBusy = false            // yalnızca `queue` üzerinde
+    /// Kalite kontrol kırpıntısının JPEG kodlaması da ayrı kuyrukta ve ayrı bağlamda: sayım kuyruğu yalnızca
+    /// küçük bir bellek kopyası alır. (Paylaşılan bağlamda ekran üretimini beklemek canlı kaynakta kare kaçırtıyordu.)
+    private let cropQueue = DispatchQueue(label: "bantsayac.crop", qos: .utility)
+    private let cropContext = CIContext()
     private var lastDisplay: CFTimeInterval = 0
 
     private var lastPublish: CFTimeInterval = 0
@@ -233,25 +237,67 @@ final class FrameProcessor: @unchecked Sendable {
 
         guard let pb = pixelBuffer else { return }
         for e in events where e.isFirstCrossing {
-            guard let jpeg = cropJPEG(pb, bbox: e.bbox) else { continue }
-            let crop = CountCrop(trackId: e.trackId, delta: e.delta, time: Date(), jpeg: jpeg)
-            DispatchQueue.main.async { [weak self] in self?.onCrop?(crop) }
+            guard let region = Self.copyRegion(pb, bbox: e.bbox) else { continue }
+            let buffer = UncheckedSendable(value: region)
+            let context = UncheckedSendable(value: cropContext)
+            let trackId = e.trackId, delta = e.delta, time = Date()
+            cropQueue.async { [weak self] in
+                guard let jpeg = Self.encodeJPEG(buffer.value, context: context.value), let self else { return }
+                let crop = CountCrop(trackId: trackId, delta: delta, time: time, jpeg: jpeg)
+                DispatchQueue.main.async { [weak self] in self?.onCrop?(crop) }
+            }
         }
     }
 
-    /// Lekenin kutusunu %15 payla genişletip tam çözünürlüklü kareden kırpar.
-    private func cropJPEG(_ pb: CVPixelBuffer, bbox: CGRect) -> Data? {
-        let w = CGFloat(CVPixelBufferGetWidth(pb)), h = CGFloat(CVPixelBufferGetHeight(pb))
-        var r = CGRect(x: bbox.minX * w, y: bbox.minY * h, width: bbox.width * w, height: bbox.height * h)
+    /// Lekenin kutusunu %15 payla genişletip tam çözünürlüklü kareden küçük bir 420f tampona kopyalar.
+    /// Yalnızca satır kopyası (mikro saniyeler): kaynak tampon hemen serbest kalır, kamera/çözücü havuzu tükenmez.
+    static func copyRegion(_ src: CVPixelBuffer, bbox: CGRect) -> CVPixelBuffer? {
+        let format = CVPixelBufferGetPixelFormatType(src)
+        guard format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(src) == 2 else { return nil }
+        let sw = CVPixelBufferGetWidth(src), sh = CVPixelBufferGetHeight(src)
+        var r = CGRect(x: bbox.minX * CGFloat(sw), y: bbox.minY * CGFloat(sh),
+                       width: bbox.width * CGFloat(sw), height: bbox.height * CGFloat(sh))
         let pad = 0.15 * max(r.width, r.height)
-        r = r.insetBy(dx: -pad, dy: -pad).intersection(CGRect(x: 0, y: 0, width: w, height: h))
-        guard r.width >= 8, r.height >= 8 else { return nil }
-        // CIImage'ın orijini sol alttadır
+        r = r.insetBy(dx: -pad, dy: -pad).intersection(CGRect(x: 0, y: 0, width: sw, height: sh))
+        guard !r.isNull else { return nil }
+        // 4:2:0 renk düzlemi yarım çözünürlüklü: köşe ve boyut çift olmalı
+        let x = max(0, Int(r.minX)) & ~1, y = max(0, Int(r.minY)) & ~1
+        let w = (min(Int(r.maxX.rounded(.up)), sw) - x) & ~1
+        let h = (min(Int(r.maxY.rounded(.up)), sh) - y) & ~1
+        guard w >= 8, h >= 8 else { return nil }
+        var out: CVPixelBuffer?
+        let attrs = [kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()] as CFDictionary
+        guard CVPixelBufferCreate(kCFAllocatorDefault, w, h, format, attrs, &out) == kCVReturnSuccess,
+              let dst = out else { return nil }
+        CVPixelBufferLockBaseAddress(src, .readOnly)
+        CVPixelBufferLockBaseAddress(dst, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(dst, [])
+            CVPixelBufferUnlockBaseAddress(src, .readOnly)
+        }
+        for plane in 0..<2 {
+            guard let s = CVPixelBufferGetBaseAddressOfPlane(src, plane),
+                  let d = CVPixelBufferGetBaseAddressOfPlane(dst, plane) else { return nil }
+            let sStride = CVPixelBufferGetBytesPerRowOfPlane(src, plane)
+            let dStride = CVPixelBufferGetBytesPerRowOfPlane(dst, plane)
+            // Y: 1 bayt/piksel; CbCr: yarım çözünürlükte 2 bayt → iki düzlemde de satır başına `w` bayt, x bayt kayma
+            let div = plane == 0 ? 1 : 2
+            let source = s + (y / div) * sStride + x
+            for row in 0..<(h / div) {
+                memcpy(d + row * dStride, source + row * sStride, w)
+            }
+        }
+        return dst
+    }
+
+    /// Küçük kırpıntıyı JPEG'e çevirir (uzun kenar en fazla 256 px). `cropQueue` üzerinde çalışır.
+    static func encodeJPEG(_ pb: CVPixelBuffer, context: CIContext) -> Data? {
         let image = CIImage(cvPixelBuffer: pb)
-            .cropped(to: CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height))
-        let scale = min(1, 256 / max(r.width, r.height))
+        let scale = min(1, 256 / max(image.extent.width, image.extent.height))
         let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return ciContext.jpegRepresentation(
+        return context.jpegRepresentation(
             of: scaled, colorSpace: CGColorSpaceCreateDeviceRGB(),
             options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.8])
     }
