@@ -30,6 +30,8 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **12** | **Ağ kamerası (RTSP)**: telefon, mevcut IP kameranın yayınını alıp sayar ve kalite kontrol yapar (marka şablonları, Digest/Basic, H.264/H.265, yeniden bağlanma). Video ve kamerada yakınlaştırma/kaydırma; Canlı ekranda son ürün kartları ve ürünün yanında OK/NOK etiketi; QC kırpıntısı artık sayımı bekletmiyor; yeni ikon ve ad (BandVision) |
 | **13** | **Kayıt cihazı (NVR/XVR) ekleme**: TRASSIR (SDK, jetonlu RTSP 555), Hikvision (ISAPI), Dahua (CGI); cihaz bir kez girilir, kameralar adları ve küçük görüntüleriyle listelenir (arama), dokunarak seçilir. RTSP el sıkışma 15 sn. Uçtan uca UI testi: sahte TRASSIR/Hikvision/Dahua (`tools/mock_nvr.py`) ile listele → seç → test → kaydet → canlı. Gerçek TRASSIR'da henüz denenmedi |
 | **14** | **Çokgen ROI** (sözleşme `roiPolygon`, algoritma §2.0; Python ↔ Swift piksel eşdeğerliği testli), **logolu açılış animasyonu**, **ilk kurulum sihirbazı** (kaynak → ürün → montaj → kalibrasyon; önceden kullanılan uygulamada kendiliğinden açılmaz). Paralel kod incelemesinde bulunan 4 hata düzeltildi; Swift birim testleri her iOS gönderiminde CI'da |
+| 15, 16 | Yüklenmedi (15: ağ kamerası UI testi zamanlaması; 16: CI her çalışmada yeni geliştirme sertifikası oluşturduğu için hesap sınırı doldu → arşiv imzasız, imza bulut dağıtım sertifikasıyla). İçerikleri 17'de |
+| **17** | **Açılı sayım çizgisi** (`countLine`, §4.8; Python ↔ Swift eşdeğer), **sayılan ürünün üstünde sıra numarası** (34; bitişik çiftte 35–36; kartlarda aynı), sayım çizgisi çokgenin içinde çizilir, kalibrasyon yazıları kırpılmaz. TRASSIR gerçek cihazda doğrulandı (derleme 13 ile) |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
