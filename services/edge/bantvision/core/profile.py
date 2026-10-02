@@ -60,6 +60,8 @@ class Profile:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     schema: str = "bantvision.profile.v1"
     roi: Roi = field(default_factory=Roi)
+    # İsteğe bağlı çokgen ROI (algoritma §2.0): normalize köşeler; roi bunun sınır kutusudur
+    roiPolygon: list[tuple[float, float]] | None = None
     linePosition: float = 0.5
     direction: str = "down"
     diffThreshold: int = 25
@@ -100,6 +102,8 @@ class Profile:
                 setattr(p, k, d[k])
         if "roi" in d:
             p.roi = Roi(**d["roi"])
+        if d.get("roiPolygon"):
+            p.roiPolygon = [(float(pt["x"]), float(pt["y"])) for pt in d["roiPolygon"]]
         src = d.get("source") or {}
         p.rotation = int(src.get("rotation", 0))
         p.referenceFps = float(src.get("referenceFps", 60.0))
@@ -133,7 +137,20 @@ class Profile:
             "qc": asdict(self.qc),
             "io": self.io,
         }
+        if self.roiPolygon:
+            d["roiPolygon"] = [{"x": x, "y": y} for x, y in self.roiPolygon]
         return d
+
+    def set_polygon(self, points: list[tuple[float, float]] | None) -> None:
+        """Çokgeni ayarlar; roi çokgenin sınır kutusu olur (sözleşme kuralı)."""
+        if not points:
+            self.roiPolygon = None
+            return
+        if not 3 <= len(points) <= 12:
+            raise ValueError("çokgen 3–12 köşe olmalı")
+        xs, ys = [x for x, _ in points], [y for _, y in points]
+        self.roiPolygon = [(float(x), float(y)) for x, y in points]
+        self.roi = Roi(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
 
     # --- hazır profiller ---
     @classmethod

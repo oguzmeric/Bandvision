@@ -12,7 +12,12 @@ Girdi: zaman damgalı tam çözünürlüklü kare. Çıktı: lekeler, izler, say
 ## 2. Arka plan ve segmentasyon
 Durum: `bg` (float32, w×h). Boyut değişirse sıfırlanır; yoksa ilk kareyle başlatılır ve o karede leke dönmez.
 
-1. **Eşik:** ROI içinde `mask = |gray − bg| > diffThreshold` (kesin büyüktür). ROI dışı 0.
+0. **ROI maskesi** (w×h, ROI ya da boyut değişince yeniden hesaplanır):
+   - **Dikdörtgen:** `x0 = clamp(int(roi.x·w), 0, w−1)`, `y0 = clamp(int(roi.y·h), 0, h−1)`, `x1 = clamp(int((roi.x+roi.width)·w), x0+1, w)`, `y1 = clamp(int((roi.y+roi.height)·h), y0+1, h)`; piksel `(i, j)` içeride ⇔ `x0 ≤ i < x1` ve `y0 ≤ j < y1`.
+   - **Çokgen** (`roiPolygon` varsa, 3–12 köşe, normalize): piksel ayrıca **merkezi** `px = (i + 0.5)/w`, `py = (j + 0.5)/h` çokgenin içindeyse içeridedir. İçerisi **çift-tek kuralı** (yatay ışın): `inside = false`; her kenar `(xa, ya) → (xb, yb)` için (köşe `k` ile `k−1`, ilk kenar son köşeden ilk köşeye) `(ya > py) ≠ (yb > py)` ise `xc = (xb − xa) · (py − ya) / (yb − ya) + xa` ve `px < xc` ise `inside = ¬inside`. Çift duyarlıklı kayan nokta, işlem sırası aynen bu (Python ve Swift aynı pikselleri seçer).
+   - `roi`, çokgenin sınır kutusudur (uygulamalar çokgen kaydederken hesaplar); maske her durumda dikdörtgen ∩ çokgen olduğundan tutarsız veride de davranış tanımlıdır. Sayım çizgisi (`linePosition`) bu kutuya göredir.
+   - Amaç: eğik bant ya da kenarda insan/makine hareketi varken yalnızca bant alanı sayılır ve boş bant öğrenmesi (§5) yalnızca bu alana bakar.
+1. **Eşik:** ROI maskesi içinde `mask = |gray − bg| > diffThreshold` (kesin büyüktür). Dışı 0.
 2. **Açma:** 3×3 erozyon, ardından 3×3 genişleme. Görüntü kenarında yalnızca görüntü içindeki komşular dikkate alınır.
 3. **Kapama:** `closeIterations` kez (3×3 genişleme → 3×3 erozyon).
 4. **Seçici arka plan güncellemesi:** her piksel için `bg += r · (gray − bg)`; `r = rateEff` (mask=0) ya da `rateEff · 0.002` (mask=1). `rateEff` §7'ye göre.
@@ -58,7 +63,7 @@ Her karede, tahmini konum `p̂ = konum + v`:
 ## 5. Kalibrasyon
 **Boş bant öğrenme** (`backgroundSeconds = 1.0`, `N = round(fps · 1.0)`, en az 15 kare):
 - 0. kare: `bg = gray`. Sonrakiler: `bg += 0.15·(gray − bg)` (koşulsuz).
-- `0.4·N`'den itibaren her karede ROI içinde `|gray − bg|`'nin %99,5 yüzdeliği ölçülür, en büyüğü `m`.
+- `0.4·N`'den itibaren her karede ROI maskesi (§2.0) içindeki piksellerde `|gray − bg|`'nin %99,5 yüzdeliği ölçülür, en büyüğü `m`.
 - Bitiş: `diffThreshold = clamp(int(1.5·m) + 8, 12, 100)`, izler sıfırlanır.
 
 **Örnek ürün öğrenme** (hedef 8): ilk kez sayılan (`isFirstCrossing`) her izin `medianArea`'sı toplanır; hedefe ulaşınca `expectedArea = median(toplanan)`.

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import json
 import math
 import pathlib
@@ -30,8 +31,23 @@ import numpy as np
 from .core import Pipeline, Profile
 from .core.pipeline import FrameResult
 from .core.profile import Roi
-from .core.segmenter import downsample, roi_pixels
+from .core.segmenter import downsample, roi_mask
 from .core.tracker import median
+
+
+@functools.lru_cache(maxsize=8)
+def _mask(roi: tuple[float, float, float, float], polygon: tuple[tuple[float, float], ...] | None,
+          w: int, h: int) -> np.ndarray:
+    m = roi_mask(Roi(*roi), polygon, w, h)
+    m.flags.writeable = False                    # önbellekteki dizi değiştirilmesin
+    return m
+
+
+def profile_mask(profile: Profile, w: int, h: int) -> np.ndarray:
+    """§2.0 ROI maskesi (önbellekli; her karede yeniden hesaplanmaz)."""
+    r = profile.roi
+    poly = tuple(profile.roiPolygon) if profile.roiPolygon else None
+    return _mask((r.x, r.y, r.width, r.height), poly, w, h)
 
 PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack}
 
@@ -131,8 +147,8 @@ def temporal_noise_p995(info: VideoInfo, profile: Profile, window: float, pairs:
         g = downsample(to_gray(f, profile.rotation), profile.processingWidth)[0].astype(np.float32)
         if prev is not None and k % step == 0:
             h, w = g.shape
-            x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
-            meds.append(float(np.median(np.abs(g - prev)[y0:y1, x0:x1])))
+            inside = profile_mask(profile, w, h)
+            meds.append(float(np.median(np.abs(g - prev)[inside])))
         prev = g
     sigma = (float(np.median(meds)) if meds else 0.0) / (0.6745 * math.sqrt(2))
     return 2.807 * sigma
@@ -158,8 +174,8 @@ def estimate_background(info: VideoInfo, profile: Profile, window: float, sample
     bg = np.median(stack, axis=0)
     if bg_range:
         h, w = bg.shape
-        x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
-        p995 = float(np.percentile(np.abs(stack - bg)[:, y0:y1, x0:x1], 99.5))
+        inside = profile_mask(profile, w, h)
+        p995 = float(np.percentile(np.abs(stack - bg)[:, inside], 99.5))
     else:
         p995 = temporal_noise_p995(info, profile, window)
     return bg, _noise_threshold(p995), smalls
@@ -175,13 +191,12 @@ def estimate_direction(info: VideoInfo, profile: Profile, bg: np.ndarray,
     dys: list[np.ndarray] = []
     prev = None
     h, w = bg.shape
-    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+    inside = profile_mask(profile, w, h)
     for k, _, f in read_frames(info, 0.0, end):
         g = downsample(to_gray(f, profile.rotation), profile.processingWidth)[0]
         if prev is not None and k % step == 0:
             flow = cv2.calcOpticalFlowFarneback(prev, g, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-            fg = np.zeros((h, w), bool)
-            fg[y0:y1, x0:x1] = np.abs(g[y0:y1, x0:x1].astype(np.float32) - bg[y0:y1, x0:x1]) > threshold
+            fg = (np.abs(g.astype(np.float32) - bg) > threshold) & inside
             moving = fg & (np.hypot(flow[..., 0], flow[..., 1]) > 0.3)
             if moving.sum() > 20:
                 dxs.append(flow[..., 0][moving])
@@ -275,10 +290,13 @@ def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float) -> n
     x1, y1 = int((roi.x + roi.width) * w), int((roi.y + roi.height) * h)
     shade = frame.copy()
     shade[:] = (0, 0, 0)
-    mask = np.ones((h, w), bool)
-    mask[y0:y1, x0:x1] = False
+    mask = ~profile_mask(profile, w, h)
     frame[mask] = cv2.addWeighted(frame, 0.65, shade, 0.35, 0)[mask]
-    cv2.rectangle(frame, (x0, y0), (x1, y1), YELLOW, th)
+    if profile.roiPolygon:
+        pts = np.array([[int(x * w), int(y * h)] for x, y in profile.roiPolygon], np.int32)
+        cv2.polylines(frame, [pts], True, YELLOW, th)
+    else:
+        cv2.rectangle(frame, (x0, y0), (x1, y1), YELLOW, th)
     if profile.vertical:
         ly = int(profile.linePosition * h)
         cv2.line(frame, (x0, ly), (x1, ly), ORANGE, th * 2)
@@ -370,6 +388,14 @@ def build_profile(a: argparse.Namespace) -> Profile:
     if a.roi:
         x, y, w, h = (float(v) for v in a.roi.split(","))
         p.roi = Roi(x, y, w, h)
+    if a.roi_polygon:
+        pts = [tuple(float(v) for v in pair.split(",")) for pair in a.roi_polygon.split(";") if pair.strip()]
+        if any(len(pt) != 2 for pt in pts):
+            raise SystemExit("--roi-polygon biçimi: x,y;x,y;x,y (0-1)")
+        try:
+            p.set_polygon([(pt[0], pt[1]) for pt in pts])
+        except ValueError as e:
+            raise SystemExit(f"--roi-polygon: {e}") from e
     if a.line is not None:
         p.linePosition = a.line
     if a.direction:
@@ -392,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--profile", help="başlangıç profili (contracts/product-profile.schema.json)")
     ap.add_argument("--direction", choices=["down", "up", "right", "left"], help="vermezsen otomatik bulunur")
     ap.add_argument("--roi", help="x,y,genişlik,yükseklik (0-1), ör. 0.1,0.2,0.8,0.6")
+    ap.add_argument("--roi-polygon", help="çokgen ROI köşeleri (0-1), ör. 0.3,0.05;0.8,0.05;0.65,0.95;0.1,0.95")
     ap.add_argument("--line", type=float, help="sayım çizgisi konumu (0-1, akış ekseninde)")
     ap.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
     ap.add_argument("--width", type=int, help="işleme genişliği (px), ör. 160/240/360")
