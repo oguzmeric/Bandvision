@@ -1,7 +1,7 @@
 # 12 — Durum Özeti (2026-10-02)
 
 Bu oturumda yapılan her şeyin toplu dökümü: ne bitti, nasıl doğrulandı, neler açık, sırada ne var.
-Repo: `github.com/oguzmeric/Bandvision` (özel). Ayrıntılar ilgili dokümanlarda; burası giriş noktası.
+Repo: `github.com/oguzmeric/Bandvision` (2026-10-02'den beri geçici olarak **herkese açık**: özel repoda aylık 2.000 Actions dakikası bitmek üzereydi, macOS dakikası 10 kat sayılıyor. Yayımlamadan önce tüm geçmiş tarandı; anahtar/şifre yok. Kullanıcı daha sonra yeniden özele alabilir). Ayrıntılar ilgili dokümanlarda; burası giriş noktası.
 
 ## 1. Altyapı
 
@@ -11,7 +11,8 @@ Repo: `github.com/oguzmeric/Bandvision` (özel). Ayrıntılar ilgili dokümanlar
 | CI `ci` | Her push'ta: edge çekirdek testleri + ruff, sözleşme doğrulaması |
 | CI `ios` | Her iOS değişikliğinde macOS'ta Xcode 26 ile imzasız Release derleme + **sıkı concurrency denetimi (uyarı = hata)** |
 | CI `testflight` | Elle tetiklenir (Actions → testflight → Run workflow): arşiv, otomatik imzalama, App Store Connect'e yükleme |
-| Apple | Bundle ID `com.oguzmeric.bantsayac`, App Store Connect kaydı "Bant Sayaç", Internal Testing grubu |
+| Apple | Bundle ID `com.oguzmeric.bantsayac`, App Store Connect kaydı "Bant Sayaç" (mağaza adı orada ayrıca değiştirilir), Internal Testing grubu. Ana ekran adı derleme 12'den itibaren **BandVision** |
+| Marka | Logo `docs/brand/bandvision-logo.png`; uygulama ikonu yazılı logo (karşılaştırma: `docs/brand/ikon-karsilastirma.png`) |
 | Secret'lar | `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (GitHub Actions secret; değerler repoda yok) |
 
 TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CRLF'e dönüşüyordu (workflow artık her yapıştırma biçimini normalize ediyor), `ASC_KEY_ID` başka anahtarındı (401; teşhis adımı eklendi), Apple iOS 26 SDK şartı (Xcode 26.3 seçiliyor).
@@ -26,6 +27,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | 9 | Video modu (Fotoğraflar/Dosyalar'dan video sayımı) + §7 fps ölçeklemesi |
 | 10 | Kullanıcı geri bildirimi: "Video ile test" sayfası (tepkisiz menü giderildi), oynatıcı (baştan, oynat/duraklat, zaman çubuğu, atlama), sayısal klavyede Tamam |
 | **11** | **Kalite kontrol A1**: sekmeler (Canlı · Genel bakış · Öğret · Ayarlar), ürün kartları, örnekle öğretme; düz videolarda kompozisyonsuz okuma; düğme yazıları bölünmüyor. **Uçtan uca UI testinden geçmeden yüklenmez.** |
+| **12** | **Ağ kamerası (RTSP)**: telefon, mevcut IP kameranın yayınını alıp sayar ve kalite kontrol yapar (marka şablonları, Digest/Basic, H.264/H.265, yeniden bağlanma). Video ve kamerada yakınlaştırma/kaydırma; Canlı ekranda son ürün kartları ve ürünün yanında OK/NOK etiketi; QC kırpıntısı artık sayımı bekletmiyor; yeni ikon ve ad (BandVision) |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
@@ -66,6 +68,15 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
 - **Uçtan uca UI testi** (`04-ios-app.md` §1d): simülatörde 28 yumurtalık klip Swift çekirdeğiyle sayılıyor; sonuç Python referansıyla aynı (**28/28**). Swift tarafı ilk kez çalıştırılarak doğrulandı. TestFlight yüklemesi bu teste bağlı.
 - Test sırasında bulunanlar: CI'da video saniyede ~0,7 kare işleniyordu. Ölçüm: Debug derlemesi (optimizasyonsuz) ve GPU'suz sanal makine; test artık Release ile çalışıyor (çekirdek ~6 ms/kare). Ayrıca düz videolar için gereksiz kompozisyon kaldırıldı, ekran karesi küçültülerek üretiliyor, dar ekranda düğme yazılarının hecelenmesi giderildi, menüden açılan pencereler menü kapandıktan sonra açılıyor.
 
+## 5c. Ağ kamerası ve uçtan uca RTSP testi (2026-10-02)
+
+- Tek kamera, telefonda (çoklu kamera gerekirse web/edge'e taşınacak). Ayarlar → Görüntü kaynağı → Ağ kamerası; ayrıntı `04-ios-app.md` §1e.
+- CI'da MediaMTX, test klibini Digest korumalı RTSP olarak yayınlar. Üç test: ağdan sayım (**28/28**), yanlış şifrede anlaşılır hata, video sayımı (**28/28**).
+- Teşhis sırasında bulunanlar:
+  - İmzasız simülatörde Keychain yazılamıyor (-34018): şifre oturum boyunca bellekte de tutuluyor; Keychain hatası kullanıcıya gösteriliyor.
+  - Klip 1,5 sn boş bantla başlıyordu; yayına ≥ 1 sn geç katılınca boş bant öğrenmesi ürünlerle yapılıyor, sayım 28 → 2'ye düşüyordu (Python benzetimi). Klip 4 sn boş bantla başlıyor. **Sahada kural:** boş bant öğrenmesi bant gerçekten boşken.
+  - **Gerçek hata:** QC kırpıntısının JPEG'i sayım kuyruğunda, ekranla ortak bağlamda üretiliyordu. Canlı kaynakta sayım saniyelerce duruyor, aradaki kareler atlanıyordu (5,7 sn boşluk, 10/28). Artık sayım kuyruğu yalnızca küçük bir bellek kopyası alıyor (en uzun boşluk 0,13 sn, çekirdek 39 → 2 ms). Telefon kamerasında da aynı risk vardı.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -87,7 +98,7 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
 
 ## 8. Sırada
 
-1. Derleme 11'in telefonda denenmesi: video oynatıcı, kartlar, öğretme.
+1. Derleme 12'nin telefonda denenmesi: video oynatıcı ve yakınlaştırma, kartlar, öğretme, gerçek bir IP kamerayla bağlantı ve sayım.
 2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
