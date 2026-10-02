@@ -117,8 +117,8 @@ final class RTSPClient: @unchecked Sendable {
                 }
             }
             conn.start(queue: queue)
-            // Bağlantı ya da el sıkışma 10 sn'de tamamlanmazsa vazgeç
-            queue.asyncAfter(deadline: .now() + 10) { [weak self] in
+            // Bağlantı ya da el sıkışma 15 sn'de tamamlanmazsa vazgeç
+            queue.asyncAfter(deadline: .now() + 15) { [weak self] in
                 guard let self, !self.finished, self.depacketizer == nil else { return }
                 self.finish(.connection("zaman aşımı"))
             }
