@@ -13,6 +13,8 @@ struct EngineSnapshot {
     var mask: CGImage?
     /// DEBUG: ortalama süreler (ms) — UI testi teşhisi için
     var perf: String = ""
+    /// İz kimliği → sayım sıra numarası ("34", bitişik çiftte "35–36"); ürünün üstünde gösterilir
+    var countLabels: [Int: String] = [:]
 
     static var empty: EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
@@ -24,6 +26,8 @@ struct EngineSnapshot {
 struct CountCrop: Sendable {
     let trackId: Int
     let delta: Int
+    /// Sayım sıra numarası (ekranda ürünün üstündekiyle aynı)
+    let label: String
     let time: Date
     /// JPEG, uzun kenar en fazla 256 px
     let jpeg: Data
@@ -76,6 +80,8 @@ final class FrameProcessor: @unchecked Sendable {
     private var lastDisplay: CFTimeInterval = 0
 
     private var lastPublish: CFTimeInterval = 0
+    /// İz kimliği → sayım sıra numarası (yalnızca `queue` üzerinde); iz silinince budanır
+    private var countLabels: [Int: String] = [:]
     // Ölçüm (üssel ortalama, ms)
     private var perfGap = 0.0, perfCore = 0.0, perfImage = 0.0
     private var perfLastEnd: CFTimeInterval = 0
@@ -113,6 +119,7 @@ final class FrameProcessor: @unchecked Sendable {
     func resetTracking(resetBackground: Bool) {
         queue.async {
             self.tracker.reset()
+            self.countLabels.removeAll()
             if resetBackground { self.segmenter.reset() }
         }
     }
@@ -120,6 +127,7 @@ final class FrameProcessor: @unchecked Sendable {
     func startBackgroundLearning() {
         queue.async {
             self.tracker.reset()
+            self.countLabels.removeAll()
             self.calib = .background(frame: 0, maxDiff: 0)
         }
     }
@@ -127,6 +135,7 @@ final class FrameProcessor: @unchecked Sendable {
     func startSampleLearning(target: Int) {
         queue.async {
             self.tracker.reset()
+            self.countLabels.removeAll()
             self.calib = .sample(areas: [], target: target)
         }
     }
@@ -172,6 +181,7 @@ final class FrameProcessor: @unchecked Sendable {
                 profile.diffThreshold = th
                 calib = .none
                 tracker.reset()
+                countLabels.removeAll()
                 emit(.backgroundDone(threshold: th))
             } else {
                 calib = .background(frame: next, maxDiff: m)
@@ -231,6 +241,18 @@ final class FrameProcessor: @unchecked Sendable {
         guard counting else { return }
         let delta = events.reduce(0) { $0 + $1.delta }
         guard delta > 0 else { return }
+        // Sıra numaraları: olay sırasıyla; sayılmış ize sonradan katılan ürün numarayı uzatır ("35–36")
+        var running = total
+        for e in events where e.delta > 0 {
+            let first = running + 1
+            running += e.delta
+            if e.isFirstCrossing || countLabels[e.trackId] == nil {
+                countLabels[e.trackId] = e.delta == 1 ? "\(first)" : "\(first)–\(running)"
+            } else if let old = countLabels[e.trackId] {
+                let start = old.split(separator: "–").first.map(String.init) ?? old
+                countLabels[e.trackId] = "\(start)–\(running)"
+            }
+        }
         total += delta
         let t = total
         DispatchQueue.main.async { [weak self] in self?.onCount?(delta, t) }
@@ -240,10 +262,10 @@ final class FrameProcessor: @unchecked Sendable {
             guard let region = Self.copyRegion(pb, bbox: e.bbox) else { continue }
             let buffer = UncheckedSendable(value: region)
             let context = UncheckedSendable(value: cropContext)
-            let trackId = e.trackId, delta = e.delta, time = Date()
+            let trackId = e.trackId, delta = e.delta, time = Date(), label = countLabels[e.trackId] ?? ""
             cropQueue.async { [weak self] in
                 guard let jpeg = Self.encodeJPEG(buffer.value, context: context.value), let self else { return }
-                let crop = CountCrop(trackId: trackId, delta: delta, time: time, jpeg: jpeg)
+                let crop = CountCrop(trackId: trackId, delta: delta, label: label, time: time, jpeg: jpeg)
                 DispatchQueue.main.async { [weak self] in self?.onCrop?(crop) }
             }
         }
@@ -341,11 +363,16 @@ final class FrameProcessor: @unchecked Sendable {
         if showMask, let m = segmenter.lastMask {
             maskImage = Self.makeMaskImage(m, w: frame.width, h: frame.height)
         }
-        let snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
+        var snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
                                   blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
                                   perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms · en uzun aralık %.0f ms · geri giden %d · kaynak fps %.1f · son ts %.2f",
                                                perfGap, perfCore, perfImage, maxGapMs, backwardsTs, sourceFps, lastTs ?? -1))
-        DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
+        // Ekrandan çıkan izlerin numaraları atılır (sözlük büyümesin)
+        let live = Set(snap.tracks.map(\.id))
+        countLabels = countLabels.filter { live.contains($0.key) }
+        snap.countLabels = countLabels
+        let ready = snap
+        DispatchQueue.main.async { [weak self] in self?.onSnapshot?(ready) }
     }
 
     /// Ekran karesini ayrı kuyrukta üretir (en fazla ~24/sn). Önceki kare bitmediyse bu kare atlanır.

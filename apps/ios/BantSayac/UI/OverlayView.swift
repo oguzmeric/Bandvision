@@ -41,14 +41,22 @@ struct OverlayView: View {
                 }
             }
 
-            // İzler: beyaz = henüz sayılmadı, camgöbeği = sayıldı
+            // İzler: sayılan ürünün üstünde sayım sıra numarası; henüz sayılmamış iz küçük beyaz nokta
             for t in snapshot.tracks {
                 let p = viewPoint(t.x, t.y)
-                ctx.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
-                         with: .color(t.counted ? .cyan : .white))
-                ctx.draw(Text(hexID(t.id)).font(.caption2.monospacedDigit())
-                            .foregroundColor(t.counted ? .cyan : .white),
-                         at: CGPoint(x: p.x + 8, y: p.y - 8), anchor: .bottomLeading)
+                if let label = snapshot.countLabels[t.id] {
+                    let text = ctx.resolve(Text(label).font(.system(size: 15, weight: .heavy).monospacedDigit())
+                                            .foregroundColor(.black))
+                    let size = text.measure(in: CGSize(width: 120, height: 40))
+                    let side = max(size.height + 8, size.width + 12)
+                    let badge = CGRect(x: p.x - side / 2, y: p.y - (size.height + 8) / 2,
+                                       width: side, height: size.height + 8)
+                    ctx.fill(Path(roundedRect: badge, cornerRadius: badge.height / 2), with: .color(.cyan))
+                    ctx.draw(text, at: CGPoint(x: badge.midX, y: badge.midY))
+                } else {
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
+                             with: .color(t.counted ? .cyan : .white))
+                }
                 if let v = verdicts[t.id] {
                     let color: Color = v.pass ? .green : .red
                     if !v.pass {

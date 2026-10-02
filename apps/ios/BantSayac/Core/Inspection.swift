@@ -12,8 +12,13 @@ struct InspectionRecord: Identifiable, Equatable {
     var verdict: AppearanceVerdict?
     /// Karar bekleniyor
     var pending = false
+    /// Sayım sıra numarası (ekranda ürünün üstündekiyle aynı); yoksa iz kimliği gösterilir
+    var countLabel: String? = nil
 
-    var shortID: String { "#" + hexID(trackId) }
+    var shortID: String {
+        if let countLabel, !countLabel.isEmpty { return "No. " + countLabel }
+        return "#" + hexID(trackId)
+    }
 }
 
 struct InspectionStats: Equatable {

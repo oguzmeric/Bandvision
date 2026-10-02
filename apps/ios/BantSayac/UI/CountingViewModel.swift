@@ -472,7 +472,8 @@ final class CountingViewModel: ObservableObject {
 
     private func handleCrop(_ crop: CountCrop) {
         let judge = teach.enabled && teach.isReady
-        var record = InspectionRecord(trackId: crop.trackId, delta: crop.delta, time: crop.time, jpeg: crop.jpeg)
+        var record = InspectionRecord(trackId: crop.trackId, delta: crop.delta, time: crop.time, jpeg: crop.jpeg,
+                                      countLabel: crop.label)
         record.pending = judge
         inspections.insert(record, at: 0)
         if inspections.count > InspectionLog.capacity { inspections.removeLast(inspections.count - InspectionLog.capacity) }

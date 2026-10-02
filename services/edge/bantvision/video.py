@@ -281,7 +281,8 @@ def _hex_id(i: int) -> str:
     return f"{(i * 2654435761) & 0xFFFF:04X}"  # kısa, ardışık id'lerde bile ayırt edilebilir
 
 
-def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float) -> np.ndarray:
+def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float,
+         labels: dict[int, str] | None = None) -> np.ndarray:
     h, w = frame.shape[:2]
     s = max(1.0, w / 960)                       # çizgi kalınlıkları çözünürlükle ölçeklensin
     th = max(1, round(2 * s))
@@ -312,10 +313,16 @@ def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float) -> n
                         0.6 * s, GREEN, th, cv2.LINE_AA)
     for t in r.tracks:
         c = (int(t.x * w), int(t.y * h))
-        col = CYAN if t.counted else WHITE
-        cv2.circle(frame, c, max(3, round(5 * s)), col, -1, cv2.LINE_AA)
-        cv2.putText(frame, _hex_id(t.id), (c[0] + 8, c[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * s, col,
-                    max(1, th - 1), cv2.LINE_AA)
+        label = (labels or {}).get(t.id)
+        if label:                                # sayılan ürünün üstünde sayım sıra numarası (iPhone ile aynı)
+            scale = 0.6 * s
+            (tw, tht), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, scale, max(1, th))
+            rad = max(tht, tw // 2) // 2 + int(10 * s)
+            cv2.circle(frame, c, rad, CYAN, -1, cv2.LINE_AA)
+            cv2.putText(frame, label, (c[0] - tw // 2, c[1] + tht // 2), cv2.FONT_HERSHEY_DUPLEX, scale,
+                        (20, 20, 20), max(1, th), cv2.LINE_AA)
+        else:
+            cv2.circle(frame, c, max(3, round(5 * s)), CYAN if t.counted else WHITE, -1, cv2.LINE_AA)
     # sayaç kutusu; yeni sayımda kısa süre yeşil yanar
     box = (0, 160, 0) if flash > 0 else (30, 30, 30)
     cv2.rectangle(frame, (0, 0), (int(330 * s), int(70 * s)), box, -1)
@@ -348,8 +355,18 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     flash = 0.0
     t0 = time.perf_counter()
     n = 0
+    labels: dict[int, str] = {}                  # iz → sayım sıra numarası ("34", bitişik çiftte "35–36")
     for k, t, frame in read_frames(info):
         r = pipe.process(frame, t)
+        running = pipe.total - sum(e.delta for e in r.counts)
+        for e in r.counts:
+            first, running = running + 1, running + e.delta
+            if e.is_first_crossing or e.track_id not in labels:
+                labels[e.track_id] = str(first) if e.delta == 1 else f"{first}–{running}"
+            else:
+                labels[e.track_id] = f"{labels[e.track_id].split('–')[0]}–{running}"
+        live = {m.id for m in r.tracks}
+        labels = {tid: lab for tid, lab in labels.items() if tid in live}
         for e in r.counts:
             per_minute[int(t // 60)] = per_minute.get(int(t // 60), 0) + e.delta
             events.append((round(t, 3), e.track_id, e.delta, pipe.total))
@@ -359,7 +376,7 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
             if profile.rotation in (90, 180, 270):
                 img = cv2.rotate(img, {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
                                        270: cv2.ROTATE_90_COUNTERCLOCKWISE}[profile.rotation])
-            img = draw(img.copy(), profile, r, flash)
+            img = draw(img.copy(), profile, r, flash, labels)
             if img.shape[1] > out_width:
                 img = cv2.resize(img, (out_width, round(img.shape[0] * out_width / img.shape[1])),
                                  interpolation=cv2.INTER_AREA)
