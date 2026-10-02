@@ -22,7 +22,10 @@ Kaynak: resmi SDK dokümanı — [Getting video and audio streams](https://stora
 
 ## Açık sorular
 1. ~~TRASSIR sunucusu kanal başına RTSP yeniden yayını sunuyor mu? URL biçimi ve kimlik doğrulama?~~
-   **Dokümana göre evet** (gerçek cihazda henüz doğrulanmadı): SDK açıkken (Ayarlar → Web sunucusu (SDK), port 8080, SDK şifresi dolu)
+   **Evet — gerçek bir TRASSIR (4.x) kayıt cihazında doğrulandı (2026-10-02, derleme 13):** SDK girişi, kanal listesi, jetonlu RTSP
+   ile canlı yayın çalıştı; alt akış 704×576 (D1) H.264. Not: D1 görüntüde pikseller kare değildir (görüntü yatayda basık görünür);
+   sayımı etkilemez, ölçüme dayalı QC'de (F4/A2: boy, en-boy) piksel en-boy oranı hesaba katılmalı. Henüz gözlenmedi: uzun süreli
+   yayında jetonun canlı kalması (`?ping`), küçük görüntülerin `container=jpeg` ile gelip gelmediği. Ayrıntılar: SDK açıkken (Ayarlar → Web sunucusu (SDK), port 8080, SDK şifresi dolu)
    `https://sunucu:8080/login?username=&password=` → `sid` (15 dk) → `/channels?sid=` → `/get_video?channel=<guid>&container=rtsp&stream=main|sub&sid=`
    → `token` (~10 sn, istek geldikçe yaşar; `http://sunucu:555/<token>?ping`) → `rtsp://sunucu:555/<token>`. Video komutları kullanıcı oturumuyla
    (SDK şifresiyle değil) çalışır; kullanıcının ilgili kanallarda izleme yetkisi olmalı. Doğrulanacak: hata kodlarının metni, açık RTSP bağlantısının
