@@ -66,77 +66,106 @@ struct NetworkCameraForm: View {
         _rtspPortText = State(initialValue: c.recorderRTSPPort.map(String.init) ?? "")
     }
 
+    // Gövde küçük parçalara bölünür: tek büyük ifade derleyicinin tip denetimini zaman aşımına uğratıyordu.
     var body: some View {
-        Form {
-            Section {
-                Picker("Cihaz türü", selection: $config.kind) {
-                    ForEach(NetworkDeviceKind.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("deviceKind")
-            } footer: {
-                Text(config.kind == .camera
-                     ? "Kamera ağa doğrudan bağlıysa."
-                     : "Kameralar bir kayıt cihazına (NVR/XVR) bağlıysa: cihazı bir kez ekle, kamerayı listeden seç.")
+        observingChanges(formContent)
+            .alert("Şifre", isPresented: warningShown) {
+                Button("Tamam") { saveWarning = nil; dismiss() }
+            } message: {
+                Text(saveWarning ?? "")
             }
+            .navigationTitle("Ağ kamerası")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Tamam") { focused = false }
+                }
+            }
+    }
 
+    private var warningShown: Binding<Bool> {
+        Binding(get: { saveWarning != nil }, set: { if !$0 { saveWarning = nil } })
+    }
+
+    private var formContent: some View {
+        Form {
+            kindSection
             if config.kind == .camera {
                 cameraSections
             } else {
                 recorderSections
             }
-
-            Section {
-                Toggle("Alt akış (önerilir)", isOn: $config.substream)
-            } footer: {
-                Text("Sayım için alt akış (ör. 640×360) yeterli; ağı, pili ve ısınmayı azaltır.")
-            }
-
+            substreamSection
             testSection
+            saveSection
+        }
+    }
 
-            Section {
-                Button {
-                    save()
-                } label: {
-                    Label("Kaydet ve bu kamerayı kullan", systemImage: "checkmark")
-                }
-                .disabled(!config.isComplete)
-                .accessibilityIdentifier("saveNetworkCamera")
+    private func observingChanges<Content: View>(_ content: Content) -> some View {
+        content
+            .onChange(of: portText) { _, text in
+                config.port = Int(text.filter(\.isNumber)) ?? 0
             }
-        }
-        .alert("Şifre", isPresented: Binding(get: { saveWarning != nil }, set: { if !$0 { saveWarning = nil } })) {
-            Button("Tamam") { saveWarning = nil; dismiss() }
-        } message: {
-            Text(saveWarning ?? "")
-        }
-        .navigationTitle("Ağ kamerası")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Tamam") { focused = false }
+            .onChange(of: httpPortText) { _, text in
+                config.recorderHTTPPort = Int(text.filter(\.isNumber))
             }
+            .onChange(of: rtspPortText) { _, text in
+                config.recorderRTSPPort = Int(text.filter(\.isNumber))
+            }
+            .onChange(of: config) { _, _ in
+                result = nil
+                errorText = nil
+            }
+            .onChange(of: recorderIdentity) { _, _ in
+                recorderChanged()
+            }
+    }
+
+    /// Başka bir cihaz: eski liste ve seçim geçersiz
+    private func recorderChanged() {
+        channels = []
+        channelError = nil
+        listClient = nil
+        config.recorderChannel = nil
+        thumbnails.reset()
+    }
+
+    private var kindSection: some View {
+        Section {
+            Picker("Cihaz türü", selection: $config.kind) {
+                ForEach(NetworkDeviceKind.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("deviceKind")
+        } footer: {
+            Text(kindFooter)
         }
-        .onChange(of: portText) { _, text in
-            config.port = Int(text.filter(\.isNumber)) ?? 0
+    }
+
+    private var kindFooter: String {
+        config.kind == .camera
+            ? "Kamera ağa doğrudan bağlıysa."
+            : "Kameralar bir kayıt cihazına (NVR/XVR) bağlıysa: cihazı bir kez ekle, kamerayı listeden seç."
+    }
+
+    private var substreamSection: some View {
+        Section {
+            Toggle("Alt akış (önerilir)", isOn: $config.substream)
+        } footer: {
+            Text("Sayım için alt akış (ör. 640×360) yeterli; ağı, pili ve ısınmayı azaltır.")
         }
-        .onChange(of: httpPortText) { _, text in
-            config.recorderHTTPPort = Int(text.filter(\.isNumber))
-        }
-        .onChange(of: rtspPortText) { _, text in
-            config.recorderRTSPPort = Int(text.filter(\.isNumber))
-        }
-        .onChange(of: config) { _, _ in
-            result = nil
-            errorText = nil
-        }
-        .onChange(of: recorderIdentity) { _, _ in
-            // Başka bir cihaz: eski liste ve seçim geçersiz
-            channels = []
-            channelError = nil
-            listClient = nil
-            config.recorderChannel = nil
-            thumbnails.reset()
+    }
+
+    private var saveSection: some View {
+        Section {
+            Button {
+                save()
+            } label: {
+                Label("Kaydet ve bu kamerayı kullan", systemImage: "checkmark")
+            }
+            .disabled(!config.isComplete)
+            .accessibilityIdentifier("saveNetworkCamera")
         }
     }
 
@@ -203,6 +232,12 @@ struct NetworkCameraForm: View {
     }
 
     @ViewBuilder private var recorderSections: some View {
+        recorderDeviceSection
+        recorderLoginSection
+        channelsSection
+    }
+
+    private var recorderDeviceSection: some View {
         Section {
             Picker("Marka", selection: $config.recorderBrand) {
                 ForEach(RecorderBrand.allCases) { Text($0.title).tag($0) }
@@ -218,33 +253,43 @@ struct NetworkCameraForm: View {
                     .focused($focused)
                     .accessibilityIdentifier("recorderHost")
             }
-            DisclosureGroup("Portlar") {
-                LabeledContent(config.recorderBrand == .trassir ? "SDK portu" : "Web portu") {
-                    TextField(String(config.recorderBrand.defaultHTTPPort), text: $httpPortText)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focused)
-                        .accessibilityIdentifier("recorderHTTPPort")
-                }
-                LabeledContent("Görüntü portu") {
-                    TextField(String(config.recorderBrand.defaultRTSPPort), text: $rtspPortText)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .focused($focused)
-                        .accessibilityIdentifier("recorderRTSPPort")
-                }
-            }
+            portsGroup
         } header: {
             Text("Kayıt cihazı")
         } footer: {
-            switch config.recorderBrand {
-            case .trassir:
-                Text("TRASSIR'da Ayarlar → Web sunucusu (SDK) açık olmalı. Varsayılan portlar: SDK 8080, görüntü 555.")
-            case .hikvision, .dahua:
-                Text("Kayıt cihazının web arayüzüne girdiğin kullanıcı ile. Varsayılan portlar: web 80, görüntü 554.")
+            Text(recorderFooter)
+        }
+    }
+
+    private var portsGroup: some View {
+        DisclosureGroup("Portlar") {
+            LabeledContent(config.recorderBrand == .trassir ? "SDK portu" : "Web portu") {
+                TextField(String(config.recorderBrand.defaultHTTPPort), text: $httpPortText)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .focused($focused)
+                    .accessibilityIdentifier("recorderHTTPPort")
+            }
+            LabeledContent("Görüntü portu") {
+                TextField(String(config.recorderBrand.defaultRTSPPort), text: $rtspPortText)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .focused($focused)
+                    .accessibilityIdentifier("recorderRTSPPort")
             }
         }
+    }
 
+    private var recorderFooter: String {
+        switch config.recorderBrand {
+        case .trassir:
+            return "TRASSIR'da Ayarlar → Web sunucusu (SDK) açık olmalı. Varsayılan portlar: SDK 8080, görüntü 555."
+        case .hikvision, .dahua:
+            return "Kayıt cihazının web arayüzüne girdiğin kullanıcı ile. Varsayılan portlar: web 80, görüntü 554."
+        }
+    }
+
+    private var recorderLoginSection: some View {
         Section {
             TextField("Kullanıcı adı", text: $config.recorderUsername)
                 .textInputAutocapitalization(.never)
@@ -259,47 +304,54 @@ struct NetworkCameraForm: View {
         } footer: {
             Text("Şifre yalnızca bu iPhone'un güvenli anahtar deposunda (Keychain) saklanır.")
         }
+    }
 
+    private var channelsSection: some View {
         Section {
-            Button {
-                listChannels()
-            } label: {
-                HStack {
-                    Label(channels.isEmpty ? "Kameraları listele" : "Listeyi yenile", systemImage: "list.bullet.rectangle")
-                    if listing { Spacer(); ProgressView() }
-                }
-            }
-            .disabled(listing || !config.recorderReady)
-            .accessibilityIdentifier("listChannels")
-
-            if let channelError {
-                Label(channelError, systemImage: "xmark.octagon.fill")
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("channelError")
-                Text(recorderHelp).font(.caption).foregroundStyle(.secondary)
-            }
-
-            if channels.isEmpty, let selected = config.recorderChannel {
-                Label("Seçili: \(selected.title)", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            }
-
-            if channels.count > 8 {
-                TextField("Kamera ara (ad ya da kanal no)", text: $search)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused($focused)
-            }
-
+            listButton
+            channelStatusRows
             ForEach(filteredChannels) { channel in
                 channelRow(channel)
             }
         } header: {
             Text(channels.isEmpty ? "Kamera" : "Kameralar (\(channels.count))")
         } footer: {
-            if !channels.isEmpty {
-                Text("Bantı gören kameraya dokun.")
+            Text(channels.isEmpty ? "" : "Bantı gören kameraya dokun.")
+        }
+    }
+
+    private var listButton: some View {
+        Button {
+            listChannels()
+        } label: {
+            HStack {
+                Label(channels.isEmpty ? "Kameraları listele" : "Listeyi yenile", systemImage: "list.bullet.rectangle")
+                if listing {
+                    Spacer()
+                    ProgressView()
+                }
             }
+        }
+        .disabled(listing || !config.recorderReady)
+        .accessibilityIdentifier("listChannels")
+    }
+
+    @ViewBuilder private var channelStatusRows: some View {
+        if let channelError {
+            Label(channelError, systemImage: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("channelError")
+            Text(recorderHelp).font(.caption).foregroundStyle(.secondary)
+        }
+        if channels.isEmpty, let selected = config.recorderChannel {
+            Label("Seçili: \(selected.title)", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        }
+        if channels.count > 8 {
+            TextField("Kamera ara (ad ya da kanal no)", text: $search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focused)
         }
     }
 

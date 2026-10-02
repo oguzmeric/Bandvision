@@ -74,6 +74,7 @@ jobs:
           hls: false
           webrtc: false
           srt: false
+          moq: false
           paths:
             clip:
               runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/clip
@@ -116,6 +117,7 @@ jobs:
           hls: false
           webrtc: false
           srt: false
+          moq: false
           paths:
             "~^tok":
               runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:555/\$MTX_PATH

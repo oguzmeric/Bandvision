@@ -43,6 +43,19 @@ Hedef markalar: Dahua, Hikvision, Axis, Pelco, TRASSIR, Vivotek, Karel, Milesigh
 
 Biçim: `rtsp://kullanıcı:şifre@IP:554<yol>`. Şifrede özel karakter varsa URL kodlaması gerekir.
 
+## 3c. Kayıt cihazı üzerinden bağlantı (NVR/XVR)
+Sahada kameraların çoğu kayıt cihazına bağlıdır; telefon (iPhone uygulaması, `04-ios-app.md` §1g) kayıt cihazına bağlanıp kamerayı listeden seçer.
+
+| Kayıt cihazı | Uygulamaya girilen | Portlar (varsayılan) | Cihazda yapılacak |
+|---|---|---|---|
+| TRASSIR | IP, kullanıcı, şifre | SDK 8080 (HTTPS), görüntü 555 | Ayarlar → Web sunucusu (SDK): **SDK** işaretli, SDK şifresi dolu; kullanıcının kanalları izleme yetkisi |
+| Hikvision | IP, kullanıcı, şifre (web arayüzündeki) | web 80, RTSP 554 | Genelde hazır; alt akış açık olmalı |
+| Dahua | IP, kullanıcı, şifre (web arayüzündeki) | web 80, RTSP 554 | Genelde hazır; alt akış (Extra Stream) açık olmalı |
+
+- Kanal sayısı (4–128) cihazdan okunur; kamera adları kayıt cihazında verilen adlardır. Bantı gören kameraya cihazda anlamlı bir ad vermek ("Paketleme bandı") seçimi kolaylaştırır.
+- Kayıt cihazının eşzamanlı uzak izleme sınırı ve ağ bant genişliği: sayım için alt akış yeterli.
+- ONVIF kayıt cihazlarında her zaman kanal başına çalışmaz (özellikle Hikvision NVR); kayıt cihazı için marka yolu daha güvenilir. ONVIF doğrudan ağa bağlı kameralar içindir.
+
 **Akıllı kodek adları** (mutlaka kapalı; sabit sahnede fps/GOP düşürür, izlemeyi bozar): Hikvision *H.264+/H.265+*, Dahua *Smart Codec*, Axis *Zipstream* (kapalı ya da "low", dinamik fps/GOP kapalı), Milesight *Smart Stream*, Vivotek *Smart Stream II*.
 
 **Lens:** varifokal 2,8–12 mm; balıkgözü/çok geniş açı kenarlarda ürünü bozar. **Konum:** bandın tam tepesinde, dik (§1). Mevcut güvenlik kameraları çoğu zaman eğik baktığı için sayım için ayrı kamera gerekebilir.
