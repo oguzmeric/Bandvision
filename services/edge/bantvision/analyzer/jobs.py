@@ -92,6 +92,9 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
     poly = options.get("roiPolygon")
     if poly:
         args += ["--roi-polygon", ";".join(f"{float(p['x'])},{float(p['y'])}" for p in poly)]
+    cl = options.get("countLine")
+    if cl:
+        args += ["--count-line", ",".join(str(float(cl[k][c])) for k in ("a", "b") for c in ("x", "y"))]
     if options.get("line") is not None:
         args += ["--line", str(float(options["line"]))]
     bg = options.get("bgRange")

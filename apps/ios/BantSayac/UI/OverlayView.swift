@@ -10,8 +10,11 @@ struct OverlayView: View {
     var verdicts: [Int: AppearanceVerdict] = [:]
 
     @State private var activeHandle: Handle?
-    /// vertex: çokgen köşesi; midpoint(i): i ile i+1 arasındaki kenarın ortası (sürükleyince köşe eklenir)
-    private enum Handle: Equatable { case topLeft, bottomRight, line, vertex(Int), midpoint(Int) }
+    /// Açılı çizgiyi ortadan taşırken başlangıçtaki çizgi
+    @State private var dragStartLine: CountLine?
+    /// vertex: çokgen köşesi; midpoint(i): i ile i+1 arasındaki kenarın ortası (sürükleyince köşe eklenir);
+    /// lineA/lineB: açılı çizginin uçları, lineMid: açılı çizgiyi bütün olarak taşı
+    private enum Handle: Equatable { case topLeft, bottomRight, line, vertex(Int), midpoint(Int), lineA, lineB, lineMid }
 
     var body: some View {
         Canvas { ctx, _ in
@@ -24,12 +27,15 @@ struct OverlayView: View {
             ctx.fill(outside, with: .color(.black.opacity(0.35)), style: FillStyle(eoFill: true))
             ctx.stroke(area, with: .color(.yellow), lineWidth: 2)
 
-            // Sayım çizgisi
+            // Sayım çizgisi (açılıysa uçlar arası + akış oku)
             let (a, b) = lineEndpoints(roi)
             var line = Path()
             line.move(to: a)
             line.addLine(to: b)
             ctx.stroke(line, with: .color(.orange), lineWidth: 4)
+            if profile.countLine != nil {
+                ctx.stroke(flowArrow(a, b), with: .color(.orange), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            }
 
             // Lekeler
             for blob in snapshot.blobs {
@@ -73,9 +79,11 @@ struct OverlayView: View {
                 }
             }
 
-            // Akış yönü
-            ctx.draw(Text(profile.direction.arrow).font(.system(size: 28, weight: .bold)).foregroundColor(.yellow),
-                     at: CGPoint(x: roi.minX + 22, y: roi.minY + 22))
+            // Akış yönü (açılı çizgide ok çizginin üstünde)
+            if profile.countLine == nil {
+                ctx.draw(Text(profile.direction.arrow).font(.system(size: 28, weight: .bold)).foregroundColor(.yellow),
+                         at: CGPoint(x: roi.minX + 22, y: roi.minY + 22))
+            }
 
             // Tutamaçlar
             if editable {
@@ -114,12 +122,37 @@ struct OverlayView: View {
     private func handleCandidates() -> [(Handle, CGPoint)] {
         let roi = viewRect(profile.roi)
         let (a, b) = lineEndpoints(roi)
-        let line = (Handle.line, CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
+        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        let lineHandles: [(Handle, CGPoint)] = profile.countLine == nil
+            ? [(.line, mid)]
+            : [(.lineA, a), (.lineB, b), (.lineMid, mid)]
         guard let poly = profile.roiPolygon else {
             return [(.topLeft, CGPoint(x: roi.minX, y: roi.minY)),
-                    (.bottomRight, CGPoint(x: roi.maxX, y: roi.maxY)), line]
+                    (.bottomRight, CGPoint(x: roi.maxX, y: roi.maxY))] + lineHandles
         }
-        return poly.enumerated().map { (Handle.vertex($0.offset), viewPoint($0.element.x, $0.element.y)) } + [line]
+        return poly.enumerated().map { (Handle.vertex($0.offset), viewPoint($0.element.x, $0.element.y)) } + lineHandles
+    }
+
+    /// Akış oku: çizginin ortasından, a→b'nin sağ eli yönünde (ekranda en-boy korunur, dik görünür)
+    private func flowArrow(_ a: CGPoint, _ b: CGPoint) -> Path {
+        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        let len = max(1, hypot(b.x - a.x, b.y - a.y))
+        let n = CGPoint(x: -(b.y - a.y) / len, y: (b.x - a.x) / len)
+        let tip = CGPoint(x: mid.x + n.x * 34, y: mid.y + n.y * 34)
+        let back = CGPoint(x: tip.x - n.x * 12, y: tip.y - n.y * 12)
+        let side = CGPoint(x: -n.y * 8, y: n.x * 8)
+        var path = Path()
+        path.move(to: CGPoint(x: mid.x + n.x * 14, y: mid.y + n.y * 14))
+        path.addLine(to: tip)
+        path.move(to: CGPoint(x: back.x + side.x, y: back.y + side.y))
+        path.addLine(to: tip)
+        path.addLine(to: CGPoint(x: back.x - side.x, y: back.y - side.y))
+        return path
+    }
+
+    /// Görüntünün en-boy oranı (açılı çizginin akış yönü bununla hesaplanır)
+    private var aspect: Double {
+        fitRect.height > 0 ? Double(fitRect.width / fitRect.height) : 1
     }
 
     private func midpointCandidates() -> [(Handle, CGPoint)] {
@@ -144,11 +177,32 @@ struct OverlayView: View {
     private var dragGesture: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                if activeHandle == nil { activeHandle = pickHandle(value.startLocation) }
+                if activeHandle == nil {
+                    activeHandle = pickHandle(value.startLocation)
+                    dragStartLine = profile.countLine
+                }
                 guard let h = activeHandle else { return }
                 let p = normPoint(value.location)
                 var r = profile.roi
                 switch h {
+                case .lineA, .lineB:
+                    guard var cl = profile.countLine else { return }
+                    let q = NormPoint(x: Double(p.x), y: Double(p.y))
+                    if h == .lineA { cl.a = q } else { cl.b = q }
+                    // Uçlar üst üste binmesin (yön tanımsız kalır)
+                    guard hypot((cl.b.x - cl.a.x) * aspect, cl.b.y - cl.a.y) > 0.05 else { return }
+                    profile.setCountLine(cl, aspect: aspect)
+                    return
+                case .lineMid:
+                    guard let start = dragStartLine, fitRect.width > 0, fitRect.height > 0 else { return }
+                    var dx = Double(value.translation.width / fitRect.width)
+                    var dy = Double(value.translation.height / fitRect.height)
+                    // Çizgi görüntünün içinde kalsın
+                    dx = min(max(dx, -min(start.a.x, start.b.x)), 1 - max(start.a.x, start.b.x))
+                    dy = min(max(dy, -min(start.a.y, start.b.y)), 1 - max(start.a.y, start.b.y))
+                    profile.setCountLine(CountLine(a: NormPoint(x: start.a.x + dx, y: start.a.y + dy),
+                                                   b: NormPoint(x: start.b.x + dx, y: start.b.y + dy)), aspect: aspect)
+                    return
                 case .vertex(let i):
                     guard var poly = profile.roiPolygon, poly.indices.contains(i) else { return }
                     poly[i] = NormPoint(x: Double(p.x), y: Double(p.y))
@@ -181,7 +235,10 @@ struct OverlayView: View {
                 let hi = profile.direction.isVertical ? r.maxY : r.maxX
                 profile.linePosition = clamp(profile.linePosition, lo + 0.02, hi - 0.02)
             }
-            .onEnded { _ in activeHandle = nil }
+            .onEnded { _ in
+                activeHandle = nil
+                dragStartLine = nil
+            }
     }
 
     private func pickHandle(_ pt: CGPoint) -> Handle? {
@@ -191,6 +248,10 @@ struct OverlayView: View {
         let candidates = handleCandidates() + midpointCandidates()
         let best = candidates.min { dist($0.1, pt) < dist($1.1, pt) }
         if let best, dist(best.1, pt) < 44 { return best.0 }
+        if profile.countLine != nil {
+            // Açılı çizginin herhangi bir yerinden tutmak: bütün olarak taşı
+            return distanceToSegment(pt, a, b) < 24 ? .lineMid : nil
+        }
         // Çizginin görünen parçasının herhangi bir yerinden tutmak
         let onLine = profile.direction.isVertical
             ? abs(pt.y - a.y) < 30 && pt.x >= min(a.x, b.x) - 20 && pt.x <= max(a.x, b.x) + 20
@@ -218,9 +279,20 @@ struct OverlayView: View {
                        y: clamp((p.y - fitRect.minY) / fitRect.height, 0, 1))
     }
 
-    /// Sayım çizgisinin ekrandaki uçları. Çokgende çizgi yalnızca çokgenin içinde kalan parçadır (tutamaç onun ortası);
-    /// çizgi çokgeni kesmiyorsa sınır kutusu boyunca çizilir.
+    private func distanceToSegment(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let ab = CGPoint(x: b.x - a.x, y: b.y - a.y)
+        let len2 = ab.x * ab.x + ab.y * ab.y
+        guard len2 > 0 else { return dist(p, a) }
+        let t = max(0, min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2))
+        return dist(p, CGPoint(x: a.x + ab.x * t, y: a.y + ab.y * t))
+    }
+
+    /// Sayım çizgisinin ekrandaki uçları. Açılı çizgide kullanıcının belirlediği uçlar. Çokgende düz çizgi yalnızca
+    /// çokgenin içinde kalan parçadır (tutamaç onun ortası); çizgi çokgeni kesmiyorsa sınır kutusu boyunca çizilir.
     private func lineEndpoints(_ roi: CGRect) -> (CGPoint, CGPoint) {
+        if let cl = profile.countLine {
+            return (viewPoint(cl.a.x, cl.a.y), viewPoint(cl.b.x, cl.b.y))
+        }
         let pos = Double(profile.linePosition)
         if let span = polygonSpan(at: pos) {
             return profile.direction.isVertical

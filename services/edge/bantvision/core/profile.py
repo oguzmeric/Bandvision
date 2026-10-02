@@ -62,6 +62,8 @@ class Profile:
     roi: Roi = field(default_factory=Roi)
     # İsteğe bağlı çokgen ROI (algoritma §2.0): normalize köşeler; roi bunun sınır kutusudur
     roiPolygon: list[tuple[float, float]] | None = None
+    # İsteğe bağlı açılı sayım çizgisi (algoritma §4.8): (a, b); akış a→b'nin sağ eli
+    countLine: tuple[tuple[float, float], tuple[float, float]] | None = None
     linePosition: float = 0.5
     direction: str = "down"
     diffThreshold: int = 25
@@ -104,6 +106,9 @@ class Profile:
             p.roi = Roi(**d["roi"])
         if d.get("roiPolygon"):
             p.roiPolygon = [(float(pt["x"]), float(pt["y"])) for pt in d["roiPolygon"]]
+        if d.get("countLine"):
+            cl = d["countLine"]
+            p.countLine = ((float(cl["a"]["x"]), float(cl["a"]["y"])), (float(cl["b"]["x"]), float(cl["b"]["y"])))
         src = d.get("source") or {}
         p.rotation = int(src.get("rotation", 0))
         p.referenceFps = float(src.get("referenceFps", 60.0))
@@ -139,6 +144,9 @@ class Profile:
         }
         if self.roiPolygon:
             d["roiPolygon"] = [{"x": x, "y": y} for x, y in self.roiPolygon]
+        if self.countLine:
+            (ax, ay), (bx, by) = self.countLine
+            d["countLine"] = {"a": {"x": ax, "y": ay}, "b": {"x": bx, "y": by}}
         return d
 
     def set_polygon(self, points: list[tuple[float, float]] | None) -> None:

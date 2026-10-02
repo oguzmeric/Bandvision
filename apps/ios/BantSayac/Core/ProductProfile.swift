@@ -36,6 +36,12 @@ struct NormPoint: Codable, Equatable, Hashable {
     var y: Double
 }
 
+/// Açılı sayım çizgisi (algoritma §4.8): akış, a'dan b'ye yürürken sağ el tarafıdır.
+struct CountLine: Codable, Equatable, Hashable {
+    var a: NormPoint
+    var b: NormPoint
+}
+
 /// Bir ürün tipi için tüm kalibrasyon ve algılama parametreleri.
 /// Konum/alan değerleri normalize: 0...1 (görüntü boyutu ya da toplam alan oranı).
 struct ProductProfile: Codable, Identifiable, Equatable {
@@ -45,6 +51,8 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     var roi: CGRect
     /// İsteğe bağlı çokgen ROI (algoritma §2.0, 3–12 köşe). nil = dikdörtgen. Eski kayıtlarda yok → nil.
     var roiPolygon: [NormPoint]? = nil
+    /// İsteğe bağlı açılı sayım çizgisi (§4.8). Varsa `direction`/`linePosition` sayımda kullanılmaz.
+    var countLine: CountLine? = nil
     /// Sayım çizgisi; akış eksenindeki normalize konum.
     var linePosition: CGFloat
     var direction: FlowDirection
@@ -90,6 +98,35 @@ extension ProductProfile {
         let lo = direction.isVertical ? roi.minY : roi.minX
         let hi = direction.isVertical ? roi.maxY : roi.maxX
         linePosition = min(max(linePosition, lo + 0.02), max(lo + 0.02, hi - 0.02))
+    }
+
+    /// Açılı çizgiyi ayarlar; `direction` akışa en yakın eksene güncellenir (uyumluluk, ekrandaki ok).
+    /// `aspect`: görüntü genişliği / yüksekliği. nil → düz çizgiye dön (çizginin ortası `linePosition` olur).
+    mutating func setCountLine(_ line: CountLine?, aspect: Double) {
+        guard let line else {
+            if let old = countLine {
+                let mid = direction.isVertical ? (old.a.y + old.b.y) / 2 : (old.a.x + old.b.x) / 2
+                let lo = direction.isVertical ? roi.minY : roi.minX
+                let hi = direction.isVertical ? roi.maxY : roi.maxX
+                linePosition = min(max(CGFloat(mid), lo + 0.02), max(lo + 0.02, hi - 0.02))
+            }
+            countLine = nil
+            return
+        }
+        let clamp = { (p: NormPoint) in NormPoint(x: min(max(p.x, 0), 1), y: min(max(p.y, 0), 1)) }
+        countLine = CountLine(a: clamp(line.a), b: clamp(line.b))
+        direction = LineFrame.nearestDirection(a: line.a, b: line.b, aspect: aspect)
+    }
+
+    /// Düz çizgiden açılı çizgiye geçerken başlangıç: aynı çizgi, aynı akış yönü (sağ el kuralıyla).
+    var straightCountLine: CountLine {
+        let p = Double(linePosition)
+        switch direction {
+        case .down: return CountLine(a: NormPoint(x: roi.minX, y: p), b: NormPoint(x: roi.maxX, y: p))
+        case .up: return CountLine(a: NormPoint(x: roi.maxX, y: p), b: NormPoint(x: roi.minX, y: p))
+        case .right: return CountLine(a: NormPoint(x: p, y: roi.maxY), b: NormPoint(x: p, y: roi.minY))
+        case .left: return CountLine(a: NormPoint(x: p, y: roi.minY), b: NormPoint(x: p, y: roi.maxY))
+        }
     }
 
     /// Dikdörtgenin dört köşesi (çokgen düzenlemeye başlangıç)

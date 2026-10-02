@@ -66,8 +66,10 @@ final class BlobTracker {
         tracks.map { TrackMarker(id: $0.id, x: $0.x, y: $0.y, counted: $0.countedSoFar > 0) }
     }
 
+    /// `bounds`: silme sınırı (x0, x1, y0, y1); açılı çizgide çizgi çerçevesinin sınırları (§4.8).
     func update(blobs: [Blob], direction: FlowDirection, line: Double,
-                maxDistance: Double, minHits: Int, maxMissed: Int = 6) -> [CountEvent] {
+                maxDistance: Double, minHits: Int, maxMissed: Int = 6,
+                bounds: (x0: Double, x1: Double, y0: Double, y1: Double) = (-0.1, 1.1, -0.1, 1.1)) -> [CountEvent] {
         let s = direction.sign
         func axis(_ x: Double, _ y: Double) -> Double { direction.isVertical ? y : x }
         var events: [CountEvent] = []
@@ -88,13 +90,13 @@ final class BlobTracker {
                     let m = max(1, roundHalfEven(mean))
                     t.countedSoFar = m
                     events.append(CountEvent(delta: m, isFirstCrossing: true, medianArea: median(t.areaHistory),
-                                             trackId: t.id, bbox: blob.bbox))
+                                             trackId: t.id, bbox: blob.sourceBBox ?? blob.bbox))
                 }
             } else {
                 let recent = t.multHistory.suffix(3)
                 if recent.count == 3, let low = recent.min(), low > t.countedSoFar {
                     events.append(CountEvent(delta: low - t.countedSoFar, isFirstCrossing: false, medianArea: 0,
-                                             trackId: t.id, bbox: blob.bbox))
+                                             trackId: t.id, bbox: blob.sourceBBox ?? blob.bbox))
                     t.countedSoFar = low
                 }
             }
@@ -206,7 +208,7 @@ final class BlobTracker {
             tracks[i].y += tracks[i].vy
         }
         tracks.removeAll {
-            $0.missed > maxMissed || $0.x < -0.1 || $0.x > 1.1 || $0.y < -0.1 || $0.y > 1.1
+            $0.missed > maxMissed || $0.x < bounds.x0 || $0.x > bounds.x1 || $0.y < bounds.y0 || $0.y > bounds.y1
         }
 
         // §4.7 Yeni izler: bant hızıyla başlar

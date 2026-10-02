@@ -22,12 +22,14 @@
     "roiPolygon": {
       "description": "İsteğe bağlı çokgen ROI (algoritma §2.0). Varsa maske = roi dikdörtgeni ∩ çokgen; roi çokgenin sınır kutusudur.",
       "type": "array", "minItems": 3, "maxItems": 12,
-      "items": {
-        "type": "object", "required": ["x", "y"], "additionalProperties": false,
-        "properties": {
-          "x": { "type": "number", "minimum": 0, "maximum": 1 },
-          "y": { "type": "number", "minimum": 0, "maximum": 1 }
-        }
+      "items": { "$ref": "#/$defs/point" }
+    },
+    "countLine": {
+      "description": "İsteğe bağlı açılı sayım çizgisi (algoritma §4.8). Akış, a'dan b'ye yürürken sağ el tarafıdır. Varsa direction/linePosition sayımda kullanılmaz.",
+      "type": "object", "required": ["a", "b"], "additionalProperties": false,
+      "properties": {
+        "a": { "$ref": "#/$defs/point" },
+        "b": { "$ref": "#/$defs/point" }
       }
     },
     "linePosition": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -110,6 +112,15 @@
                           "widthMs": { "type": "integer", "minimum": 5, "maximum": 2000 },
                           "latencyCompensationMs": { "type": "integer" } }
         }
+      }
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "object", "required": ["x", "y"], "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
       }
     }
   }

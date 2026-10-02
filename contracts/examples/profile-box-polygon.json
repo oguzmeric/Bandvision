@@ -2,13 +2,40 @@
   "schema": "bantvision.profile.v1",
   "id": "2d9b7f40-5c1e-4a8b-9f63-7a1e0c4d2b58",
   "name": "Koli (eğik bant)",
-  "roi": { "x": 0.12, "y": 0.05, "width": 0.7, "height": 0.9 },
+  "roi": {
+    "x": 0.12,
+    "y": 0.05,
+    "width": 0.7,
+    "height": 0.9
+  },
   "roiPolygon": [
-    { "x": 0.30, "y": 0.05 },
-    { "x": 0.82, "y": 0.05 },
-    { "x": 0.64, "y": 0.95 },
-    { "x": 0.12, "y": 0.95 }
+    {
+      "x": 0.3,
+      "y": 0.05
+    },
+    {
+      "x": 0.82,
+      "y": 0.05
+    },
+    {
+      "x": 0.64,
+      "y": 0.95
+    },
+    {
+      "x": 0.12,
+      "y": 0.95
+    }
   ],
+  "countLine": {
+    "a": {
+      "x": 0.12,
+      "y": 0.62
+    },
+    "b": {
+      "x": 0.78,
+      "y": 0.38
+    }
+  },
   "linePosition": 0.5,
   "direction": "down",
   "diffThreshold": 24,

@@ -60,6 +60,12 @@ Eğik bant ya da kenarda insan/makine hareketi varsa dikdörtgen ROI fazlasını
 - `ProductProfile.roiPolygon: [NormPoint]?` (sözleşmedeki `{x, y}` biçimi; eski kayıtlarda yok → dikdörtgen). `setPolygon` `roi`'yi sınır kutusu yapar ve sayım çizgisini kutunun içine çeker.
 - `BackgroundSegmenter.roiMask`: §2.0 kuralı (piksel merkezi, çift-tek), önbellekli; eşik ve boş bant öğrenmesinin yüzdeliği yalnızca maske içinde. Python `roi_mask` ile aynı pikseller: `BantSayacTests/RoiPolygonTests` ↔ `services/edge/tests/test_roi_polygon.py` aynı sayıları doğrular.
 
+## 1i. Açılı sayım çizgisi
+Eğik bakan IP/CCTV kamerada bant görüntüde çapraz akar. Kalibre panelinde **Sayım çizgisi: Düz | Açılı** (algoritma §4.8, sözleşme `countLine`).
+- Açılıya geçince düz çizgi aynı yerde ve aynı akış yönüyle açılı çizgiye dönüşür (`straightCountLine`). Uçlar ayrı sürüklenir, ortadan tutulunca bütün taşınır; turuncu ok akışı gösterir (a→b'nin sağ eli), **Yönü çevir** uçları değiştirir. `direction` akışa en yakın eksene güncellenir (uyumluluk).
+- `Vision/LineFrame.swift`: çerçeve (Python `lineframe.py` ile aynı işlem sırası); segmentasyon açılı çizgide her bileşenin çerçeve kutusunu piksellerden hesaplar (`frameBBox`); izleyici çerçevede "aşağı, çizgi 0" ile çalışır; iz işaretleri ekrana geri çevrilir; sayım kırpıntısı görüntüdeki özgün kutudan (`sourceBBox`).
+- Eşdeğerlik: `BantSayacTests/LineFrameTests` ↔ `services/edge/tests/test_angled_line.py`.
+
 ## 1f. Görünüm yakınlaştırma
 Kamera alanında iki parmakla 1×–6× yakınlaştırma, yakınken tek parmakla kaydırma, çift dokunuşla sıfırlama. Görüntü, maske ve ROI/çizgi/izler birlikte ölçeklenir. Yalnızca görünümdür; sayım tam kare üzerinden sürer. Kalibrasyonda tek parmak ROI'yi sürüklediği için kaydırma kapalıdır. Ekran karesi (video/ağ kamerası) ayrı kuyrukta üretilir; sayım ekranı beklemez.
 

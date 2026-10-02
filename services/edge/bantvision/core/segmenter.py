@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from .profile import Roi
+
+if TYPE_CHECKING:
+    from .lineframe import LineFrame
 
 _K3 = np.ones((3, 3), np.uint8)
 # §2.4: ürün altındaki arka plan güncelleme katsayısı (yoğun akışta kaymayı önlemek için çok küçük)
@@ -22,6 +26,8 @@ class Blob:
     area: float                               # normalize
     label: int                                # bileşen etiketi (QC için)
     multiplicity: int = 1
+    # §4.8: açılı çizgide bileşenin çizgi çerçevesindeki kutusu (v0, u0, genişlik, yükseklik), piksellerden
+    frame_bbox: tuple[float, float, float, float] | None = None
 
 
 def downsample(gray: np.ndarray, processing_width: int) -> tuple[np.ndarray, int]:
@@ -122,7 +128,7 @@ class BackgroundSegmenter:
         return int(np.searchsorted(cum, target))
 
     def segment(self, gray: np.ndarray, roi: Roi, threshold: int, close_iterations: int,
-                rate: float, polygon: Polygon | None = None) -> list[Blob]:
+                rate: float, polygon: Polygon | None = None, line_frame: LineFrame | None = None) -> list[Blob]:
         self._ensure(gray)
         if self.bg is None:
             self.bg = gray.astype(np.float32)
@@ -148,9 +154,29 @@ class BackgroundSegmenter:
         n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
         self.mask, self.labels = mask, labels
         total = float(w * h)
+        frame_boxes = _frame_boxes(labels, n, w, h, line_frame) if line_frame is not None and n > 1 else None
         blobs: list[Blob] = []
         for i in range(1, n):
             bx, by, bw, bh, area = stats[i]
             blobs.append(Blob(cx=float(cents[i][0]) / w, cy=float(cents[i][1]) / h,
-                              bbox=(bx / w, by / h, bw / w, bh / h), area=area / total, label=i))
+                              bbox=(bx / w, by / h, bw / w, bh / h), area=area / total, label=i,
+                              frame_bbox=frame_boxes[i] if frame_boxes is not None else None))
         return blobs
+
+
+def _frame_boxes(labels: np.ndarray, n: int, w: int, h: int,
+                 lf: LineFrame) -> list[tuple[float, float, float, float]]:
+    """§4.8: her bileşenin piksel merkezlerinin çizgi çerçevesindeki kapsamı + yarım piksel (Swift ile aynı sıra)."""
+    ys, xs = np.nonzero(labels)
+    lab = labels[ys, xs]
+    rx = (xs + 0.5) / w * lf.alpha - lf.ax
+    ry = (ys + 0.5) / h - lf.ay
+    v = rx * lf.dx + ry * lf.dy
+    u = rx * lf.nx + ry * lf.ny
+    v0 = np.full(n, np.inf); v1 = np.full(n, -np.inf)
+    u0 = np.full(n, np.inf); u1 = np.full(n, -np.inf)
+    np.minimum.at(v0, lab, v); np.maximum.at(v1, lab, v)
+    np.minimum.at(u0, lab, u); np.maximum.at(u1, lab, u)
+    pad = 0.5 / h
+    return [(float(v0[i] - pad), float(u0[i] - pad), float(v1[i] - v0[i] + 2 * pad), float(u1[i] - u0[i] + 2 * pad))
+            for i in range(n)]

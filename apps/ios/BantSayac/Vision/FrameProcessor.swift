@@ -82,6 +82,8 @@ final class FrameProcessor: @unchecked Sendable {
     private var lastPublish: CFTimeInterval = 0
     /// İz kimliği → sayım sıra numarası (yalnızca `queue` üzerinde); iz silinince budanır
     private var countLabels: [Int: String] = [:]
+    /// §4.8: son karede kullanılan çizgi çerçevesi (iz işaretlerini görüntüye geri çevirmek için)
+    private var lineFrame: LineFrame?
     // Ölçüm (üssel ortalama, ms)
     private var perfGap = 0.0, perfCore = 0.0, perfImage = 0.0
     private var perfLastEnd: CFTimeInterval = 0
@@ -196,11 +198,14 @@ final class FrameProcessor: @unchecked Sendable {
         if case .sample = calib { learningSample = true }
         let expected = learningSample ? 0 : profile.expectedArea
 
+        let lf = profile.countLine.flatMap { LineFrame.build(a: $0.a, b: $0.b, width: frame.width, height: frame.height) }
+        lineFrame = lf
         let raw = segmenter.segment(frame, roi: profile.roi, polygon: profile.roiPolygon,
                                     threshold: profile.diffThreshold,
                                     closeIterations: profile.closeIterations,
                                     backgroundRate: Float(rate),
-                                    keepMask: showMask)
+                                    keepMask: showMask,
+                                    lineFrame: lf)
         let minArea = expected > 0 ? expected * profile.minAreaFactor : profile.minAreaAbs
         var blobs = raw.filter { $0.area >= minArea }
 
@@ -213,12 +218,24 @@ final class FrameProcessor: @unchecked Sendable {
             }
         }
 
-        let events = tracker.update(blobs: blobs,
+        let events: [CountEvent]
+        if let lf {
+            // §4.8: lekeler çizgi çerçevesine; izleyici "aşağı akış, çizgi 0" ile aynen çalışır
+            events = tracker.update(blobs: blobs.map(lf.blob),
+                                    direction: .down,
+                                    line: 0,
+                                    maxDistance: maxDist,
+                                    minHits: profile.minHits,
+                                    maxMissed: maxMissed,
+                                    bounds: (lf.bounds.v0, lf.bounds.v1, lf.bounds.u0, lf.bounds.u1))
+        } else {
+            events = tracker.update(blobs: blobs,
                                     direction: profile.direction,
                                     line: Double(profile.linePosition),
                                     maxDistance: maxDist,
                                     minHits: profile.minHits,
                                     maxMissed: maxMissed)
+        }
         if !events.isEmpty { handle(events, pixelBuffer: pixelBuffer) }
         publish(frame: frame, blobs: blobs, pixelBuffer: pixelBuffer)
         if let pb = pixelBuffer { emitDisplayImage(pb, sourceWidth: frame.sourceWidth) }
@@ -326,6 +343,15 @@ final class FrameProcessor: @unchecked Sendable {
 
     // MARK: - Yardımcılar
 
+    /// İz işaretleri görüntü koordinatında (açılı çizgide çerçeveden geri çevrilir)
+    private func displayMarkers() -> [TrackMarker] {
+        guard let lf = lineFrame else { return tracker.markers }
+        return tracker.markers.map {
+            let p = lf.toImage($0.x, $0.y)
+            return TrackMarker(id: $0.id, x: p.x, y: p.y, counted: $0.counted)
+        }
+    }
+
     private func updateSourceFPS(_ ts: Double) -> Double {
         if let last = lastTs {
             if ts <= last { backwardsTs += 1 } else { maxGapMs = max(maxGapMs, (ts - last) * 1000) }
@@ -364,7 +390,7 @@ final class FrameProcessor: @unchecked Sendable {
             maskImage = Self.makeMaskImage(m, w: frame.width, h: frame.height)
         }
         var snap = EngineSnapshot(frameSize: CGSize(width: frame.sourceWidth, height: frame.sourceHeight),
-                                  blobs: blobs, tracks: tracker.markers, fps: fps, mask: maskImage,
+                                  blobs: blobs, tracks: displayMarkers(), fps: fps, mask: maskImage,
                                   perf: String(format: "bekleme %.0f ms · çekirdek %.0f ms · ekran %.0f ms · en uzun aralık %.0f ms · geri giden %d · kaynak fps %.1f · son ts %.2f",
                                                perfGap, perfCore, perfImage, maxGapMs, backwardsTs, sourceFps, lastTs ?? -1))
         // Ekrandan çıkan izlerin numaraları atılır (sözlük büyümesin)

@@ -60,6 +60,20 @@ Her karede, tahmini konum `p̂ = konum + v`:
 
 **Neden:** Birbirine hafifçe değen yumurtalar kareden kareye bir birleşik (×2) bir ayrık görünür. Bu kurallar olmadan 100 yumurtalık render videoda 110 sayılıyordu (her birleşmede yeni iz doğuyor, izler lekeden kopuyordu). Testler: `test_synthetic.py::flicker_pairs`, `test_rendered.py`.
 
+Silme sınırı (6. adım) varsayılan olarak her iki eksende `[−0.1, 1.1]`; §4.8'de çizgi çerçevesinin sınırları kullanılır.
+
+### 4.8 Açılı sayım çizgisi (`countLine`)
+Profilde `countLine = {a, b}` (normalize uçlar) varsa sayım çizgisi bu doğrudur; `direction` ve `linePosition` sayımda kullanılmaz. Eksik ise davranış yukarıdakinin aynısıdır.
+- **Akış yönü:** a'dan b'ye yürürken **sağ el** tarafı (görüntü koordinatları, y aşağı). a→b soldan sağa ise akış aşağı; yönü ters çevirmek uçları değiştirmektir.
+- **Eş ölçekli koordinat:** `α = w / h` (işleme karesi, §1.3 sonrası). Normalize nokta `(x, y)` → `q = (x·α, y)` (birim: kare yüksekliği; açılar kare olmayan karede de doğru).
+- **Çerçeve:** `A = q(a)`, `B = q(b)`, `L = ‖B − A‖` (`L < 1e-6` ise `countLine` yok sayılır), `d = (B − A)/L`, `n = (−d.y, d.x)`. Nokta için `r = q(x, y) − A`, `v = r·d` (çizgi boyunca), `u = r·n` (akış yönünde; çizgi `u = 0`).
+- **İzleyiciye verilen leke:** merkez = ağırlık merkezinin (§2.6) `(v, u)`'su; alan ve çarpan aynı. **Kutu doğrudan piksellerden:** bileşenin her pikselinin merkezi `((i + 0.5)/w, (j + 0.5)/h)` çerçeveye çevrilir, `v` ve `u`'nun en küçük/en büyüğü alınır ve her yöne yarım piksel (`0.5/h`, eş ölçekli birimde bir piksel `1/h`) eklenir. (Görüntüdeki eksen hizalı kutunun köşelerini çevirmek kutuyu iki kez şişirir; değip ayrılan çiftlerde birleşik grup kuralını bozar: 45–60°'de 20 yerine 22.) İzleyici `down` yönü (`s = +1`) ve `line = 0` ile çalışır; `maxDistEff` ve `MERGE_MARGIN` aynı (birim artık kare yüksekliği).
+- **Silme sınırı:** görüntünün 4 köşesinin `(v, u)`'daki en küçük/en büyük değerleri `± 0.1`.
+- **Geri dönüşüm** (ekrandaki iz işaretleri): `q = A + v·d + u·n`, `x = q.x / α`, `y = q.y`. Sayım olayının kutusu (QC kırpıntısı) görüntüdeki **özgün** lekenin kutusudur.
+- **Hız (§9):** bant hızı `|v_u|` ile, `span = kare yüksekliği` alınarak hesaplanır.
+- Doğru sonsuzdur (ROI maskesi zaten yalnızca alandaki lekeleri bırakır); arayüz yalnızca alan içindeki parçayı çizer.
+- **Doğrulama:** `test_angled_line.py` — 30°, 45°, 60°, 135°, 160°'de tek sıra ve arka arkaya bitişik çiftler tam; yatay `countLine` eski "aşağı, 0.5" ile aynı sayar. **Bilinen sınır:** değip ayrılan çiftler (`flicker_pairs`) döndürülmüş sahnede 30°/60°'de 20 yerine 21–24 sayılabiliyor; **düz çizgide de aynı** sapma çıkar (izleyicinin birleşik grup kuralının genel sınırı, §4.0), açılı çizgiden kaynaklanmaz. İyileştirme ayrı iş.
+
 ## 5. Kalibrasyon
 **Boş bant öğrenme** (`backgroundSeconds = 1.0`, `N = round(fps · 1.0)`, en az 15 kare):
 - 0. kare: `bg = gray`. Sonrakiler: `bg += 0.15·(gray − bg)` (koşulsuz).

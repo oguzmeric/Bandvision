@@ -14,6 +14,7 @@ Bir ürün tipinin tüm kalibrasyon ve QC ayarları. iOS'ta da edge'de de aynı 
 | `roi` | `{x,y,width,height}` | Döndürülmüş (dik) görüntüde ilgi alanı |
 | `roiPolygon` | `[{x,y}]`, 3–12 köşe, isteğe bağlı | Çokgen ilgi alanı (eğik bant, kenarda hareket). Varsa maske = `roi` ∩ çokgen ve `roi` çokgenin sınır kutusudur (algoritma §2.0). Yoksa davranış eskisi gibi |
 | `linePosition` | 0–1 | Sayım çizgisinin akış eksenindeki konumu |
+| `countLine` | `{a:{x,y}, b:{x,y}}`, isteğe bağlı | Açılı sayım çizgisi (algoritma §4.8). Akış, a'dan b'ye yürürken sağ el tarafı. Varsa `direction`/`linePosition` sayımda kullanılmaz (uyumluluk için yine yazılır: akışa en yakın eksen) |
 | `direction` | `down/up/right/left` | Akış yönü |
 | `diffThreshold` | 5–120 | Arka plan farkı eşiği (gri seviye) |
 | `expectedArea` | ≥0 | Tek ürün normalize alanı; 0 = örnek kalibrasyonu yok |

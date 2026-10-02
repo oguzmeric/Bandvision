@@ -33,6 +33,8 @@ class Scenario:
     noise: float = 3.0
     extra_seconds: float = 0.6
     seed: int = 1
+    # Akış açısı (derece, görüntü koordinatı: 90 = aşağı, 0 = sağa). Bant görüntü merkezi etrafında döndürülür.
+    angle_deg: float = 90.0
     expected_count: int = field(init=False)
 
     def __post_init__(self) -> None:
@@ -43,23 +45,34 @@ class Scenario:
         far = max(-it.start_y for it in self.items) + self.height + 200
         return int((far / self.speed_px_s + self.extra_seconds) * self.fps)
 
+    def _place(self, bx: float, by: float) -> tuple[int, int]:
+        """Bant koordinatı (x, akış) → görüntü pikseli (merkez etrafında `angle_deg - 90` döndürülmüş)."""
+        if self.angle_deg == 90.0:                       # döndürme yok: eski görüntülerle piksel piksel aynı
+            return int(bx), int(by)
+        phi = math.radians(self.angle_deg - 90.0)
+        cx, cy = self.width / 2, self.height / 2
+        dx, dy = bx - cx, by - cy
+        return int(cx + dx * math.cos(phi) - dy * math.sin(phi)), int(cy + dx * math.sin(phi) + dy * math.cos(phi))
+
     def frames(self):
         """(gri kare, zaman damgası) üretir."""
         rng = np.random.default_rng(self.seed)
+        tilt = self.angle_deg - 90.0
         for k in range(self.n_frames):
             t = k / self.fps
             img = np.full((self.height, self.width), float(self.belt), np.float32)
             img += rng.normal(0, self.noise, img.shape).astype(np.float32)
             for it in self.items:
                 y = it.start_y + t * self.speed_px_s + it.wobble * math.sin(2 * math.pi * it.wobble_hz * t)
-                if -it.ry * 1.2 < y < self.height + it.ry * 1.2:
-                    c = (int(it.x), int(y))
-                    cv2.ellipse(img, c, (int(it.rx), int(it.ry)), 0, 0, 360, float(self.product), -1)
+                reach = max(self.width, self.height) * 0.6 + it.ry * 1.2   # döndürülmüş bantta görünürlük payı
+                if -reach < y < self.height + reach:
+                    c = self._place(it.x, y)
+                    cv2.ellipse(img, c, (int(it.rx), int(it.ry)), tilt, 0, 360, float(self.product), -1)
                     if it.spot:
-                        cv2.circle(img, (int(it.x + it.rx * 0.2), int(y - it.ry * 0.2)), int(it.rx * 0.22),
+                        cv2.circle(img, self._place(it.x + it.rx * 0.2, y - it.ry * 0.2), int(it.rx * 0.22),
                                    float(self.product - 90), -1)
                     if it.bite:
-                        cv2.circle(img, (int(it.x + it.rx * 0.95), int(y)), int(it.rx * 0.55),
+                        cv2.circle(img, self._place(it.x + it.rx * 0.95, y), int(it.rx * 0.55),
                                    float(self.belt), -1)
             yield np.clip(img, 0, 255).astype(np.uint8), t
 

@@ -8,6 +8,10 @@ struct Blob {
     var bbox: CGRect
     var area: Double
     var multiplicity: Int = 1
+    /// §4.8: açılı çizgide bileşenin çizgi çerçevesindeki kutusu (piksellerden)
+    var frameBBox: CGRect? = nil
+    /// §4.8: çerçeveye taşınan lekenin görüntüdeki özgün kutusu (sayım kırpıntısı için)
+    var sourceBBox: CGRect? = nil
 }
 
 struct PixelRect {
@@ -143,7 +147,7 @@ final class BackgroundSegmenter {
     }
 
     func segment(_ f: GrayFrame, roi: CGRect, polygon: [NormPoint]? = nil, threshold: Int, closeIterations: Int,
-                 backgroundRate: Float, keepMask: Bool) -> [Blob] {
+                 backgroundRate: Float, keepMask: Bool, lineFrame: LineFrame? = nil) -> [Blob] {
         ensureSize(f.width, f.height)
         if bg.isEmpty {
             bg = f.pixels.map { Float($0) }
@@ -195,7 +199,7 @@ final class BackgroundSegmenter {
         }
 
         lastMask = keepMask ? mask : nil
-        return components(in: r)
+        return components(in: r, lineFrame: lineFrame)
     }
 
     /// 3x3 erozyon / genişleme, sonuç mask'e yazılır.
@@ -228,7 +232,7 @@ final class BackgroundSegmenter {
     }
 
     /// 8-komşuluk bağlı bileşen etiketleme.
-    private func components(in r: PixelRect) -> [Blob] {
+    private func components(in r: PixelRect, lineFrame lf: LineFrame?) -> [Blob] {
         let w = width, h = height, n = w * h
         let m = mask
         var visited = [UInt8](repeating: 0, count: n)
@@ -245,10 +249,22 @@ final class BackgroundSegmenter {
                 stack.append(start)
                 var area = 0, sx = 0, sy = 0
                 var minX = x, maxX = x, minY = y, maxY = y
+                // §4.8: piksel merkezlerinin çizgi çerçevesindeki kapsamı (Python _frame_boxes ile aynı sıra)
+                var v0 = Double.infinity, v1 = -Double.infinity, u0 = Double.infinity, u1 = -Double.infinity
 
                 while let p = stack.popLast() {
                     let px = p % w, py = p / w
                     area += 1; sx += px; sy += py
+                    if let lf {
+                        let rx = (Double(px) + 0.5) / fw * lf.alpha - lf.ax
+                        let ry = (Double(py) + 0.5) / fh - lf.ay
+                        let v = rx * lf.dx + ry * lf.dy
+                        let u = rx * lf.nx + ry * lf.ny
+                        if v < v0 { v0 = v }
+                        if v > v1 { v1 = v }
+                        if u < u0 { u0 = u }
+                        if u > u1 { u1 = u }
+                    }
                     if px < minX { minX = px }
                     if px > maxX { maxX = px }
                     if py < minY { minY = py }
@@ -268,13 +284,18 @@ final class BackgroundSegmenter {
                     }
                 }
 
-                blobs.append(Blob(
+                var blob = Blob(
                     cx: Double(sx) / Double(area) / fw,
                     cy: Double(sy) / Double(area) / fh,
                     bbox: CGRect(x: Double(minX) / fw, y: Double(minY) / fh,
                                  width: Double(maxX - minX + 1) / fw,
                                  height: Double(maxY - minY + 1) / fh),
-                    area: Double(area) / Double(n)))
+                    area: Double(area) / Double(n))
+                if lf != nil {
+                    let pad = 0.5 / fh
+                    blob.frameBBox = CGRect(x: v0 - pad, y: u0 - pad, width: v1 - v0 + 2 * pad, height: u1 - u0 + 2 * pad)
+                }
+                blobs.append(blob)
             }
         }
         return blobs

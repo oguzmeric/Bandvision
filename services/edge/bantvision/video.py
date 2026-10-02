@@ -29,6 +29,7 @@ import cv2
 import numpy as np
 
 from .core import Pipeline, Profile
+from .core.lineframe import nearest_direction
 from .core.pipeline import FrameResult
 from .core.profile import Roi
 from .core.segmenter import downsample, roi_mask
@@ -298,7 +299,16 @@ def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float,
         cv2.polylines(frame, [pts], True, YELLOW, th)
     else:
         cv2.rectangle(frame, (x0, y0), (x1, y1), YELLOW, th)
-    if profile.vertical:
+    if profile.countLine:                       # §4.8 açılı çizgi + akış oku (a→b'nin sağ eli)
+        (ax, ay), (bx, by) = profile.countLine
+        pa, pb = (int(ax * w), int(ay * h)), (int(bx * w), int(by * h))
+        cv2.line(frame, pa, pb, ORANGE, th * 2, cv2.LINE_AA)
+        dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+        ln = max(1.0, math.hypot(dx, dy))
+        mid = ((pa[0] + pb[0]) // 2, (pa[1] + pb[1]) // 2)
+        tip = (int(mid[0] - dy / ln * 40 * s), int(mid[1] + dx / ln * 40 * s))
+        cv2.arrowedLine(frame, mid, tip, ORANGE, th * 2, cv2.LINE_AA, tipLength=0.35)
+    elif profile.vertical:
         ly = int(profile.linePosition * h)
         cv2.line(frame, (x0, ly), (x1, ly), ORANGE, th * 2)
     else:
@@ -411,6 +421,13 @@ def build_profile(a: argparse.Namespace) -> Profile:
     if a.roi:
         x, y, w, h = (float(v) for v in a.roi.split(","))
         p.roi = Roi(x, y, w, h)
+    if a.count_line:
+        vals = [float(v) for v in a.count_line.split(",")]
+        if len(vals) != 4 or not all(0 <= v <= 1 for v in vals):
+            raise SystemExit("--count-line biçimi: ax,ay,bx,by (0-1)")
+        p.countLine = ((vals[0], vals[1]), (vals[2], vals[3]))
+        # uyumluluk: direction akışa en yakın eksen (§4.8); yön tahmini atlanır
+        p.direction = nearest_direction(p.countLine[0], p.countLine[1], 1.0)
     if a.roi_polygon:
         pts = [tuple(float(v) for v in pair.split(",")) for pair in a.roi_polygon.split(";") if pair.strip()]
         if any(len(pt) != 2 for pt in pts):
@@ -441,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--profile", help="başlangıç profili (contracts/product-profile.schema.json)")
     ap.add_argument("--direction", choices=["down", "up", "right", "left"], help="vermezsen otomatik bulunur")
     ap.add_argument("--roi", help="x,y,genişlik,yükseklik (0-1), ör. 0.1,0.2,0.8,0.6")
+    ap.add_argument("--count-line", help="açılı sayım çizgisi ax,ay,bx,by (0-1); akış a→b'nin sağ eli")
     ap.add_argument("--roi-polygon", help="çokgen ROI köşeleri (0-1), ör. 0.3,0.05;0.8,0.05;0.65,0.95;0.1,0.95")
     ap.add_argument("--line", type=float, help="sayım çizgisi konumu (0-1, akış ekseninde)")
     ap.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
@@ -468,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     print("1/2 Kalibrasyon...")
     emit(stage="calibrating", seconds=round(info.duration, 2), fps=info.fps, width=info.width, height=info.height)
     bg_range = tuple(float(v) for v in a.bg_range.split(",")) if a.bg_range else None
-    cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction),
+    cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction) or profile.countLine is not None,
                     fixed_area=a.expected_area is not None or profile.expectedArea > 0,
                     bg_range=bg_range)  # type: ignore[arg-type]
     cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
