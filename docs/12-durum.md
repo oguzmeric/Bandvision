@@ -1,4 +1,4 @@
-# 12 — Durum Özeti (2026-10-01)
+# 12 — Durum Özeti (2026-10-02)
 
 Bu oturumda yapılan her şeyin toplu dökümü: ne bitti, nasıl doğrulandı, neler açık, sırada ne var.
 Repo: `github.com/oguzmeric/Bandvision` (özel). Ayrıntılar ilgili dokümanlarda; burası giriş noktası.
@@ -23,7 +23,9 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | 6 | İlk yükleme: uygulama derleniyor, açılıyor; ikon |
 | 7 | Yoğun akışta arka plan kayması düzeltmesi |
 | 8 | Bitişik ürünlerde birleşme/bölünme izleme, Swift yuvarlaması Python ile aynı |
-| **9** | **Video modu** (Fotoğraflar/Dosyalar'dan video sayımı) + §7 fps ölçeklemesi |
+| 9 | Video modu (Fotoğraflar/Dosyalar'dan video sayımı) + §7 fps ölçeklemesi |
+| 10 | Kullanıcı geri bildirimi: "Video ile test" sayfası (tepkisiz menü giderildi), oynatıcı (baştan, oynat/duraklat, zaman çubuğu, atlama), sayısal klavyede Tamam |
+| **11** | **Kalite kontrol A1**: sekmeler (Canlı · Genel bakış · Öğret · Ayarlar), ürün kartları, örnekle öğretme; düz videolarda kompozisyonsuz okuma; düğme yazıları bölünmüyor. **Uçtan uca UI testinden geçmeden yüklenmez.** |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
@@ -57,6 +59,13 @@ Gerçek video denemesi: Pexels'ten 4 video indirildi (`data/videos/`, repoda de�
 
 Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 test; hepsi CI'da yeşil.
 
+## 5b. Kalite kontrol A1 ve uçtan uca test (2026-10-02)
+
+- **Enao incelemesi** (ekran görüntüleri): kalite kontrolleri bulutta eğitilen nesne tespiti modeline dayanıyor (Full mode: kadrajı dolduran üründe kusur; Small mode: ürünleri tek tek). Bizim klasik hat Small mode'a karşılık geliyor. Karar: önce **A — cihazda, bulutsuz** (`04-ios-app.md` §1c), sonra **B — bulutlu etiketleme ve model eğitimi**.
+- **A1:** sekmeler; sayılan her ürünün kırpıntısı ve kartı (fotoğraf, Geçti/Kaldı, saat, kısa kimlik, güven %); profile özel kusur türleri; iyi/kusurlu örnek işaretleme; Vision feature print ile en yakın komşu kararı (eğitimsiz), yalnızca iyi örnekle anomali modu.
+- **Uçtan uca UI testi** (`04-ios-app.md` §1d): simülatörde 28 yumurtalık klip Swift çekirdeğiyle sayılıyor; sonuç Python referansıyla aynı (**28/28**). Swift tarafı ilk kez çalıştırılarak doğrulandı. TestFlight yüklemesi bu teste bağlı.
+- Test sırasında bulunanlar: CI'da video saniyede ~0,7 kare işleniyordu. Ölçüm: Debug derlemesi (optimizasyonsuz) ve GPU'suz sanal makine; test artık Release ile çalışıyor (çekirdek ~6 ms/kare). Ayrıca düz videolar için gereksiz kompozisyon kaldırıldı, ekran karesi küçültülerek üretiliyor, dar ekranda düğme yazılarının hecelenmesi giderildi, menüden açılan pencereler menü kapandıktan sonra açılıyor.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -71,9 +80,14 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
 - Swift `ProductProfile` hâlâ sözleşmenin alt kümesi (`source`, `qc`, `scale`, `io` yok; F1.1).
 - Yerel ortam notu: Windows'ta Python venv `%TEMP%\claude\venv-bv` altında; repoda `.venv` yok. `pip install -e ".[dev]"` ile kurulabilir.
 
+## 7b. Bilinen sınırlar (A1)
+- Örnekle öğretme, ürünün **genel görünümüne** bakar; çok küçük kusurlar (kılcal çatlak, tek saç teli) genel benzerlikte kaybolabilir. Bunlar için ölçüme dayalı kontrol (A2) ya da kutu etiketli model (B) gerekir.
+- Anomali eşiği (iyilerin tipik uzaklığının 1,8 katı) sahada ayarlanması gereken bir başlangıç değeri.
+- Kartlar ve istatistikler cihazda, son 50 ürün; panele gönderim F1.1/F3 ile.
+
 ## 8. Sırada
 
-1. Derleme 9'un telefonda denenmesi ve sonuca göre düzeltme.
-2. **Overview + Teach + kalite kontrol** (Enao görselindeki gibi: ürün kartları, Pass/Fail, güven %, iyi/kötü işaretleme). Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4) ve örnekle öğretme (F7.0).
+1. Derleme 11'in telefonda denenmesi: video oynatıcı, kartlar, öğretme.
+2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
