@@ -4,13 +4,12 @@ import pathlib
 
 import numpy as np
 import pytest
+from test_synthetic import calibrated_egg_profile, run
 
 from bantvision import sim
 from bantvision.core import Pipeline, Profile
 from bantvision.core.profile import Roi
 from bantvision.core.segmenter import BackgroundSegmenter, roi_mask, roi_pixels
-
-from test_synthetic import calibrated_egg_profile, run
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "examples" / "profile-box-polygon.json"
 # Orta şerit (x = 360/720 = 0.5) içeride; yan şeritler (150 ve 570) dışarıda. Eğik dörtgen.

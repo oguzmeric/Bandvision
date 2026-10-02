@@ -178,8 +178,8 @@ struct OverlayView: View {
 
     private func pickHandle(_ pt: CGPoint) -> Handle? {
         let roi = viewRect(profile.roi)
-        let (a, b) = lineEndpoints(roi)
-        // Köşeler ve çizgi önce; kenar ortası ancak onlardan biri yakında değilse
+        let (a, _) = lineEndpoints(roi)
+        // En yakın tutamaç: köşe, sayım çizgisi ya da kenar ortası (yeni köşe)
         let candidates = handleCandidates() + midpointCandidates()
         let best = candidates.min { dist($0.1, pt) < dist($1.1, pt) }
         if let best, dist(best.1, pt) < 44 { return best.0 }

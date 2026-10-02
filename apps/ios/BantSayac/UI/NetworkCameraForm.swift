@@ -54,10 +54,12 @@ struct NetworkCameraForm: View {
     @StateObject private var thumbnails = ChannelThumbnailLoader()
     @FocusState private var focused: Bool
 
-    init(vm: CountingViewModel) {
+    /// `initialKind`: sihirbazdan açılınca kamera ya da kayıt cihazı önceden seçili gelir
+    init(vm: CountingViewModel, initialKind: NetworkDeviceKind? = nil) {
         _vm = ObservedObject(wrappedValue: vm)
         // Başlangıç değerleri burada: onAppear'da atansaydı "cihaz değişti" kuralı kayıtlı kamera seçimini silerdi.
-        let c = vm.networkConfig
+        var c = vm.networkConfig
+        if let initialKind { c.kind = initialKind }
         _config = State(initialValue: c)
         _cameraPassword = State(initialValue: vm.storedPassword(for: .camera))
         _recorderPassword = State(initialValue: vm.storedPassword(for: .recorder))
