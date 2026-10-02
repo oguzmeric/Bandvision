@@ -18,6 +18,13 @@ struct RootView: View {
                 .tabItem { Label("Ayarlar", systemImage: "slider.horizontal.3") }
         }
         .preferredColorScheme(.dark)
+        #if DEBUG
+        .overlay(alignment: .top) {
+            if let message = vm.testHookError {
+                Text(message).font(.caption).padding(6).background(.red).accessibilityIdentifier("testHookError")
+            }
+        }
+        #endif
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             #if DEBUG

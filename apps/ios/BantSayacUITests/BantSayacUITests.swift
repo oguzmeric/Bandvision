@@ -25,7 +25,17 @@ final class BantSayacUITests: XCTestCase {
         app.launch()
 
         // 1) Video sonuna kadar sayılır, sayı referansla aynı olmalı
-        XCTAssertTrue(app.staticTexts["videoFinished"].waitForExistence(timeout: 300), "video bitmedi")
+        if !app.staticTexts["videoFinished"].waitForExistence(timeout: 300) {
+            // Teşhis: ekranda ne var (konum, hata metni, hangi sekme)
+            print("=== EKRAN (erişilebilirlik ağacı) ===")
+            print(app.debugDescription)
+            print("=== SON ===")
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.lifetime = .keepAlways
+            add(shot)
+            XCTFail("video bitmedi")
+            return
+        }
         let countText = app.staticTexts["videoCount"].label
         XCTAssertEqual(Int(countText), meta.count, "Swift sayımı \(countText), Python referansı \(meta.count)")
 

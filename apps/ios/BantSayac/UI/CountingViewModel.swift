@@ -301,8 +301,17 @@ final class CountingViewModel: ObservableObject {
         if let area = expectedArea { profile.expectedArea = area }
         videoSpeed = 0
         videoLearnBackground = true
-        Task { try? await openVideo(url: URL(fileURLWithPath: path)) }
+        Task {
+            do {
+                try await openVideo(url: URL(fileURLWithPath: path))
+            } catch {
+                testHookError = "Test videosu açılamadı: \(error.localizedDescription)"
+            }
+        }
     }
+
+    /// UI testinde video açılamazsa ekranda gösterilir (teşhis için).
+    @Published var testHookError: String?
     #endif
 
     private func videoPositionChanged(_ pos: Double, source: VideoFileSource) {
