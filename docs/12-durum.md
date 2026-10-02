@@ -29,6 +29,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **11** | **Kalite kontrol A1**: sekmeler (Canlı · Genel bakış · Öğret · Ayarlar), ürün kartları, örnekle öğretme; düz videolarda kompozisyonsuz okuma; düğme yazıları bölünmüyor. **Uçtan uca UI testinden geçmeden yüklenmez.** |
 | **12** | **Ağ kamerası (RTSP)**: telefon, mevcut IP kameranın yayınını alıp sayar ve kalite kontrol yapar (marka şablonları, Digest/Basic, H.264/H.265, yeniden bağlanma). Video ve kamerada yakınlaştırma/kaydırma; Canlı ekranda son ürün kartları ve ürünün yanında OK/NOK etiketi; QC kırpıntısı artık sayımı bekletmiyor; yeni ikon ve ad (BandVision) |
 | **13** | **Kayıt cihazı (NVR/XVR) ekleme**: TRASSIR (SDK, jetonlu RTSP 555), Hikvision (ISAPI), Dahua (CGI); cihaz bir kez girilir, kameralar adları ve küçük görüntüleriyle listelenir (arama), dokunarak seçilir. RTSP el sıkışma 15 sn. Uçtan uca UI testi: sahte TRASSIR/Hikvision/Dahua (`tools/mock_nvr.py`) ile listele → seç → test → kaydet → canlı. Gerçek TRASSIR'da henüz denenmedi |
+| **14** | **Çokgen ROI** (sözleşme `roiPolygon`, algoritma §2.0; Python ↔ Swift piksel eşdeğerliği testli), **logolu açılış animasyonu**, **ilk kurulum sihirbazı** (kaynak → ürün → montaj → kalibrasyon; önceden kullanılan uygulamada kendiliğinden açılmaz). Paralel kod incelemesinde bulunan 4 hata düzeltildi; Swift birim testleri her iOS gönderiminde CI'da |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
@@ -100,7 +101,7 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
 ## 8. Sırada
 
 1. Derleme 13'ün telefonda denenmesi: gerçek kayıt cihazı (TRASSIR: Ayarlar → Web sunucusu (SDK) açık olmalı), video oynatıcı, kartlar, öğretme.
-2. **Derleme 14** (`roi-polygon` dalı): çokgen ROI (sözleşme + Python + Swift, eşdeğerlik testli), logolu açılış animasyonu, ilk kurulum sihirbazı, inceleme bulgularının düzeltmeleri.
+2. **Web platformu** (`13-web-platform.md`): W1 video analiz sunucusu ✅ → W2 web paneli (video analizi sayfası, BandVision kimliği) → W3 canlı hat (yerel Supabase) → W4 barındırma, NOK galerisi.
 2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
