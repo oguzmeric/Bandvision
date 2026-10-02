@@ -47,6 +47,8 @@ final class BantSayacUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(state, containing: "Canlı", timeout: 60), "yayın başlamadı: \(state.label)")
         let ended = waitForLabel(state, containing: "Yayın bitti", timeout: 180)
         print("AĞ DURUMU: \(state.label)")
+        let hook = app.staticTexts["testHookError"]
+        if hook.exists { print("TEST KANCASI: \(hook.label)") }
         print("ÖLÇÜM: \(app.staticTexts["perfStats"].label)")
         XCTAssertTrue(ended, "yayın bitmedi")
         let countText = app.staticTexts["liveCount"].label

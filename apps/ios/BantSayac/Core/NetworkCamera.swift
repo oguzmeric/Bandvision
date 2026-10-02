@@ -106,14 +106,16 @@ enum CameraCredentialStore {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    static func setPassword(_ password: String) {
+    /// Kaydeder; başarısızsa Keychain durum kodunu döndürür (sessizce yutulmaz).
+    @discardableResult
+    static func setPassword(_ password: String) -> OSStatus {
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                    kSecAttrService as String: service, kSecAttrAccount as String: account]
         SecItemDelete(base as CFDictionary)
-        guard !password.isEmpty else { return }
+        guard !password.isEmpty else { return errSecSuccess }
         var add = base
         add[kSecValueData as String] = Data(password.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        return SecItemAdd(add as CFDictionary, nil)
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import Security
 
 /// Video dosyasından sayım oturumu (manuel test). Sayımlar canlı oturumun kaydına/webhook'una karışmaz.
 struct VideoRun: Equatable {
@@ -46,6 +47,8 @@ final class CountingViewModel: ObservableObject {
     @Published private(set) var networkConfig = NetworkCameraConfig.load()
     @Published private(set) var networkState: NetworkCameraState?
     private var networkSource: NetworkCameraSource?
+    /// Kaydedilen şifre bellekte de tutulur: Keychain yazılamasa bile oturum boyunca bağlantı çalışır
+    private var networkPassword: String?
     private let frameGate = FrameGate()
     /// UI testi: yayın bitince yeniden bağlanma (gerçek kullanımda her zaman true)
     private var networkReconnect = true
@@ -347,7 +350,9 @@ final class CountingViewModel: ObservableObject {
         config.customURL = url
         config.username = username
         networkConfig = config
-        CameraCredentialStore.setPassword(password)
+        networkPassword = password
+        let status = CameraCredentialStore.setPassword(password)
+        if status != errSecSuccess { testHookError = "Keychain kaydı başarısız (durum \(status))" }
         sourceKind = .network
         startNetwork()
         processor.startBackgroundLearning()          // klip boş bantla başlar (§5)
@@ -393,11 +398,16 @@ final class CountingViewModel: ObservableObject {
     }
 
     /// Ayarları ve şifreyi kaydeder; ağ kamerası seçiliyse yeni ayarlarla yeniden bağlanır.
-    func saveNetworkConfig(_ config: NetworkCameraConfig, password: String) {
+    /// Dönüş: şifre güvenli depoya (Keychain) yazılamadıysa kullanıcıya gösterilecek uyarı.
+    @discardableResult
+    func saveNetworkConfig(_ config: NetworkCameraConfig, password: String) -> String? {
         networkConfig = config
         config.save()
-        CameraCredentialStore.setPassword(password)
+        networkPassword = password
+        let status = CameraCredentialStore.setPassword(password)
         if sourceKind == .network && !isVideoMode { startNetwork() }
+        return status == errSecSuccess ? nil
+            : "Şifre güvenli depoya kaydedilemedi (kod \(status)). Bu oturumda kullanılır; uygulama yeniden açılınca tekrar girmen gerekebilir."
     }
 
     private func startNetwork() {
@@ -409,7 +419,7 @@ final class CountingViewModel: ObservableObject {
         }
         // Tam adreste kullanıcı adı/şifre yazılmışsa ve ayrı girilmemişse onları kullan
         let user = networkConfig.username.isEmpty ? (url.user ?? "") : networkConfig.username
-        let stored = CameraCredentialStore.password()
+        let stored = networkPassword ?? CameraCredentialStore.password()
         let password = stored.isEmpty ? (url.password ?? "") : stored
         processor.resetClock()
         processor.resetTracking(resetBackground: true)

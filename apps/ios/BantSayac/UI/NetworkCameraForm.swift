@@ -39,6 +39,7 @@ struct NetworkCameraForm: View {
     @State private var testing = false
     @State private var result: NetworkCameraSource.ProbeResult?
     @State private var errorText: String?
+    @State private var saveWarning: String?
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -135,6 +136,11 @@ struct NetworkCameraForm: View {
                 .disabled(config.rtspURL == nil)
             }
         }
+        .alert("Şifre", isPresented: Binding(get: { saveWarning != nil }, set: { if !$0 { saveWarning = nil } })) {
+            Button("Tamam") { saveWarning = nil; dismiss() }
+        } message: {
+            Text(saveWarning ?? "")
+        }
         .navigationTitle("Ağ kamerası")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -176,8 +182,12 @@ struct NetworkCameraForm: View {
 
     private func save() {
         focused = false
-        vm.saveNetworkConfig(config, password: password)
+        let warning = vm.saveNetworkConfig(config, password: password)
         vm.setSource(.network)
-        dismiss()
+        if let warning {
+            saveWarning = warning                    // sessizce geçme: kullanıcıya göster, sonra kapat
+        } else {
+            dismiss()
+        }
     }
 }
