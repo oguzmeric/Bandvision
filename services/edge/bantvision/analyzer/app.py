@@ -42,6 +42,11 @@ class PointIn(_Strict):
     y: float = Field(ge=0, le=1)
 
 
+class CountLineIn(_Strict):
+    a: PointIn
+    b: PointIn
+
+
 class OptionsIn(_Strict):
     """Sözleşmedeki `options` ile birebir (bilinmeyen alan reddedilir)."""
     preset: Literal["generic", "egg", "flour"] | None = None
@@ -49,6 +54,7 @@ class OptionsIn(_Strict):
     direction: Literal["down", "up", "right", "left"] | None = None
     roi: RoiIn | None = None
     roiPolygon: list[PointIn] | None = Field(default=None, min_length=3, max_length=12)
+    countLine: CountLineIn | None = None
     line: float | None = Field(default=None, ge=0, le=1)
     bgRange: list[float] | None = Field(default=None, min_length=2, max_length=2)
 

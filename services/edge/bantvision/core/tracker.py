@@ -69,7 +69,9 @@ class BlobTracker:
         return [abs(t.vy if vertical else t.vx) for t in self.tracks if t.counted_so_far > 0 and t.missed == 0]
 
     def update(self, blobs: list[Blob], vertical: bool, sign: float, line: float,
-               max_distance: float, min_hits: int, max_missed: int = 6) -> list[CountEvent]:
+               max_distance: float, min_hits: int, max_missed: int = 6,
+               bounds: tuple[float, float, float, float] = (-0.1, 1.1, -0.1, 1.1)) -> list[CountEvent]:
+        """`bounds`: silme sınırı (x0, x1, y0, y1); açılı çizgide çizgi çerçevesinin sınırları (§4.8)."""
         def axis(x: float, y: float) -> float:
             return y if vertical else x
 
@@ -202,7 +204,7 @@ class BlobTracker:
                 t.x += t.vx
                 t.y += t.vy
         self.tracks = [t for t in self.tracks
-                       if t.missed <= max_missed and -0.1 <= t.x <= 1.1 and -0.1 <= t.y <= 1.1]
+                       if t.missed <= max_missed and bounds[0] <= t.x <= bounds[1] and bounds[2] <= t.y <= bounds[3]]
 
         # §4.6 Yeni iz hızı: banttaki her ürün aynı hızla gider; oturmuş izlerin (hits ≥ 3) medyan hızıyla başla.
         # Sıfır hızla doğan iz bir sonraki karede geride tahmin edilir, birleşik gruba giremez ve çift sayıma yol açar.

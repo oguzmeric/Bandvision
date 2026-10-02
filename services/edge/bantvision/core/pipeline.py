@@ -9,6 +9,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .lineframe import LineFrame
 from .profile import Profile
 from .qc import InspectionResult, inspect
 from .segmenter import BackgroundSegmenter, Blob, downsample
@@ -49,6 +50,7 @@ class Pipeline:
         self._last_activity: float | None = None
         self.running = False
         self.factor = 1
+        self._frame: LineFrame | None = None
 
     # ---- kontrol ----
     def set_profile(self, profile: Profile, reset_background: bool = False) -> None:
@@ -86,10 +88,13 @@ class Pipeline:
         p = self.profile
         if not p.mmPerPixel:
             return None
-        speeds = self.tracker.axis_speeds(p.vertical)
+        # §4.8: açılı çizgide izler çizgi çerçevesinde (u akış ekseni, birim kare yüksekliği)
+        speeds = self.tracker.axis_speeds(True if p.countLine else p.vertical)
         if not speeds:
             return None
         span = full_size[1] if p.vertical else full_size[0]
+        if p.countLine:
+            span = full_size[1]
         return median(speeds) * span * p.mmPerPixel * fps
 
     # ---- ana döngü ----
@@ -127,7 +132,8 @@ class Pipeline:
 
         sampling = self._calib == "sample"
         expected = 0.0 if sampling else p.expectedArea
-        raw = self.segmenter.segment(small, p.roi, p.diffThreshold, p.closeIterations, rate, p.roiPolygon)
+        frame_lf = LineFrame.build(*p.countLine, small.shape[1], small.shape[0]) if p.countLine else None
+        raw = self.segmenter.segment(small, p.roi, p.diffThreshold, p.closeIterations, rate, p.roiPolygon, frame_lf)
         min_area = expected * p.minAreaFactor if expected > 0 else p.minAreaAbs
         blobs = [b for b in raw if b.area >= min_area]
         if p.splitTouching and expected > 0:
@@ -135,7 +141,13 @@ class Pipeline:
                 r = b.area / expected
                 b.multiplicity = 1 if r < 1.5 else min(p.maxMultiplicity, max(1, round(r)))
 
-        events = self.tracker.update(blobs, p.vertical, p.sign, p.linePosition, max_dist, p.minHits, max_missed)
+        if frame_lf is not None:
+            # §4.8: lekeler çizgi çerçevesine; izleyici "aşağı akış, çizgi 0" ile aynen çalışır
+            events = self.tracker.update([frame_lf.blob(b) for b in blobs], True, 1.0, 0.0, max_dist,
+                                         p.minHits, max_missed, frame_lf.bounds)
+        else:
+            events = self.tracker.update(blobs, p.vertical, p.sign, p.linePosition, max_dist, p.minHits, max_missed)
+        self._frame = frame_lf
 
         counts: list[CountEvent] = []
         inspections: list[InspectionResult] = []
@@ -168,5 +180,8 @@ class Pipeline:
             self.running = now_running
             change = now_running
 
-        return FrameResult(ts, blobs, self.tracker.markers, counts, inspections, calib_events, change,
+        markers = self.tracker.markers
+        if frame_lf is not None:                      # iz işaretleri görüntü koordinatına (ekran/çizim)
+            markers = [TrackMarker(m.id, *frame_lf.to_image(m.x, m.y), m.counted) for m in markers]
+        return FrameResult(ts, blobs, markers, counts, inspections, calib_events, change,
                            fps, self.total, full_size, small)

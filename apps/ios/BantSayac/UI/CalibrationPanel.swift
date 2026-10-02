@@ -8,15 +8,27 @@ struct CalibrationPanel: View {
             HStack {
                 Text("Kalibrasyon").font(.headline)
                 Spacer()
-                Picker("Akış yönü", selection: $vm.profile.direction) {
-                    ForEach(FlowDirection.allCases) { d in
-                        Text("\(d.arrow) \(d.title)").tag(d)
+                if vm.profile.countLine == nil {
+                    Picker("Akış yönü", selection: $vm.profile.direction) {
+                        ForEach(FlowDirection.allCases) { d in
+                            Text("\(d.arrow) \(d.title)").tag(d)
+                        }
                     }
+                    .pickerStyle(.menu)
+                } else {
+                    Button {
+                        if let cl = vm.profile.countLine {
+                            vm.profile.setCountLine(CountLine(a: cl.b, b: cl.a), aspect: imageAspect)
+                        }
+                    } label: {
+                        Label("Yönü çevir", systemImage: "arrow.left.arrow.right")
+                    }
+                    .accessibilityIdentifier("flipLine")
                 }
-                .pickerStyle(.menu)
             }
 
             areaShapePicker
+            lineModePicker
 
             Text(vm.calibrationMessage)
                 .font(.callout)
@@ -71,6 +83,35 @@ struct CalibrationPanel: View {
         }
         .padding()
         .background(Color(white: 0.08))
+    }
+
+    /// Görüntünün genişlik / yükseklik oranı (açılı çizginin akış yönü için)
+    private var imageAspect: Double {
+        let s = vm.snapshot.frameSize
+        return s.height > 0 ? Double(s.width / s.height) : 9.0 / 16.0
+    }
+
+    /// Sayım çizgisi: düz (akış eksenine dik) ya da açılı (iki ucu sürüklenir, akış çizgiye dik) — §4.8
+    private var lineModePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Sayım çizgisi", selection: Binding(
+                get: { vm.profile.countLine != nil },
+                set: { angled in
+                    vm.profile.setCountLine(angled ? vm.profile.straightCountLine : nil, aspect: imageAspect)
+                }
+            )) {
+                Text("Düz çizgi").tag(false)
+                Text("Açılı çizgi").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("lineMode")
+            Text(vm.profile.countLine == nil
+                 ? "Turuncu çizgiyi ortasındaki tutamaçla akış yönünde kaydır."
+                 : "Çizginin uçlarını sürükle · ortasından tutup taşı · ok akış yönünü gösterir (gerekirse \"Yönü çevir\")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// İlgi alanı biçimi: dikdörtgen ya da banda göre çizilen çokgen (algoritma §2.0)
