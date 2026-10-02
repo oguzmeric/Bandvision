@@ -41,10 +41,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO > uitest.log 2>&1
           status=$?
           grep -E "Test Case|error:|XCTAssert|failed|\*\* TEST" uitest.log | tail -40
+          # Test başarısız olunca yazdırdığı ekran ağacı (teşhis)
+          sed -n '/=== EKRAN/,/=== SON/p' uitest.log | head -300
           exit $status
       - name: Test sonuç paketini sakla
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: uitest-result
-          path: ${{ runner.temp }}/uitest.xcresult
+          path: |
+            ${{ runner.temp }}/uitest.xcresult
+            apps/ios/uitest.log
