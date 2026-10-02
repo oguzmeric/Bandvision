@@ -17,7 +17,7 @@ targets:
     info:
       path: BantSayac/Info.plist
       properties:
-        CFBundleDisplayName: Bant Sayaç
+        CFBundleDisplayName: BandVision
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSCameraUsageDescription: Banttan geçen ürünleri saymak için kamera kullanılır.

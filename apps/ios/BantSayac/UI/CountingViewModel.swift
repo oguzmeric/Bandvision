@@ -135,7 +135,7 @@ final class CountingViewModel: ObservableObject {
         camera.requestAccess { [weak self] granted in
             guard let self else { return }
             guard granted else {
-                self.cameraError = "Kamera izni yok. Ayarlar > Bant Sayaç > Kamera'dan izin verin."
+                self.cameraError = "Kamera izni yok. Ayarlar > BandVision > Kamera'dan izin verin."
                 return
             }
             self.camera.configureAndStart { [weak self] ok in
