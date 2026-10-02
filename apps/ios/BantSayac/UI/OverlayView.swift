@@ -10,17 +10,19 @@ struct OverlayView: View {
     var verdicts: [Int: AppearanceVerdict] = [:]
 
     @State private var activeHandle: Handle?
-    private enum Handle { case topLeft, bottomRight, line }
+    /// vertex: çokgen köşesi; midpoint(i): i ile i+1 arasındaki kenarın ortası (sürükleyince köşe eklenir)
+    private enum Handle: Equatable { case topLeft, bottomRight, line, vertex(Int), midpoint(Int) }
 
     var body: some View {
         Canvas { ctx, _ in
             let roi = viewRect(profile.roi)
+            let area = roiPath()
 
             // ROI dışını karart
             var outside = Path(fitRect)
-            outside.addRect(roi)
+            outside.addPath(area)
             ctx.fill(outside, with: .color(.black.opacity(0.35)), style: FillStyle(eoFill: true))
-            ctx.stroke(Path(roi), with: .color(.yellow), lineWidth: 2)
+            ctx.stroke(area, with: .color(.yellow), lineWidth: 2)
 
             // Sayım çizgisi
             let (a, b) = lineEndpoints(roi)
@@ -69,19 +71,64 @@ struct OverlayView: View {
 
             // Tutamaçlar
             if editable {
-                let handles = [CGPoint(x: roi.minX, y: roi.minY),
-                               CGPoint(x: roi.maxX, y: roi.maxY),
-                               CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)]
-                for p in handles {
+                for (_, p) in handleCandidates() {
                     let c = CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24)
                     ctx.fill(Path(ellipseIn: c), with: .color(.white))
                     ctx.stroke(Path(ellipseIn: c), with: .color(.black), lineWidth: 2)
+                }
+                // Kenar ortaları: sürükleyince yeni köşe
+                for (_, p) in midpointCandidates() {
+                    let c = CGRect(x: p.x - 9, y: p.y - 9, width: 18, height: 18)
+                    ctx.fill(Path(ellipseIn: c), with: .color(.yellow.opacity(0.75)))
+                    ctx.draw(Text("+").font(.caption.bold()).foregroundColor(.black), at: p)
                 }
             }
         }
         .contentShape(Rectangle())
         .gesture(dragGesture)
+        .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in removeVertex(near: value.location) })
         .allowsHitTesting(editable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(profile.roiPolygon == nil ? "İlgi alanı: dikdörtgen" : "İlgi alanı: \(profile.roiPolygon?.count ?? 0) köşeli çokgen")
+        .accessibilityIdentifier("roiOverlay")
+    }
+
+    /// İlgi alanının ekrandaki şekli: çokgen ya da dikdörtgen
+    private func roiPath() -> Path {
+        guard let poly = profile.roiPolygon, poly.count >= 3 else { return Path(viewRect(profile.roi)) }
+        var path = Path()
+        path.addLines(poly.map { viewPoint($0.x, $0.y) })
+        path.closeSubpath()
+        return path
+    }
+
+    /// Sürüklenebilir tutamaçlar ve ekrandaki yerleri
+    private func handleCandidates() -> [(Handle, CGPoint)] {
+        let roi = viewRect(profile.roi)
+        let (a, b) = lineEndpoints(roi)
+        let line = (Handle.line, CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
+        guard let poly = profile.roiPolygon else {
+            return [(.topLeft, CGPoint(x: roi.minX, y: roi.minY)),
+                    (.bottomRight, CGPoint(x: roi.maxX, y: roi.maxY)), line]
+        }
+        return poly.enumerated().map { (Handle.vertex($0.offset), viewPoint($0.element.x, $0.element.y)) } + [line]
+    }
+
+    private func midpointCandidates() -> [(Handle, CGPoint)] {
+        guard let poly = profile.roiPolygon, poly.count < ProductProfile.maxPolygonPoints else { return [] }
+        return poly.indices.map { i in
+            let a = poly[i], b = poly[(i + 1) % poly.count]
+            return (Handle.midpoint(i), viewPoint((a.x + b.x) / 2, (a.y + b.y) / 2))
+        }
+    }
+
+    /// Köşeye çift dokunma: köşeyi sil (en az 3 kalır)
+    private func removeVertex(near pt: CGPoint) {
+        guard editable, var poly = profile.roiPolygon, poly.count > 3 else { return }
+        let nearest = poly.indices.min { dist(viewPoint(poly[$0].x, poly[$0].y), pt) < dist(viewPoint(poly[$1].x, poly[$1].y), pt) }
+        guard let i = nearest, dist(viewPoint(poly[i].x, poly[i].y), pt) < 30 else { return }
+        poly.remove(at: i)
+        profile.setPolygon(poly)
     }
 
     // MARK: - Sürükleme
@@ -94,6 +141,19 @@ struct OverlayView: View {
                 let p = normPoint(value.location)
                 var r = profile.roi
                 switch h {
+                case .vertex(let i):
+                    guard var poly = profile.roiPolygon, poly.indices.contains(i) else { return }
+                    poly[i] = NormPoint(x: Double(p.x), y: Double(p.y))
+                    profile.setPolygon(poly)
+                    return
+                case .midpoint(let i):
+                    // Kenar ortasından tutunca yeni köşe eklenir ve sürükleme o köşeyle sürer
+                    guard var poly = profile.roiPolygon, poly.indices.contains(i),
+                          poly.count < ProductProfile.maxPolygonPoints else { return }
+                    poly.insert(NormPoint(x: Double(p.x), y: Double(p.y)), at: i + 1)
+                    profile.setPolygon(poly)
+                    activeHandle = .vertex(i + 1)
+                    return
                 case .topLeft:
                     let nx = min(p.x, r.maxX - 0.05), ny = min(p.y, r.maxY - 0.05)
                     r = CGRect(x: nx, y: ny, width: r.maxX - nx, height: r.maxY - ny)
@@ -118,12 +178,9 @@ struct OverlayView: View {
 
     private func pickHandle(_ pt: CGPoint) -> Handle? {
         let roi = viewRect(profile.roi)
-        let (a, b) = lineEndpoints(roi)
-        let candidates: [(Handle, CGPoint)] = [
-            (.topLeft, CGPoint(x: roi.minX, y: roi.minY)),
-            (.bottomRight, CGPoint(x: roi.maxX, y: roi.maxY)),
-            (.line, CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2))
-        ]
+        let (a, _) = lineEndpoints(roi)
+        // En yakın tutamaç: köşe, sayım çizgisi ya da kenar ortası (yeni köşe)
+        let candidates = handleCandidates() + midpointCandidates()
         let best = candidates.min { dist($0.1, pt) < dist($1.1, pt) }
         if let best, dist(best.1, pt) < 44 { return best.0 }
         // Çizginin herhangi bir yerinden tutmak

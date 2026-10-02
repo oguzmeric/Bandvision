@@ -241,6 +241,61 @@ final class BantSayacUITests: XCTestCase {
         pickTestAndSave(app, camera: "Bant 1", expectedOthers: ["Kapı", "Depo", "Kanal 4"], absent: [])
     }
 
+    // MARK: - Kurulum sihirbazı ve çokgen ROI
+
+    /// Sistem izin penceresi (kamera) çıkarsa izin ver; simülatörde kamera yok, uygulama hatayı ekranda gösterir.
+    private func allowSystemAlertIfShown() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            print("KURULUM izin penceresi: \(alert.label)")
+            alert.buttons.element(boundBy: alert.buttons.count - 1).tap()
+        }
+    }
+
+    func testOnboardingLeadsToCalibrationWithPolygonArea() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["BS_TEST_ONBOARDING"] = "1"
+        app.launch()
+
+        let next = element(app, "onboardingNext")
+        XCTAssertTrue(next.waitForExistence(timeout: 15), "sihirbaz açılmadı")
+        XCTAssertTrue(app.staticTexts["Banttan geçen ürünleri sayar, kalitesini kontrol eder."].exists)
+        next.tap()                                                      // Başla
+
+        // Kaynak: kayıt cihazı seçilince bağlantı ayarı ister, form kayıt cihazı türüyle açılır
+        element(app, "source.recorder").tap()
+        XCTAssertFalse(next.isEnabled, "ağ kaynağı ayarlanmadan devam edilmemeli")
+        element(app, "onboardingConnect").tap()
+        XCTAssertTrue(element(app, "recorderHost").waitForExistence(timeout: 10), "form kayıt cihazı türüyle açılmadı")
+        app.buttons["Kapat"].tap()
+        element(app, "source.phone").tap()
+        XCTAssertTrue(next.isEnabled)
+        next.tap()
+
+        // Ürün → montaj → hazır
+        XCTAssertTrue(element(app, "product.Yumurta").waitForExistence(timeout: 5))
+        element(app, "product.Yumurta").tap()
+        next.tap()
+        XCTAssertTrue(app.staticTexts["Montajı kontrol et"].waitForExistence(timeout: 5))
+        next.tap()
+        XCTAssertTrue(app.staticTexts["Hazır"].waitForExistence(timeout: 5))
+        XCTAssertEqual(next.label, "Kalibrasyonla başla")
+        next.tap()
+        allowSystemAlertIfShown()
+
+        // Canlı ekran kalibrasyonda; alan çokgene çevrilir
+        XCTAssertTrue(app.staticTexts["Kalibrasyon"].waitForExistence(timeout: 15), "kalibrasyon paneli açılmadı")
+        let shape = element(app, "roiShape")
+        XCTAssertTrue(shape.waitForExistence(timeout: 5))
+        shape.buttons["Çokgen"].tap()
+        let overlay = element(app, "roiOverlay")
+        XCTAssertTrue(waitForLabel(overlay, containing: "4 köşeli çokgen", timeout: 5), "çokgen yok: \(overlay.label)")
+        XCTAssertTrue(element(app, "resetPolygon").exists)
+        shape.buttons["Dikdörtgen"].tap()
+        XCTAssertTrue(waitForLabel(overlay, containing: "dikdörtgen", timeout: 5))
+    }
+
     func testVideoCountMatchesReferenceAndScreensOpen() throws {
         let bundle = Bundle(for: BantSayacUITests.self)
         let clip = try XCTUnwrap(bundle.url(forResource: "ui_test_clip", withExtension: "mp4"), "test klibi pakette yok")

@@ -164,7 +164,7 @@ final class FrameProcessor: @unchecked Sendable {
             segmenter.learn(frame, rate: n == 0 ? 1 : 0.15)
             var m = maxDiff
             if n >= Int(0.4 * Double(nTotal)) {
-                m = max(m, segmenter.diffPercentile(frame, roi: profile.roi, percentile: 0.995))
+                m = max(m, segmenter.diffPercentile(frame, roi: profile.roi, polygon: profile.roiPolygon, percentile: 0.995))
             }
             let next = n + 1
             if next >= nTotal {
@@ -186,7 +186,7 @@ final class FrameProcessor: @unchecked Sendable {
         if case .sample = calib { learningSample = true }
         let expected = learningSample ? 0 : profile.expectedArea
 
-        let raw = segmenter.segment(frame, roi: profile.roi,
+        let raw = segmenter.segment(frame, roi: profile.roi, polygon: profile.roiPolygon,
                                     threshold: profile.diffThreshold,
                                     closeIterations: profile.closeIterations,
                                     backgroundRate: Float(rate),

@@ -23,6 +23,15 @@ final class BackgroundSegmenter {
     private var mask: [UInt8] = []
     private var tmp: [UInt8] = []
     private(set) var lastMask: [UInt8]?
+    // §2.0 ROI maskesi önbelleği (ROI ya da boyut değişince yeniden)
+    private var roiMaskKey: RoiMaskKey?
+    private var roiMaskCache: [UInt8] = []
+
+    private struct RoiMaskKey: Equatable {
+        let width: Int, height: Int
+        let roi: CGRect
+        let polygon: [NormPoint]?
+    }
 
     var hasBackground: Bool { !bg.isEmpty }
 
@@ -42,12 +51,51 @@ final class BackgroundSegmenter {
     }
 
     func pixelRect(_ r: CGRect) -> PixelRect {
+        Self.pixelRect(r, width: width, height: height)
+    }
+
+    static func pixelRect(_ r: CGRect, width: Int, height: Int) -> PixelRect {
         let w = Double(width), h = Double(height)
         let x0 = max(0, min(width - 1, Int(Double(r.minX) * w)))
         let y0 = max(0, min(height - 1, Int(Double(r.minY) * h)))
         let x1 = max(x0 + 1, min(width, Int(Double(r.maxX) * w)))
         let y1 = max(y0 + 1, min(height, Int(Double(r.maxY) * h)))
         return PixelRect(x0: x0, y0: y0, x1: x1, y1: y1)
+    }
+
+    /// §2.0 ROI maskesi (1 = içeride): dikdörtgen ∩ çokgen. Çokgen: piksel merkezi, çift-tek kuralı.
+    /// İşlem sırası dokümandaki ve Python `roi_mask` ile aynı (aynı pikseller seçilir).
+    static func roiMask(roi: CGRect, polygon: [NormPoint]?, width w: Int, height h: Int) -> [UInt8] {
+        var m = [UInt8](repeating: 0, count: w * h)
+        let r = pixelRect(roi, width: w, height: h)
+        let poly = polygon ?? []
+        let n = poly.count
+        for y in r.y0..<r.y1 {
+            let py = (Double(y) + 0.5) / Double(h)
+            for x in r.x0..<r.x1 {
+                guard n > 0 else { m[y * w + x] = 1; continue }
+                let px = (Double(x) + 0.5) / Double(w)
+                var inside = false
+                for k in 0..<n {
+                    let a = poly[k], b = poly[k == 0 ? n - 1 : k - 1]
+                    if (a.y > py) != (b.y > py) {
+                        let xc = (b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x
+                        if px < xc { inside.toggle() }
+                    }
+                }
+                if inside { m[y * w + x] = 1 }
+            }
+        }
+        return m
+    }
+
+    private func roiMask(_ roi: CGRect, _ polygon: [NormPoint]?) -> [UInt8] {
+        let key = RoiMaskKey(width: width, height: height, roi: roi, polygon: polygon)
+        if key != roiMaskKey || roiMaskCache.count != width * height {
+            roiMaskCache = Self.roiMask(roi: roi, polygon: polygon, width: width, height: height)
+            roiMaskKey = key
+        }
+        return roiMaskCache
     }
 
     /// Kalibrasyon: arka planı koşulsuz öğren. rate >= 1 → sıfırdan başlat.
@@ -65,10 +113,11 @@ final class BackgroundSegmenter {
         }
     }
 
-    /// ROI içinde |kare - arka plan| dağılımının yüzdelik değeri (gürültü ölçümü).
-    func diffPercentile(_ f: GrayFrame, roi: CGRect, percentile: Double) -> Int {
+    /// ROI maskesi içinde |kare - arka plan| dağılımının yüzdelik değeri (gürültü ölçümü, §5).
+    func diffPercentile(_ f: GrayFrame, roi: CGRect, polygon: [NormPoint]? = nil, percentile: Double) -> Int {
         guard !bg.isEmpty, f.width == width, f.height == height else { return 0 }
         let r = pixelRect(roi)
+        let inside = roiMask(roi, polygon)
         var hist = [Int](repeating: 0, count: 256)
         var total = 0
         let w = width
@@ -77,11 +126,13 @@ final class BackgroundSegmenter {
         for y in r.y0..<r.y1 {
             for x in r.x0..<r.x1 {
                 let i = y * w + x
+                if inside[i] == 0 { continue }
                 let d = min(255, Int(abs(Float(px[i]) - b[i])))
                 hist[d] += 1
                 total += 1
             }
         }
+        guard total > 0 else { return 0 }
         let target = Int(Double(total) * percentile)
         var acc = 0
         for v in 0..<256 {
@@ -91,7 +142,7 @@ final class BackgroundSegmenter {
         return 255
     }
 
-    func segment(_ f: GrayFrame, roi: CGRect, threshold: Int, closeIterations: Int,
+    func segment(_ f: GrayFrame, roi: CGRect, polygon: [NormPoint]? = nil, threshold: Int, closeIterations: Int,
                  backgroundRate: Float, keepMask: Bool) -> [Blob] {
         ensureSize(f.width, f.height)
         if bg.isEmpty {
@@ -101,17 +152,20 @@ final class BackgroundSegmenter {
         let w = width, n = width * height
         let r = pixelRect(roi)
         let th = Float(threshold)
+        let inside = roiMask(roi, polygon)
 
-        // 1) Fark + eşik (yalnızca ROI)
+        // 1) Fark + eşik (yalnızca ROI maskesi, §2.0)
         f.pixels.withUnsafeBufferPointer { src in
             bg.withUnsafeBufferPointer { b in
-                mask.withUnsafeMutableBufferPointer { m in
-                    for i in 0..<n { m[i] = 0 }
-                    for y in r.y0..<r.y1 {
-                        var i = y * w + r.x0
-                        for _ in r.x0..<r.x1 {
-                            m[i] = abs(Float(src[i]) - b[i]) > th ? 1 : 0
-                            i += 1
+                inside.withUnsafeBufferPointer { roiM in
+                    mask.withUnsafeMutableBufferPointer { m in
+                        for i in 0..<n { m[i] = 0 }
+                        for y in r.y0..<r.y1 {
+                            var i = y * w + r.x0
+                            for _ in r.x0..<r.x1 {
+                                m[i] = roiM[i] != 0 && abs(Float(src[i]) - b[i]) > th ? 1 : 0
+                                i += 1
+                            }
                         }
                     }
                 }

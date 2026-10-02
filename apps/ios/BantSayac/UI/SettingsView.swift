@@ -9,6 +9,7 @@ struct SettingsView: View {
     var showsDone = true
     @Environment(\.dismiss) private var dismiss
     @State private var csvURL: URL?
+    @AppStorage("bs.onboarded") private var onboarded = true
 
     var body: some View {
         NavigationStack {
@@ -51,6 +52,17 @@ struct SettingsView: View {
                     Text("Entegrasyon")
                 } footer: {
                     Text("Sayım olayları 5 sn'de bir JSON olarak bu adrese POST edilir (n8n, Supabase Edge Function vb.). Boş bırakılırsa gönderilmez.")
+                }
+
+                if vm != nil {
+                    Section {
+                        Button("Kurulum sihirbazını yeniden aç") { onboarded = false }
+                            .accessibilityIdentifier("reopenOnboarding")
+                    } header: {
+                        Text("Kurulum")
+                    } footer: {
+                        Text("Görüntü kaynağı, ürün, montaj kontrolü ve kalibrasyon adım adım.")
+                    }
                 }
 
                 Section("Rapor") {

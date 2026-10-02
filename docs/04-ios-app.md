@@ -54,6 +54,12 @@ Saha gerçeği: kameraların çoğu bir kayıt cihazına bağlı (TRASSIR, Dahua
 - **Test:** birim (`BantSayacTests`: ayrıştırıcılar, geriye uyum, akış adresleri) ve uçtan uca UI (`BS_TEST_FORMS`; ayar ekranı gerçek kullanıcı gibi doldurulur). CI'da `tools/mock_nvr.py` sahte TRASSIR (HTTPS) ve Hikvision/Dahua (Digest), MediaMTX akışları (TRASSIR jetonları 555'te).
 - **Doğrulanmamış:** gerçek TRASSIR'da hata kodlarının metni, `?ping`'in gerekliliği, `container=jpeg` anlık görüntü yolu (olmazsa RTSP'ye düşülür). Gerçek bir TRASSIR (4.x) ile denenmeli.
 
+## 1h. Çokgen ilgi alanı (ROI)
+Eğik bant ya da kenarda insan/makine hareketi varsa dikdörtgen ROI fazlasını içine alır. Kalibre panelinde **Alan: Dikdörtgen | Çokgen**.
+- Çokgene geçince mevcut dikdörtgenin 4 köşesiyle başlar. Köşeler sürüklenir; kenar ortasındaki sarı **+** sürüklenince köşe eklenir (en çok 12); köşeye çift dokunma köşeyi siler (en az 3). "Köşeleri sıfırla".
+- `ProductProfile.roiPolygon: [NormPoint]?` (sözleşmedeki `{x, y}` biçimi; eski kayıtlarda yok → dikdörtgen). `setPolygon` `roi`'yi sınır kutusu yapar ve sayım çizgisini kutunun içine çeker.
+- `BackgroundSegmenter.roiMask`: §2.0 kuralı (piksel merkezi, çift-tek), önbellekli; eşik ve boş bant öğrenmesinin yüzdeliği yalnızca maske içinde. Python `roi_mask` ile aynı pikseller: `BantSayacTests/RoiPolygonTests` ↔ `services/edge/tests/test_roi_polygon.py` aynı sayıları doğrular.
+
 ## 1f. Görünüm yakınlaştırma
 Kamera alanında iki parmakla 1×–6× yakınlaştırma, yakınken tek parmakla kaydırma, çift dokunuşla sıfırlama. Görüntü, maske ve ROI/çizgi/izler birlikte ölçeklenir. Yalnızca görünümdür; sayım tam kare üzerinden sürer. Kalibrasyonda tek parmak ROI'yi sürüklediği için kaydırma kapalıdır. Ekran karesi (video/ağ kamerası) ayrı kuyrukta üretilir; sayım ekranı beklemez.
 

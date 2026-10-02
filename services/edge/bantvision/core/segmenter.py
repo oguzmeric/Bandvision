@@ -1,6 +1,7 @@
 """Arka plan farkı segmentasyonu — docs/03-algorithm.md §1–§2."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import cv2
@@ -42,11 +43,50 @@ def roi_pixels(roi: Roi, w: int, h: int) -> tuple[int, int, int, int]:
     return x0, y0, x1, y1
 
 
+Polygon = Sequence[tuple[float, float]]
+
+
+def roi_mask(roi: Roi, polygon: Polygon | None, w: int, h: int) -> np.ndarray:
+    """§2.0 ROI maskesi (bool, h×w): dikdörtgen ∩ çokgen. Çokgen: piksel merkezi, çift-tek kuralı.
+
+    İşlem sırası dokümandakiyle aynıdır; Swift `BackgroundSegmenter.roiMask` aynı pikselleri seçer.
+    """
+    mask = np.zeros((h, w), bool)
+    x0, y0, x1, y1 = roi_pixels(roi, w, h)
+    mask[y0:y1, x0:x1] = True
+    if not polygon:
+        return mask
+    px = (np.arange(w, dtype=np.float64) + 0.5) / w
+    py = (np.arange(h, dtype=np.float64) + 0.5) / h
+    gx, gy = np.meshgrid(px, py)
+    inside = np.zeros((h, w), bool)
+    n = len(polygon)
+    for k in range(n):
+        xa, ya = polygon[k]
+        xb, yb = polygon[k - 1]
+        crosses = (ya > gy) != (yb > gy)
+        if not crosses.any():
+            continue
+        with np.errstate(divide="ignore", invalid="ignore"):
+            xc = (xb - xa) * (gy - ya) / (yb - ya) + xa
+        inside ^= crosses & (gx < xc)
+    return mask & inside
+
+
 class BackgroundSegmenter:
     def __init__(self) -> None:
         self.bg: np.ndarray | None = None
         self.mask: np.ndarray | None = None
         self.labels: np.ndarray | None = None
+        self._roi_key: tuple | None = None
+        self._roi_mask: np.ndarray | None = None
+
+    def roi_mask(self, roi: Roi, polygon: Polygon | None, w: int, h: int) -> np.ndarray:
+        """Önbellekli §2.0 maskesi (ROI ya da boyut değişince yeniden)."""
+        key = (w, h, roi.x, roi.y, roi.width, roi.height, tuple(polygon) if polygon else None)
+        if key != self._roi_key or self._roi_mask is None:
+            self._roi_key, self._roi_mask = key, roi_mask(roi, polygon, w, h)
+        return self._roi_mask
 
     @property
     def has_background(self) -> bool:
@@ -66,12 +106,15 @@ class BackgroundSegmenter:
             return
         self.bg += rate * (gray.astype(np.float32) - self.bg)
 
-    def diff_percentile(self, gray: np.ndarray, roi: Roi, p: float) -> int:
+    def diff_percentile(self, gray: np.ndarray, roi: Roi, p: float, polygon: Polygon | None = None) -> int:
         if self.bg is None or self.bg.shape != gray.shape:
             return 0
         h, w = gray.shape
         x0, y0, x1, y1 = roi_pixels(roi, w, h)
-        d = np.abs(gray[y0:y1, x0:x1].astype(np.float32) - self.bg[y0:y1, x0:x1])
+        inside = self.roi_mask(roi, polygon, w, h)[y0:y1, x0:x1]
+        d = np.abs(gray[y0:y1, x0:x1].astype(np.float32) - self.bg[y0:y1, x0:x1])[inside]
+        if d.size == 0:
+            return 0
         d = np.minimum(d.astype(np.int32), 255)
         hist = np.bincount(d.ravel(), minlength=256)
         target = int(d.size * p)
@@ -79,7 +122,7 @@ class BackgroundSegmenter:
         return int(np.searchsorted(cum, target))
 
     def segment(self, gray: np.ndarray, roi: Roi, threshold: int, close_iterations: int,
-                rate: float) -> list[Blob]:
+                rate: float, polygon: Polygon | None = None) -> list[Blob]:
         self._ensure(gray)
         if self.bg is None:
             self.bg = gray.astype(np.float32)
@@ -90,7 +133,8 @@ class BackgroundSegmenter:
         x0, y0, x1, y1 = roi_pixels(roi, w, h)
         g = gray.astype(np.float32)
         mask = np.zeros((h, w), np.uint8)
-        mask[y0:y1, x0:x1] = (np.abs(g[y0:y1, x0:x1] - self.bg[y0:y1, x0:x1]) > threshold).astype(np.uint8)
+        inside = self.roi_mask(roi, polygon, w, h)[y0:y1, x0:x1]
+        mask[y0:y1, x0:x1] = ((np.abs(g[y0:y1, x0:x1] - self.bg[y0:y1, x0:x1]) > threshold) & inside).astype(np.uint8)
 
         # açma + kapama (OpenCV varsayılan kenar değerleri §2.2 ile uyumlu)
         mask = cv2.dilate(cv2.erode(mask, _K3), _K3)

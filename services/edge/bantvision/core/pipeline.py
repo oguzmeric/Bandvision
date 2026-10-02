@@ -113,7 +113,7 @@ class Pipeline:
             n = self._calib_n
             self.segmenter.learn(small, 1.0 if n == 0 else 0.15)
             if n >= int(0.4 * n_total):
-                self._calib_max = max(self._calib_max, self.segmenter.diff_percentile(small, p.roi, 0.995))
+                self._calib_max = max(self._calib_max, self.segmenter.diff_percentile(small, p.roi, 0.995, p.roiPolygon))
             self._calib_n = n + 1
             if self._calib_n >= n_total:
                 th = int(min(100, max(12, int(self._calib_max * 1.5) + 8)))
@@ -127,7 +127,7 @@ class Pipeline:
 
         sampling = self._calib == "sample"
         expected = 0.0 if sampling else p.expectedArea
-        raw = self.segmenter.segment(small, p.roi, p.diffThreshold, p.closeIterations, rate)
+        raw = self.segmenter.segment(small, p.roi, p.diffThreshold, p.closeIterations, rate, p.roiPolygon)
         min_area = expected * p.minAreaFactor if expected > 0 else p.minAreaAbs
         blobs = [b for b in raw if b.area >= min_area]
         if p.splitTouching and expected > 0:

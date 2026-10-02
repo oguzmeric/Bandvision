@@ -19,6 +19,17 @@
         "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
       }
     },
+    "roiPolygon": {
+      "description": "İsteğe bağlı çokgen ROI (algoritma §2.0). Varsa maske = roi dikdörtgeni ∩ çokgen; roi çokgenin sınır kutusudur.",
+      "type": "array", "minItems": 3, "maxItems": 12,
+      "items": {
+        "type": "object", "required": ["x", "y"], "additionalProperties": false,
+        "properties": {
+          "x": { "type": "number", "minimum": 0, "maximum": 1 },
+          "y": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
     "linePosition": { "type": "number", "minimum": 0, "maximum": 1 },
     "direction": { "enum": ["down", "up", "right", "left"] },
     "diffThreshold": { "type": "integer", "minimum": 5, "maximum": 120 },

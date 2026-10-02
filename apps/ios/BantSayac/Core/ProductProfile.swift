@@ -30,13 +30,21 @@ enum FlowDirection: String, Codable, CaseIterable, Identifiable {
     var sign: Double { (self == .down || self == .right) ? 1 : -1 }
 }
 
+/// Normalize nokta (0...1). Sözleşmedeki `{x, y}` biçimiyle kodlanır (CGPoint dizi olarak kodlanırdı).
+struct NormPoint: Codable, Equatable, Hashable {
+    var x: Double
+    var y: Double
+}
+
 /// Bir ürün tipi için tüm kalibrasyon ve algılama parametreleri.
 /// Konum/alan değerleri normalize: 0...1 (görüntü boyutu ya da toplam alan oranı).
 struct ProductProfile: Codable, Identifiable, Equatable {
     var id = UUID()
     var name: String
-    /// İlgi alanı (ROI), normalize.
+    /// İlgi alanı (ROI), normalize. Çokgen varsa onun sınır kutusu.
     var roi: CGRect
+    /// İsteğe bağlı çokgen ROI (algoritma §2.0, 3–12 köşe). nil = dikdörtgen. Eski kayıtlarda yok → nil.
+    var roiPolygon: [NormPoint]? = nil
     /// Sayım çizgisi; akış eksenindeki normalize konum.
     var linePosition: CGFloat
     var direction: FlowDirection
@@ -64,6 +72,32 @@ struct ProductProfile: Codable, Identifiable, Equatable {
 }
 
 extension ProductProfile {
+    static let maxPolygonPoints = 12
+
+    /// Çokgeni ayarlar; roi çokgenin sınır kutusu olur, sayım çizgisi kutunun içinde kalır. nil → dikdörtgene dön.
+    mutating func setPolygon(_ points: [NormPoint]?) {
+        guard let points, points.count >= 3 else {
+            roiPolygon = nil
+            return
+        }
+        let pts = points.prefix(Self.maxPolygonPoints).map {
+            NormPoint(x: min(max($0.x, 0), 1), y: min(max($0.y, 0), 1))
+        }
+        roiPolygon = Array(pts)
+        let xs = pts.map(\.x), ys = pts.map(\.y)
+        let minX = xs.min() ?? 0, maxX = xs.max() ?? 1, minY = ys.min() ?? 0, maxY = ys.max() ?? 1
+        roi = CGRect(x: minX, y: minY, width: max(maxX - minX, 0.01), height: max(maxY - minY, 0.01))
+        let lo = direction.isVertical ? roi.minY : roi.minX
+        let hi = direction.isVertical ? roi.maxY : roi.maxX
+        linePosition = min(max(linePosition, lo + 0.02), max(lo + 0.02, hi - 0.02))
+    }
+
+    /// Dikdörtgenin dört köşesi (çokgen düzenlemeye başlangıç)
+    var roiCorners: [NormPoint] {
+        [NormPoint(x: roi.minX, y: roi.minY), NormPoint(x: roi.maxX, y: roi.minY),
+         NormPoint(x: roi.maxX, y: roi.maxY), NormPoint(x: roi.minX, y: roi.maxY)]
+    }
+
     static func egg() -> ProductProfile {
         ProductProfile(name: "Yumurta",
                        roi: CGRect(x: 0.05, y: 0.1, width: 0.9, height: 0.8),

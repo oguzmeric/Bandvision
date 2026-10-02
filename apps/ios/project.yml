@@ -27,7 +27,11 @@ targets:
           NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
-        UILaunchScreen: {}
+        # Açılış ekranı: logo, logonun zemin rengiyle (yapay bekletme yok; uygulama hazır olunca kapanır)
+        UILaunchScreen:
+          UIImageName: LaunchLogo
+          UIColorName: LaunchBackground
+          UIImageRespectsSafeAreaInsets: true
         # Yalnızca standart HTTPS kullanılıyor; TestFlight'ta ihracat uyumluluk sorusunu atlar
         ITSAppUsesNonExemptEncryption: false
     settings:

@@ -88,6 +88,7 @@ def _many_events(doc: Any) -> None:
 
 
 PROFILE = ("profile-egg.json", "product-profile.schema.json")
+POLY = ("profile-box-polygon.json", "product-profile.schema.json")
 EVENT = ("event-state.json", "event.schema.json")
 BATCH = ("batch.json", "batch.schema.json")
 PAIR = ("device-pair-request.json", "device.schema.json#/$defs/pairRequest")
@@ -102,6 +103,12 @@ NEGATIVE_CASES = [
     ("profil eşik tamsayı değil", *PROFILE, _set(["diffThreshold"], 28.5), "type", ["diffThreshold"]),
     ("profil döndürme açısı", *PROFILE, _set(["source", "rotation"], 45), "enum", ["source", "rotation"]),
     ("profil io kanalı", *PROFILE, _set(["io", "eject", "channel"], 5), "maximum", ["io", "eject", "channel"]),
+    ("profil çokgen 3 köşeden az", *POLY, _set(["roiPolygon"], [{"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.9}]),
+     "minItems", ["roiPolygon"]),
+    ("profil çokgen köşesi 1'den büyük", *POLY, _set(["roiPolygon", 2, "x"], 1.2), "maximum", ["roiPolygon", 2, "x"]),
+    ("profil çokgen köşesinde y yok", *POLY, _del(["roiPolygon", 0, "y"]), "required", ["roiPolygon", 0]),
+    ("profil çokgen 12 köşeden çok", *POLY, _set(["roiPolygon"], [{"x": 0.5, "y": i / 20} for i in range(13)]),
+     "maxItems", ["roiPolygon"]),
     ("olay ts tarih-saat değil", *EVENT, _set(["ts"], "2026-10-01"), "format", ["ts"]),
     ("olay eventId uuid değil", *EVENT, _set(["eventId"], "42"), "format", ["eventId"]),
     ("olay tipi geçersiz", *EVENT, _set(["type"], "pause"), "enum", ["type"]),

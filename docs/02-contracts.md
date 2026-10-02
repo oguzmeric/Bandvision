@@ -12,6 +12,7 @@ Bir ürün tipinin tüm kalibrasyon ve QC ayarları. iOS'ta da edge'de de aynı 
 | `schema` | `"bantvision.profile.v1"` | |
 | `id`, `name` | uuid, string | |
 | `roi` | `{x,y,width,height}` | Döndürülmüş (dik) görüntüde ilgi alanı |
+| `roiPolygon` | `[{x,y}]`, 3–12 köşe, isteğe bağlı | Çokgen ilgi alanı (eğik bant, kenarda hareket). Varsa maske = `roi` ∩ çokgen ve `roi` çokgenin sınır kutusudur (algoritma §2.0). Yoksa davranış eskisi gibi |
 | `linePosition` | 0–1 | Sayım çizgisinin akış eksenindeki konumu |
 | `direction` | `down/up/right/left` | Akış yönü |
 | `diffThreshold` | 5–120 | Arka plan farkı eşiği (gri seviye) |
