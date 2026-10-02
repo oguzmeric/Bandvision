@@ -340,6 +340,7 @@ struct NetworkCameraForm: View {
         if let channelError {
             Label(channelError, systemImage: "xmark.octagon.fill")
                 .foregroundStyle(.red)
+                .accessibilityElement(children: .combine)       // simge + metin tek öğe: metin okunur
                 .accessibilityIdentifier("channelError")
             Text(recorderHelp).font(.caption).foregroundStyle(.secondary)
         }
@@ -446,6 +447,7 @@ struct NetworkCameraForm: View {
                 Label("Bağlandı · \(result.width)×\(result.height) · \(result.codec)",
                       systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+                    .accessibilityElement(children: .combine)       // simge + metin tek öğe: metin okunur
                     .accessibilityIdentifier("testResult")
                 if result.width > 1280 {
                     Text("Sayım için alt akış (ör. 640×360) yeterli ve daha az pil/ısı demek.")
@@ -454,6 +456,7 @@ struct NetworkCameraForm: View {
             }
             if let errorText {
                 Label(errorText, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                    .accessibilityElement(children: .combine)       // simge + metin tek öğe: metin okunur
                     .accessibilityIdentifier("testError")
                 Text(config.kind == .camera
                      ? "Kontrol et: IP adresi doğru mu · telefon kamerayla aynı ağda mı (misafir Wi-Fi çoğu zaman kameralara erişemez) · kamerada RTSP açık mı, port 554 mü · kullanıcı adı/şifre · marka/kanal doğru mu (olmazsa \"Diğer\" ile tam adres). iPhone \"Yerel ağ\" izni istediyse izin ver."

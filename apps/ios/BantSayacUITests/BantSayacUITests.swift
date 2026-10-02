@@ -99,8 +99,11 @@ final class BantSayacUITests: XCTestCase {
         app.descendants(matching: .any)[id].firstMatch
     }
 
+    /// Açık klavye alttaki alanı örtebilir (dokunuş klavyeye gider): önce kapatılır, alan görünür yapılır.
     private func fill(_ field: XCUIElement, _ text: String, clear: Int = 0) {
         XCTAssertTrue(field.waitForExistence(timeout: 10), "alan yok: \(field)")
+        dismissKeyboard(XCUIApplication())
+        if !field.isHittable { XCUIApplication().swipeUp(velocity: .slow) }
         field.tap()
         if clear > 0 { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: clear)) }
         field.typeText(text)
