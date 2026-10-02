@@ -81,9 +81,11 @@ jobs:
               runOnDemandRestart: false
             # Sahte Hikvision (kanal 1 alt akış) ve Dahua kayıt cihazı yolları (sorgu dizgesi yola girmez)
             Streaming/Channels/102:
-              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
+              runOnDemand: $FF -stream_loop -1 -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
+              runOnDemandCloseAfter: 60s
             cam/realmonitor:
-              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
+              runOnDemand: $FF -stream_loop -1 -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/\$MTX_PATH
+              runOnDemandCloseAfter: 60s
           EOF
           (cd "$RUNNER_TEMP/mtx" && nohup ./mediamtx mediamtx.yml > "$RUNNER_TEMP/mediamtx.log" 2>&1 &)
           for i in $(seq 1 40); do nc -z 127.0.0.1 8554 && break; sleep 0.5; done
@@ -120,7 +122,8 @@ jobs:
           moq: false
           paths:
             "~^tok":
-              runOnDemand: $FF -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:555/\$MTX_PATH
+              runOnDemand: $FF -stream_loop -1 -re -i $CLIP -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:555/\$MTX_PATH
+              runOnDemandCloseAfter: 60s
           EOF
           (cd "$RUNNER_TEMP/mtx555" && nohup "$RUNNER_TEMP/mtx/mediamtx" mediamtx.yml > "$RUNNER_TEMP/mediamtx555.log" 2>&1 &)
           # Sahte kayıt cihazları (tools/mock_nvr.py): Hikvision/Dahua HTTP 8081 (Digest), TRASSIR SDK HTTPS 8080

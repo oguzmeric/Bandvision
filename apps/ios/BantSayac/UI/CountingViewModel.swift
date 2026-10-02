@@ -361,7 +361,7 @@ final class CountingViewModel: ObservableObject {
 
     /// UI testi (ayar ekranları): önceki testten kalan ağ ayarı ve şifreler silinir, kamera açılmaz.
     func prepareUITestForms() {
-        networkReconnect = false
+        networkReconnect = true                           // gerçek kullanım gibi: koparsa yeniden bağlanır
         networkPasswords = [:]
         networkConfig = NetworkCameraConfig()
         networkConfig.save()
