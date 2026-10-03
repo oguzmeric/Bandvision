@@ -42,8 +42,12 @@ struct UncheckedSendable<T>: @unchecked Sendable {
 enum CalibrationEvent {
     case backgroundProgress(Double)
     case backgroundDone(threshold: Int)
+    /// Gürültü eşiği üst sınıra dayandı: öğrenirken bantta ürün/hareket vardı. Eşik değiştirilmedi.
+    case backgroundRejected(measured: Int)
     case sampleProgress(done: Int, target: Int)
     case sampleDone(expectedArea: Double)
+    /// Şerit tarama (§4.9): ürün boyu öğrenildi (ROI akış uzunluğuna oranla)
+    case lengthDone(productLength: Double)
 }
 
 /// Tüm görüntü işleme hattı. Durum yalnızca `queue` üzerinde değişir;
@@ -51,13 +55,16 @@ enum CalibrationEvent {
 final class FrameProcessor: @unchecked Sendable {
     private enum CalibState {
         case none
-        case background(frame: Int, maxDiff: Int)
+        /// updateThreshold: false → yalnızca arka plan görüntüsü öğrenilir, kayıtlı eşik korunur
+        case background(frame: Int, maxDiff: Int, updateThreshold: Bool)
         case sample(areas: [Double], target: Int)
     }
 
     let queue: DispatchQueue
     private let segmenter = BackgroundSegmenter()
     private let tracker = BlobTracker()
+    private let lineScan = LineScanCounter()
+    private var lastFrameSize = (width: 0, height: 0)
     private var profile = ProductProfile.generic()
     private var counting = false
     private var total = 0
@@ -122,24 +129,38 @@ final class FrameProcessor: @unchecked Sendable {
     func resetTracking(resetBackground: Bool) {
         queue.async {
             self.tracker.reset()
+            self.lineScan.reset()
             self.countNumbers.removeAll()
             if resetBackground { self.segmenter.reset() }
         }
     }
 
-    func startBackgroundLearning() {
+    /// §5 Boş bant öğrenme. `updateThreshold: false` (video başında otomatik): yalnızca arka plan görüntüsü;
+    /// kayıtlı eşik değişmez (kullanıcının Kaydet ettiği kalibrasyon sabit kalır).
+    func startBackgroundLearning(updateThreshold: Bool = true) {
         queue.async {
             self.tracker.reset()
+            self.lineScan.reset()
             self.countNumbers.removeAll()
-            self.calib = .background(frame: 0, maxDiff: 0)
+            self.calib = .background(frame: 0, maxDiff: 0, updateThreshold: updateThreshold)
         }
     }
 
     func startSampleLearning(target: Int) {
         queue.async {
             self.tracker.reset()
+            self.lineScan.reset()
             self.countNumbers.removeAll()
             self.calib = .sample(areas: [], target: target)
+        }
+    }
+
+    /// Video bitti (§4.9 flush): şerit taramada son karede çizgiye yarım binmiş ürünler merkezlerine göre sayılır.
+    /// Kuyruk sıralı olduğundan videonun son karesinden sonra çalışır.
+    func finishVideo() {
+        queue.async {
+            guard self.profile.mode == .linescan, case .none = self.calib, self.counting else { return }
+            self.countLineScan(self.lineScan.flush(profile: self.profile), pixelBuffer: nil)
         }
     }
 
@@ -169,9 +190,15 @@ final class FrameProcessor: @unchecked Sendable {
         let maxDist = min(0.5, profile.maxMatchDistance * k)
         let rate = 1 - pow(1 - profile.backgroundRate, k)
         let maxMissed = max(2, roundHalfEven(6 / k))
+        lastFrameSize = (frame.width, frame.height)
+
+        if profile.mode == .linescan {
+            processLineScan(frame, pixelBuffer: pixelBuffer)
+            return
+        }
 
         // §5 Boş bant öğrenme: ~1 sn (en az 15 kare)
-        if case .background(let n, let maxDiff) = calib {
+        if case .background(let n, let maxDiff, let updateThreshold) = calib {
             let nTotal = max(15, roundHalfEven(fps * 1.0))
             segmenter.learn(frame, rate: n == 0 ? 1 : 0.15)
             var m = maxDiff
@@ -181,13 +208,20 @@ final class FrameProcessor: @unchecked Sendable {
             let next = n + 1
             if next >= nTotal {
                 let th = min(100, max(12, Int(Double(m) * 1.5) + 8))
-                profile.diffThreshold = th
                 calib = .none
                 tracker.reset()
                 countNumbers.removeAll()
-                emit(.backgroundDone(threshold: th))
+                if !updateThreshold {
+                    emit(.backgroundDone(threshold: profile.diffThreshold))
+                } else if th >= 100 {
+                    // Gürültü bu kadar yüksekse bantta ürün ya da hareket vardı: eşiği bozma, kullanıcıyı uyar
+                    emit(.backgroundRejected(measured: th))
+                } else {
+                    profile.diffThreshold = th
+                    emit(.backgroundDone(threshold: th))
+                }
             } else {
-                calib = .background(frame: next, maxDiff: m)
+                calib = .background(frame: next, maxDiff: m, updateThreshold: updateThreshold)
                 if next % 6 == 0 { emit(.backgroundProgress(Double(next) / Double(nTotal))) }
             }
             publish(frame: frame, blobs: [], pixelBuffer: pixelBuffer)
@@ -356,8 +390,79 @@ final class FrameProcessor: @unchecked Sendable {
         return nums.count <= 3 ? nums.map(String.init).joined(separator: "·") : "\(first)…\(last)"
     }
 
+    // MARK: - Şerit tarama (§4.9)
+
+    private func processLineScan(_ frame: GrayFrame, pixelBuffer: CVPixelBuffer?) {
+        lineFrame = nil
+        if case .background = calib {
+            // Şerit tarama boş bant kullanmaz: öğrenme hemen biter, eşik değişmez
+            calib = .none
+            emit(.backgroundDone(threshold: profile.diffThreshold))
+        }
+        if case .sample = calib {
+            var p = profile
+            p.productLength = 0
+            _ = lineScan.process(frame, profile: p)
+            let len = lineScan.productLength
+            if len > 0 {
+                profile.productLength = len
+                calib = .none
+                emit(.lengthDone(productLength: len))
+            }
+        } else {
+            let events = lineScan.process(frame, profile: profile)
+            if counting && !events.isEmpty { countLineScan(events, pixelBuffer: pixelBuffer) }
+        }
+        publish(frame: frame, blobs: [], pixelBuffer: pixelBuffer)
+        if let pb = pixelBuffer { emitDisplayImage(pb, sourceWidth: frame.sourceWidth) }
+    }
+
+    /// Her olay bir ürün: kendi sıra numarası (ekrandaki işaret kimliği = olay kimliği) ve kalite kartı kırpıntısı.
+    private func countLineScan(_ events: [LineScanCounter.Event], pixelBuffer: CVPixelBuffer?) {
+        guard !events.isEmpty else { return }
+        var running = total
+        for e in events {
+            countNumbers[e.id, default: []].append(contentsOf: (running + 1)...(running + e.delta))
+            running += e.delta
+        }
+        let delta = running - total
+        total = running
+        let t = total
+        DispatchQueue.main.async { [weak self] in self?.onCount?(delta, t) }
+        guard let pb = pixelBuffer, lastFrameSize.width > 0 else { return }
+        let markers = lineScan.markers(width: lastFrameSize.width, height: lastFrameSize.height, profile: profile)
+        let r = profile.roi
+        let len = max(0.05, profile.lineProductLength > 0 ? lineScan.productLength : 0.2)
+        for e in events {
+            guard let m = markers.first(where: { $0.id == e.id }) else { continue }
+            // Ürünün bulunduğu bant parçası: ROI genişliğinde, akış boyunca bir ürün boyu
+            let bbox: CGRect
+            if profile.direction.isVertical {
+                let hgt = len * Double(r.height)
+                bbox = CGRect(x: Double(r.minX), y: m.y - hgt / 2, width: Double(r.width), height: hgt)
+            } else {
+                let wdt = len * Double(r.width)
+                bbox = CGRect(x: m.x - wdt / 2, y: Double(r.minY), width: wdt, height: Double(r.height))
+            }
+            let clipped = bbox.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            guard !clipped.isNull, let region = Self.copyRegion(pb, bbox: clipped) else { continue }
+            let buffer = UncheckedSendable(value: region)
+            let context = UncheckedSendable(value: cropContext)
+            let trackId = e.id, time = Date(), label = Self.numberLabel(countNumbers[e.id] ?? [])
+            cropQueue.async { [weak self] in
+                guard let jpeg = Self.encodeJPEG(buffer.value, context: context.value), let self else { return }
+                let crop = CountCrop(trackId: trackId, delta: 1, label: label, time: time, jpeg: jpeg)
+                DispatchQueue.main.async { [weak self] in self?.onCrop?(crop) }
+            }
+        }
+    }
+
     /// İz işaretleri görüntü koordinatında (açılı çizgide çerçeveden geri çevrilir)
     private func displayMarkers() -> [TrackMarker] {
+        if profile.mode == .linescan {
+            return lineScan.markers(width: lastFrameSize.width, height: lastFrameSize.height, profile: profile)
+                .map { TrackMarker(id: $0.id, x: $0.x, y: $0.y, counted: $0.counted) }
+        }
         guard let lf = lineFrame else { return tracker.markers }
         return tracker.markers.map {
             let p = lf.toImage($0.x, $0.y)

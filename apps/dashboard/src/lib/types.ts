@@ -2,7 +2,8 @@
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "expired";
 export type JobStage = "calibrating" | "counting" | "encoding";
-export type Preset = "generic" | "egg" | "flour";
+export type Preset = "generic" | "egg" | "flour" | "box";
+export type CountMode = "blob" | "linescan";
 export type Direction = "down" | "up" | "right" | "left";
 export type ResultFile = "annotated.mp4" | "counts.csv" | "profile.json" | "background.png";
 
@@ -13,6 +14,8 @@ export interface Point {
 
 export interface JobOptions {
   preset?: Preset;
+  countMode?: CountMode;
+  productLength?: number;
   truth?: number;
   direction?: Direction;
   roi?: { x: number; y: number; width: number; height: number };
@@ -38,6 +41,8 @@ export interface AnalysisJob {
     truth: number | null;
     errorPct: number | null;
     calibration?: {
+      countMode?: CountMode;
+      productLength?: number;
       threshold?: number;
       direction?: Direction;
       background?: string;
@@ -53,7 +58,20 @@ export interface AnalysisJob {
 
 export const RESULT_FILES: ResultFile[] = ["annotated.mp4", "counts.csv", "profile.json", "background.png"];
 
-export const PRESET_LABELS: Record<Preset, string> = { egg: "Yumurta", flour: "Un torbası", generic: "Genel ürün" };
+export const PRESET_LABELS: Record<Preset, string> = {
+  egg: "Yumurta",
+  flour: "Un torbası",
+  box: "Koli / kutu",
+  generic: "Genel ürün",
+};
+
+/** Hazır profilin varsayılan sayım yöntemi (services/edge Profile ile aynı) */
+export const PRESET_MODE: Record<Preset, CountMode> = { egg: "blob", flour: "linescan", box: "linescan", generic: "blob" };
+
+export const MODE_LABELS: Record<CountMode, string> = {
+  blob: "Ayrık ürün (arka plan farkı)",
+  linescan: "Bitişik / hacimli (şerit tarama)",
+};
 
 export const DIRECTION_LABELS: Record<Direction, string> = {
   down: "Yukarıdan aşağı",

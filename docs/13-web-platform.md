@@ -29,7 +29,7 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 ## Analiz sunucusu API (v1)
 | Yöntem | Yol | Açıklama |
 |---|---|---|
-| `POST` | `/api/v1/jobs` | `multipart/form-data`: `file` (video), `options` (JSON, isteğe bağlı: `preset`, `truth`, `direction`, `roi`, `roiPolygon`, `line`, `countLine`, `bgRange`). `202` + iş |
+| `POST` | `/api/v1/jobs` | `multipart/form-data`: `file` (video), `options` (JSON, isteğe bağlı: `preset`, `countMode`, `productLength`, `truth`, `direction`, `roi`, `roiPolygon`, `line`, `countLine`, `bgRange`). `202` + iş |
 | `GET` | `/api/v1/jobs` | Son işler (yeniden eskiye) |
 | `GET` | `/api/v1/jobs/{id}` | İş: durum, ilerleme, sonuç |
 | `GET` | `/api/v1/jobs/{id}/files/{ad}` | `annotated.mp4`, `counts.csv`, `profile.json`, `background.png` |

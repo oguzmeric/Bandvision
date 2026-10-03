@@ -32,6 +32,14 @@
         "b": { "$ref": "#/$defs/point" }
       }
     },
+    "countMode": {
+      "description": "Sayım yöntemi (algoritma §4.9). blob: arka plan farkı + izleme (ayrık ürünler, varsayılan). linescan: şerit tarama (tek sıra gelen bitişik/aralıklı hacimli ürünler: torba, koli; boş bant öğrenmesi gerekmez, açılı çizgiyle kullanılmaz).",
+      "enum": ["blob", "linescan"]
+    },
+    "productLength": {
+      "description": "linescan: tek ürünün akış boyunca boyu, ROI'nin akış eksenindeki uzunluğuna oranla. 0 = otomatik öğren.",
+      "type": "number", "minimum": 0, "maximum": 2
+    },
     "linePosition": { "type": "number", "minimum": 0, "maximum": 1 },
     "direction": { "enum": ["down", "up", "right", "left"] },
     "diffThreshold": { "type": "integer", "minimum": 5, "maximum": 120 },

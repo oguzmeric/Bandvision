@@ -30,6 +30,7 @@ import numpy as np
 
 from .core import Pipeline, Profile
 from .core.lineframe import nearest_direction
+from .core.linescan import LineScanCounter, flow_profile, match_shift
 from .core.pipeline import FrameResult
 from .core.profile import Roi
 from .core.segmenter import downsample, roi_mask
@@ -50,7 +51,8 @@ def profile_mask(profile: Profile, w: int, h: int) -> np.ndarray:
     poly = tuple(profile.roiPolygon) if profile.roiPolygon else None
     return _mask((r.x, r.y, r.width, r.height), poly, w, h)
 
-PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack}
+PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box}
+MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek sıra, bitişik hacimli ürünler)"}
 DIRECTION_TR = {"down": "yukarıdan aşağı", "up": "aşağıdan yukarı", "right": "soldan sağa", "left": "sağdan sola"}
 
 # BGR renkler (iOS bindirmesiyle aynı anlam: sarı ROI, turuncu çizgi, yeşil leke, camgöbeği sayılmış iz)
@@ -249,8 +251,76 @@ def estimate_expected_area(info: VideoInfo, profile: Profile, bg: np.ndarray, wi
     return unit, len(areas), mixed
 
 
+def estimate_direction_linescan(info: VideoInfo, profile: Profile, window: float, pairs: int = 40
+                                ) -> tuple[str | None, tuple[float, float]]:
+    """Şerit tarama (§4.9): dört yön için çizgi çevresindeki kaymayı ölç; en büyük medyan kayma akış yönüdür.
+    Yanlış yönde eşleşme ya belirsiz ya da ~0 çıkar (kayma yalnızca akış yönünde aranır)."""
+    end = min(info.duration, window)
+    n_avail = max(2, int(end * info.fps))
+    step = max(1, n_avail // pairs)
+    shifts: dict[str, list[float]] = {d: [] for d in ("down", "up", "right", "left")}
+    prev = None
+    for k, _, f in read_frames(info, 0.0, end):
+        g = downsample(to_gray(f, profile.rotation), profile.processingWidth)[0]
+        if prev is not None and k % step == 0:
+            for d, found in shifts.items():
+                q = Profile.from_dict(profile.to_dict())
+                q.direction = d
+                fa, fb = flow_profile(prev, q), flow_profile(g, q)
+                if fa is None or fb is None:
+                    continue
+                m = match_shift(fa[0][1], fb[0][1], fb[1])
+                found.append(m[0] if m else 0.0)
+        prev = g
+    # Ortalama: ekran kayıtlarında tekrarlanan karelerin kayması 0'dır, medyanı sıfıra çeker
+    med = {d: (float(np.mean(v)) if v else 0.0) for d, v in shifts.items()}
+    best = max(med, key=lambda d: med[d])
+    if med[best] < 0.2:
+        return None, (0.0, 0.0)
+    flow = {"down": (0.0, med[best]), "up": (0.0, -med[best]), "right": (med[best], 0.0), "left": (-med[best], 0.0)}
+    return best, flow[best]
+
+
+def learn_product_length(info: VideoInfo, profile: Profile, window: float) -> float:
+    """Şerit tarama (§4.9.5) ön geçişi: ürün boyunu öğren ki sayım geçişinde sayılar video boyunca aksın
+    (tek geçişte boy ancak ~3 alan boyu bant aktıktan sonra öğrenilir)."""
+    q = Profile.from_dict(profile.to_dict())
+    q.productLength = 0.0
+    lc = LineScanCounter()
+    for _, _, f in read_frames(info, 0.0, min(info.duration, window)):
+        lc.process(downsample(to_gray(f, q.rotation), q.processingWidth)[0], q)
+        if lc.product_length > 0:
+            return lc.product_length
+    lc.flush(q)
+    return lc.product_length
+
+
 def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction: bool,
               fixed_area: bool, bg_range: tuple[float, float] | None = None) -> Calibration:
+    if profile.countMode == "linescan":
+        # §4.9: arka plan ve leke alanı gerekmez; yalnızca yön (ürün boyu sayım sırasında öğrenilir)
+        first = next((f for _, _, f in read_frames(info, 0.0, min(info.duration, 1.0))), None)
+        if first is None:
+            raise SystemExit("Videodan kare okunamadı.")
+        bg = downsample(to_gray(first, profile.rotation), profile.processingWidth)[0].astype(np.float32)
+        cal = Calibration(bg, profile.diffThreshold, profile.direction, (0.0, 0.0), background_from="gerekmiyor")
+        if not fixed_direction:
+            d, flow = estimate_direction_linescan(info, profile, window)
+            cal.flow = flow
+            if d is None:
+                cal.notes.append("Akış yönü bulunamadı (hareket çok az); varsayılan kullanıldı: "
+                                 + DIRECTION_TR.get(profile.direction, profile.direction) + ".")
+            else:
+                profile.direction = d
+                cal.direction = d
+        if profile.productLength <= 0:
+            plen = learn_product_length(info, profile, window)
+            if plen > 0:
+                profile.productLength = plen
+            else:
+                cal.notes.append("Ürün boyu öğrenilemedi (bant hareketi ya da ürün aralıkları bulunamadı). "
+                                 "Alanı ve çizgiyi bandın üstüne koyup tekrar dene.")
+        return cal
     bg, th, _ = estimate_background(info, profile, window, bg_range=bg_range)
     cal = Calibration(bg, th, profile.direction, (0.0, 0.0))
     if bg_range:
@@ -378,6 +448,7 @@ class RunResult:
     events: list[tuple[float, int, int, int]]   # (zaman, iz, delta, toplam)
     frames: int
     seconds: float
+    product_length: float = 0.0                  # şerit tarama: öğrenilen ürün boyu (ROI akış uzunluğuna oranla)
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
@@ -392,7 +463,9 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     t0 = time.perf_counter()
     n = 0
     numbers: dict[int, list[int]] = {}            # iz → bu izde sayılan ürünlerin sıra numaraları
+    last_t = 0.0
     for k, t, frame in read_frames(info):
+        last_t = t
         r = pipe.process(frame, t)
         split_numbers(numbers, pipe.tracker.last_splits)
         running = pipe.total - sum(e.delta for e in r.counts)
@@ -428,11 +501,14 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
                 print(f"\r  işleniyor %{100 * k // max(1, info.frames):3d}  sayı={pipe.total}", end="", flush=True)
     if writer is not None:
         writer.release()
+    for e in pipe.finish(last_t):               # §4.9: son karede çizgiye yarım binmiş ürünler
+        per_minute[int(last_t // 60)] = per_minute.get(int(last_t // 60), 0) + e.delta
+        events.append((round(last_t, 3), e.track_id, e.delta, pipe.total))
     if callable(progress):
         progress(1.0, pipe.total)
     elif progress:
         print(f"\r  işleniyor %100  sayı={pipe.total}          ")
-    return RunResult(pipe.total, per_minute, events, n, time.perf_counter() - t0)
+    return RunResult(pipe.total, per_minute, events, n, time.perf_counter() - t0, pipe.linescan.product_length)
 
 
 # ---------------------------------------------------------------- CLI
@@ -471,6 +547,12 @@ def build_profile(a: argparse.Namespace) -> Profile:
         p.processingWidth = a.width
     if a.expected_area is not None:
         p.expectedArea = a.expected_area
+    if a.mode:
+        p.countMode = a.mode
+    if a.product_length is not None:
+        p.productLength = a.product_length
+    if p.countMode == "linescan" and p.countLine is not None:
+        raise SystemExit("Şerit tarama açılı çizgiyle çalışmaz; düz çizgi (--line, --direction) kullan.")
     return p
 
 
@@ -489,6 +571,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
     ap.add_argument("--width", type=int, help="işleme genişliği (px), ör. 160/240/360")
     ap.add_argument("--expected-area", type=float, help="tek ürün alanı (vermezsen otomatik öğrenilir)")
+    ap.add_argument("--mode", choices=["blob", "linescan"],
+                    help="sayım yöntemi: blob = ayrık ürünler (arka plan farkı), linescan = şerit tarama (tek sıra "
+                         "bitişik torba/koli; boş bant gerekmez). Varsayılan: hazır profilden")
+    ap.add_argument("--product-length", type=float,
+                    help="şerit tarama: tek ürün boyu, ROI'nin akış uzunluğuna oranla (vermezsen otomatik öğrenilir)")
     ap.add_argument("--bg-range", help="boş bandın göründüğü aralık (sn), ör. 0,1.5; bant çok doluysa gerekli")
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
@@ -517,9 +604,14 @@ def main(argv: list[str] | None = None) -> int:
     cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
         cal.background.astype(np.uint8), (cal.background.shape[1] * 3, cal.background.shape[0] * 3),
         interpolation=cv2.INTER_NEAREST))
-    print(f"  arka plan: {cal.background_from} (bkz. arka_plan.png; boş bant görünmeli)")
-    print(f"  eşik={cal.threshold}  yön={profile.direction} (akış dx={cal.flow[0]:+.2f} dy={cal.flow[1]:+.2f})"
-          f"  tek ürün alanı={profile.expectedArea:.5f} ({cal.area_samples} örnek)")
+    print(f"  yöntem: {MODE_TR.get(profile.countMode, profile.countMode)}")
+    if profile.countMode == "linescan":
+        print(f"  yön={profile.direction} (akış {cal.flow[0]:+.2f}, {cal.flow[1]:+.2f} px/kare)"
+              f"  ürün boyu={profile.productLength:.3f} (alanın akış boyuna oranı)")
+    else:
+        print(f"  arka plan: {cal.background_from} (bkz. arka_plan.png; boş bant görünmeli)")
+        print(f"  eşik={cal.threshold}  yön={profile.direction} (akış dx={cal.flow[0]:+.2f} dy={cal.flow[1]:+.2f})"
+              f"  tek ürün alanı={profile.expectedArea:.5f} ({cal.area_samples} örnek)")
     for note in cal.notes:
         print("  ! " + note)
     if any("Leke boyları" in n for n in cal.notes):
@@ -535,7 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         "video": src.name, "fps": info.fps, "seconds": round(info.duration, 2),
         "size": [info.width, info.height], "count": res.total, "truth": a.truth,
         "errorPct": (round(100 * (res.total - a.truth) / a.truth, 2) if a.truth else None),
-        "calibration": {"threshold": cal.threshold, "direction": profile.direction,
+        "calibration": {"countMode": profile.countMode, "productLength": round(profile.productLength, 4),
+                        "threshold": cal.threshold, "direction": profile.direction,
                         "background": cal.background_from,
                         "flow": [round(cal.flow[0], 3), round(cal.flow[1], 3)],
                         "expectedArea": profile.expectedArea, "areaSamples": cal.area_samples,
@@ -555,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
         diff = res.total - a.truth
         print(f"   doğru: {a.truth}   fark: {diff:+d} ({100 * diff / a.truth:+.1f}%)", end="")
     print(f"\nÇıktılar: {out_dir}" + ("" if a.no_video else "  (isaretli.mp4, arka_plan.png, ozet.json, profil.json, sayimlar.csv)"))
-    if not math.isfinite(profile.expectedArea) or profile.expectedArea == 0:
+    if profile.countMode != "linescan" and (not math.isfinite(profile.expectedArea) or profile.expectedArea == 0):
         print("İpucu: ürünler birbirine değiyorsa --expected-area ile tek ürün alanını elle ver.")
     return 0
 

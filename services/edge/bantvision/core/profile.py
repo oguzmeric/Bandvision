@@ -77,6 +77,10 @@ class Profile:
     minHits: int = 2
     maxMatchDistance: float = 0.15
     backgroundRate: float = 0.02
+    # Sayım yöntemi (§4.9): "blob" = arka plan farkı + izleme; "linescan" = şerit tarama (tek sıra, bitişik hacimli ürün)
+    countMode: str = "blob"
+    # linescan: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla (0 = otomatik öğren)
+    productLength: float = 0.0
     rotation: int = 0            # source.rotation (saat yönünde derece)
     referenceFps: float = 60.0   # source.referenceFps
     mmPerPixel: float | None = None  # scale.mmPerPixel (tam çözünürlük)
@@ -98,7 +102,7 @@ class Profile:
         p = cls(name=d.get("name", "Profil"))
         simple = ["id", "linePosition", "direction", "diffThreshold", "expectedArea", "minAreaFactor",
                   "minAreaAbs", "splitTouching", "maxMultiplicity", "closeIterations", "processingWidth",
-                  "minHits", "maxMatchDistance", "backgroundRate"]
+                  "minHits", "maxMatchDistance", "backgroundRate", "countMode", "productLength"]
         for k in simple:
             if k in d:
                 setattr(p, k, d[k])
@@ -137,6 +141,7 @@ class Profile:
             "closeIterations": self.closeIterations, "processingWidth": self.processingWidth,
             "minHits": self.minHits, "maxMatchDistance": self.maxMatchDistance,
             "backgroundRate": self.backgroundRate,
+            "countMode": self.countMode, "productLength": float(self.productLength),
             "source": {"rotation": self.rotation, "referenceFps": self.referenceFps},
             "scale": {"mmPerPixel": self.mmPerPixel},
             "qc": asdict(self.qc),
@@ -174,6 +179,13 @@ class Profile:
 
     @classmethod
     def flour_sack(cls) -> Profile:
+        # Torbalar tek sıra, çoğu zaman bitişik/üst üste: şerit tarama (§4.9); leke ayarları "blob"a geçilirse diye
         return cls(name="Un torbası", roi=Roi(0.05, 0.05, 0.9, 0.9), diffThreshold=22, minAreaFactor=0.45,
                    minAreaAbs=0.01, splitTouching=True, maxMultiplicity=3, closeIterations=2,
-                   processingWidth=160, maxMatchDistance=0.20)
+                   processingWidth=240, maxMatchDistance=0.20, countMode="linescan")
+
+    @classmethod
+    def box(cls) -> Profile:
+        return cls(name="Koli / kutu", roi=Roi(0.05, 0.05, 0.9, 0.9), diffThreshold=22, minAreaFactor=0.45,
+                   minAreaAbs=0.01, splitTouching=True, maxMultiplicity=3, closeIterations=2,
+                   processingWidth=240, maxMatchDistance=0.20, countMode="linescan")

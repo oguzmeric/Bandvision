@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .lineframe import LineFrame
+from .linescan import LineScanCounter
 from .profile import Profile
 from .qc import InspectionResult, inspect
 from .segmenter import BackgroundSegmenter, Blob, downsample
@@ -39,6 +40,7 @@ class Pipeline:
         self.idle_seconds = idle_seconds
         self.segmenter = BackgroundSegmenter()
         self.tracker = BlobTracker()
+        self.linescan = LineScanCounter()       # §4.9 (countMode = "linescan")
         self.counting = True
         self.total = 0
         self._calib: str | None = None          # "background" | "sample"
@@ -46,6 +48,7 @@ class Pipeline:
         self._calib_max = 0
         self._calib_areas: list[float] = []
         self._calib_target = 8
+        self._calib_update = True
         self._ts: deque[float] = deque()
         self._last_activity: float | None = None
         self.running = False
@@ -56,15 +59,21 @@ class Pipeline:
     def set_profile(self, profile: Profile, reset_background: bool = False) -> None:
         self.profile = profile
         self.tracker.reset()
+        self.linescan.reset()
         if reset_background:
             self.segmenter.reset()
 
-    def start_background_learning(self) -> None:
+    def start_background_learning(self, update_threshold: bool = True) -> None:
+        """§5. `update_threshold=False` (video başında otomatik): yalnızca arka plan görüntüsü öğrenilir,
+        kaydedilmiş eşik korunur."""
         self.tracker.reset()
+        self.linescan.reset()
         self._calib, self._calib_n, self._calib_max = "background", 0, 0
+        self._calib_update = update_threshold
 
     def start_sample_learning(self, target: int = 8) -> None:
         self.tracker.reset()
+        self.linescan.reset()               # şerit taramada: ürün boyu baştan öğrenilir
         self._calib, self._calib_areas, self._calib_target = "sample", [], target
 
     def cancel_calibration(self) -> None:
@@ -73,6 +82,16 @@ class Pipeline:
     def reset_count(self) -> None:
         self.total = 0
         self.tracker.reset()
+        self.linescan.reset()
+
+    def finish(self, ts: float) -> list[CountEvent]:
+        """Video sonu (§4.9): şerit taramada çizgiye yarım binmiş son ürünler merkezlerine göre sayılır."""
+        p = self.profile
+        if p.countMode != "linescan" or self._calib is not None or not self.counting:
+            return []
+        out = [CountEvent(e.seg_id, e.delta, True, 0.0, None) for e in self.linescan.flush(p)]
+        self.total += sum(e.delta for e in out)
+        return out
 
     # ---- fps ----
     def _update_fps(self, ts: float) -> float:
@@ -112,6 +131,9 @@ class Pipeline:
         calib_events: list[tuple[str, Any]] = []
         full_size = (full.shape[1], full.shape[0])
 
+        if p.countMode == "linescan":
+            return self._process_linescan(small, ts, fps, full_size, calib_events)
+
         # §5 boş bant öğrenme
         if self._calib == "background":
             n_total = max(15, round(fps * 1.0))
@@ -122,10 +144,16 @@ class Pipeline:
             self._calib_n = n + 1
             if self._calib_n >= n_total:
                 th = int(min(100, max(12, int(self._calib_max * 1.5) + 8)))
-                p.diffThreshold = th
                 self._calib = None
                 self.tracker.reset()
-                calib_events.append(("background_done", th))
+                if not self._calib_update:
+                    calib_events.append(("background_done", p.diffThreshold))
+                elif th >= 100:
+                    # Gürültü üst sınıra dayandı: öğrenirken bantta ürün/hareket vardı; eşiği bozma
+                    calib_events.append(("background_rejected", th))
+                else:
+                    p.diffThreshold = th
+                    calib_events.append(("background_done", th))
             else:
                 calib_events.append(("background_progress", self._calib_n / n_total))
             return FrameResult(ts, [], [], [], [], calib_events, None, fps, self.total, full_size, small)
@@ -185,3 +213,38 @@ class Pipeline:
             markers = [TrackMarker(m.id, *frame_lf.to_image(m.x, m.y), m.counted) for m in markers]
         return FrameResult(ts, blobs, markers, counts, inspections, calib_events, change,
                            fps, self.total, full_size, small)
+
+    def _process_linescan(self, small: np.ndarray, ts: float, fps: float, full_size: tuple[int, int],
+                          calib_events: list[tuple[str, Any]]) -> FrameResult:
+        """§4.9 Şerit tarama: arka plan ve leke yok. Boş bant öğrenme gerekmez (hemen biter, eşik değişmez);
+        örnek öğrenme ürün boyunu öğrenir (`productLength`)."""
+        p = self.profile
+        if self._calib == "background":
+            self._calib = None
+            calib_events.append(("background_done", p.diffThreshold))
+        sampling = self._calib == "sample"
+        if sampling:
+            saved, p.productLength = p.productLength, 0.0
+            events = self.linescan.process(small, p)
+            p.productLength = saved
+            if self.linescan.product_length > 0:
+                p.productLength = self.linescan.product_length
+                self._calib = None
+                calib_events.append(("sample_done", p.productLength))
+            events = []
+        else:
+            events = self.linescan.process(small, p)
+        counts: list[CountEvent] = []
+        if self.counting and not sampling:
+            for e in events:
+                self.total += e.delta
+                counts.append(CountEvent(e.seg_id, e.delta, True, 0.0, None))
+        if counts or self.linescan.moving:
+            self._last_activity = ts
+        now_running = self._last_activity is not None and ts - self._last_activity <= self.idle_seconds
+        change = None
+        if now_running != self.running:
+            self.running = now_running
+            change = now_running
+        markers = [TrackMarker(m.id, m.x, m.y, m.counted) for m in self.linescan.markers(small.shape, p)]
+        return FrameResult(ts, [], markers, counts, [], calib_events, change, fps, self.total, full_size, small)

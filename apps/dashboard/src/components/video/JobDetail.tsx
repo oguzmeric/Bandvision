@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { bytes, duration, int, num, signedPct, when } from "@/lib/format";
-import { DIRECTION_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
+import { DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
 import CountChart from "./CountChart";
 import { StatusPill } from "./JobList";
 
@@ -105,10 +105,20 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
             <div className="min-w-0">
               <p className="eyebrow mb-2.5">Kalibrasyon</p>
               <dl className="mb-4 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-[13.5px]">
-                <dt className="text-muted">Arka plan</dt><dd className="font-medium">{r.calibration?.background ?? "—"}</dd>
-                <dt className="text-muted">Eşik</dt><dd className="font-medium">{r.calibration?.threshold ?? "—"}</dd>
+                <dt className="text-muted">Yöntem</dt><dd className="font-medium">{MODE_LABELS[r.calibration?.countMode ?? "blob"]}</dd>
                 <dt className="text-muted">Akış yönü</dt><dd className="font-medium">{r.calibration?.direction ? DIRECTION_LABELS[r.calibration.direction] : "—"}</dd>
-                <dt className="text-muted">Tek ürün alanı</dt><dd className="font-medium">{r.calibration?.expectedArea ? num(r.calibration.expectedArea, 4) : "—"}</dd>
+                {r.calibration?.countMode === "linescan" ? (
+                  <>
+                    <dt className="text-muted">Ürün boyu</dt>
+                    <dd className="font-medium">{r.calibration.productLength ? `alanın %${num(r.calibration.productLength * 100, 0)}` : "—"}</dd>
+                  </>
+                ) : (
+                  <>
+                    <dt className="text-muted">Arka plan</dt><dd className="font-medium">{r.calibration?.background ?? "—"}</dd>
+                    <dt className="text-muted">Eşik</dt><dd className="font-medium">{r.calibration?.threshold ?? "—"}</dd>
+                    <dt className="text-muted">Tek ürün alanı</dt><dd className="font-medium">{r.calibration?.expectedArea ? num(r.calibration.expectedArea, 4) : "—"}</dd>
+                  </>
+                )}
               </dl>
               {r.calibration?.notes?.map((n) => (
                 <p key={n} className="mb-3 rounded-xl bg-warn-50 px-3 py-2 text-[12.5px] text-warn-700">{n}</p>

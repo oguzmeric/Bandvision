@@ -98,7 +98,8 @@ def test_rejects_bad_uploads(client: TestClient, tmp_path: pathlib.Path) -> None
     assert r.status_code == 400 and "okunamadı" in r.json()["detail"]
     r = client.post("/api/v1/jobs", files={"file": ("bos.mp4", b"", "video/mp4")})
     assert r.status_code == 400
-    for bad in ('{"preset": "box"}', '{"sahibi": "x"}', '{"roiPolygon": [{"x": 0.1, "y": 0.1}]}', "{bozuk"):
+    for bad in ('{"preset": "palet"}', '{"countMode": "ai"}', '{"sahibi": "x"}',
+                '{"roiPolygon": [{"x": 0.1, "y": 0.1}]}', "{bozuk"):
         with CLIP.open("rb") as fh:
             r = client.post("/api/v1/jobs", files={"file": ("a.mp4", fh, "video/mp4")}, data={"options": bad})
         assert r.status_code == 422, bad
@@ -166,3 +167,10 @@ def test_failed_analysis_is_reported(client: TestClient, job_validator: Draft202
     job = wait_done(client, r.json()["id"])
     assert job["status"] == "failed" and "Kalibrasyon" in job["error"], job
     assert_contract(job_validator, job)
+
+
+def test_linescan_options_reach_video_tool() -> None:
+    """Şerit tarama seçenekleri (§4.9) komut satırına geçer."""
+    from bantvision.analyzer.jobs import options_to_args
+    args = options_to_args({"preset": "box", "countMode": "linescan", "productLength": 0.3})
+    assert args == ["--preset", "box", "--mode", "linescan", "--product-length", "0.3"]

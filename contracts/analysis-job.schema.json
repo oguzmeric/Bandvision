@@ -26,7 +26,9 @@
     "options": {
       "type": "object", "additionalProperties": false,
       "properties": {
-        "preset": { "enum": ["generic", "egg", "flour"] },
+        "preset": { "enum": ["generic", "egg", "flour", "box"] },
+        "countMode": { "enum": ["blob", "linescan"], "description": "Sayım yöntemi; verilmezse hazır profilden (un, koli: linescan)" },
+        "productLength": { "type": "number", "exclusiveMinimum": 0, "maximum": 2, "description": "linescan: tek ürün boyu (ROI akış uzunluğuna oranla); verilmezse öğrenilir" },
         "truth": { "type": "integer", "minimum": 1, "description": "Elle sayılan doğru adet; hata yüzdesi hesaplanır" },
         "direction": { "enum": ["down", "up", "right", "left"] },
         "roi": {

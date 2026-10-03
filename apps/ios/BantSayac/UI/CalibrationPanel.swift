@@ -27,8 +27,11 @@ struct CalibrationPanel: View {
                 }
             }
 
+            countModePicker
             areaShapePicker
-            lineModePicker
+            if vm.profile.mode == .blob {
+                lineModePicker
+            }
 
             Text(vm.calibrationMessage)
                 .font(.callout)
@@ -36,6 +39,78 @@ struct CalibrationPanel: View {
                 .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            if vm.profile.mode == .linescan {
+                lineScanControls
+            } else {
+                blobControls
+            }
+
+            HStack {
+                Button("İptal", role: .cancel) { vm.cancelCalibration() }
+                Spacer()
+                Button { vm.saveCalibration() } label: {
+                    Label("Kaydet", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .background(Color(white: 0.08))
+    }
+
+    /// Sayım yöntemi (§4.9): ayrık ürünler (leke) ya da bitişik/hacimli tek sıra ürünler (şerit tarama)
+    private var countModePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Sayım yöntemi", selection: Binding(
+                get: { vm.profile.mode },
+                set: { vm.setCountMode($0) }
+            )) {
+                ForEach(CountMode.allCases) { m in Text(m.title).tag(m) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("countMode")
+            Text(vm.profile.mode == .linescan
+                 ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez."
+                 : "Yumurta, meyve gibi ayrık ürünler; bant boşken arka plan öğrenilir.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var lineScanControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { vm.learnSample() } label: {
+                    Label("Ürün boyunu öğren", systemImage: "ruler")
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                }
+                .accessibilityIdentifier("learnLength")
+                if vm.profile.lineProductLength > 0 {
+                    Button { vm.profile.productLength = nil } label: {
+                        Label("Otomatik", systemImage: "arrow.counterclockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            Text(vm.profile.lineProductLength > 0
+                 ? String(format: "Ürün boyu: alanın %%%.0f'i (kaydedilince sabit kalır)", vm.profile.lineProductLength * 100)
+                 : "Ürün boyu: her başlangıçta ilk ürünlerden kendiliğinden öğrenilir")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("İpucu: turuncu çizgiyi alanın ortasına koy; alan, çizginin iki yanında en az bir ürün boyu kadar olsun.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var blobControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Button { vm.learnBackground() } label: {
                     Label("1. Boş bandı öğren", systemImage: "rectangle.dashed")
@@ -71,18 +146,7 @@ struct CalibrationPanel: View {
                  : "Tek ürün alanı: henüz öğrenilmedi")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            HStack {
-                Button("İptal", role: .cancel) { vm.cancelCalibration() }
-                Spacer()
-                Button { vm.saveCalibration() } label: {
-                    Label("Kaydet", systemImage: "checkmark")
-                }
-                .buttonStyle(.borderedProminent)
-            }
         }
-        .padding()
-        .background(Color(white: 0.08))
     }
 
     /// Görüntünün genişlik / yükseklik oranı (açılı çizginin akış yönü için)

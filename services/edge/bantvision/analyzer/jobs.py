@@ -84,6 +84,10 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
         args += ["--preset", options["preset"]]
     if options.get("truth"):
         args += ["--truth", str(int(options["truth"]))]
+    if options.get("countMode"):
+        args += ["--mode", options["countMode"]]
+    if options.get("productLength"):
+        args += ["--product-length", str(float(options["productLength"]))]
     if options.get("direction"):
         args += ["--direction", options["direction"]]
     roi = options.get("roi")

@@ -77,10 +77,34 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     var maxMatchDistance: Double
     /// Arka planın ışık değişimlerine uyum hızı.
     var backgroundRate: Double
+    /// Sayım yöntemi (§4.9). nil = leke (eski kayıtlar). İsteğe bağlı: eski kayıtlar sorunsuz açılır.
+    var countMode: CountMode? = nil
+    /// Şerit tarama: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla. nil/0 = otomatik öğren.
+    var productLength: Double? = nil
+}
+
+/// Sayım yöntemi (sözleşme `countMode`).
+enum CountMode: String, Codable, CaseIterable, Identifiable {
+    /// Arka plan farkı + izleme: ayrık ürünler (yumurta, meyve...)
+    case blob
+    /// Şerit tarama: tek sıra gelen bitişik/aralıklı hacimli ürünler (torba, koli)
+    case linescan
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .blob: return "Ayrık ürün"
+        case .linescan: return "Bitişik / hacimli"
+        }
+    }
 }
 
 extension ProductProfile {
     static let maxPolygonPoints = 12
+
+    var mode: CountMode { countMode ?? .blob }
+    /// Şerit taramada kullanılan ürün boyu (0 = öğrenilecek)
+    var lineProductLength: Double { max(0, productLength ?? 0) }
 
     /// Çokgeni ayarlar; roi çokgenin sınır kutusu olur, sayım çizgisi kutunun içinde kalır. nil → dikdörtgene dön.
     mutating func setPolygon(_ points: [NormPoint]?) {
@@ -153,8 +177,22 @@ extension ProductProfile {
                        diffThreshold: 22, expectedArea: 0,
                        minAreaFactor: 0.45, minAreaAbs: 0.01,
                        splitTouching: true, maxMultiplicity: 3,
-                       closeIterations: 2, processingWidth: 160,
-                       minHits: 2, maxMatchDistance: 0.20, backgroundRate: 0.02)
+                       closeIterations: 2, processingWidth: 240,
+                       minHits: 2, maxMatchDistance: 0.20, backgroundRate: 0.02,
+                       countMode: .linescan)
+    }
+
+    /// Koli/kutu: tek sıra, çoğu zaman bitişik — şerit tarama (§4.9)
+    static func box() -> ProductProfile {
+        ProductProfile(name: "Koli / kutu",
+                       roi: CGRect(x: 0.05, y: 0.05, width: 0.9, height: 0.9),
+                       linePosition: 0.5, direction: .down,
+                       diffThreshold: 22, expectedArea: 0,
+                       minAreaFactor: 0.45, minAreaAbs: 0.01,
+                       splitTouching: true, maxMultiplicity: 3,
+                       closeIterations: 2, processingWidth: 240,
+                       minHits: 2, maxMatchDistance: 0.20, backgroundRate: 0.02,
+                       countMode: .linescan)
     }
 
     static func generic() -> ProductProfile {

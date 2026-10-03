@@ -49,7 +49,9 @@ class CountLineIn(_Strict):
 
 class OptionsIn(_Strict):
     """Sözleşmedeki `options` ile birebir (bilinmeyen alan reddedilir)."""
-    preset: Literal["generic", "egg", "flour"] | None = None
+    preset: Literal["generic", "egg", "flour", "box"] | None = None
+    countMode: Literal["blob", "linescan"] | None = None
+    productLength: float | None = Field(default=None, gt=0, le=2)
     truth: int | None = Field(default=None, ge=1)
     direction: Literal["down", "up", "right", "left"] | None = None
     roi: RoiIn | None = None

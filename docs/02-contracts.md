@@ -13,6 +13,8 @@ Bir ürün tipinin tüm kalibrasyon ve QC ayarları. iOS'ta da edge'de de aynı 
 | `id`, `name` | uuid, string | |
 | `roi` | `{x,y,width,height}` | Döndürülmüş (dik) görüntüde ilgi alanı |
 | `roiPolygon` | `[{x,y}]`, 3–12 köşe, isteğe bağlı | Çokgen ilgi alanı (eğik bant, kenarda hareket). Varsa maske = `roi` ∩ çokgen ve `roi` çokgenin sınır kutusudur (algoritma §2.0). Yoksa davranış eskisi gibi |
+| `countMode` | `blob` / `linescan`, isteğe bağlı | Sayım yöntemi (algoritma §4.9). `blob` (varsayılan): arka plan farkı + izleme, ayrık ürünler. `linescan`: şerit tarama, tek sıra gelen bitişik/aralıklı hacimli ürünler (torba, koli); boş bant öğrenmesi gerekmez, açılı çizgiyle (`countLine`) kullanılmaz. Hazır profiller: un torbası ve koli `linescan` |
+| `productLength` | 0–2, isteğe bağlı | `linescan`: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla; 0 = otomatik öğrenilir ("Ürün boyunu öğren" kalibrasyonu bunu yazar) |
 | `linePosition` | 0–1 | Sayım çizgisinin akış eksenindeki konumu |
 | `countLine` | `{a:{x,y}, b:{x,y}}`, isteğe bağlı | Açılı sayım çizgisi (algoritma §4.8). Akış, a'dan b'ye yürürken sağ el tarafı. Varsa `direction`/`linePosition` sayımda kullanılmaz (uyumluluk için yine yazılır: akışa en yakın eksen) |
 | `direction` | `down/up/right/left` | Akış yönü |
@@ -109,7 +111,7 @@ Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`ban
 |---|---|
 | `status` | `queued` → `running` → `done` / `failed`; saklama süresi dolunca `expired` (dosyalar silinir, özet kalır) |
 | `video` | ad, bayt; analizden sonra `seconds`, `fps`, `width`, `height` |
-| `options` | isteğe bağlı: `preset` (`generic/egg/flour`), `truth`, `direction`, `roi`, `roiPolygon` (profil şemasındakiyle aynı), `line`, `bgRange` |
+| `options` | isteğe bağlı: `preset` (`generic/egg/flour/box`), `countMode`, `productLength` (profildeki anlamıyla), `truth`, `direction`, `roi`, `roiPolygon`, `countLine` (profil şemasındakiyle aynı), `line`, `bgRange` |
 | `progress`, `stage` | 0–1; `calibrating` / `counting` / `encoding` |
 | `result` | `count`, `truth`, `errorPct`, `calibration`, `processingFps`, `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`) |
 | `expiresAt` | oluşturma + saklama süresi (varsayılan 7 gün) |

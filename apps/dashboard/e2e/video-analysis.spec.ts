@@ -16,7 +16,7 @@ test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({
 
   await page.getByTestId("file-input").setInputFiles(CLIP);
   await expect(page.getByText("ui_test_clip.mp4").first()).toBeVisible();
-  await page.getByLabel("Ürün").selectOption("egg");
+  await page.getByLabel("Ürün", { exact: true }).selectOption("egg");
   await page.getByLabel(/Doğru adet/).fill(String(META.count));
   await page.getByText("Gelişmiş: boş bant aralığı").click();
   await page.getByLabel("Boş bant başlangıcı (saniye)").fill("0");
@@ -75,4 +75,17 @@ test("doğru adet ve boş bant aralığı doğrulanır", async ({ page }) => {
   await page.getByLabel("Boş bant bitişi (saniye)").fill("2");
   await page.getByRole("button", { name: "Analizi başlat" }).click();
   await expect(page.getByTestId("upload-error")).toContainText("Boş bant aralığı");
+});
+
+test("un ve koli şerit taramayla gelir; yöntem değiştirilebilir", async ({ page }) => {
+  await page.goto("/videos");
+  const mode = page.getByLabel("Sayım yöntemi", { exact: true });
+  await expect(mode).toHaveValue("blob");                       // yumurta: ayrık ürün
+  await page.getByLabel("Ürün", { exact: true }).selectOption("box");
+  await expect(mode).toHaveValue("linescan");
+  await expect(page.getByText("Boş bant gerekmez")).toBeVisible();
+  await page.getByLabel("Ürün", { exact: true }).selectOption("flour");
+  await expect(mode).toHaveValue("linescan");
+  await mode.selectOption("blob");
+  await expect(mode).toHaveValue("blob");
 });

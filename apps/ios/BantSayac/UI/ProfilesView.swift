@@ -54,6 +54,7 @@ struct ProfilesView: View {
                     Menu {
                         Button("Yumurta") { store.add(.egg()) }
                         Button("Un torbası") { store.add(.flourSack()) }
+                        Button("Koli / kutu") { store.add(.box()) }
                         Button("Genel ürün") { store.add(.generic()) }
                     } label: {
                         Image(systemName: "plus")

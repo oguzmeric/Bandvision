@@ -103,3 +103,26 @@ def test_dense_flow_background_does_not_drift(egg_profile: Profile, gap: int) ->
     """
     sc = sim.Scenario(f"dense{gap}", [sim.Item(-120 - i * gap, 360) for i in range(60)])
     assert run(egg_profile, sc) == sc.expected_count
+
+
+def test_background_learning_with_products_keeps_threshold() -> None:
+    """§5: boş bant öğrenirken bantta ürün varsa eşik 100'e kaçmaz, eski eşik korunur (uyarı olayı);
+    video başındaki otomatik öğrenme (yalnızca arka plan) kaydedilmiş eşiği hiç değiştirmez."""
+    sc = sim.touching_vertical(8)
+    busy = [(g, t) for g, t in sc.frames() if (g > 150).mean() > 0.05][:90]   # bantta ürün varken (60 fps: 60 kare)
+    assert len(busy) >= 70
+    p = Profile.egg()
+    p.diffThreshold = 33
+    pipe = Pipeline(p)
+    pipe.start_background_learning()
+    events = []
+    for g, t in busy:
+        events += pipe.process(g, t).calibration
+    done = [e for e in events if e[0] in ("background_done", "background_rejected")]
+    assert done and done[-1][0] == "background_rejected" and p.diffThreshold == 33
+    pipe = Pipeline(p)                            # yeni oturum (zaman damgaları baştan)
+    pipe.start_background_learning(update_threshold=False)
+    events = []
+    for g, t in busy:
+        events += pipe.process(g, t).calibration
+    assert ("background_done", 33) in events and p.diffThreshold == 33

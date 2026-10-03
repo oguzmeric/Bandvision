@@ -2,7 +2,10 @@
 
 import { useRef, useState } from "react";
 import { bytes } from "@/lib/format";
-import { DIRECTION_LABELS, PRESET_LABELS, type AnalysisJob, type Direction, type JobOptions, type Preset } from "@/lib/types";
+import {
+  DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
+  type AnalysisJob, type CountMode, type Direction, type JobOptions, type Preset,
+} from "@/lib/types";
 
 const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
 
@@ -19,6 +22,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [preset, setPreset] = useState<Preset>("egg");
+  const [mode, setMode] = useState<CountMode | "">("");          // "" = hazır profilin yöntemi
   const [truth, setTruth] = useState("");
   const [direction, setDirection] = useState<Direction | "">("");
   const [bgStart, setBgStart] = useState("");
@@ -34,6 +38,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
 
   function options(): JobOptions | string {
     const o: JobOptions = { preset };
+    if (mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
     if (truth.trim()) {
       const n = Number(truth);
       if (!Number.isInteger(n) || n < 1) return "Doğru adet pozitif bir tam sayı olmalı.";
@@ -126,10 +131,21 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       </div>
 
       <label className="mt-4 block text-sm font-medium">Ürün
-        <select className={`${field} mt-1.5`} value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
+        <select aria-label="Ürün" className={`${field} mt-1.5`} value={preset} onChange={(e) => { setPreset(e.target.value as Preset); setMode(""); }}>
           {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => <option key={p} value={p}>{PRESET_LABELS[p]}</option>)}
         </select>
       </label>
+      <label className="mt-3 block text-sm font-medium">Sayım yöntemi
+        <select aria-label="Sayım yöntemi" className={`${field} mt-1.5`} value={mode || PRESET_MODE[preset]}
+                onChange={(e) => setMode(e.target.value as CountMode)}>
+          {(Object.keys(MODE_LABELS) as CountMode[]).map((m) => <option key={m} value={m}>{MODE_LABELS[m]}</option>)}
+        </select>
+      </label>
+      <p className="mt-1 text-xs text-faint">
+        {(mode || PRESET_MODE[preset]) === "linescan"
+          ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez, ürün boyu videodan öğrenilir."
+          : "Yumurta gibi ayrık ürünler; arka plan videodan öğrenilir."}
+      </p>
       <div className="mt-3 grid grid-cols-2 gap-2.5">
         <label className="block text-sm font-medium">Doğru adet <span className="font-normal text-faint">(isteğe bağlı)</span>
           <input className={`${field} mt-1.5`} inputMode="numeric" placeholder="100" value={truth}

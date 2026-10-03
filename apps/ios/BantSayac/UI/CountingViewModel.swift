@@ -182,18 +182,38 @@ final class CountingViewModel: ObservableObject {
         wasRunningBeforeCalibration = isRunning
         setRunning(false)
         isCalibrating = true
-        calibrationMessage = "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
-        processor.setShowMask(true)
+        calibrationMessage = profile.mode == .linescan
+            ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
+            : "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
+        processor.setShowMask(profile.mode == .blob)
     }
 
     func learnBackground() {
         calibrationMessage = "Boş bant öğreniliyor… Bantta ürün olmasın."
-        processor.startBackgroundLearning()
+        processor.startBackgroundLearning(updateThreshold: true)
     }
 
     func learnSample() {
-        calibrationMessage = "Ürünleri TEK TEK ve aralıklı geçir: 0/8"
+        if profile.mode == .linescan {
+            calibrationMessage = "Ürün boyu öğreniliyor… Ürünler bantta normal akışında geçsin (bitişik olabilir)."
+        } else {
+            calibrationMessage = "Ürünleri TEK TEK ve aralıklı geçir: 0/8"
+        }
         processor.startSampleLearning(target: 8)
+    }
+
+    /// Sayım yöntemini değiştir (§4.9). Şerit tarama açılı çizgiyle çalışmaz: düz çizgiye dönülür.
+    func setCountMode(_ mode: CountMode) {
+        guard mode != profile.mode else { return }
+        if mode == .linescan && profile.countLine != nil {
+            let s = snapshot.frameSize
+            profile.setCountLine(nil, aspect: s.height > 0 ? Double(s.width / s.height) : 9.0 / 16.0)
+        }
+        profile.countMode = mode
+        processor.setShowMask(mode == .blob)
+        calibrationMessage = mode == .linescan
+            ? "Bitişik/hacimli ürün: boş bant gerekmez. Ürün boyu ilk ürünlerden öğrenilir ya da \"Ürün boyunu öğren\"."
+            : "Ayrık ürün: önce boş bandı öğret, sonra örnek ürün geçir."
     }
 
     func saveCalibration() {
@@ -231,6 +251,13 @@ final class CountingViewModel: ObservableObject {
         case .sampleDone(let area):
             profile.expectedArea = area
             calibrationMessage = "Ürün boyutu öğrenildi. Kontrol edip Kaydet'e bas."
+        case .backgroundRejected:
+            calibrationMessage = "Boş bant öğrenilemedi: bantta ürün ya da hareket vardı. Eşik değiştirilmedi; "
+                + "bant boşken tekrar dene."
+        case .lengthDone(let len):
+            profile.productLength = len
+            calibrationMessage = String(format: "Ürün boyu öğrenildi (alanın %%%.0f'i). Kontrol edip Kaydet'e bas.",
+                                        len * 100)
         }
     }
 
@@ -266,8 +293,9 @@ final class CountingViewModel: ObservableObject {
         processor.setTotal(0)
         processor.resetClock()
         processor.resetTracking(resetBackground: fromStart)
-        if fromStart && videoLearnBackground && !isCalibrating {
-            processor.startBackgroundLearning()
+        if fromStart && videoLearnBackground && !isCalibrating && profile.mode == .blob {
+            // Yalnızca arka plan görüntüsü; Kaydet edilmiş eşik korunur (eskiden ürünle başlayan videoda 100'e kaçıyordu)
+            processor.startBackgroundLearning(updateThreshold: false)
         }
         video?.position = target
         video?.countFrom = target
@@ -390,7 +418,10 @@ final class CountingViewModel: ObservableObject {
         video?.finished = true
         video?.playing = false
         video?.error = error
-        if error == nil { video?.position = source.info.duration }
+        if error == nil {
+            video?.position = source.info.duration
+            processor.finishVideo()          // şerit tarama: son karede yarım kalan ürünler (§4.9)
+        }
     }
 
     // MARK: - Ağ kamerası
