@@ -25,6 +25,7 @@ final class LineScanCounter {
     static let lowLevel = 0.25
     static let confMin = 0.05
     static let loQ = 0.02
+    static let reliableSegments = 4
     static let activeFrames = 10
     static let activeFraction = 0.25
     static let motionMin = 1.0
@@ -87,6 +88,7 @@ final class LineScanCounter {
     private var pPitch = 0.0
     private var pLen = 0.0
     private var learnAt = 0
+    private var tryAt = 0
     private var nextId = 1
     private var segs: [Seg] = []
     private(set) var failed = false
@@ -118,7 +120,7 @@ final class LineScanCounter {
         sig = []; pend = []; carry = nil
         oId = 0; oIa = nil; oIb = 0; oK = 0; low = nil
         off = 0; start = 0; end = nil; scan = 0; lastSeam = nil
-        pPitch = 0; pLen = 0; learnAt = 0; nextId = 1; segs = []
+        pPitch = 0; pLen = 0; learnAt = 0; tryAt = 0; nextId = 1; segs = []
         failed = false; polarity = 0; votes = 0; lastShift = 0
     }
 
@@ -524,9 +526,16 @@ final class LineScanCounter {
         let tot = total
         let known = profile.lineProductLength > 0
         if polarity == 0 {
-            let need = start + (known ? n : 2 * n)
-            if tot < need && !final { return false }
-            decidePolarity(profile)
+            // En erken bir alan boyu bant aktıktan sonra; boy bilinmiyorsa iki alan boyuna kadar yalnızca
+            // güvenilir sonuç (≥ 4 tam ürün, tutarlı boylar) kabul edilir
+            if tot < start + n && !final { return false }
+            if known || final || tot >= start + 2 * n {
+                _ = decidePolarity(profile, strict: false)
+            } else {
+                if tot < tryAt { return false }
+                tryAt = tot + max(4, n / 2)
+                if !decidePolarity(profile, strict: true) { return false }
+            }
         }
         if known {
             pLen = profile.lineProductLength * Double(n)
@@ -545,37 +554,55 @@ final class LineScanCounter {
         return true
     }
 
-    private func decidePolarity(_ profile: ProductProfile) {
+    @discardableResult
+    private func decidePolarity(_ profile: ProductProfile, strict: Bool) -> Bool {
         let pd = pend
         pend = []
+        func reliable(_ r: (p: Double, res: Double, count: Int)?) -> Bool {
+            guard let r else { return false }
+            return r.count >= Self.reliableSegments && r.res <= 0.15
+        }
+        func rollback() -> Bool {
+            pend = pd
+            sig = []
+            polarity = 0
+            return false
+        }
         let forced = Self.spreadPolarity(pd)
         if forced != 0 {
             // Kesin ipucu: ürün satırında kenarlarda bant görünür (satır içi yayılım büyük), boş bant satırı düzdür
-            polarity = forced
             sig = pd.map { forced > 0 ? $0.1 : 255 - $0.0 }
-            if profile.lineProductLength <= 0, let r = learn() {
-                pLen = r.p
-                pPitch = r.p
+            if profile.lineProductLength <= 0 {
+                let r = learn()
+                if strict && !reliable(r) { return rollback() }
+                if let r {
+                    pLen = r.p
+                    pPitch = r.p
+                }
             }
-            return
+            polarity = forced
+            return true
         }
-        var best: (res: Double, pol: Int, p: Double)?
+        var best: (res: Double, pol: Int, p: Double, count: Int)?
         for pol in [1, -1] {
             sig = pd.map { pol > 0 ? $0.1 : 255 - $0.0 }
-            var r: (p: Double, res: Double)?
+            var r: (p: Double, res: Double, count: Int)?
             if profile.lineProductLength > 0 {
                 let plen = profile.lineProductLength * Double(n)
-                if let res = residual(max(4, Self.roundEven(plen)), off + sig.count) { r = (plen, res) }
+                if let res = residual(max(4, Self.roundEven(plen)), off + sig.count) { r = (plen, res, 0) }
             } else {
                 r = learn()
             }
             guard let rr = r else { continue }
             if best == nil || rr.res < best!.res - 0.03 {
-                best = (rr.res, pol, rr.p)
+                best = (rr.res, pol, rr.p, rr.count)
             } else if abs(rr.res - best!.res) <= 0.03 {
                 let votePol = votes < 0 ? -1 : 1
-                if pol == votePol { best = (rr.res, pol, rr.p) }
+                if pol == votePol { best = (rr.res, pol, rr.p, rr.count) }
             }
+        }
+        if strict {
+            guard let b = best, reliable((b.p, b.res, b.count)) else { return rollback() }
         }
         polarity = best?.pol ?? (votes < 0 ? -1 : 1)
         sig = pd.map { polarity > 0 ? $0.1 : 255 - $0.0 }
@@ -583,6 +610,7 @@ final class LineScanCounter {
             pLen = b.p
             pPitch = b.p
         }
+        return true
     }
 
     private func residual(_ pp: Int, _ tot: Int) -> Double? {
@@ -596,7 +624,7 @@ final class LineScanCounter {
         return s / Double(lens.count)
     }
 
-    private func learn() -> (p: Double, res: Double)? {
+    private func learn() -> (p: Double, res: Double, count: Int)? {
         let x = sig
         let cnt = x.count
         let pmin = max(4, n / 10)
@@ -629,7 +657,7 @@ final class LineScanCounter {
         } else {
             q = scored.min { ($0.value, $0.key) < ($1.value, $1.key) }!.key
         }
-        return (Double(q), scored[q]!)
+        return (Double(q), scored[q]!, segLengths(q, tot).count)
     }
 
     private func segLengths(_ pp: Int, _ tot: Int) -> [Int] {

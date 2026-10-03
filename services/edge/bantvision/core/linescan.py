@@ -20,6 +20,7 @@ MIN_CONTRAST = 6.0       # sinyalde bundan düşük kontrast: bant boş/dokusuz,
 SEAM_PROMINENCE = 0.25   # çukur derinliği ≥ bu × kontrast
 LOW_LEVEL = 0.25         # ürün kısmı: lo + bu × kontrast üstü
 CONF_MIN = 0.05          # kayma eşleşmesi bundan belirsizse hız değişmedi sayılır
+RELIABLE_SEGMENTS = 4    # erken öğrenmenin kabulü için gereken tam ürün (parça) sayısı
 LO_Q = 0.02              # kontrastın alt ucu: ince ek yerleri (koli kenarı) pencerenin küçük bir kısmıdır
 ACTIVE_FRAMES = 10       # hareketli sütun seçimi için gereken hareketli kare sayısı (§4.9.0)
 ACTIVE_FRACTION = 0.25   # konum hareketli ⇔ ortalama farkı ≥ bu × en hareketli konumunki
@@ -235,6 +236,7 @@ class LineScanCounter:
         self._p_pitch = 0.0
         self._p_len = 0.0
         self._learn_at = 0                # öğrenme denemesi için gereken sinyal uzunluğu
+        self._try_at = 0                  # erken (güvenilirse kabul) öğrenme denemesi
         self._next_id = 1
         self._segs: list[_Seg] = []       # ekrandaki işaretler için son ürünler
         self.failed = False               # flush'ta ürün boyu öğrenilemediyse
@@ -399,11 +401,19 @@ class LineScanCounter:
     def _ensure_period(self, profile: Profile, final: bool) -> bool:
         total = self._total()
         if self._polarity == 0:
-            # Açık/koyu kararı: boy biliniyorsa bir, bilinmiyorsa iki alan boyu bant aktıktan sonra
-            need = self._start + (self._n if profile.productLength > 0 else 2 * self._n)
-            if total < need and not final:
+            # Açık/koyu kararı ve (boy bilinmiyorsa) boy öğrenme: en erken bir alan boyu bant aktıktan sonra.
+            # Boy bilinmiyorsa iki alan boyuna kadar yalnızca güvenilir sonuç kabul edilir (≥ 4 tam ürün, tutarlı
+            # boylar); sayılar gecikip topluca gelmesin ama erken ve yanlış bir boy da kalıcı olmasın.
+            if total < self._start + self._n and not final:
                 return False
-            self._decide_polarity(profile)
+            if profile.productLength > 0 or final or total >= self._start + 2 * self._n:
+                self._decide_polarity(profile)
+            else:
+                if total < self._try_at:
+                    return False
+                self._try_at = total + max(4, self._n // 2)
+                if not self._decide_polarity(profile, strict=True):
+                    return False
         if profile.productLength > 0:
             self._p_len = self._p_pitch = profile.productLength * self._n
             return True
@@ -420,42 +430,56 @@ class LineScanCounter:
         self._p_len = self._p_pitch = r[0]
         return True
 
-    def _decide_polarity(self, profile: Profile) -> None:
+    def _decide_polarity(self, profile: Profile, strict: bool = False) -> bool:
         """§4.9.4 Ürün banttan açık mı koyu mu: iki yorumla da parçalara ayır; parça boylarını ürün boyunun
         katlarıyla daha tutarlı açıklayan (kalan hatası küçük olan) doğrudur. Yanlış yorumda "ürünler" aslında
         boşluklardır, boyları tutarsızdır. Fark belirsizse (< 0,03) kenar/orta oyları karar verir."""
         pend, self._pend = self._pend, []
+
+        def reliable(r: tuple[float, float, int] | None) -> bool:
+            return r is not None and r[2] >= RELIABLE_SEGMENTS and r[1] <= 0.15
+
+        def rollback() -> bool:
+            self._pend, self._sig, self._polarity = pend, [], 0
+            return False
+
         forced = _spread_polarity(pend)
         if forced != 0:
             # Kesin ipucu: ürün satırında kenarlarda bant görünür (satır içi yayılım büyük), boş bant satırı düzdür
-            self._polarity = forced
             self._sig = [hi if forced > 0 else 255.0 - lo for lo, hi in pend]
             if profile.productLength <= 0:
                 r = self._learn()
+                if strict and not reliable(r):
+                    return rollback()
                 if r is not None:
                     self._p_len = self._p_pitch = r[0]
-            return
-        best: tuple[float, int, float] | None = None       # (kalan hata, yön, boy)
+            self._polarity = forced
+            return True
+        best: tuple[float, int, float, int] | None = None   # (kalan hata, yön, boy, tam parça sayısı)
         for pol in (1, -1):
             self._sig = [hi if pol > 0 else 255.0 - lo for lo, hi in pend]
+            r: tuple[float, float, int] | None
             if profile.productLength > 0:
                 plen = profile.productLength * self._n
                 res = self._residual(max(4, round(plen)), self._off + len(self._sig))
-                r = (plen, res) if res is not None else None
+                r = (plen, res, 0) if res is not None else None
             else:
                 r = self._learn()
             if r is None:
                 continue
             if best is None or r[1] < best[0] - 0.03:
-                best = (r[1], pol, r[0])
+                best = (r[1], pol, r[0], r[2])
             elif abs(r[1] - best[0]) <= 0.03:                # belirsiz: oylar
                 vote_pol = -1 if self._votes < 0 else 1
                 if pol == vote_pol:
-                    best = (r[1], pol, r[0])
+                    best = (r[1], pol, r[0], r[2])
+        if strict and (best is None or not reliable((best[2], best[0], best[3]))):
+            return rollback()
         self._polarity = best[1] if best is not None else (-1 if self._votes < 0 else 1)
         self._sig = [hi if self._polarity > 0 else 255.0 - lo for lo, hi in pend]
         if best is not None and profile.productLength <= 0:
             self._p_len = self._p_pitch = best[2]
+        return True
 
     def _residual(self, pp: int, total: int) -> float | None:
         """Parça boylarının pp'nin tam katlarına ortalama uzaklığı (en az 2 tam parça yoksa None)."""
@@ -464,11 +488,11 @@ class LineScanCounter:
             return None
         return float(np.mean([abs(v / pp - max(1, round(v / pp))) for v in lens]))
 
-    def _learn(self) -> tuple[float, float] | None:
+    def _learn(self) -> tuple[float, float, int] | None:
         """§4.9.5 Tek ürün boyu: (a) öz-ilinti aralığı (ham ve yüksek geçiren sinyalde, güçlü olanı),
         (b) parlak koşuların medyanı; adaylar ve parça taramasıyla inceltilmiş halleri arasından parça boylarını
         en iyi açıklayan (oran tam sayıya yakın) EN BÜYÜK boy. P/2 de tam sayılar verir (2'şer), bu yüzden büyükten
-        küçüğe bakılır; 2P oranları 0,5 yapar, elenir. (boy, kalan hata) ya da None."""
+        küçüğe bakılır; 2P oranları 0,5 yapar, elenir. (boy, kalan hata, tam parça sayısı) ya da None."""
         x = np.asarray(self._sig, dtype=np.float64)
         n = len(x)
         pmin = max(4, self._n // 10)
@@ -503,7 +527,7 @@ class LineScanCounter:
             return None
         good = [q for q, r in scored.items() if r <= 0.15]
         q = max(good) if good else min(scored, key=lambda k: (scored[k], k))
-        return float(q), scored[q]
+        return float(q), scored[q], len(self._seg_lengths(q, total))
 
     def _seg_lengths(self, pp: int, total: int) -> list[int]:
         """Tamamlanmış (ilk/son hariç) parçaların ürün kısmı uzunlukları (≥ 0,3·pp)."""

@@ -18,6 +18,8 @@ struct VideoRun: Equatable {
 
 @MainActor
 final class CountingViewModel: ObservableObject {
+    /// Şerit tarama: ürün boyu bu video için ön taramayla bulundu (kayıtlı profilde yok)
+    private var autoProductLength = false
     @Published var profile: ProductProfile {
         didSet { processor.setProfile(profile) }
     }
@@ -217,6 +219,7 @@ final class CountingViewModel: ObservableObject {
     }
 
     func saveCalibration() {
+        autoProductLength = false            // kullanıcı kaydetti: boy artık profilin
         processor.cancelCalibration()
         store.update(profile)
         finishCalibration()
@@ -279,7 +282,41 @@ final class CountingViewModel: ObservableObject {
         video = VideoRun(name: url.lastPathComponent, duration: source.info.duration)
         processor.setEmitFrameImages(true)
         processor.setCounting(true)
+        restoreAutoProductLength()
+        if profile.mode == .linescan && profile.lineProductLength <= 0 {
+            // Şerit tarama: ürün boyunu oynatmadan önce hızlı bir taramayla öğren; böylece sayılar videonun başından
+            // itibaren tek tek (ürünün üstünde numarasıyla) gelir, öğrenme bitince topluca eklenmez. Yalnızca bu
+            // video için: kayıtlı profil değişmez (Kaydet edilirse kalır).
+            let p = profile
+            let len = await Task.detached(priority: .userInitiated) {
+                Self.prescanProductLength(source, profile: p)
+            }.value
+            if len > 0 && videoSource === source {
+                profile.productLength = len
+                autoProductLength = true
+            }
+        }
         seekVideo(to: 0)
+    }
+
+    /// Ön taramayla bulunan ürün boyunu geri al (başka video ya da canlı kaynak kendi boyunu öğrensin).
+    private func restoreAutoProductLength() {
+        guard autoProductLength else { return }
+        autoProductLength = false
+        profile.productLength = store.selectedProfile.productLength
+    }
+
+    nonisolated private static func prescanProductLength(_ source: VideoFileSource, profile: ProductProfile) -> Double {
+        var p = profile
+        p.productLength = 0
+        let counter = LineScanCounter()
+        try? source.scan(maxSeconds: 60) { pb in
+            guard let g = GrayFrame.make(from: pb, targetWidth: p.processingWidth) else { return true }
+            _ = counter.process(g, profile: p)
+            return counter.productLength <= 0
+        }
+        if counter.productLength <= 0 { _ = counter.flush(profile: p) }
+        return counter.productLength
     }
 
     /// Videonun `t` saniyesinden oynatır. Sayaç sıfırlanır; 0'dan başlıyorsa ve ayar açıksa arka plan
@@ -329,6 +366,7 @@ final class CountingViewModel: ObservableObject {
 
     /// Video modundan çık, canlı kameraya ve önceki oturum sayısına dön.
     func exitVideo() {
+        restoreAutoProductLength()
         if let source = videoSource {
             source.stop()
             Self.removeIfTemporaryCopy(source.url)

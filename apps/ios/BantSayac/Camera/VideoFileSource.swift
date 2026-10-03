@@ -121,9 +121,22 @@ final class VideoFileSource: @unchecked Sendable {
         return g
     }
 
-    private func readLoop(generation g: Int, from start: Double, processingQueue: DispatchQueue,
-                          onFrame: @Sendable (CVPixelBuffer, Double) -> Void,
-                          onPosition: @Sendable (Double) -> Void) throws {
+    /// Hızlı ön tarama (şerit taramada ürün boyunu oynatmadan önce öğrenmek için): baştan en çok `maxSeconds`,
+    /// olabildiğince hızlı, çağıran iş parçacığında. `onFrame` false dönerse durur. Ana kuyrukta çağırma.
+    func scan(maxSeconds: Double, onFrame: (CVPixelBuffer) -> Bool) throws {
+        let (reader, output) = try makeReader(from: 0)
+        defer { if reader.status == .reading { reader.cancelReading() } }
+        while let sample = output.copyNextSampleBuffer() {
+            guard let pb = CMSampleBufferGetImageBuffer(sample) else { continue }
+            if CMSampleBufferGetPresentationTimeStamp(sample).seconds > maxSeconds { break }
+            if !onFrame(pb) { break }
+        }
+        if reader.status == .failed {
+            throw Failure.cannotRead(reader.error?.localizedDescription ?? "okuma hatası")
+        }
+    }
+
+    private func makeReader(from start: Double) throws -> (AVAssetReader, AVAssetReaderOutput) {
         let reader: AVAssetReader
         do { reader = try AVAssetReader(asset: asset) } catch { throw Failure.cannotRead(error.localizedDescription) }
         let begin = max(0, min(start, info.duration))
@@ -147,6 +160,13 @@ final class VideoFileSource: @unchecked Sendable {
         guard reader.startReading() else {
             throw Failure.cannotRead(reader.error?.localizedDescription ?? "bilinmeyen hata")
         }
+        return (reader, output)
+    }
+
+    private func readLoop(generation g: Int, from start: Double, processingQueue: DispatchQueue,
+                          onFrame: @Sendable (CVPixelBuffer, Double) -> Void,
+                          onPosition: @Sendable (Double) -> Void) throws {
+        let (reader, output) = try makeReader(from: start)
         defer { if reader.status == .reading { reader.cancelReading() } }
 
         var wallStart: CFTimeInterval?
