@@ -32,6 +32,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **14** | **Çokgen ROI** (sözleşme `roiPolygon`, algoritma §2.0; Python ↔ Swift piksel eşdeğerliği testli), **logolu açılış animasyonu**, **ilk kurulum sihirbazı** (kaynak → ürün → montaj → kalibrasyon; önceden kullanılan uygulamada kendiliğinden açılmaz). Paralel kod incelemesinde bulunan 4 hata düzeltildi; Swift birim testleri her iOS gönderiminde CI'da |
 | 15, 16 | Yüklenmedi (15: ağ kamerası UI testi zamanlaması; 16: CI her çalışmada yeni geliştirme sertifikası oluşturduğu için hesap sınırı doldu → arşiv imzasız, imza bulut dağıtım sertifikasıyla). İçerikleri 17'de |
 | **17** | **Açılı sayım çizgisi** (`countLine`, §4.8; Python ↔ Swift eşdeğer), **sayılan ürünün üstünde sıra numarası** (34; bitişik çiftte 35–36; kartlarda aynı), sayım çizgisi çokgenin içinde çizilir, kalibrasyon yazıları kırpılmaz. TRASSIR gerçek cihazda doğrulandı (derleme 13 ile) |
+| **18** | **Şerit tarama sayımı** (bitişik/üst üste torba, koli; §4.9): kalibrasyonda "Sayım yöntemi" ve "Ürün boyunu öğren"; un torbası ve yeni "Koli / kutu" profili bu yöntemle. **Her ürüne kendi numarası** (yapışıkta "34·35", ayrılınca her biri kendi numarasıyla). **Kaydedilen eşik video başında değişmez** (100'e kaçma hatası); bantta ürün varken "Boş bandı öğren" eşiği bozmaz, uyarır |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
