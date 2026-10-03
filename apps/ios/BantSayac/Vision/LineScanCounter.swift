@@ -548,6 +548,17 @@ final class LineScanCounter {
     private func decidePolarity(_ profile: ProductProfile) {
         let pd = pend
         pend = []
+        let forced = Self.spreadPolarity(pd)
+        if forced != 0 {
+            // Kesin ipucu: ürün satırında kenarlarda bant görünür (satır içi yayılım büyük), boş bant satırı düzdür
+            polarity = forced
+            sig = pd.map { forced > 0 ? $0.1 : 255 - $0.0 }
+            if profile.lineProductLength <= 0, let r = learn() {
+                pLen = r.p
+                pPitch = r.p
+            }
+            return
+        }
         var best: (res: Double, pol: Int, p: Double)?
         for pol in [1, -1] {
             sig = pd.map { pol > 0 ? $0.1 : 255 - $0.0 }
@@ -607,8 +618,10 @@ final class LineScanCounter {
         var scored: [Int: Double] = [:]
         for c in cands {
             let q = max(4, Self.roundEven(c))
+            if q < pmin { continue }                 // alanın onda birinden kısa "ürün" kıvrım/etiket parçasıdır
             if scored[q] == nil { scored[q] = residual(q, tot) ?? 1.0 }
         }
+        guard !scored.isEmpty else { return nil }
         let good = scored.filter { $0.value <= 0.15 }.map(\.key)
         let q: Int
         if let g = good.max() {
@@ -630,28 +643,44 @@ final class LineScanCounter {
 
     // MARK: - Ek yeri taraması ve parçalar (§4.9.6–.9)
 
-    private func seamAt(_ i: Int, _ pp: Int, _ tot: Int, final: Bool) -> (ok: Bool, lo: Double, contrast: Double)? {
+    /// §4.9.6 (lo, kontrast, ürün eşiği): lo = %2'lik, kontrast = %90'lık − lo, eşik = lo + 0,25·kontrast
+    private static func levels(_ window: [Double]) -> (lo: Double, contrast: Double, low: Double) {
+        let lo = percentileLower(window, loQ)
+        let contrast = percentileLower(window, 0.90) - lo
+        return (lo, contrast, lo + lowLevel * contrast)
+    }
+
+    /// i ek yeri mi? (a) dar çukur: yerel en küçük, derinliği ≥ 0,25·kontrast; (b) düşen kenar: sinyal ürün
+    /// eşiğinin altına iner (aralıklı ürünlerde uzun boş bant). Yeterli ileri veri yoksa nil.
+    private func seamAt(_ i: Int, _ pp: Int, _ tot: Int, final: Bool) -> (ok: Bool, low: Double, contrast: Double)? {
         let r = pp / 50
         let half = max(1, pp / 3)
         let hp = max(1, pp / 2)
         if !final && i + hp + r >= tot { return nil }
-        let loI = max(off, i - half), hiI = min(tot - 1, i + half)
         let v = sm(i, r)
+        let vPrev: Double? = i - 1 >= off ? sm(i - 1, r) : nil
+        let loI = max(off, i - half), hiI = min(tot - 1, i + half)
+        var localMin = true
         for j in loI...hiI {
             let sj = sm(j, r)
-            if sj < v || (j < i && sj <= v) { return (false, 0, 0) }
+            if sj < v || (j < i && sj <= v) {
+                localMin = false
+                break
+            }
         }
-        var lmax = -Double.infinity, rmax = -Double.infinity
-        for j in max(off, i - hp)...i { lmax = max(lmax, sm(j, r)) }
-        for j in i...min(tot - 1, i + hp) { rmax = max(rmax, sm(j, r)) }
-        let prom = min(lmax, rmax) - v
+        if !localMin && (vPrev == nil || v >= vPrev!) { return (false, 0, 0) }
         let wa = max(off, i - 4 * pp), wb = min(tot, i + hp + 1)
         var window: [Double] = []
         window.reserveCapacity(wb - wa)
         for j in wa..<wb { window.append(sm(j, r)) }
-        let lo = Self.percentileLower(window, Self.loQ)
-        let contrast = Self.percentileLower(window, 0.90) - lo
-        return (contrast >= Self.minContrast && prom >= Self.seamProminence * contrast, lo, contrast)
+        let lv = Self.levels(window)
+        if lv.contrast < Self.minContrast { return (false, lv.low, lv.contrast) }
+        if let vp = vPrev, v <= lv.low && lv.low < vp { return (true, lv.low, lv.contrast) }   // (b) düşen kenar
+        if !localMin { return (false, lv.low, lv.contrast) }
+        var lmax = -Double.infinity, rmax = -Double.infinity
+        for j in max(off, i - hp)...i { lmax = max(lmax, sm(j, r)) }
+        for j in i...min(tot - 1, i + hp) { rmax = max(rmax, sm(j, r)) }
+        return (min(lmax, rmax) - v >= Self.seamProminence * lv.contrast, lv.low, lv.contrast)
     }
 
     private func detect(_ pp: Int, _ a0: Int, _ tot: Int) -> [(a: Int, b: Int, ia: Int, ib: Int)] {
@@ -664,7 +693,7 @@ final class LineScanCounter {
             defer { i += 1 }
             guard let res = seamAt(i, pp, tot, final: true), res.ok else { continue }
             if let last = seams.last, i - last < half { continue }
-            if let br = bright(prevSeam, i, pp, res.lo + Self.lowLevel * res.contrast) {
+            if let br = bright(prevSeam, i, pp, res.low) {
                 out.append((prevSeam, i, br.ia, br.ib))
             }
             seams.append(i)
@@ -673,19 +702,28 @@ final class LineScanCounter {
         return out
     }
 
+    /// Ürün kısmı: [a, b) içinde eşiğin üstündeki, en az max(2, 0,15·pp) uzunluktaki koşuların ilk ve son indeksi
     private func bright(_ a: Int, _ b: Int, _ pp: Int, _ lowThr: Double) -> (ia: Int, ib: Int)? {
         let r = pp / 50
+        let minRun = max(2, Self.roundEven(0.15 * Double(pp)))
         var first: Int?, last = 0
+        var runStart: Int?
         var j = a
-        while j < b {
-            if sm(j, r) > lowThr {
-                if first == nil { first = j }
-                last = j
+        while j <= b {
+            let above = j < b && sm(j, r) > lowThr
+            if above && runStart == nil {
+                runStart = j
+            } else if !above, let rs = runStart {
+                if j - rs >= minRun {
+                    if first == nil { first = rs }
+                    last = j
+                }
+                runStart = nil
             }
             j += 1
         }
         guard let f = first else { return nil }
-        return (f, last + 1)
+        return (f, last)
     }
 
     private func advance(_ profile: ProductProfile, final: Bool) -> [Event] {
@@ -695,18 +733,18 @@ final class LineScanCounter {
         let r = pp / 50
         let tot = off + sig.count
         var events: [Event] = []
-        var lastLo = 0.0, lastC = 0.0
+        var lastLow = 0.0, lastC = 0.0
         while scan < tot {
             let i = scan
             guard let res = seamAt(i, pp, tot, final: final) else { break }
             scan += 1
             if res.contrast > 0 {
-                lastLo = res.lo
+                lastLow = res.low
                 lastC = res.contrast
-                low = res.lo + Self.lowLevel * res.contrast
+                low = res.low
             }
             if res.ok && (lastSeam == nil || i - lastSeam! >= half) {
-                events += close(lastSeam, i, pp, res.lo + Self.lowLevel * res.contrast, profile, rightSeam: true)
+                events += close(lastSeam, i, pp, res.low, profile, rightSeam: true)
                 lastSeam = i
                 oIa = nil
                 oK = 0
@@ -725,12 +763,13 @@ final class LineScanCounter {
                 var window: [Double] = []
                 for j in max(off, tot - 4 * pp)..<tot { window.append(sm(j, r)) }
                 if !window.isEmpty {
-                    lastLo = Self.percentileLower(window, Self.loQ)
-                    lastC = Self.percentileLower(window, 0.90) - lastLo
+                    let lv = Self.levels(window)
+                    lastC = lv.contrast
+                    lastLow = lv.low
                 }
             }
             if lastC >= Self.minContrast {
-                events += close(lastSeam, tot, pp, lastLo + Self.lowLevel * lastC, profile, rightSeam: false)
+                events += close(lastSeam, tot, pp, lastLow, profile, rightSeam: false)
             }
             events += flushCarry(profile)
             oIa = nil
@@ -740,13 +779,14 @@ final class LineScanCounter {
         return events
     }
 
-    /// Ön sayım: açık parçanın ürün kısmı (j + 0,5)·P'yi geçince j. ürün hemen sayılır (fazlası geri alınmaz).
+    /// Ön sayım: açık parçanın ürün kısmı 0,5·P'yi geçince ilk ürün hemen sayılır (fazlası geri alınmaz).
     private func provisional(_ profile: ProductProfile) -> [Event] {
         guard let ia = oIa, ia >= start else { return [] }
         let plen = pLen
         let a = lastSeam ?? off
         if let c = carry, Double(ia - a) <= 0.15 * plen, Double(oIb - c.ia) <= 1.35 * plen { return [] }
-        let target = min(profile.maxMultiplicity, Int((Double(oIb - ia) / plen + 0.5).rounded(.down)))
+        // Yalnızca parçanın ilk ürünü; sonrakiler kapanışta kesin olarak (fazla sayım geri alınamaz)
+        let target = min(1, Int((Double(oIb - ia) / plen + 0.5).rounded(.down)))
         var out: [Event] = []
         while oK < target {
             let c = Double(ia) + (Double(oK) + 0.5) * plen
@@ -776,6 +816,7 @@ final class LineScanCounter {
         let ib = br.ib
         let plen = pLen
         let tight = 0.15 * plen
+        var isolated = a0 == nil || Double(ia - startIdx) > tight      // önünde gerçek boşluk var
         if let c = carry {
             if Double(ia - startIdx) <= tight && Double(ib - c.ia) <= 1.35 * plen {
                 a = c.a
@@ -783,15 +824,16 @@ final class LineScanCounter {
                 sid = c.id
                 k += c.k
                 carry = nil
+                isolated = false
             } else {
                 out += flushCarry(profile)
             }
         }
-        if Double(ib - ia) < 0.75 * plen && rightSeam && Double(b - ib) <= tight {
+        if Double(ib - ia) < 0.75 * plen && rightSeam && Double(b - ib) <= tight && sm(b, pp / 50) > lowThr {
             carry = Carry(a: a, b: b, ia: ia, ib: ib, id: sid, k: k)
             return out
         }
-        out += emit(a, b, ia, ib, rightSeam: rightSeam, profile, sid: sid, k: k)
+        out += emit(a, b, ia, ib, rightSeam: rightSeam, profile, sid: sid, k: k, isolated: isolated)
         return out
     }
 
@@ -801,9 +843,12 @@ final class LineScanCounter {
         return emit(c.a, c.b, c.ia, c.ib, rightSeam: true, profile, sid: c.id, k: c.k)
     }
 
+    /// Kesin karar: n ürün; ilk k'sı ön sayımla zaten sayıldı. Önünde boşluk olan tek başına parça ≥ 0,25·P ise
+    /// bir üründür (perspektifte uzak/sivri görünen torba).
     private func emit(_ a: Int?, _ b: Int, _ ia: Int, _ ib: Int, rightSeam: Bool, _ profile: ProductProfile,
-                      sid: Int, k: Int) -> [Event] {
-        let cnt = min(profile.maxMultiplicity, Int((Double(ib - ia) / pLen + 0.5).rounded(.down)))
+                      sid: Int, k: Int, isolated: Bool = false) -> [Event] {
+        var cnt = min(profile.maxMultiplicity, Int((Double(ib - ia) / pLen + 0.5).rounded(.down)))
+        if cnt == 0 && isolated && Double(ib - ia) >= 0.25 * pLen { cnt = 1 }
         guard cnt > 0 else { return [] }
         let e = 0.1 * pLen
         let ca = a.map { max(Double($0), Double(ia) - e) } ?? Double(ia) - e
@@ -825,6 +870,32 @@ final class LineScanCounter {
     }
 
     // MARK: - Yardımcılar
+
+    private static func pearson(_ a: [Double], _ b: [Double]) -> Double {
+        let n = Double(a.count)
+        let ma = a.reduce(0, +) / n, mb = b.reduce(0, +) / n
+        var sab = 0.0, saa = 0.0, sbb = 0.0
+        for i in 0..<a.count {
+            let da = a[i] - ma, db = b[i] - mb
+            sab += da * db
+            saa += da * da
+            sbb += db * db
+        }
+        let den = (saa * sbb).squareRoot()
+        return den > 1e-9 ? sab / den : 0
+    }
+
+    /// §4.9.4 Yayılım ipucu: s = üst − alt çeyrek. Açık üründe üst çeyrek s ile pozitif, koyu ürün yorumu
+    /// (255 − alt çeyrek) negatif ilişkili (ya da tersi) ise kesin karar; değilse 0.
+    private static func spreadPolarity(_ pd: [(Double, Double)]) -> Int {
+        guard pd.count >= 8 else { return 0 }
+        let lo = pd.map { $0.0 }, hi = pd.map { $0.1 }
+        let spread = zip(hi, lo).map { $0 - $1 }
+        let cn = pearson(hi, spread), ci = pearson(lo.map { 255 - $0 }, spread)
+        if cn > 0.3 && ci < 0 { return 1 }
+        if ci > 0.3 && cn < 0 { return -1 }
+        return 0
+    }
 
     static func roundEven(_ x: Double) -> Int { Int(x.rounded(.toNearestOrEven)) }
 

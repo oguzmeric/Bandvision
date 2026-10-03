@@ -152,6 +152,13 @@ def active_region(motion: np.ndarray, profile: Profile, mask: np.ndarray
     return out, (x0, y0 + c0, x1, y0 + c1)
 
 
+def levels(window: np.ndarray) -> tuple[float, float, float]:
+    """§4.9.6 (lo, kontrast, ürün eşiği): lo = %2'lik, kontrast = %90'lık − lo, eşik = lo + 0,25·kontrast."""
+    lo = percentile_lower(window, LO_Q)
+    contrast = percentile_lower(window, 0.90) - lo
+    return lo, contrast, lo + LOW_LEVEL * contrast
+
+
 def lower_median(values: np.ndarray) -> float:
     s = np.sort(values)
     return float(s[(len(s) - 1) // 2])
@@ -418,6 +425,16 @@ class LineScanCounter:
         katlarıyla daha tutarlı açıklayan (kalan hatası küçük olan) doğrudur. Yanlış yorumda "ürünler" aslında
         boşluklardır, boyları tutarsızdır. Fark belirsizse (< 0,03) kenar/orta oyları karar verir."""
         pend, self._pend = self._pend, []
+        forced = _spread_polarity(pend)
+        if forced != 0:
+            # Kesin ipucu: ürün satırında kenarlarda bant görünür (satır içi yayılım büyük), boş bant satırı düzdür
+            self._polarity = forced
+            self._sig = [hi if forced > 0 else 255.0 - lo for lo, hi in pend]
+            if profile.productLength <= 0:
+                r = self._learn()
+                if r is not None:
+                    self._p_len = self._p_pitch = r[0]
+            return
         best: tuple[float, int, float] | None = None       # (kalan hata, yön, boy)
         for pol in (1, -1):
             self._sig = [hi if pol > 0 else 255.0 - lo for lo, hi in pend]
@@ -494,28 +511,39 @@ class LineScanCounter:
         return sorted(ib - ia for (_a, _b, ia, ib) in segs[1:-1] if ib - ia >= 0.3 * pp)
 
     def _seam_at(self, i: int, pp: int, total: int, final: bool) -> tuple[bool, float, float] | None:
-        """i çukur mu? (karar, lo, kontrast). Yeterli ileri veri yoksa None."""
+        """§4.9.6 i ek yeri mi? (karar, ürün eşiği, kontrast). Yeterli ileri veri yoksa None.
+        İki tür: (a) dar çukur — yerel en küçük ve derinliği ≥ 0,25·kontrast (bitişik ürün arası, gölge);
+        (b) düşen kenar — sinyal ürün eşiğinin (lo + 0,25·kontrast) altına iner (aralıklı ürünlerde uzun boş bant;
+        düz boşlukta çukur derinliği ölçülemez)."""
         r = pp // 50
         half = max(1, pp // 3)
         hp = max(1, pp // 2)
         if not final and i + hp + r >= total:
             return None
+        v = self._sm(i, r)
+        v_prev = self._sm(i - 1, r) if i - 1 >= self._off else None
         lo_i = max(self._off, i - half)
         hi_i = min(total - 1, i + half)
-        v = self._sm(i, r)
+        local_min = True
         for j in range(lo_i, hi_i + 1):
             sj = self._sm(j, r)
             if sj < v or (j < i and sj <= v):
-                return False, 0.0, 0.0
-        lmax = max(self._sm(j, r) for j in range(max(self._off, i - hp), i + 1))
-        rmax = max(self._sm(j, r) for j in range(i, min(total - 1, i + hp) + 1))
-        prom = min(lmax, rmax) - v
+                local_min = False
+                break
+        if not local_min and (v_prev is None or v >= v_prev):
+            return False, 0.0, 0.0
         wa, wb = max(self._off, i - 4 * pp), min(total, i + hp + 1)
         window = np.array([self._sm(j, r) for j in range(wa, wb)])
-        lo = percentile_lower(window, LO_Q)
-        contrast = percentile_lower(window, 0.90) - lo
-        ok = contrast >= MIN_CONTRAST and prom >= SEAM_PROMINENCE * contrast
-        return ok, lo, contrast
+        _, contrast, low = levels(window)
+        if contrast < MIN_CONTRAST:
+            return False, low, contrast
+        if v_prev is not None and v <= low < v_prev:
+            return True, low, contrast                       # (b) düşen kenar
+        if not local_min:
+            return False, low, contrast
+        lmax = max(self._sm(j, r) for j in range(max(self._off, i - hp), i + 1))
+        rmax = max(self._sm(j, r) for j in range(i, min(total - 1, i + hp) + 1))
+        return min(lmax, rmax) - v >= SEAM_PROMINENCE * contrast, low, contrast
 
     def _detect(self, pp: int, a0: int, total: int) -> tuple[list[int], list[tuple[int, int, int, int]]]:
         """Çevrimdışı tarama (öğrenme için): çukurlar ve parçalar (a, b, ürün_başı, ürün_sonu)."""
@@ -529,7 +557,7 @@ class LineScanCounter:
                 continue
             if seams and i - seams[-1] < half:
                 continue
-            seg = self._bright(prev, i, pp, res[1] + LOW_LEVEL * res[2])
+            seg = self._bright(prev, i, pp, res[1])
             if seg is not None:
                 segs.append((prev, i, *seg))
             seams.append(i)
@@ -537,11 +565,26 @@ class LineScanCounter:
         return seams, segs
 
     def _bright(self, a: int, b: int, pp: int, low: float) -> tuple[int, int] | None:
+        """Ürün kısmı: [a, b) içinde eşiğin üstündeki, en az max(2, 0,15·pp) uzunluktaki koşuların ilk ve son
+        indeksi (boş bant eşiğe yakınsa gürültüyle oluşan kısa kırıntılar ürüne katılmasın)."""
         r = pp // 50
-        idx = [j for j in range(a, b) if self._sm(j, r) > low]
-        if not idx:
+        min_run = max(2, round(0.15 * pp))
+        first: int | None = None
+        last = 0
+        run_start: int | None = None
+        for j in range(a, b + 1):
+            above = j < b and self._sm(j, r) > low
+            if above and run_start is None:
+                run_start = j
+            elif not above and run_start is not None:
+                if j - run_start >= min_run:
+                    if first is None:
+                        first = run_start
+                    last = j
+                run_start = None
+        if first is None:
             return None
-        return idx[0], idx[-1] + 1
+        return first, last
 
     def _advance(self, profile: Profile, final: bool) -> list[ScanEvent]:
         if not self._ensure_period(profile, final):
@@ -551,19 +594,19 @@ class LineScanCounter:
         r = pp // 50
         total = self._off + len(self._sig)
         events: list[ScanEvent] = []
-        last_lo, last_c = 0.0, 0.0
+        last_low, last_c = 0.0, 0.0
         while self._scan < total:
             i = self._scan
             res = self._seam_at(i, pp, total, final)
             if res is None:
                 break
             self._scan += 1
-            ok, lo, contrast = res
+            ok, low, contrast = res
             if contrast > 0:
-                last_lo, last_c = lo, contrast
-                self._low = lo + LOW_LEVEL * contrast
+                last_low, last_c = low, contrast
+                self._low = low
             if ok and (self._last_seam is None or i - self._last_seam >= half):
-                events += self._close(self._last_seam, i, pp, lo + LOW_LEVEL * contrast, profile)
+                events += self._close(self._last_seam, i, pp, low, profile)
                 self._last_seam = i
                 self._o_ia, self._o_k = None, 0
             elif self._low is not None and self._sm(i, r) > self._low:
@@ -576,18 +619,17 @@ class LineScanCounter:
             a = self._last_seam if self._last_seam is not None else self._off
             if last_c <= 0:
                 window = np.array([self._sm(j, r) for j in range(max(self._off, total - 4 * pp), total)])
-                last_lo = percentile_lower(window, LO_Q)
-                last_c = percentile_lower(window, 0.90) - last_lo
+                _, last_c, last_low = levels(window)
             if last_c >= MIN_CONTRAST:
                 events += self._close(a if self._last_seam is not None else None, total, pp,
-                                      last_lo + LOW_LEVEL * last_c, profile, right_seam=False)
+                                      last_low, profile, right_seam=False)
             events += self._flush_carry(profile)
             self._o_ia, self._o_k = None, 0
         self._trim(pp)
         return events
 
     def _provisional(self, profile: Profile) -> list[ScanEvent]:
-        """§4.9.7 Ön sayım: açık parçanın ürün kısmı (j + 0,5)·P'yi geçince j. ürünün merkezi çizgiyi geçmiştir,
+        """§4.9.7 Ön sayım: açık parçanın ürün kısmı 0,5·P'yi geçince ilk ürünün merkezi çizgiyi geçmiştir,
         hemen sayılır (numara ürün çizgideyken görünsün). Kesin karar parça kapanınca: eksik kalan eklenir,
         fazla sayılan geri alınmaz. Başlangıçtan önce başlamış parçada ve bekletilen kısa parçaya bitişikken
         (birleşebilir) ön sayım yapılmaz."""
@@ -599,7 +641,9 @@ class LineScanCounter:
         if (self._carry is not None and self._o_ia - a <= 0.15 * plen
                 and self._o_ib - self._carry[2] <= 1.35 * plen):
             return []
-        target = min(profile.maxMultiplicity, math.floor((self._o_ib - self._o_ia) / plen + 0.5))
+        # Yalnızca parçanın ilk ürünü: açık parçanın uzunluğu kapanıştakinden uzun ölçülebilir (eşik henüz
+        # oturmamış); ikinci ve sonraki ürünler kapanışta kesin olarak eklenir (fazla sayım geri alınamaz)
+        target = min(1, math.floor((self._o_ib - self._o_ia) / plen + 0.5))
         out: list[ScanEvent] = []
         while self._o_k < target:
             c = self._o_ia + (self._o_k + 0.5) * plen
@@ -627,17 +671,19 @@ class LineScanCounter:
         ia, ib = br
         plen = self._p_len
         tight = 0.15 * plen
+        isolated = a is None or ia - start > tight          # önünde gerçek boşluk (boş bant) var
         if self._carry is not None:
             c_a, _cb, c_ia, _cib, c_id, c_k = self._carry
             if ia - start <= tight and ib - c_ia <= 1.35 * plen:
                 a, ia, sid, k = c_a, c_ia, c_id, c_k + k
                 self._carry = None
+                isolated = False
             else:
                 out += self._flush_carry(profile)
-        if ib - ia < 0.75 * plen and right_seam and b - ib <= tight:
+        if ib - ia < 0.75 * plen and right_seam and b - ib <= tight and self._sm(b, pp // 50) > low:
             self._carry = (a, b, ia, ib, sid, k)
             return out
-        out += self._emit(a, b, ia, ib, right_seam, profile, sid, k)
+        out += self._emit(a, b, ia, ib, right_seam, profile, sid, k, isolated)
         return out
 
     def _flush_carry(self, profile: Profile) -> list[ScanEvent]:
@@ -648,9 +694,12 @@ class LineScanCounter:
         return self._emit(a, b, ia, ib, True, profile, sid, k)
 
     def _emit(self, a: int | None, b: int, ia: int, ib: int, right_seam: bool, profile: Profile,
-              sid: int, k: int) -> list[ScanEvent]:
-        """Kesin karar: n ürün; ilk k'sı ön sayımla zaten sayıldı (fazlası geri alınmaz)."""
+              sid: int, k: int, isolated: bool = False) -> list[ScanEvent]:
+        """Kesin karar: n ürün; ilk k'sı ön sayımla zaten sayıldı (fazlası geri alınmaz). Önünde boşluk olan tek
+        başına parça ≥ 0,25·P ise bir üründür (perspektifte uzak/sivri görünen torba; parlak kısmı kısa kalır)."""
         n = min(profile.maxMultiplicity, math.floor((ib - ia) / self._p_len + 0.5))
+        if n == 0 and isolated and ib - ia >= 0.25 * self._p_len:
+            n = 1
         if n <= 0:
             return []
         # Merkez: ek yerleri arası; ürün ile ek yeri arasında boşluk (boş bant) varsa ürün kısmının biraz dışı.
@@ -722,3 +771,26 @@ def _run_median(x: np.ndarray, pmin: int) -> float | None:
         return None
     runs.sort()
     return float(runs[(len(runs) - 1) // 2])
+
+
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    da, db = a - a.mean(), b - b.mean()
+    den = float(np.sqrt(float(np.dot(da, da)) * float(np.dot(db, db))))
+    return float(np.dot(da, db)) / den if den > 1e-9 else 0.0
+
+
+def _spread_polarity(pend: list[tuple[float, float]]) -> int:
+    """§4.9.4 Yayılım ipucu: satır içi yayılım s = üst − alt çeyrek. Ürün banttan dar ise ürün satırlarında s büyür;
+    açık üründe parlaklık (üst çeyrek) s ile pozitif, koyu ürün yorumu (255 − alt çeyrek) negatif ilişkilidir.
+    Biri > 0,3 ve diğeri < 0 ise kesin (+1/−1); değilse 0 (bitişik akışta gölgeli ek yerleri de yayılım verir)."""
+    if len(pend) < 8:
+        return 0
+    arr = np.asarray(pend, dtype=np.float64)
+    lo, hi = arr[:, 0], arr[:, 1]
+    spread = hi - lo
+    cn, ci = _pearson(hi, spread), _pearson(255.0 - lo, spread)
+    if cn > 0.3 and ci < 0:
+        return 1
+    if ci > 0.3 and cn < 0:
+        return -1
+    return 0
