@@ -21,6 +21,9 @@ SEAM_PROMINENCE = 0.25   # çukur derinliği ≥ bu × kontrast
 LOW_LEVEL = 0.25         # ürün kısmı: lo + bu × kontrast üstü
 CONF_MIN = 0.05          # kayma eşleşmesi bundan belirsizse hız değişmedi sayılır
 LO_Q = 0.02              # kontrastın alt ucu: ince ek yerleri (koli kenarı) pencerenin küçük bir kısmıdır
+ACTIVE_FRAMES = 10       # hareketli sütun seçimi için gereken hareketli kare sayısı (§4.9.0)
+ACTIVE_FRACTION = 0.25   # konum hareketli ⇔ ortalama farkı ≥ bu × en hareketli konumunki
+MOTION_MIN = 1.0         # bir kare "hareketli" ⇔ ROI'de akışa dik en hareketli konumun ortalama |farkı| ≥ bu
 
 
 @dataclass
@@ -50,13 +53,13 @@ def percentile_lower(values: np.ndarray, q: float) -> float:
     return float(s[math.floor(q * (len(s) - 1))])
 
 
-def flow_profile(small: np.ndarray, profile: Profile, mask: np.ndarray | None = None
-                 ) -> tuple[np.ndarray, int] | None:
+def flow_profile(small: np.ndarray, profile: Profile, mask: np.ndarray | None = None,
+                 bounds: tuple[int, int, int, int] | None = None) -> tuple[np.ndarray, int] | None:
     """§4.9.1 Akış eksenine göre sıralı profil (3×n: alt çeyrek, alt medyan, üst çeyrek) ve çizgi indeksi.
     ROI akış boyunca çok kısaysa None. Kayma ölçümü medyanla; sayım sinyali ürün açıksa üst, koyuysa alt çeyrekle
     (ürün üstündeki etiket/bant gibi küçük alanlar satırı "boş bant" gibi göstermesin)."""
     h, w = small.shape
-    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+    x0, y0, x1, y1 = bounds or roi_pixels(profile.roi, w, h)
     if mask is None:
         mask = roi_mask(profile.roi, profile.roiPolygon, w, h)
     vertical = profile.vertical
@@ -108,16 +111,58 @@ def match_shift(key: np.ndarray, cur: np.ndarray, line: int) -> tuple[float, int
     return s, smax
 
 
+def motion_map(small: np.ndarray, prev: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """§4.9.0 |kare − önceki kare|, ROI maskesi dışı 0 (float64, h×w)."""
+    return np.abs(small.astype(np.int16) - prev.astype(np.int16)).astype(np.float64) * mask
+
+
+def frame_moving(motion: np.ndarray, profile: Profile) -> bool:
+    """Kare hareketli mi: ROI içinde akışa dik en hareketli konumun ortalama farkı ≥ MOTION_MIN."""
+    h, w = motion.shape
+    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+    sub = motion[y0:y1, x0:x1]
+    axis = 0 if profile.vertical else 1
+    return float((sub.sum(axis=axis) / max(1, sub.shape[axis])).max()) >= MOTION_MIN
+
+
+def active_region(motion: np.ndarray, profile: Profile, mask: np.ndarray
+                  ) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:
+    """§4.9.0 Hareketli bölge: ROI içinde akışa dik eksende (dikey akışta sütunlar) ortalama hareketi en
+    hareketlinin ACTIVE_FRACTION'ı kadar olan konumlar — bant. Menüler, raylar, yerde duran nesneler hareket etmez;
+    alan bandın yanlarına taşsa da yalnızca bant kullanılır. Akış ekseninde kırpılmaz (tek renk ürün içi kareler
+    arasında değişmez, satır hareketi güvenilir değil). (maske, sınırlar) ya da hareket yoksa None."""
+    h, w = mask.shape
+    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+    m = mask[y0:y1, x0:x1]
+    sub = motion[y0:y1, x0:x1]
+    vertical = profile.vertical
+    axis = 0 if vertical else 1
+    cnt = m.sum(axis=axis)
+    cross = np.where(cnt > 0, sub.sum(axis=axis) / np.maximum(cnt, 1), 0.0)
+    if cross.max() <= 0:
+        return None
+    sel = cross >= ACTIVE_FRACTION * float(cross.max())
+    idx = np.nonzero(sel)[0]
+    c0, c1 = int(idx[0]), int(idx[-1]) + 1
+    out = np.zeros_like(mask)
+    if vertical:
+        out[y0:y1, x0:x1] = m & sel[None, :]
+        return out, (x0 + c0, y0, x0 + c1, y1)
+    out[y0:y1, x0:x1] = m & sel[:, None]
+    return out, (x0, y0 + c0, x1, y0 + c1)
+
+
 def lower_median(values: np.ndarray) -> float:
     s = np.sort(values)
     return float(s[(len(s) - 1) // 2])
 
 
-def polarity_vote(small: np.ndarray, profile: Profile, mask: np.ndarray, line: int) -> int:
+def polarity_vote(small: np.ndarray, profile: Profile, mask: np.ndarray, line: int,
+                  bounds: tuple[int, int, int, int] | None = None) -> int:
     """§4.9.4 Ürün banttan açık mı (+1) koyu mu (−1)? Çizgi çevresinde ROI'nin ortası ile kenarları karşılaştırılır
     (ürün genelde banttan dardır, kenarlarda bant görünür). Fark ≤ 15 gri seviye ise oy yok (0)."""
     h, w = small.shape
-    x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+    x0, y0, x1, y1 = bounds or roi_pixels(profile.roi, w, h)
     forward = profile.direction in ("down", "right")
     if profile.vertical:
         c = (y0 + line) if forward else (y1 - 1 - line)
@@ -147,6 +192,15 @@ class LineScanCounter:
         self.reset()
 
     def reset(self) -> None:
+        """Tam sıfırlama: hareketli sütunlar da yeniden seçilir (§4.9.0)."""
+        self._active: np.ndarray | None = None
+        self._bounds: tuple[int, int, int, int] | None = None
+        self._w_prev: np.ndarray | None = None
+        self._w_maps: list[np.ndarray] = []      # hareketli karelerin fark haritaları (en çok ACTIVE_FRAMES)
+        self._w_frames: list[np.ndarray] = []    # ilk kare + hareketli kareler (bölge bulununca yeniden işlenir)
+        self._reset_scan()
+
+    def _reset_scan(self) -> None:
         self._prev: np.ndarray | None = None
         self._line = 0
         self._n = 0                       # ROI akış uzunluğu (işleme pikseli)
@@ -184,22 +238,55 @@ class LineScanCounter:
     # ---- dış arayüz ----
     @property
     def product_length(self) -> float:
-        """Öğrenilen/kullanılan ürün boyu (ROI akış uzunluğuna oranla; 0 = henüz yok)."""
+        """Öğrenilen/kullanılan ürün boyu (hareketli bölgenin akış uzunluğuna oranla; 0 = henüz yok)."""
         return self._p_len / self._n if self._n and self._p_len > 0 else 0.0
 
     def process(self, small: np.ndarray, profile: Profile) -> list[ScanEvent]:
         h, w = small.shape
         key = (profile.roi.x, profile.roi.y, profile.roi.width, profile.roi.height,
-               tuple(profile.roiPolygon or ()), w, h)
+               tuple(profile.roiPolygon or ()), w, h, profile.vertical)
         if key != self._mask_key:
             self._mask_key, self._mask = key, roi_mask(profile.roi, profile.roiPolygon, w, h)
-        fp = flow_profile(small, profile, self._mask)
+            self.reset()
+        assert self._mask is not None
+        if self._active is not None:
+            return self._process_active(small, profile)
+        # §4.9.0 Önce hangi sütunların hareket ettiğini öğren. İlk kare ve hareketli kareler saklanır; bölge
+        # bulununca baştan işlenir (öğrenme sırasında çizgiyi geçen ürün kaçmaz). Hareketsiz/tekrarlanan kare
+        # kayma 0 verdiği için atlanması sonucu değiştirmez.
+        if self._w_prev is None:
+            self._w_frames.append(small.copy())
+        elif self._w_prev.shape == small.shape:
+            mm = motion_map(small, self._w_prev, self._mask)
+            if frame_moving(mm, profile):
+                self._w_maps.append(mm)
+                self._w_frames.append(small.copy())
+        self._w_prev = small.copy()
+        if len(self._w_maps) < ACTIVE_FRAMES:
+            return []
+        # Piksel başına alt medyan: siyah kare, sahne geçişi gibi tek tük kareler seçimi bozmasın
+        region = active_region(np.sort(np.stack(self._w_maps), axis=0)[(ACTIVE_FRAMES - 1) // 2],
+                               profile, self._mask)
+        if region is None:
+            self._w_maps.clear()
+            self._w_frames = [small.copy()]
+            return []
+        self._active, self._bounds = region
+        frames, self._w_frames, self._w_maps = self._w_frames, [], []
+        events: list[ScanEvent] = []
+        for f in frames:
+            events += self._process_active(f, profile)
+        return events
+
+    def _process_active(self, small: np.ndarray, profile: Profile) -> list[ScanEvent]:
+        assert self._active is not None
+        fp = flow_profile(small, profile, self._active, self._bounds)
         if fp is None:
             return []
         stats, line = fp
         prof = stats[1]
-        if self._polarity == 0 and self._mask is not None:
-            self._votes += polarity_vote(small, profile, self._mask, line)
+        if self._polarity == 0:
+            self._votes += polarity_vote(small, profile, self._active, line, self._bounds)
         if self._prev is None or len(self._prev) != len(prof) or line != self._line:
             self._begin(stats, line, profile)
             return []
@@ -240,7 +327,7 @@ class LineScanCounter:
         if self._prev is None:
             return []
         h, w = small_shape
-        x0, y0, x1, y1 = roi_pixels(profile.roi, w, h)
+        x0, y0, x1, y1 = self._bounds or roi_pixels(profile.roi, w, h)
         emitted = self._end if self._end is not None else self._total()
         out: list[ScanMarker] = []
         forward = profile.direction in ("down", "right")
@@ -276,7 +363,7 @@ class LineScanCounter:
     def _begin(self, stats: np.ndarray, line: int, profile: Profile) -> None:
         n = stats.shape[1]
         keep = (self._p_len, self._polarity) if self._n == n else (0.0, 0)
-        self.reset()
+        self._reset_scan()
         self._prev, self._prev_stats, self._line, self._n = stats[1], stats, line, n
         self._key = stats[1]
         if keep[0] > 0 and profile.productLength <= 0:
@@ -390,9 +477,13 @@ class LineScanCounter:
         scored: dict[int, float] = {}
         for c in cands:
             q = max(4, round(c))
+            if q < pmin:                    # alanın onda birinden kısa "ürün" kıvrım/etiket parçasıdır
+                continue
             if q not in scored:
                 res = self._residual(q, total)
                 scored[q] = 1.0 if res is None else res
+        if not scored:
+            return None
         good = [q for q, r in scored.items() if r <= 0.15]
         q = max(good) if good else min(scored, key=lambda k: (scored[k], k))
         return float(q), scored[q]

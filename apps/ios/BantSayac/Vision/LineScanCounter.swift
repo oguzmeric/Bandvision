@@ -25,6 +25,9 @@ final class LineScanCounter {
     static let lowLevel = 0.25
     static let confMin = 0.05
     static let loQ = 0.02
+    static let activeFrames = 10
+    static let activeFraction = 0.25
+    static let motionMin = 1.0
 
     private struct Stats {
         var lo: [Double]
@@ -52,6 +55,7 @@ final class LineScanCounter {
         let polygon: [NormPoint]?
         let width: Int
         let height: Int
+        let vertical: Bool
     }
 
     private var maskKey: MaskKey?
@@ -89,10 +93,26 @@ final class LineScanCounter {
     private var polarity = 0
     private var votes = 0
     private var lastShift = 0.0
+    // §4.9.0 Hareketli bölge (tam sıfırlamada yeniden seçilir)
+    private var active: [UInt8]?
+    private var bounds: PixelRect?
+    private var wPrev: GrayFrame?
+    private var wMaps: [[Double]] = []
+    private var wFrames: [GrayFrame] = []
 
     init() { reset() }
 
+    /// Tam sıfırlama: hareketli bölge de yeniden seçilir.
     func reset() {
+        active = nil
+        bounds = nil
+        wPrev = nil
+        wMaps = []
+        wFrames = []
+        resetScan()
+    }
+
+    private func resetScan() {
         prev = nil; prevStats = nil; line = 0; n = 0; acc = 0
         key = nil; base = 0; dist = 0; vel = 0
         sig = []; pend = []; carry = nil
@@ -104,24 +124,68 @@ final class LineScanCounter {
 
     // MARK: - Dış arayüz
 
-    /// Öğrenilen/kullanılan ürün boyu (ROI akış uzunluğuna oranla; 0 = henüz yok)
+    /// Öğrenilen/kullanılan ürün boyu (hareketli bölgenin akış uzunluğuna oranla; 0 = henüz yok)
     var productLength: Double { n > 0 && pLen > 0 ? pLen / Double(n) : 0 }
 
     /// Son karede bant hareket etti mi (§8)
     var moving: Bool { lastShift > 0.05 }
 
     func process(_ f: GrayFrame, profile: ProductProfile) -> [Event] {
-        let k = MaskKey(roi: profile.roi, polygon: profile.roiPolygon, width: f.width, height: f.height)
+        let k = MaskKey(roi: profile.roi, polygon: profile.roiPolygon, width: f.width, height: f.height,
+                        vertical: profile.direction.isVertical)
         if k != maskKey {
             maskKey = k
             mask = BackgroundSegmenter.roiMask(roi: profile.roi, polygon: profile.roiPolygon,
                                                width: f.width, height: f.height)
+            reset()
         }
-        guard let fp = Self.flowProfile(f, profile: profile, mask: mask) else { return [] }
+        if active != nil { return processActive(f, profile: profile) }
+        // §4.9.0 Önce hangi sütunların hareket ettiğini öğren. İlk kare ve hareketli kareler saklanır; bölge
+        // bulununca baştan işlenir (öğrenme sırasında çizgiyi geçen ürün kaçmaz).
+        if let wp = wPrev {
+            if wp.width == f.width && wp.height == f.height {
+                let mm = Self.motionMap(f, wp, mask: mask)
+                if Self.frameMoving(mm, width: f.width, height: f.height, profile: profile) {
+                    wMaps.append(mm)
+                    wFrames.append(f)
+                }
+            }
+        } else {
+            wFrames.append(f)
+        }
+        wPrev = f
+        guard wMaps.count >= Self.activeFrames else { return [] }
+        // Piksel başına alt medyan: siyah kare, sahne geçişi gibi tek tük kareler seçimi bozmasın
+        let count = wMaps[0].count
+        var med = [Double](repeating: 0, count: count)
+        var col = [Double](repeating: 0, count: wMaps.count)
+        for i in 0..<count {
+            for j in 0..<wMaps.count { col[j] = wMaps[j][i] }
+            col.sort()
+            med[i] = col[(Self.activeFrames - 1) / 2]
+        }
+        guard let region = Self.activeRegion(med, width: f.width, height: f.height, profile: profile, mask: mask) else {
+            wMaps = []
+            wFrames = [f]
+            return []
+        }
+        active = region.mask
+        bounds = region.bounds
+        let frames = wFrames
+        wFrames = []
+        wMaps = []
+        var events: [Event] = []
+        for fr in frames { events += processActive(fr, profile: profile) }
+        return events
+    }
+
+    private func processActive(_ f: GrayFrame, profile: ProductProfile) -> [Event] {
+        guard let act = active, let bd = bounds else { return [] }
+        guard let fp = Self.flowProfile(f, profile: profile, mask: act, bounds: bd) else { return [] }
         let stats = fp.stats, ln = fp.line
         let prof = stats.med
         if polarity == 0 {
-            votes += Self.polarityVote(f, profile: profile, mask: mask, line: ln)
+            votes += Self.polarityVote(f, profile: profile, mask: act, line: ln, bounds: bd)
         }
         guard let prevProf = prev, prevProf.count == prof.count, ln == line else {
             begin(stats, line: ln, profile: profile)
@@ -174,7 +238,7 @@ final class LineScanCounter {
     /// Son sayılan ürünlerin şimdiki konumu (çizgiden geçtikleri mesafe kadar ileride).
     func markers(width w: Int, height h: Int, profile: ProductProfile) -> [Marker] {
         guard prev != nil else { return [] }
-        let r = BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
+        let r = bounds ?? BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
         let emitted = Double(end ?? total)
         let forward = profile.direction == .down || profile.direction == .right
         var items: [(Int, Double, Bool)] = []
@@ -202,12 +266,77 @@ final class LineScanCounter {
         return out
     }
 
+    // MARK: - Hareketli bölge (§4.9.0)
+
+    /// |kare − önceki kare|, ROI maskesi dışı 0
+    private static func motionMap(_ f: GrayFrame, _ prev: GrayFrame, mask: [UInt8]) -> [Double] {
+        var out = [Double](repeating: 0, count: f.pixels.count)
+        for i in 0..<out.count where mask[i] != 0 {
+            out[i] = Double(abs(Int(f.pixels[i]) - Int(prev.pixels[i])))
+        }
+        return out
+    }
+
+    /// Kare hareketli mi: ROI içinde akışa dik en hareketli konumun ortalama farkı ≥ motionMin
+    /// (Python: ROI dikdörtgenindeki tüm satırlar/sütunlar üzerinden ortalama)
+    private static func frameMoving(_ m: [Double], width w: Int, height h: Int, profile: ProductProfile) -> Bool {
+        let r = BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
+        var best = 0.0
+        if profile.direction.isVertical {
+            for x in r.x0..<r.x1 {
+                var s = 0.0
+                for y in r.y0..<r.y1 { s += m[y * w + x] }
+                best = max(best, s / Double(max(1, r.y1 - r.y0)))
+            }
+        } else {
+            for y in r.y0..<r.y1 {
+                var s = 0.0
+                for x in r.x0..<r.x1 { s += m[y * w + x] }
+                best = max(best, s / Double(max(1, r.x1 - r.x0)))
+            }
+        }
+        return best >= motionMin
+    }
+
+    /// Hareketli bölge: ROI içinde akışa dik konumlar (dikey akışta sütunlar), ortalama hareketi en hareketlinin
+    /// activeFraction'ı kadar olanlar. Akış ekseninde kırpılmaz.
+    private static func activeRegion(_ motion: [Double], width w: Int, height h: Int, profile: ProductProfile,
+                                     mask: [UInt8]) -> (mask: [UInt8], bounds: PixelRect)? {
+        let r = BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
+        let vertical = profile.direction.isVertical
+        let len = vertical ? r.x1 - r.x0 : r.y1 - r.y0
+        var cross = [Double](repeating: 0, count: len)
+        for i in 0..<len {
+            var s = 0.0, c = 0
+            if vertical {
+                let x = r.x0 + i
+                for y in r.y0..<r.y1 where mask[y * w + x] != 0 { s += motion[y * w + x]; c += 1 }
+            } else {
+                let y = r.y0 + i
+                for x in r.x0..<r.x1 where mask[y * w + x] != 0 { s += motion[y * w + x]; c += 1 }
+            }
+            cross[i] = c > 0 ? s / Double(c) : 0
+        }
+        guard let mx = cross.max(), mx > 0 else { return nil }
+        let sel = cross.map { $0 >= activeFraction * mx }
+        guard let c0 = sel.firstIndex(of: true), let cl = sel.lastIndex(of: true) else { return nil }
+        var out = [UInt8](repeating: 0, count: w * h)
+        for y in r.y0..<r.y1 {
+            for x in r.x0..<r.x1 where mask[y * w + x] != 0 && sel[vertical ? x - r.x0 : y - r.y0] {
+                out[y * w + x] = 1
+            }
+        }
+        let b = vertical
+            ? PixelRect(x0: r.x0 + c0, y0: r.y0, x1: r.x0 + cl + 1, y1: r.y1)
+            : PixelRect(x0: r.x0, y0: r.y0 + c0, x1: r.x1, y1: r.y0 + cl + 1)
+        return (out, b)
+    }
+
     // MARK: - Profil, kayma, oy (§4.9.1, .2, .4)
 
-    private static func flowProfile(_ f: GrayFrame, profile: ProductProfile, mask: [UInt8])
+    private static func flowProfile(_ f: GrayFrame, profile: ProductProfile, mask: [UInt8], bounds r: PixelRect)
         -> (stats: Stats, line: Int)? {
         let w = f.width, h = f.height
-        let r = BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
         let vertical = profile.direction.isVertical
         let lo = vertical ? r.y0 : r.x0
         let hi = vertical ? r.y1 : r.x1
@@ -299,9 +428,9 @@ final class LineScanCounter {
     }
 
     /// Ürün banttan açık mı (+1) koyu mu (−1)? ROI ortası (%30–%70) ile kenarları (%15'er), çizgi çevresi 5 satır.
-    private static func polarityVote(_ f: GrayFrame, profile: ProductProfile, mask: [UInt8], line: Int) -> Int {
-        let w = f.width, h = f.height
-        let r = BackgroundSegmenter.pixelRect(profile.roi, width: w, height: h)
+    private static func polarityVote(_ f: GrayFrame, profile: ProductProfile, mask: [UInt8], line: Int,
+                                     bounds r: PixelRect) -> Int {
+        let w = f.width
         let forward = profile.direction == .down || profile.direction == .right
         var center: [Double] = [], sides: [Double] = []
         if profile.direction.isVertical {
@@ -346,7 +475,7 @@ final class LineScanCounter {
         let count = stats.med.count
         let keepLen = n == count ? pLen : 0
         let keepPol = n == count ? polarity : 0
-        reset()
+        resetScan()
         prev = stats.med
         prevStats = stats
         line = ln

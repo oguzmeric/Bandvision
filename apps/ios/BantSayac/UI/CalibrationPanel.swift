@@ -27,35 +27,26 @@ struct CalibrationPanel: View {
                 }
             }
 
+            Text(vm.calibrationMessage)
+                .font(.footnote)
+                .foregroundStyle(.yellow)
+                .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             countModePicker
             areaShapePicker
             if vm.profile.mode == .blob {
                 lineModePicker
             }
 
-            Text(vm.calibrationMessage)
-                .font(.callout)
-                .foregroundStyle(.yellow)
-                .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
-                .frame(maxWidth: .infinity, alignment: .leading)
-
             if vm.profile.mode == .linescan {
                 lineScanControls
             } else {
                 blobControls
             }
-
-            HStack {
-                Button("İptal", role: .cancel) { vm.cancelCalibration() }
-                Spacer()
-                Button { vm.saveCalibration() } label: {
-                    Label("Kaydet", systemImage: "checkmark")
-                }
-                .buttonStyle(.borderedProminent)
-            }
         }
-        .padding()
-        .background(Color(white: 0.08))
+        .padding(.horizontal)
+        .padding(.vertical, 10)
     }
 
     /// Sayım yöntemi (§4.9): ayrık ürünler (leke) ya da bitişik/hacimli tek sıra ürünler (şerit tarama)
@@ -72,7 +63,7 @@ struct CalibrationPanel: View {
             Text(vm.profile.mode == .linescan
                  ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez."
                  : "Yumurta, meyve gibi ayrık ürünler; bant boşken arka plan öğrenilir.")
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -172,7 +163,7 @@ struct CalibrationPanel: View {
             Text(vm.profile.countLine == nil
                  ? "Turuncu çizgiyi ortasındaki tutamaçla akış yönünde kaydır."
                  : "Çizginin uçlarını sürükle · ortasından tutup taşı · ok akış yönünü gösterir (gerekirse \"Yönü çevir\")")
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -200,9 +191,28 @@ struct CalibrationPanel: View {
             Text(vm.profile.roiPolygon == nil
                  ? "Köşelerden sürükleyerek alanı ayarla."
                  : "Köşeleri sürükle · sarı + ile köşe ekle (en çok 12) · köşeye çift dokun: sil")
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Kalibrasyonun İptal / Kaydet düğmeleri: kayan panelin altında sabit (kaydırmadan hep görünür)
+struct CalibrationActions: View {
+    @ObservedObject var vm: CountingViewModel
+
+    var body: some View {
+        HStack {
+            Button("İptal", role: .cancel) { vm.cancelCalibration() }
+            Spacer()
+            Button { vm.saveCalibration() } label: {
+                Label("Kaydet", systemImage: "checkmark")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color(white: 0.08))
     }
 }

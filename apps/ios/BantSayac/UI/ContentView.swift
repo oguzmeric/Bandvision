@@ -13,21 +13,8 @@ struct ContentView: View {
     @GestureState private var drag: CGSize = .zero
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            cameraArea
-            if vm.isCalibrating {
-                if vm.isVideoMode {                     // video oynarken kalibrasyon: oynatıcı görünür kalsın
-                    VideoTransportBar(vm: vm)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                }
-                CalibrationPanel(vm: vm)
-            } else if vm.isVideoMode {
-                VideoPanel(vm: vm, onPickVideo: { showVideoSheet = true })
-            } else {
-                controlPanel
-            }
+        GeometryReader { geo in
+            mainStack(height: geo.size.height)
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -37,6 +24,31 @@ struct ContentView: View {
         .sheet(isPresented: $showVideoSheet) {
             VideoPickerSheet(vm: vm)
                 .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func mainStack(height: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            topBar
+            cameraArea
+            if vm.isCalibrating {
+                if vm.isVideoMode {                     // video oynarken kalibrasyon: oynatıcı görünür kalsın
+                    VideoTransportBar(vm: vm)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+                // Panel ekranın en çok %36'sı (+ sabit Kaydet satırı); içinde kayar — görüntü (alan ve çizgi ayarı) büyük kalsın
+                ScrollView {
+                    CalibrationPanel(vm: vm)
+                }
+                .frame(maxHeight: height * 0.36)
+                .background(Color(white: 0.08))
+                CalibrationActions(vm: vm)
+            } else if vm.isVideoMode {
+                VideoPanel(vm: vm, onPickVideo: { showVideoSheet = true })
+            } else {
+                controlPanel
+            }
         }
     }
 

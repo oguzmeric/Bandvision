@@ -69,6 +69,20 @@ final class LineScanTests: XCTestCase {
         XCTAssertEqual(known.total, 24)
     }
 
+    /// Alan tüm kare; bandın dışında hareketsiz desen. Python: test_swift_parity_wide_roi (24 ürün, bant 16–80).
+    func testParityWideRoi() {
+        let frames = Self.parityFrames().map { g -> GrayFrame in
+            var px = g.pixels
+            for y in 0..<Self.h {
+                for x in 0..<Self.w where x < 16 || x >= 80 { px[y * Self.w + x] = UInt8((x * 7 + y * 13) % 251) }
+            }
+            return GrayFrame(width: Self.w, height: Self.h, sourceWidth: Self.w, sourceHeight: Self.h, pixels: px)
+        }
+        var p = Self.profile()
+        p.roi = CGRect(x: 0, y: 0, width: 1, height: 1)
+        XCTAssertEqual(Self.run(frames, p).total, 24)
+    }
+
     func testEventsAreSingleProductsWithMarkers() {
         let frames = Self.parityFrames()
         let p = Self.profile(productLength: 0.298611)

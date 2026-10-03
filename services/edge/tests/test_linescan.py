@@ -242,3 +242,41 @@ def test_swift_parity_vectors() -> None:
 
 
 PARITY_EXPECTED = (24, 0.298611, 24)          # elle: merkezi çizgiyi geçen 24 ürün
+
+
+def test_wide_roi_with_static_clutter_uses_only_belt() -> None:
+    """§4.9.0 Alan bandın dışına taşıyor (tüm genişlik, üst/alt kenarlar dahil); yanlarda hareketsiz yüksek
+    kontrastlı desen (menü, ray, duran nesne) ve siyah ilk kare (ekran kaydı) var: yalnızca bant kullanılır."""
+    sc = SCENARIOS["bags_touching"]()
+    rng = np.random.default_rng(5)
+    clutter = rng.integers(0, 255, (sc.height, sc.width)).astype(np.uint8)
+    belt = slice(sc.belt_x[0], sc.belt_x[1])
+    frames = [np.zeros((sc.height, sc.width), np.uint8)]          # siyah açılış karesi
+    for g, _ in sc.frames():
+        f = clutter.copy()
+        f[:, belt] = g[:, belt]
+        frames.append(f)
+    p = ls_profile(Roi(0.0, 0.0, 1.0, 1.0))
+    lc = LineScanCounter()
+    total = sum(e.delta for f in frames for e in lc.process(f, p)) + sum(e.delta for e in lc.flush(p))
+    assert lc._bounds is not None and abs(lc._bounds[0] - sc.belt_x[0]) <= 8 and abs(lc._bounds[2] - sc.belt_x[1]) <= 8
+    assert total == sc.truth(0.5)
+
+
+def test_swift_parity_wide_roi() -> None:
+    """Swift `LineScanTests.testParityWideRoi`: aynı üretici, bandın dışında hareketsiz desen, alan tüm kare."""
+    frames = []
+    yy, xx = np.mgrid[0:PARITY_H, 0:PARITY_W]
+    clutter = ((xx * 7 + yy * 13) % 251).astype(np.uint8)
+    for g in parity_frames():
+        f = clutter.copy()
+        f[:, 16:80] = g[:, 16:80]
+        frames.append(f)
+    p = parity_profile()
+    p.roi = Roi(0.0, 0.0, 1.0, 1.0)
+    lc = LineScanCounter()
+    total = sum(e.delta for f in frames for e in lc.process(f, p)) + sum(e.delta for e in lc.flush(p))
+    assert (total, lc._bounds) == PARITY_WIDE_EXPECTED
+
+
+PARITY_WIDE_EXPECTED = (24, (16, 0, 80, 160))     # bant sütunları 16–80 kendiliğinden seçilir

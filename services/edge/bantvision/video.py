@@ -30,7 +30,7 @@ import numpy as np
 
 from .core import Pipeline, Profile
 from .core.lineframe import nearest_direction
-from .core.linescan import LineScanCounter, flow_profile, match_shift
+from .core.linescan import LineScanCounter, active_region, flow_profile, frame_moving, match_shift, motion_map
 from .core.pipeline import FrameResult
 from .core.profile import Roi
 from .core.segmenter import downsample, roi_mask
@@ -253,25 +253,49 @@ def estimate_expected_area(info: VideoInfo, profile: Profile, bg: np.ndarray, wi
 
 def estimate_direction_linescan(info: VideoInfo, profile: Profile, window: float, pairs: int = 40
                                 ) -> tuple[str | None, tuple[float, float]]:
-    """Şerit tarama (§4.9): dört yön için çizgi çevresindeki kaymayı ölç; en büyük medyan kayma akış yönüdür.
-    Yanlış yönde eşleşme ya belirsiz ya da ~0 çıkar (kayma yalnızca akış yönünde aranır)."""
+    """Şerit tarama (§4.9): önce hareketli bölge (§4.9.0, dikey ve yatay akış için ayrı), sonra dört yön için
+    çizgi çevresindeki kayma; en büyük ortalama kayma akış yönüdür (yanlış yönde eşleşme belirsiz ya da ~0)."""
     end = min(info.duration, window)
     n_avail = max(2, int(end * info.fps))
     step = max(1, n_avail // pairs)
-    shifts: dict[str, list[float]] = {d: [] for d in ("down", "up", "right", "left")}
+    smalls: list[np.ndarray] = []
     prev = None
     for k, _, f in read_frames(info, 0.0, end):
         g = downsample(to_gray(f, profile.rotation), profile.processingWidth)[0]
         if prev is not None and k % step == 0:
-            for d, found in shifts.items():
-                q = Profile.from_dict(profile.to_dict())
-                q.direction = d
-                fa, fb = flow_profile(prev, q), flow_profile(g, q)
+            smalls += [prev, g]
+        prev = g
+    if not smalls:
+        return None, (0.0, 0.0)
+    h, w = smalls[0].shape
+    base = roi_mask(profile.roi, profile.roiPolygon, w, h)
+    shifts: dict[str, list[float]] = {d: [] for d in ("down", "up", "right", "left")}
+    # Eksen: hareketli bölgesindeki ortalama hareketi büyük olan (bant şeridi yoğun hareketlidir; ekran kaydındaki
+    # ilerleme çubuğu gibi ince hareketler bölgeye seyreltilir)
+    cands: list[tuple[float, tuple[str, str], Profile, np.ndarray, tuple[int, int, int, int]]] = []
+    for dirs in (("down", "up"), ("right", "left")):
+        q = Profile.from_dict(profile.to_dict())
+        q.direction = dirs[0]
+        maps = [motion_map(smalls[i + 1], smalls[i], base) for i in range(0, len(smalls), 2)]
+        maps = [m for m in maps if frame_moving(m, q)]
+        if len(maps) < 3:
+            continue
+        med_map = np.sort(np.stack(maps), axis=0)[(len(maps) - 1) // 2]
+        region = active_region(med_map, q, base)
+        if region is None:
+            continue
+        mask, bounds = region
+        cands.append((float(med_map[mask].mean()) if mask.any() else 0.0, dirs, q, mask, bounds))
+    if cands:
+        _, dirs, q, mask, bounds = max(cands, key=lambda c: c[0])
+        for d in dirs:
+            q.direction = d
+            for i in range(0, len(smalls), 2):
+                fa, fb = flow_profile(smalls[i], q, mask, bounds), flow_profile(smalls[i + 1], q, mask, bounds)
                 if fa is None or fb is None:
                     continue
                 m = match_shift(fa[0][1], fb[0][1], fb[1])
-                found.append(m[0] if m else 0.0)
-        prev = g
+                shifts[d].append(m[0] if m else 0.0)
     # Ortalama: ekran kayıtlarında tekrarlanan karelerin kayması 0'dır, medyanı sıfıra çeker
     med = {d: (float(np.mean(v)) if v else 0.0) for d, v in shifts.items()}
     best = max(med, key=lambda d: med[d])
