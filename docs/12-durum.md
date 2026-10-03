@@ -33,6 +33,8 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | 15, 16 | Yüklenmedi (15: ağ kamerası UI testi zamanlaması; 16: CI her çalışmada yeni geliştirme sertifikası oluşturduğu için hesap sınırı doldu → arşiv imzasız, imza bulut dağıtım sertifikasıyla). İçerikleri 17'de |
 | **17** | **Açılı sayım çizgisi** (`countLine`, §4.8; Python ↔ Swift eşdeğer), **sayılan ürünün üstünde sıra numarası** (34; bitişik çiftte 35–36; kartlarda aynı), sayım çizgisi çokgenin içinde çizilir, kalibrasyon yazıları kırpılmaz. TRASSIR gerçek cihazda doğrulandı (derleme 13 ile) |
 | **18** | **Şerit tarama sayımı** (bitişik/üst üste torba, koli; §4.9): kalibrasyonda "Sayım yöntemi" ve "Ürün boyunu öğren"; un torbası ve yeni "Koli / kutu" profili bu yöntemle. **Her ürüne kendi numarası** (yapışıkta "34·35", ayrılınca her biri kendi numarasıyla). **Kaydedilen eşik video başında değişmez** (100'e kaçma hatası); bantta ürün varken "Boş bandı öğren" eşiği bozmaz, uyarır |
+| **19** | Kalibrasyon paneli ekranın en çok üçte biri (kayar, Kaydet/İptal sabit); şerit taramada **alan bandın dışına taşsa da yalnızca hareketli bant** kullanılır (ekran kaydı, menüler, raylar, siyah ilk kare) |
+| **20** | Şerit tarama: **aralıklı ürünler ve güçlü perspektif** (ikinci gerçek video 11 → 8–9, doğru 9), açık/koyu kararı satır içi yayılım ipucuyla, ön sayım yalnızca ilk ürün |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
