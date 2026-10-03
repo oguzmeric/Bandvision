@@ -59,6 +59,8 @@ final class BlobTracker {
 
     private var tracks: [Track] = []
     private var nextID = 1
+    /// Son güncellemedeki bölünmeler (ebeveyn, çocuk, çocuğa geçen sayılmış ürün) — ekrandaki sıra numaraları için
+    private(set) var lastSplits: [(parent: Int, child: Int, counted: Int)] = []
 
     func reset() { tracks.removeAll() }
 
@@ -73,6 +75,7 @@ final class BlobTracker {
         let s = direction.sign
         func axis(_ x: Double, _ y: Double) -> Double { direction.isVertical ? y : x }
         var events: [CountEvent] = []
+        lastSplits.removeAll()
 
         func observe(_ ti: Int, mult: Int, area: Double, blob: Blob) {
             var t = tracks[ti]
@@ -189,9 +192,11 @@ final class BlobTracker {
             guard let parentIndex = best?.t else { continue }
             let parent = tracks[parentIndex]
             let keep = min(parent.countedSoFar, parent.lastMult)
+            let childCounted = min(parent.countedSoFar - keep, b.multiplicity)
+            lastSplits.append((parent: parent.id, child: nextID, counted: childCounted))
             children.append(Track(id: nextID, x: b.cx, y: b.cy, vx: parent.vx, vy: parent.vy,
                                   hits: parent.hits, missed: 0, startedBefore: parent.startedBefore,
-                                  countedSoFar: min(parent.countedSoFar - keep, b.multiplicity),
+                                  countedSoFar: childCounted,
                                   multHistory: [b.multiplicity], areaHistory: [b.area],
                                   bbox: b.bbox, lastMult: b.multiplicity))
             nextID += 1

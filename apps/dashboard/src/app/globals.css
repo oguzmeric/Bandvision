@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/* BandVision paneli — açık tema (docs/brand/web-panel-taslak.html): lavanta zemin, beyaz kartlar, mor-pembe vurgu */
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --color-canvas: #f6f5fc;
+  --color-canvas-2: #efedfa;
+  --color-card: #ffffff;
+  --color-line: #e7e4f3;
+  --color-ink: #1d1a2e;
+  --color-muted: #6e6a85;
+  --color-faint: #9a96b0;
+
+  --color-brand-50: #f1ecfe;
+  --color-brand-100: #e3d9fd;
+  --color-brand-500: #6d3bf0;
+  --color-brand-600: #5b2bd6;
+  --color-accent-500: #e0368c;
+
+  --color-ok-50: #e6f6ee;
+  --color-ok-600: #169c62;
+  --color-nok-50: #fdecee;
+  --color-nok-600: #d93a4a;
+  --color-warn-50: #fcf3e2;
+  --color-warn-700: #b7791f;
+}
+
+html,
+body {
+  background: linear-gradient(180deg, var(--color-canvas) 0%, var(--color-canvas-2) 100%);
+  color: var(--color-ink);
+  min-height: 100%;
+}
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-line);
+  border-radius: 18px;
+  box-shadow: 0 1px 2px rgb(29 26 46 / 0.04), 0 8px 24px rgb(29 26 46 / 0.04);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+.brand-gradient {
+  background: linear-gradient(90deg, var(--color-brand-500), var(--color-accent-500));
+}

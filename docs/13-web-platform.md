@@ -29,7 +29,7 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 ## Analiz sunucusu API (v1)
 | Yöntem | Yol | Açıklama |
 |---|---|---|
-| `POST` | `/api/v1/jobs` | `multipart/form-data`: `file` (video), `options` (JSON, isteğe bağlı: `preset`, `truth`, `direction`, `roi`, `roiPolygon`, `line`, `bgRange`). `202` + iş |
+| `POST` | `/api/v1/jobs` | `multipart/form-data`: `file` (video), `options` (JSON, isteğe bağlı: `preset`, `truth`, `direction`, `roi`, `roiPolygon`, `line`, `countLine`, `bgRange`). `202` + iş |
 | `GET` | `/api/v1/jobs` | Son işler (yeniden eskiye) |
 | `GET` | `/api/v1/jobs/{id}` | İş: durum, ilerleme, sonuç |
 | `GET` | `/api/v1/jobs/{id}/files/{ad}` | `annotated.mp4`, `counts.csv`, `profile.json`, `background.png` |
@@ -42,6 +42,6 @@ Güvenlik: `ANALYZER_TOKEN` tanımlıysa `Authorization: Bearer <token>` zorunlu
 | Faz | İçerik | Kabul |
 |---|---|---|
 | **W1** | Analiz sunucusu (FastAPI) + sözleşme + testler; Dockerfile | Test klibi yüklenir → sayım Python referansıyla aynı, işaretli H.264 video, CSV; 7 gün kuralı test edilir |
-| **W2** | `apps/dashboard` (Next.js 15): **Video analizi** sayfası — yükle, ilerleme, işaretli video oynatıcı, sayım/doğruluk, CSV indir, geçmiş | Tarayıcıda uçtan uca (Playwright) |
+| **W2** ✅ | `apps/dashboard` (Next.js 15): **Video analizi** sayfası — yükle, ilerleme, işaretli video oynatıcı, sayım/doğruluk, CSV indir, geçmiş. Çalıştırma: `apps/dashboard/README.md` | Tarayıcıda uçtan uca (Playwright, CI `dashboard` işi) |
 | **W3** | Canlı: Supabase yerel (Docker), ingest, iPhone olay gönderimi (outbox), hat başına isteğe bağlı anlık kare; panelde **Hatlar** ve hat sayfası (Realtime) | iPhone'dan sayım panelde ≤ 5 sn'de görünür; anlık kare kapalıyken hiç görüntü gitmez |
 | **W4** | NOK galerisi, raporlar, barındırma (karar sonrası), giriş/organizasyon | `06` kabul kriterleri |

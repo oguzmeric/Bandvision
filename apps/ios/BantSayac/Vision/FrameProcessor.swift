@@ -80,8 +80,9 @@ final class FrameProcessor: @unchecked Sendable {
     private var lastDisplay: CFTimeInterval = 0
 
     private var lastPublish: CFTimeInterval = 0
-    /// İz kimliği → sayım sıra numarası (yalnızca `queue` üzerinde); iz silinince budanır
-    private var countLabels: [Int: String] = [:]
+    /// İz kimliği → o izde sayılan ürünlerin sıra numaraları (yalnızca `queue` üzerinde); iz silinince budanır.
+    /// Yapışık lekede "34·35"; leke ayrılınca her ürün kendi numarasını taşır.
+    private var countNumbers: [Int: [Int]] = [:]
     /// §4.8: son karede kullanılan çizgi çerçevesi (iz işaretlerini görüntüye geri çevirmek için)
     private var lineFrame: LineFrame?
     // Ölçüm (üssel ortalama, ms)
@@ -121,7 +122,7 @@ final class FrameProcessor: @unchecked Sendable {
     func resetTracking(resetBackground: Bool) {
         queue.async {
             self.tracker.reset()
-            self.countLabels.removeAll()
+            self.countNumbers.removeAll()
             if resetBackground { self.segmenter.reset() }
         }
     }
@@ -129,7 +130,7 @@ final class FrameProcessor: @unchecked Sendable {
     func startBackgroundLearning() {
         queue.async {
             self.tracker.reset()
-            self.countLabels.removeAll()
+            self.countNumbers.removeAll()
             self.calib = .background(frame: 0, maxDiff: 0)
         }
     }
@@ -137,7 +138,7 @@ final class FrameProcessor: @unchecked Sendable {
     func startSampleLearning(target: Int) {
         queue.async {
             self.tracker.reset()
-            self.countLabels.removeAll()
+            self.countNumbers.removeAll()
             self.calib = .sample(areas: [], target: target)
         }
     }
@@ -183,7 +184,7 @@ final class FrameProcessor: @unchecked Sendable {
                 profile.diffThreshold = th
                 calib = .none
                 tracker.reset()
-                countLabels.removeAll()
+                countNumbers.removeAll()
                 emit(.backgroundDone(threshold: th))
             } else {
                 calib = .background(frame: next, maxDiff: m)
@@ -236,6 +237,7 @@ final class FrameProcessor: @unchecked Sendable {
                                     minHits: profile.minHits,
                                     maxMissed: maxMissed)
         }
+        applySplits(tracker.lastSplits)
         if !events.isEmpty { handle(events, pixelBuffer: pixelBuffer) }
         publish(frame: frame, blobs: blobs, pixelBuffer: pixelBuffer)
         if let pb = pixelBuffer { emitDisplayImage(pb, sourceWidth: frame.sourceWidth) }
@@ -258,17 +260,11 @@ final class FrameProcessor: @unchecked Sendable {
         guard counting else { return }
         let delta = events.reduce(0) { $0 + $1.delta }
         guard delta > 0 else { return }
-        // Sıra numaraları: olay sırasıyla; sayılmış ize sonradan katılan ürün numarayı uzatır ("35–36")
+        // Sıra numaraları olay sırasıyla; her ürüne kendi numarası (sonradan katılan ürün kendi numarasını ekler)
         var running = total
         for e in events where e.delta > 0 {
-            let first = running + 1
+            countNumbers[e.trackId, default: []].append(contentsOf: (running + 1)...(running + e.delta))
             running += e.delta
-            if e.isFirstCrossing || countLabels[e.trackId] == nil {
-                countLabels[e.trackId] = e.delta == 1 ? "\(first)" : "\(first)–\(running)"
-            } else if let old = countLabels[e.trackId] {
-                let start = old.split(separator: "–").first.map(String.init) ?? old
-                countLabels[e.trackId] = "\(start)–\(running)"
-            }
         }
         total += delta
         let t = total
@@ -279,7 +275,7 @@ final class FrameProcessor: @unchecked Sendable {
             guard let region = Self.copyRegion(pb, bbox: e.bbox) else { continue }
             let buffer = UncheckedSendable(value: region)
             let context = UncheckedSendable(value: cropContext)
-            let trackId = e.trackId, delta = e.delta, time = Date(), label = countLabels[e.trackId] ?? ""
+            let trackId = e.trackId, delta = e.delta, time = Date(), label = Self.numberLabel(countNumbers[e.trackId] ?? [])
             cropQueue.async { [weak self] in
                 guard let jpeg = Self.encodeJPEG(buffer.value, context: context.value), let self else { return }
                 let crop = CountCrop(trackId: trackId, delta: delta, label: label, time: time, jpeg: jpeg)
@@ -343,6 +339,23 @@ final class FrameProcessor: @unchecked Sendable {
 
     // MARK: - Yardımcılar
 
+    /// Yapışık lekeden ayrılan ürün kendi numarasını alır: ebeveynin son numaraları çocuğa geçer.
+    private func applySplits(_ splits: [(parent: Int, child: Int, counted: Int)]) {
+        for s in splits where s.counted > 0 {
+            guard var nums = countNumbers[s.parent], !nums.isEmpty else { continue }
+            let k = min(s.counted, nums.count)
+            countNumbers[s.child] = Array(nums.suffix(k))
+            nums.removeLast(k)
+            countNumbers[s.parent] = nums.isEmpty ? nil : nums
+        }
+    }
+
+    /// Ürün üstündeki yazı: tek ürün "34"; yapışık ürünler "34·35"; çok sayıda "34…40".
+    static func numberLabel(_ nums: [Int]) -> String {
+        guard let first = nums.first, let last = nums.last else { return "" }
+        return nums.count <= 3 ? nums.map(String.init).joined(separator: "·") : "\(first)…\(last)"
+    }
+
     /// İz işaretleri görüntü koordinatında (açılı çizgide çerçeveden geri çevrilir)
     private func displayMarkers() -> [TrackMarker] {
         guard let lf = lineFrame else { return tracker.markers }
@@ -395,8 +408,8 @@ final class FrameProcessor: @unchecked Sendable {
                                                perfGap, perfCore, perfImage, maxGapMs, backwardsTs, sourceFps, lastTs ?? -1))
         // Ekrandan çıkan izlerin numaraları atılır (sözlük büyümesin)
         let live = Set(snap.tracks.map(\.id))
-        countLabels = countLabels.filter { live.contains($0.key) }
-        snap.countLabels = countLabels
+        countNumbers = countNumbers.filter { live.contains($0.key) }
+        snap.countLabels = countNumbers.mapValues(Self.numberLabel)
         let ready = snap
         DispatchQueue.main.async { [weak self] in self?.onSnapshot?(ready) }
     }

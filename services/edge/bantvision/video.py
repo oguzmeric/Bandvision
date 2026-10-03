@@ -51,6 +51,7 @@ def profile_mask(profile: Profile, w: int, h: int) -> np.ndarray:
     return _mask((r.x, r.y, r.width, r.height), poly, w, h)
 
 PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack}
+DIRECTION_TR = {"down": "yukarıdan aşağı", "up": "aşağıdan yukarı", "right": "soldan sağa", "left": "sağdan sola"}
 
 # BGR renkler (iOS bindirmesiyle aynı anlam: sarı ROI, turuncu çizgi, yeşil leke, camgöbeği sayılmış iz)
 YELLOW, ORANGE, GREEN, CYAN, WHITE = (0, 220, 255), (0, 140, 255), (80, 220, 60), (230, 210, 40), (255, 255, 255)
@@ -259,7 +260,8 @@ def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction:
         d, flow = estimate_direction(info, profile, bg, th, window)
         cal.flow = flow
         if d is None:
-            cal.notes.append("Akış yönü bulunamadı (hareket çok az); varsayılan kullanıldı: " + profile.direction)
+            cal.notes.append("Akış yönü bulunamadı (hareket çok az); varsayılan kullanıldı: "
+                             + DIRECTION_TR.get(profile.direction, profile.direction) + ".")
         else:
             profile.direction = d
             cal.direction = d
@@ -267,8 +269,10 @@ def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction:
         area, n, mixed = estimate_expected_area(info, profile, bg, window)
         cal.expected_area, cal.area_samples = area, n
         if mixed:
+            # Not hem masaüstünde hem web panelinde gösterilir: komut satırına özgü ipucu burada yok
             cal.notes.append("Leke boyları çok değişken (bitişik ürünler ya da farklı boylar). Tek ürün alanı "
-                             "alt kümeden alındı; şüphen varsa tek tek geçen ürünlerle ayrı kalibre et (--profile).")
+                             "alt kümeden alındı; sayım şüpheliyse ürünlerin tek tek geçtiği bir videoyla ayrıca "
+                             "kalibre et.")
         if area > 0:
             profile.expectedArea = area
         else:
@@ -277,6 +281,28 @@ def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction:
 
 
 # ---------------------------------------------------------------- çizim
+
+def split_numbers(numbers: dict[int, list[int]], splits: list[tuple[int, int, int]]) -> None:
+    """Yapışık lekeden ayrılan ürün kendi numarasını alır (ebeveynin son numaraları çocuğa geçer)."""
+    for parent, child, counted in splits:
+        ns = numbers.get(parent)
+        if not ns or counted <= 0:
+            continue
+        k = min(counted, len(ns))
+        numbers[child] = ns[-k:]
+        rest = ns[:-k]
+        if rest:
+            numbers[parent] = rest
+        else:
+            numbers.pop(parent, None)
+
+
+def number_label(ns: list[int]) -> str:
+    """Ürün üstündeki yazı: tek ürün "34"; yapışık ürünler "34·35"; çok sayıda "34…40"."""
+    if len(ns) <= 3:
+        return "·".join(str(n) for n in ns)
+    return f"{ns[0]}…{ns[-1]}"
+
 
 def _hex_id(i: int) -> str:
     return f"{(i * 2654435761) & 0xFFFF:04X}"  # kısa, ardışık id'lerde bile ayırt edilebilir
@@ -365,18 +391,17 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     flash = 0.0
     t0 = time.perf_counter()
     n = 0
-    labels: dict[int, str] = {}                  # iz → sayım sıra numarası ("34", bitişik çiftte "35–36")
+    numbers: dict[int, list[int]] = {}            # iz → bu izde sayılan ürünlerin sıra numaraları
     for k, t, frame in read_frames(info):
         r = pipe.process(frame, t)
+        split_numbers(numbers, pipe.tracker.last_splits)
         running = pipe.total - sum(e.delta for e in r.counts)
         for e in r.counts:
-            first, running = running + 1, running + e.delta
-            if e.is_first_crossing or e.track_id not in labels:
-                labels[e.track_id] = str(first) if e.delta == 1 else f"{first}–{running}"
-            else:
-                labels[e.track_id] = f"{labels[e.track_id].split('–')[0]}–{running}"
+            numbers.setdefault(e.track_id, []).extend(range(running + 1, running + e.delta + 1))
+            running += e.delta
         live = {m.id for m in r.tracks}
-        labels = {tid: lab for tid, lab in labels.items() if tid in live}
+        numbers = {tid: ns for tid, ns in numbers.items() if tid in live}
+        labels = {tid: number_label(ns) for tid, ns in numbers.items()}
         for e in r.counts:
             per_minute[int(t // 60)] = per_minute.get(int(t // 60), 0) + e.delta
             events.append((round(t, 3), e.track_id, e.delta, pipe.total))
@@ -497,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
           f"  tek ürün alanı={profile.expectedArea:.5f} ({cal.area_samples} örnek)")
     for note in cal.notes:
         print("  ! " + note)
+    if any("Leke boyları" in n for n in cal.notes):
+        print("    (ayrı kalibrasyon: --profile ile ürünlerin tek tek geçtiği videodan üretilmiş profil.json)")
 
     print("2/2 Sayım...")
     emit(stage="counting")

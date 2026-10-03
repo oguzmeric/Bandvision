@@ -57,6 +57,8 @@ class BlobTracker:
     def __init__(self) -> None:
         self.tracks: list[_Track] = []
         self.next_id = 1
+        # Son güncellemedeki bölünmeler (ebeveyn, çocuk, çocuğa geçen sayılmış ürün) — ekrandaki sıra numaraları için
+        self.last_splits: list[tuple[int, int, int]] = []
 
     def reset(self) -> None:
         self.tracks.clear()
@@ -76,6 +78,7 @@ class BlobTracker:
             return y if vertical else x
 
         events: list[CountEvent] = []
+        self.last_splits = []
 
         def observe(t: _Track, mult: int, area: float, bi: int) -> None:
             t.bbox, t.last_mult = blobs[bi].bbox, mult
@@ -192,6 +195,7 @@ class BlobTracker:
                            counted_so_far=min(parent.counted_so_far - keep, b.multiplicity),
                            mult=[b.multiplicity], areas=[b.area], bbox=b.bbox, last_mult=b.multiplicity)
             self.next_id += 1
+            self.last_splits.append((parent.id, child.id, child.counted_so_far))
             parent.counted_so_far = keep
             parent.mult = [parent.last_mult]
             prev[best[1]] = (parent.bbox, parent.last_mult)   # aynı ebeveyn ikinci kez bölünemez

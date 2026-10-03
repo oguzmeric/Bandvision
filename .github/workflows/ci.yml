@@ -21,3 +21,31 @@ jobs:
       - run: pip install "jsonschema[format-nongpl]>=4.22" pytest
       - run: python tools/validate_contracts.py
       - run: pytest -q tools/tests
+  dashboard:
+    # Web paneli (docs/13-web-platform.md): lint + tip denetimi + gerçek analiz sunucusuyla uçtan uca test
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: apps/dashboard } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: pip install -e "../../services/edge[analyzer]"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env: { PYTHON: python }
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-playwright
+          path: |
+            apps/dashboard/playwright-report
+            apps/dashboard/test-results
