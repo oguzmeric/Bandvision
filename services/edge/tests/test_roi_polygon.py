@@ -97,8 +97,12 @@ def test_background_learning_ignores_motion_outside_polygon() -> None:
         pipe.start_background_learning()
         for img, ts in busy.frames():
             r = pipe.process(img, ts)
-            if any(e[0] == "background_done" for e in r.calibration):
-                return p.diffThreshold
+            for name, value in r.calibration:
+                if name == "background_done":
+                    return p.diffThreshold
+                if name == "background_rejected":      # §5: üst sınıra dayandı, eşik değiştirilmedi
+                    assert p.diffThreshold == Profile.egg().diffThreshold
+                    return int(value)
         raise AssertionError("öğrenme bitmedi")
 
     with_polygon = learned_threshold(MIDDLE_LANE)
