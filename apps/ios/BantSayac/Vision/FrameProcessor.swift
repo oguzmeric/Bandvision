@@ -159,7 +159,21 @@ final class FrameProcessor: @unchecked Sendable {
     /// Kuyruk sıralı olduğundan videonun son karesinden sonra çalışır.
     func finishVideo() {
         queue.async {
-            guard self.profile.mode == .linescan, case .none = self.calib, self.counting else { return }
+            guard self.profile.mode == .linescan else { return }
+            if case .sample = self.calib {
+                // "Ürün boyunu öğren" sürerken video bitti: eldeki veriyle öğren
+                var p = self.profile
+                p.productLength = 0
+                _ = self.lineScan.flush(profile: p)
+                let len = self.lineScan.productLength
+                if len > 0 {
+                    self.profile.productLength = len
+                    self.calib = .none
+                    self.emit(.lengthDone(productLength: len))
+                }
+                return
+            }
+            guard case .none = self.calib, self.counting else { return }
             self.countLineScan(self.lineScan.flush(profile: self.profile), pixelBuffer: nil)
         }
     }

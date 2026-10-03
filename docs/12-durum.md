@@ -81,6 +81,14 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
   - Klip 1,5 sn boş bantla başlıyordu; yayına ≥ 1 sn geç katılınca boş bant öğrenmesi ürünlerle yapılıyor, sayım 28 → 2'ye düşüyordu (Python benzetimi). Klip 4 sn boş bantla başlıyor. **Sahada kural:** boş bant öğrenmesi bant gerçekten boşken.
   - **Gerçek hata:** QC kırpıntısının JPEG'i sayım kuyruğunda, ekranla ortak bağlamda üretiliyordu. Canlı kaynakta sayım saniyelerce duruyor, aradaki kareler atlanıyordu (5,7 sn boşluk, 10/28). Artık sayım kuyruğu yalnızca küçük bir bellek kopyası alıyor (en uzun boşluk 0,13 sn, çekirdek 39 → 2 ms). Telefon kamerasında da aynı risk vardı.
 
+## 5d. Şerit tarama: bitişik torba/koli sayımı (2026-10-03)
+- **Sorun:** bitişik/üst üste gelen un torbaları (TRASSIR ekran kaydı, 16 sn). Bant hiç boş görünmüyor: arka plan öğrenilemiyor, bitişik torbalar tek leke. Eski yöntem 11 (ROI'siz 76), kayıttaki TRASSIR sayacı 6; karelerden elle sayılan **7**.
+- **Çözüm:** yeni sayım yöntemi `countMode = "linescan"` (algoritma §4.9). Çizgi çevresinde bant kayması ölçülür, çizgiden geçen satırlar "geçen mesafe" sinyaline eklenir, ek yeri/boşluk çukurlarından ürünler ayrılır. Boş bant gerekmez; ürün boyu, ürünün banttan açık/koyu oluşu ve akış yönü kendiliğinden bulunur. Ön sayım: numara ürün çizgiyi geçerken görünür.
+- **Sonuç:** aynı videoda **7/7** (çizgi alanın %40–60'ında, iki işleme çözünürlüğünde). Sentetik: bitişik, üst üste binmiş, düzensiz aralıklı torbalar; açık bantta koyu, koyu bantta açık koliler; ekran kaydı (tekrarlanan kareler), duran ve hızlanan bant; dört yön, çokgen ROI — hepsi tam. Swift ile eşdeğerlik vektörü 24/24.
+- **Bilinen sınır:** videonun ilk/son karesinde çizgiye yarım binen ürün ±1 sapabilir.
+- **Kalibrasyon düzeltmesi:** video her baştan başladığında boş bant yeniden öğreniliyor ve ürünle başlayan videoda eşik 100'e kaçıyordu (sonra hiçbir şey sayılmıyordu). Artık otomatik öğrenme yalnızca arka plan görüntüsünü yeniler, **Kaydet edilen eşik sabit kalır**; bantta ürün varken "Boş bandı öğren" eşiği bozmaz, uyarır.
+- Hazır profiller: un torbası ve yeni "Koli / kutu" şerit taramayla. iPhone kalibrasyonunda "Sayım yöntemi" ve "Ürün boyunu öğren"; web panelinde yöntem seçimi.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.

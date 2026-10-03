@@ -64,14 +64,14 @@ final class LineScanTests: XCTestCase {
         let frames = Self.parityFrames()
         let learned = Self.run(frames, Self.profile())
         XCTAssertEqual(learned.total, 24)                       // Python: PARITY_EXPECTED[0] (elle de 24)
-        XCTAssertEqual(learned.length, 0.347222, accuracy: 1e-6)
+        XCTAssertEqual(learned.length, 0.298611, accuracy: 1e-6)
         let known = Self.run(frames, Self.profile(productLength: 0.3))
         XCTAssertEqual(known.total, 24)
     }
 
     func testEventsAreSingleProductsWithMarkers() {
         let frames = Self.parityFrames()
-        let p = Self.profile(productLength: 0.347222)
+        let p = Self.profile(productLength: 0.298611)
         let lc = LineScanCounter()
         var ids = Set<Int>()
         for f in frames {

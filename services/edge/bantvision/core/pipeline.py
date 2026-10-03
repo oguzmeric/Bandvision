@@ -87,7 +87,16 @@ class Pipeline:
     def finish(self, ts: float) -> list[CountEvent]:
         """Video sonu (§4.9): şerit taramada çizgiye yarım binmiş son ürünler merkezlerine göre sayılır."""
         p = self.profile
-        if p.countMode != "linescan" or self._calib is not None or not self.counting:
+        if p.countMode != "linescan":
+            return []
+        if self._calib == "sample":                 # video bitti: ürün boyunu eldeki veriyle öğren
+            saved, p.productLength = p.productLength, 0.0
+            self.linescan.flush(p)
+            p.productLength = self.linescan.product_length or saved
+            if self.linescan.product_length > 0:
+                self._calib = None
+            return []
+        if self._calib is not None or not self.counting:
             return []
         out = [CountEvent(e.seg_id, e.delta, True, 0.0, None) for e in self.linescan.flush(p)]
         self.total += sum(e.delta for e in out)

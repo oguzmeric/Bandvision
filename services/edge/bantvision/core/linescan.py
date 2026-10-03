@@ -286,7 +286,7 @@ class LineScanCounter:
         for k in range(n - 1, line - 1, -1):
             self._push(stats[0, k], stats[2, k])
         self._start = self._total()
-        self._learn_at = self._start + 3 * self._n
+        self._learn_at = self._start + 2 * self._n
 
     def _push(self, lo: float, hi: float) -> None:
         if self._polarity == 0:
@@ -305,8 +305,8 @@ class LineScanCounter:
     def _ensure_period(self, profile: Profile, final: bool) -> bool:
         total = self._total()
         if self._polarity == 0:
-            # Açık/koyu kararı: boy biliniyorsa bir, bilinmiyorsa üç alan boyu bant aktıktan sonra
-            need = self._start + (self._n if profile.productLength > 0 else 3 * self._n)
+            # Açık/koyu kararı: boy biliniyorsa bir, bilinmiyorsa iki alan boyu bant aktıktan sonra
+            need = self._start + (self._n if profile.productLength > 0 else 2 * self._n)
             if total < need and not final:
                 return False
             self._decide_polarity(profile)

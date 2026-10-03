@@ -241,4 +241,4 @@ def test_swift_parity_vectors() -> None:
     assert (total, round(plen, 6), total2) == PARITY_EXPECTED
 
 
-PARITY_EXPECTED = (24, 0.347222, 24)          # elle: merkezi çizgiyi geçen 24 ürün
+PARITY_EXPECTED = (24, 0.298611, 24)          # elle: merkezi çizgiyi geçen 24 ürün

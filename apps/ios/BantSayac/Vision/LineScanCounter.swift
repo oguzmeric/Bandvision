@@ -364,7 +364,7 @@ final class LineScanCounter {
             k -= 1
         }
         start = total
-        learnAt = start + 3 * n
+        learnAt = start + 2 * n
     }
 
     private func push(_ lo: Double, _ hi: Double) {
@@ -395,7 +395,7 @@ final class LineScanCounter {
         let tot = total
         let known = profile.lineProductLength > 0
         if polarity == 0 {
-            let need = start + (known ? n : 3 * n)
+            let need = start + (known ? n : 2 * n)
             if tot < need && !final { return false }
             decidePolarity(profile)
         }
