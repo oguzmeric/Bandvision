@@ -7,7 +7,8 @@ Kullanıcı isteği (2026-10-02): telefonda yaptığımız canlı analiz ve gale
 | Konu | Karar |
 |---|---|
 | Canlı görünüm | **Sayılar + işaretli anlık kare.** Sayaç, grafik, OK/NOK, NOK fotoğrafları ve birkaç saniyede bir güncellenen işaretli anlık kare; anlık kare **hat bazında açılıp kapatılır** (varsayılan kapalı — "görüntü cihazdan çıkmaz" ilkesi). Kesintisiz video akışı yok. |
-| Barındırma | Henüz karar yok → önce **yerel geliştirme**; her parça konteyner, bulut ya da kendi sunucuya taşınabilir. |
+| Barındırma | **Şimdilik yayın yok** (kullanıcı, 2026-10-04): demolar yerel bilgisayarda; yayın müşteri netleşince. Öneri: panel Vercel, analiz sunucusu küçük bir sunucuda (uzun işler, büyük yükleme, kalıcı disk Vercel'e uymaz). |
+| Erişim | **Tek şifre** (`DASHBOARD_PASSWORD`): tanımlıysa tüm sayfalar ve API giriş ister; girişsiz istekte aynı adreste giriş formu (yeniden yazma), API 401. Kullanıcı hesapları W4'te. |
 | Yüklenen video saklama | **7 gün** sonra video ve işaretli video otomatik silinir; analiz özeti kalır. |
 
 ## Mimari

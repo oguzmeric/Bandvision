@@ -21,7 +21,7 @@ const NAV: NavItem[] = [
   { href: "/devices", label: "Cihazlar", icon: icon("M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM11 18h2"), soon: true },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) {
   const path = usePathname();
   return (
     <aside className="sticky top-0 flex h-screen flex-col items-center gap-2.5 border-r border-line bg-white py-4">
@@ -52,6 +52,16 @@ export default function Sidebar() {
           );
         })}
       </nav>
+      {canLogout && (
+        <button type="button" title="Çıkış" aria-label="Çıkış"
+                onClick={async () => {
+                  await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
+                  window.location.assign("/login");          // göreli: ana makine adı değişmez
+                }}
+                className="mt-auto grid h-10 w-10 place-items-center rounded-xl text-muted transition hover:bg-brand-50 hover:text-brand-500">
+          {icon("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9")}
+        </button>
+      )}
     </aside>
   );
 }

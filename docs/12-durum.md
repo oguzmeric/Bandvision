@@ -35,6 +35,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **18** | **Şerit tarama sayımı** (bitişik/üst üste torba, koli; §4.9): kalibrasyonda "Sayım yöntemi" ve "Ürün boyunu öğren"; un torbası ve yeni "Koli / kutu" profili bu yöntemle. **Her ürüne kendi numarası** (yapışıkta "34·35", ayrılınca her biri kendi numarasıyla). **Kaydedilen eşik video başında değişmez** (100'e kaçma hatası); bantta ürün varken "Boş bandı öğren" eşiği bozmaz, uyarır |
 | **19** | Kalibrasyon paneli ekranın en çok üçte biri (kayar, Kaydet/İptal sabit); şerit taramada **alan bandın dışına taşsa da yalnızca hareketli bant** kullanılır (ekran kaydı, menüler, raylar, siyah ilk kare) |
 | **20** | Şerit tarama: **aralıklı ürünler ve güçlü perspektif** (ikinci gerçek video 11 → 8–9, doğru 9), açık/koyu kararı satır içi yayılım ipucuyla, ön sayım yalnızca ilk ürün |
+| **21** | Şerit tarama: sayılar topluca gelmesin — video modunda oynatmadan önce **ön tarama** (ürün boyu), canlıda **güvenilir erken öğrenme** (≥ 4 tam ürün, tutarlı boylar) |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 

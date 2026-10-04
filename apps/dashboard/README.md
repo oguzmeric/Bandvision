@@ -25,6 +25,7 @@ Panel analiz sunucusuna (`services/edge`, `bantvision.analyzer`) **kendi sunucu 
 |---|---|---|
 | `ANALYZER_URL` | `http://127.0.0.1:8090` | Analiz sunucusu adresi |
 | `ANALYZER_TOKEN` | — | Sunucuda token tanımlıysa aynısı (yalnızca sunucu tarafında kullanılır) |
+| `DASHBOARD_PASSWORD` | — | Tanımlıysa panelin tüm sayfaları ve API'si tek şifreyle korunur (oturum 7 gün; şifre değişince tüm oturumlar düşer). Tanımlı değilse panel açıktır — **yalnızca yerel demoda**; internete açılan her kurulumda zorunlu |
 
 ## Denetimler
 ```bash

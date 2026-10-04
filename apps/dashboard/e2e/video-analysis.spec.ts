@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -9,7 +9,19 @@ const META = JSON.parse(fs.readFileSync(CLIP.replace(/\.mp4$/, ".json"), "utf-8"
   emptySeconds: number;
 };
 
-test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({ page, request }) => {
+/** Panel testte şifreli (playwright.config.ts): her test önce giriş yapar. */
+async function login(page: Page) {
+  await page.goto("/videos");
+  await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+  await page.getByRole("button", { name: "Giriş yap" }).click();
+  await expect(page.getByRole("heading", { name: "Videodan sayım ve doğruluk" })).toBeVisible();
+}
+
+test.beforeEach(async ({ page }) => {
+  await login(page);
+});
+
+test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({ page }) => {
   await page.goto("/videos");
   await expect(page.getByRole("heading", { name: "Videodan sayım ve doğruluk" })).toBeVisible();
   await expect(page.getByText("Henüz analiz yok")).toBeVisible();
@@ -43,7 +55,7 @@ test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({
 
   // CSV indirilebilir, sayım satırları içerir
   const href = await detail.getByRole("link", { name: "CSV indir" }).getAttribute("href");
-  const csv = await request.get(href!);
+  const csv = await page.request.get(href!);              // oturum çerezi sayfayla ortak
   expect(csv.status()).toBe(200);
   const lines = (await csv.text()).trim().split(/\r?\n/);
   expect(lines[0]).toBe("zaman_sn;iz;delta;toplam");
