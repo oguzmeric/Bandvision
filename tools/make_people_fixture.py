@@ -20,8 +20,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / "apps" / "ios" / "BantSayacTests" / "people_parity.json"
 sys.path.insert(0, str(ROOT / "services" / "edge"))
 
-from bantvision.core.people_track import MotParams, MotTracker  # noqa: E402
-from bantvision.core.sim_people import LINE, Faults, scenario, scenario_motion  # noqa: E402
+from bantvision.core.people_track import MotParams, MotTracker
+from bantvision.core.sim_people import LINE, Faults, scenario, scenario_motion
 
 # (ad, tohum, hareket var mı, konum noktası, kusurlar)
 SCENARIOS = [
