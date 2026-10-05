@@ -16,7 +16,7 @@ final class ProfileStore: ObservableObject {
            !decoded.isEmpty {
             loaded = decoded
         } else {
-            loaded = [.egg(), .flourSack(), .generic()]
+            loaded = [.egg(), .flourSack(), .box(), .generic()]
         }
         profiles = loaded
         if let s = d.string(forKey: Self.selectedKey), let id = UUID(uuidString: s),

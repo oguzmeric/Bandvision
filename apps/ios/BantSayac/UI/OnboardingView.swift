@@ -227,7 +227,46 @@ struct OnboardingView: View {
 
     private var productStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            stepTitle("Hangi ürün geçiyor?")
+            stepTitle("Ne sayacaksın?")
+            ForEach(ProductCatalog.categories) { cat in
+                if cat.available {
+                    Label(cat.title, systemImage: cat.icon)
+                        .font(.headline)
+                        .padding(.top, 4)
+                    beltProducts
+                } else {
+                    comingSoon(cat)
+                }
+            }
+            Text("Listede yoksa \"Genel ürün\"ü seç; kalibrasyonla senin ürününe göre ayarlanır.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Henüz çalışmayan sayım türü: görünür ama seçilemez
+    private func comingSoon(_ cat: CountCategory) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: cat.icon).frame(width: 24).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cat.title).foregroundStyle(.secondary)
+                Text(cat.subtitle).font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Text("Yakında")
+                .font(.caption2.bold())
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08)))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("category.\(cat.id)")
+    }
+
+    private var beltProducts: some View {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(vm.store.profiles) { p in
                 Button {
                     productID = p.id
@@ -244,9 +283,6 @@ struct OnboardingView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("product.\(p.name)")
             }
-            Text("Listede yoksa \"Genel ürün\"ü seç; kalibrasyonla senin ürününe göre ayarlanır.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

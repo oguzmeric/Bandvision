@@ -52,10 +52,18 @@ struct ProfilesView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        Button("Yumurta") { store.add(.egg()) }
-                        Button("Un torbası") { store.add(.flourSack()) }
-                        Button("Koli / kutu") { store.add(.box()) }
-                        Button("Genel ürün") { store.add(.generic()) }
+                        ForEach(ProductCatalog.categories) { cat in
+                            Section(cat.available ? cat.title : "\(cat.title) · yakında") {
+                                if cat.available {
+                                    ForEach(cat.presets) { preset in
+                                        Button(preset.name) { store.add(preset.make()) }
+                                    }
+                                } else {
+                                    Button {} label: { Label(cat.subtitle, systemImage: cat.icon) }
+                                        .disabled(true)
+                                }
+                            }
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
