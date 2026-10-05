@@ -24,6 +24,8 @@ final class CountingViewModel: ObservableObject {
         didSet { processor.setProfile(profile) }
     }
     @Published private(set) var total = 0
+    /// Kişi sayımı (§4.10): çıkış toplamı (`total` giriş toplamıdır)
+    @Published private(set) var totalOut = 0
     @Published private(set) var snapshot: EngineSnapshot = .empty
     /// Video/ağ kamerası modunda ekranda gösterilen son kare
     @Published private(set) var frameImage: CGImage?
@@ -74,6 +76,7 @@ final class CountingViewModel: ObservableObject {
     private var videoSource: VideoFileSource?
     private var videoGeneration = 0
     private var liveTotal = 0
+    private var liveTotalOut = 0
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -88,7 +91,8 @@ final class CountingViewModel: ObservableObject {
 
         processor.setProfile(profile)
         total = logger.restoredTotal
-        processor.setTotal(total)
+        totalOut = logger.restoredTotalOut
+        processor.setTotals(in: total, out: totalOut)
         logger.profileName = profile.name
         logger.lineName = settings.lineName
         logger.webhookURL = settings.webhookURL
@@ -98,6 +102,15 @@ final class CountingViewModel: ObservableObject {
             self.total = total
             if self.video == nil {                     // video sayımı canlı kayda/webhook'a yazılmaz
                 self.logger.record(delta: delta, total: total)
+            }
+        }
+        processor.onCrossing = { [weak self] ins, outs, tIn, tOut in
+            guard let self else { return }
+            self.total = tIn
+            self.totalOut = tOut
+            if self.video == nil {                     // video sayımı canlı kayda/webhook'a yazılmaz
+                if ins > 0 { self.logger.record(delta: ins, total: tIn, direction: .entry) }
+                if outs > 0 { self.logger.record(delta: outs, total: tOut, direction: .exit) }
             }
         }
         processor.onSnapshot = { [weak self] snap in
@@ -173,7 +186,8 @@ final class CountingViewModel: ObservableObject {
     func reset() {
         clearInspections()
         total = 0
-        processor.setTotal(0)
+        totalOut = 0
+        processor.setTotals(in: 0, out: 0)
         processor.resetTracking(resetBackground: false)
         logger.resetSession()
     }
@@ -184,9 +198,14 @@ final class CountingViewModel: ObservableObject {
         wasRunningBeforeCalibration = isRunning
         setRunning(false)
         isCalibrating = true
-        calibrationMessage = profile.mode == .linescan
-            ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
-            : "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
+        switch profile.mode {
+        case .linescan:
+            calibrationMessage = "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
+        case .detect:
+            calibrationMessage = "Turuncu çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy (kapı eşiğine değil). Ok giriş yönünü gösterir."
+        case .blob:
+            calibrationMessage = "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
+        }
         processor.setShowMask(profile.mode == .blob)
     }
 
@@ -216,6 +235,24 @@ final class CountingViewModel: ObservableObject {
         calibrationMessage = mode == .linescan
             ? "Bitişik/hacimli ürün: boş bant gerekmez. Ürün boyu ilk ürünlerden öğrenilir ya da \"Ürün boyunu öğren\"."
             : "Ayrık ürün: önce boş bandı öğret, sonra örnek ürün geçir."
+    }
+
+    /// Giriş yönünü tersine çevirir (kişi sayımı): giriş ↔ çıkış. Açılı çizgide uçlar yer değiştirir.
+    /// Kalibrasyon dışında hemen kaydedilir (kalibrasyonda Kaydet ile).
+    func flipEntryDirection() {
+        if let cl = profile.countLine {
+            let s = snapshot.frameSize
+            profile.setCountLine(CountLine(a: cl.b, b: cl.a), aspect: s.height > 0 ? Double(s.width / s.height) : 9.0 / 16.0)
+        } else {
+            profile.direction = profile.direction.opposite
+        }
+        processor.resetTracking(resetBackground: false)     // yarım kalmış geçişler yeni yönle karışmasın
+        if !isCalibrating { store.update(profile) }
+    }
+
+    /// Giriş yönünün kısa açıklaması ("↓ yukarıdan aşağı"; açılı çizgide oka göre)
+    var entryDirectionText: String {
+        profile.countLine == nil ? "\(profile.direction.arrow) \(profile.direction.title.lowercased())" : "çizgideki ok yönünde"
     }
 
     func saveCalibration() {
@@ -273,7 +310,10 @@ final class CountingViewModel: ObservableObject {
             old.stop()
             if old.url != url { Self.removeIfTemporaryCopy(old.url) }
         }
-        if video == nil { liveTotal = total }
+        if video == nil {
+            liveTotal = total
+            liveTotalOut = totalOut
+        }
         camera.stop()
         stopNetwork()
         if isCalibrating { cancelCalibration() }
@@ -327,7 +367,8 @@ final class CountingViewModel: ObservableObject {
         let fromStart = target < 0.05
         clearInspections()
         total = 0
-        processor.setTotal(0)
+        totalOut = 0
+        processor.setTotals(in: 0, out: 0)
         processor.resetClock()
         processor.resetTracking(resetBackground: fromStart)
         if fromStart && videoLearnBackground && !isCalibrating && profile.mode == .blob {
@@ -380,7 +421,8 @@ final class CountingViewModel: ObservableObject {
         processor.resetTracking(resetBackground: true)
         clearInspections()
         total = liveTotal
-        processor.setTotal(liveTotal)
+        totalOut = liveTotalOut
+        processor.setTotals(in: liveTotal, out: liveTotalOut)
         processor.setCounting(isRunning)
         startCamera()
     }

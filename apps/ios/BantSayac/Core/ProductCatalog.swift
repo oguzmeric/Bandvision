@@ -7,9 +7,9 @@ struct ProfilePreset: Identifiable {
     let make: () -> ProductProfile
 }
 
-/// Sayım türü: arayüzde hazır profilleri gruplar ("Ne sayacaksın?"). Şimdilik yalnızca bant üstü ürün sayımı
-/// çalışır; diğerleri yol haritasını gösterir ("Yakında", seçilemez). Yeni tür çalışır hale gelince önce
-/// sözleşme (profil şeması) güncellenir, sonra burada `available` açılır.
+/// Sayım türü: arayüzde hazır profilleri gruplar ("Ne sayacaksın?"). Bant üstü ürün ve kişi sayımı çalışır;
+/// diğerleri yol haritasını gösterir ("Yakında", seçilemez). Yeni tür çalışır hale gelince önce sözleşme (profil
+/// şeması) güncellenir, sonra burada `available` açılır.
 struct CountCategory: Identifiable {
     let id: String
     let title: String
@@ -18,6 +18,15 @@ struct CountCategory: Identifiable {
     let icon: String
     let available: Bool
     let presets: [ProfilePreset]
+
+    /// Bu türe ait kayıtlı profil mi (bant üstü: ayrık/bitişik; kişi: iki yönlü tanıma)
+    func contains(_ p: ProductProfile) -> Bool {
+        switch id {
+        case "people": return p.mode == .detect
+        case "belt": return p.mode != .detect
+        default: return false
+        }
+    }
 }
 
 enum ProductCatalog {
@@ -31,8 +40,9 @@ enum ProductCatalog {
                               ProfilePreset(name: "Koli / kutu", make: { .box() }),
                               ProfilePreset(name: "Genel ürün", make: { .generic() }),
                           ]),
-            CountCategory(id: "people", title: "Kişi sayımı", subtitle: "Mağaza girişi: giriş/çıkış ve anlık doluluk",
-                          icon: "person.2", available: false, presets: []),
+            CountCategory(id: "people", title: "Kişi sayımı", subtitle: "Mağaza girişi: giren ve çıkan kişi sayısı",
+                          icon: "person.2", available: true,
+                          presets: [ProfilePreset(name: "Mağaza girişi", make: { .people() })]),
             CountCategory(id: "vehicle", title: "Araç sayımı", subtitle: "Giriş/çıkış ve otopark doluluğu",
                           icon: "car", available: false, presets: []),
             CountCategory(id: "animal", title: "Hayvan sayımı", subtitle: "Koridor geçişi ve ağıl doluluğu",

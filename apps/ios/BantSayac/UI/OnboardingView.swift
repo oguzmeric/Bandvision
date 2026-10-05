@@ -233,7 +233,7 @@ struct OnboardingView: View {
                     Label(cat.title, systemImage: cat.icon)
                         .font(.headline)
                         .padding(.top, 4)
-                    beltProducts
+                    products(of: cat)
                 } else {
                     comingSoon(cat)
                 }
@@ -265,9 +265,36 @@ struct OnboardingView: View {
         .accessibilityIdentifier("category.\(cat.id)")
     }
 
-    private var beltProducts: some View {
+    /// Türün kayıtlı profilleri; hiç yoksa hazır profil (seçilince eklenir)
+    private func products(of cat: CountCategory) -> some View {
+        let saved = vm.store.profiles.filter(cat.contains)
+        return VStack(alignment: .leading, spacing: 12) {
+            if saved.isEmpty {
+                ForEach(cat.presets) { preset in
+                    Button {
+                        let p = preset.make()
+                        vm.store.add(p)
+                        productID = p.id
+                    } label: {
+                        HStack {
+                            Text(preset.name).foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "plus.circle").foregroundStyle(Color.accentColor)
+                        }
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("preset.\(preset.name)")
+                }
+            }
+            productRows(saved)
+        }
+    }
+
+    private func productRows(_ list: [ProductProfile]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(vm.store.profiles) { p in
+            ForEach(list) { p in
                 Button {
                     productID = p.id
                 } label: {
@@ -286,6 +313,21 @@ struct OnboardingView: View {
         }
     }
 
+    /// Kişi sayımı (mağaza girişi) için montaj maddeleri
+    private static let peopleMountingItems = [
+        "Kamera girişi yukarıdan ya da yandan görüyor; kişiler kadrajdan tam geçiyor",
+        "Sayım çizgisinin iki yanında yürüme alanı görünüyor (yalnızca kapı eşiği değil)",
+        "Kamera sabit, titreşmiyor",
+        "Işık yeterli; kapıdan gelen ters ışık ya da parlama yok",
+        "Girişte görüntülü sayım bilgilendirmesi asılı (görüntü kaydedilmez, yalnızca sayı)"
+    ]
+
+    /// Seçilen profile göre montaj maddeleri
+    private var mountingItems: [String] {
+        let selected = vm.store.profiles.first { $0.id == (productID ?? vm.profile.id) }
+        return selected?.isTwoWay == true ? Self.peopleMountingItems : Self.mountingItems
+    }
+
     private static let mountingItems = [
         "Kamera bandın tam tepesinde ve banda dik bakıyor",
         "Kamera sabit, titreşmiyor",
@@ -297,14 +339,14 @@ struct OnboardingView: View {
     private var mountingStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             stepTitle("Montajı kontrol et")
-            ForEach(Self.mountingItems.indices, id: \.self) { i in
+            ForEach(mountingItems.indices, id: \.self) { i in
                 Button {
                     if checks.contains(i) { checks.remove(i) } else { checks.insert(i) }
                 } label: {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: checks.contains(i) ? "checkmark.square.fill" : "square")
                             .foregroundStyle(checks.contains(i) ? Color.accentColor : .secondary)
-                        Text(Self.mountingItems[i]).foregroundStyle(.primary).multilineTextAlignment(.leading)
+                        Text(mountingItems[i]).foregroundStyle(.primary).multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
                     }
                 }

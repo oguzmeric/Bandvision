@@ -1,0 +1,66 @@
+{
+  "schema": "bantvision.profile.v1",
+  "id": "4784baef-112d-4301-a899-7fed21acaef5",
+  "name": "Mağaza girişi",
+  "roi": {
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1.0,
+    "height": 1.0
+  },
+  "linePosition": 0.55,
+  "direction": "down",
+  "diffThreshold": 25,
+  "expectedArea": 0.0,
+  "minAreaFactor": 0.4,
+  "minAreaAbs": 0.002,
+  "splitTouching": false,
+  "maxMultiplicity": 4,
+  "closeIterations": 1,
+  "processingWidth": 640,
+  "minHits": 3,
+  "maxMatchDistance": 0.15,
+  "backgroundRate": 0.02,
+  "countMode": "detect",
+  "productLength": 0.0,
+  "detectClasses": [
+    "person"
+  ],
+  "detectConfidence": 0.35,
+  "countAnchor": "center",
+  "source": {
+    "rotation": 0,
+    "referenceFps": 60.0
+  },
+  "scale": {
+    "mmPerPixel": null
+  },
+  "qc": {
+    "enabled": false,
+    "geometry": {
+      "areaMinFactor": 0.8,
+      "areaMaxFactor": 1.25,
+      "aspectMin": 1.0,
+      "aspectMax": 3.0,
+      "solidityMin": 0.9
+    },
+    "spots": {
+      "enabled": false,
+      "darkDelta": 35,
+      "maxSpotAreaRatio": 0.004
+    },
+    "barcode": {
+      "required": false,
+      "symbologies": [],
+      "pattern": null
+    },
+    "text": {
+      "required": false,
+      "symbologies": [],
+      "pattern": null
+    },
+    "sizeClasses": [],
+    "saveNokImages": true
+  },
+  "io": {}
+}

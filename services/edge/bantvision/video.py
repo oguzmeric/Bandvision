@@ -29,12 +29,14 @@ import cv2
 import numpy as np
 
 from .core import Pipeline, Profile
+from .core.detector import CLASS_IDS, GROUPS
 from .core.lineframe import nearest_direction
 from .core.linescan import LineScanCounter, active_region, flow_profile, frame_moving, match_shift, motion_map
 from .core.pipeline import FrameResult
 from .core.profile import Roi
 from .core.segmenter import downsample, roi_mask
 from .core.tracker import median
+from .overlay import draw_detect
 
 
 @functools.lru_cache(maxsize=8)
@@ -51,8 +53,10 @@ def profile_mask(profile: Profile, w: int, h: int) -> np.ndarray:
     poly = tuple(profile.roiPolygon) if profile.roiPolygon else None
     return _mask((r.x, r.y, r.width, r.height), poly, w, h)
 
-PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box}
-MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek sıra, bitişik hacimli ürünler)"}
+PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box,
+           "people": Profile.people, "vehicle": Profile.vehicles, "animal": Profile.animals}
+MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek sıra, bitişik hacimli ürünler)",
+           "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)"}
 DIRECTION_TR = {"down": "yukarıdan aşağı", "up": "aşağıdan yukarı", "right": "soldan sağa", "left": "sağdan sola"}
 
 # BGR renkler (iOS bindirmesiyle aynı anlam: sarı ROI, turuncu çizgi, yeşil leke, camgöbeği sayılmış iz)
@@ -159,13 +163,17 @@ def temporal_noise_p995(info: VideoInfo, profile: Profile, window: float, pairs:
 
 
 def estimate_background(info: VideoInfo, profile: Profile, window: float, samples: int = 60,
-                        bg_range: tuple[float, float] | None = None) -> tuple[np.ndarray, int, list[np.ndarray]]:
+                        bg_range: tuple[float, float] | None = None, percentile: float = 50.0
+                        ) -> tuple[np.ndarray, int, list[np.ndarray]]:
     """Arka plan = örnek karelerin piksel medyanı.
 
     `bg_range` verilirse (videoda boş bandın göründüğü aralık) yalnızca oradan öğrenilir ve eşik canlı
     kalibrasyondaki gibi |kare - arka plan| dağılımından hesaplanır. Verilmezse tüm pencereden öğrenilir:
     ürünler hareket ettiği için her pikselde çoğu örnek bant olur ve medyan ürünleri siler. Bu varsayım
     bant %50'den fazla dolu olduğunda bozulur (bkz. testler); eşik bu yüzden ardışık kare farkından alınır.
+
+    `percentile` < 50: bant hiç boşalmıyor ama ürünler banttan parlaksa (koyu merdanede yumurta) her pikselin
+    koyu hâlleri boş banttır; > 50: ürünler banttan koyuysa. Pikselin bu oranda boş görünmesi yeter.
     """
     start, end = bg_range if bg_range else (0.0, min(info.duration, window))
     n_avail = max(1, int((end - start) * info.fps))
@@ -175,7 +183,7 @@ def estimate_background(info: VideoInfo, profile: Profile, window: float, sample
     if len(smalls) < (3 if bg_range else 5):
         raise SystemExit("Kalibrasyon için yeterli kare okunamadı (video ya da --bg-range çok kısa).")
     stack = np.stack(smalls).astype(np.float32)
-    bg = np.median(stack, axis=0)
+    bg = np.median(stack, axis=0) if percentile == 50 else np.percentile(stack, percentile, axis=0)
     if bg_range:
         h, w = bg.shape
         inside = profile_mask(profile, w, h)
@@ -320,7 +328,17 @@ def learn_product_length(info: VideoInfo, profile: Profile, window: float) -> fl
 
 
 def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction: bool,
-              fixed_area: bool, bg_range: tuple[float, float] | None = None) -> Calibration:
+              fixed_area: bool, bg_range: tuple[float, float] | None = None,
+              bg_percentile: float = 50.0, threshold: int | None = None) -> Calibration:
+    if profile.countMode == "detect":
+        # §4.10: arka plan, eşik, alan gerekmez. Sayım yönü = giriş yönü (hazır profil ya da --direction);
+        # kişi iki yönde de geçtiğinden hareketten tahmin edilmez.
+        cal = Calibration(np.zeros((2, 2), np.float32), profile.diffThreshold, profile.direction, (0.0, 0.0),
+                          background_from="gerekmiyor")
+        if not fixed_direction:
+            cal.notes.append("Giriş yönü: " + DIRECTION_TR.get(profile.direction, profile.direction)
+                             + " (hazır profil). Ters ise yönü değiştir.")
+        return cal
     if profile.countMode == "linescan":
         # §4.9: arka plan ve leke alanı gerekmez; yalnızca yön (ürün boyu sayım sırasında öğrenilir)
         first = next((f for _, _, f in read_frames(info, 0.0, min(info.duration, 1.0))), None)
@@ -345,10 +363,14 @@ def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction:
                 cal.notes.append("Ürün boyu öğrenilemedi (bant hareketi ya da ürün aralıkları bulunamadı). "
                                  "Alanı ve çizgiyi bandın üstüne koyup tekrar dene.")
         return cal
-    bg, th, _ = estimate_background(info, profile, window, bg_range=bg_range)
+    bg, th, _ = estimate_background(info, profile, window, bg_range=bg_range, percentile=bg_percentile)
+    if threshold is not None:                    # elle: hareketli zemin (merdane) gürültüsü eşiği şişirdiğinde
+        th = threshold
     cal = Calibration(bg, th, profile.direction, (0.0, 0.0))
     if bg_range:
         cal.background_from = f"aralık {bg_range[0]:.1f}-{bg_range[1]:.1f} sn"
+    if bg_percentile != 50:
+        cal.background_from += f", %{bg_percentile:g} yüzdelik"
     profile.diffThreshold = th
     if not fixed_direction:
         d, flow = estimate_direction(info, profile, bg, th, window)
@@ -473,11 +495,17 @@ class RunResult:
     frames: int
     seconds: float
     product_length: float = 0.0                  # şerit tarama: öğrenilen ürün boyu (ROI akış uzunluğuna oranla)
+    total_out: int = 0                           # tanıma: çıkış sayısı (total = giriş)
+    per_minute_out: dict[int, int] = field(default_factory=dict)
+    crossings: list[tuple[float, int, str, int, int]] = field(default_factory=list)  # (zaman, iz, yön, giriş, çıkış)
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
-          out_width: int, progress: bool | Callable[[float, int], None] = True) -> RunResult:
+          out_width: int, progress: bool | Callable[[float, int], None] = True,
+          start: float = 0.0, end: float | None = None) -> RunResult:
     """`progress`: True → konsola yüzde; fonksiyon → (0–1 oran, anlık sayı) ile çağrılır (analiz sunucusu)."""
+    if profile.countMode == "detect":
+        return count_detect(info, profile, out_path, out_width, progress, start, end)
     pipe = Pipeline(profile)
     pipe.segmenter.bg = cal.background.copy()
     writer = None
@@ -488,7 +516,7 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     n = 0
     numbers: dict[int, list[int]] = {}            # iz → bu izde sayılan ürünlerin sıra numaraları
     last_t = 0.0
-    for k, t, frame in read_frames(info):
+    for k, t, frame in read_frames(info, start, end):
         last_t = t
         r = pipe.process(frame, t)
         split_numbers(numbers, pipe.tracker.last_splits)
@@ -535,6 +563,75 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     return RunResult(pipe.total, per_minute, events, n, time.perf_counter() - t0, pipe.linescan.product_length)
 
 
+def _rotated(img: np.ndarray, rotation: int) -> np.ndarray:
+    if rotation in (90, 180, 270):
+        return cv2.rotate(img, {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                                270: cv2.ROTATE_90_COUNTERCLOCKWISE}[rotation])
+    return img
+
+
+def count_detect(info: VideoInfo, profile: Profile, out_path: pathlib.Path | None, out_width: int,
+                 progress: bool | Callable[[float, int], None] = True, start: float = 0.0,
+                 end: float | None = None) -> RunResult:
+    """§4.10 iki yönlü geçiş: `total` giriş, `total_out` çıkış. Sayılan kişinin kutusunda "G3"/"Ç2" yazar."""
+    pipe = Pipeline(profile)
+    writer = None
+    per_min: dict[int, int] = {}
+    per_min_out: dict[int, int] = {}
+    crossings: list[tuple[float, int, str, int, int]] = []
+    labels: dict[int, str] = {}
+    flash, flash_in = 0.0, True
+    t0 = time.perf_counter()
+    n = 0
+    span = ((min(end, info.duration) if end is not None else info.duration) - start) or 1.0
+    for _, t, frame in read_frames(info, start, end):
+        r = pipe.process(frame, t)
+        n_in = pipe.total - len(r.counts)
+        n_out = pipe.total_out - len(r.counts_out)
+        for e in r.counts:
+            n_in += 1
+            labels[e.track_id] = f"G{n_in}"
+            per_min[int(t // 60)] = per_min.get(int(t // 60), 0) + 1
+            crossings.append((round(t, 3), e.track_id, "giris", n_in, n_out))
+            flash, flash_in = 0.35, True
+        for e in r.counts_out:
+            n_out += 1
+            labels[e.track_id] = f"Ç{n_out}"
+            per_min_out[int(t // 60)] = per_min_out.get(int(t // 60), 0) + 1
+            crossings.append((round(t, 3), e.track_id, "cikis", pipe.total, n_out))
+            flash, flash_in = 0.35, False
+        alive = {tr.id for tr in pipe.detect.tracker.tracks}
+        labels = {i: lab for i, lab in labels.items() if i in alive}
+        if out_path is not None:
+            img = draw_detect(_rotated(frame, profile.rotation).copy(), profile, r.detect, pipe.total,
+                              pipe.total_out, t, flash, flash_in, labels)
+            if img.shape[1] > out_width:
+                img = cv2.resize(img, (out_width, round(img.shape[0] * out_width / img.shape[1])),
+                                 interpolation=cv2.INTER_AREA)
+            if writer is None:
+                writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), info.fps,
+                                         (img.shape[1], img.shape[0]))
+            writer.write(img)
+        flash = max(0.0, flash - 1 / info.fps)
+        n += 1
+        if progress and n % max(1, int(info.fps * 2)) == 0:
+            frac = min(1.0, (t - start) / span)
+            if callable(progress):
+                progress(frac, pipe.total)
+            else:
+                print(f"\r  işleniyor %{int(100 * frac):3d}  giriş={pipe.total}  çıkış={pipe.total_out}",
+                      end="", flush=True)
+    if writer is not None:
+        writer.release()
+    if callable(progress):
+        progress(1.0, pipe.total)
+    elif progress:
+        print(f"\r  işleniyor %100  giriş={pipe.total}  çıkış={pipe.total_out}          ")
+    return RunResult(pipe.total, per_min, [(c[0], c[1], 1, c[3]) for c in crossings if c[2] == "giris"], n,
+                     time.perf_counter() - t0, total_out=pipe.total_out, per_minute_out=per_min_out,
+                     crossings=crossings)
+
+
 # ---------------------------------------------------------------- CLI
 
 def build_profile(a: argparse.Namespace) -> Profile:
@@ -575,6 +672,20 @@ def build_profile(a: argparse.Namespace) -> Profile:
         p.countMode = a.mode
     if a.product_length is not None:
         p.productLength = a.product_length
+    if a.classes:
+        names: list[str] = []
+        for c in a.classes.split(","):
+            names += GROUPS.get(c.strip(), [c.strip()])
+        bad = [c for c in names if c not in CLASS_IDS]
+        if bad:
+            raise SystemExit(f"--classes: bilinmeyen sınıf {bad}; seçenekler: {sorted(GROUPS)} ya da {sorted(CLASS_IDS)}")
+        p.detectClasses = names
+    if a.anchor:
+        p.countAnchor = a.anchor
+    if a.conf is not None:
+        p.detectConfidence = a.conf
+    if p.countMode == "detect" and not p.detectClasses:
+        raise SystemExit("Tanıma modu için sınıf gerekli: --classes people")
     if p.countMode == "linescan" and p.countLine is not None:
         raise SystemExit("Şerit tarama açılı çizgiyle çalışmaz; düz çizgi (--line, --direction) kullan.")
     return p
@@ -595,12 +706,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
     ap.add_argument("--width", type=int, help="işleme genişliği (px), ör. 160/240/360")
     ap.add_argument("--expected-area", type=float, help="tek ürün alanı (vermezsen otomatik öğrenilir)")
-    ap.add_argument("--mode", choices=["blob", "linescan"],
+    ap.add_argument("--mode", choices=["blob", "linescan", "detect"],
                     help="sayım yöntemi: blob = ayrık ürünler (arka plan farkı), linescan = şerit tarama (tek sıra "
-                         "bitişik torba/koli; boş bant gerekmez). Varsayılan: hazır profilden")
+                         "bitişik torba/koli; boş bant gerekmez), detect = nesne tanıma (kişi/araç/hayvan; iki yönlü "
+                         "giriş/çıkış). Varsayılan: hazır profilden")
+    ap.add_argument("--classes", help="tanıma: people | vehicle | animal ya da sınıf listesi (person,car,...)")
+    ap.add_argument("--anchor", choices=["center", "bottom"],
+                    help="tanıma: çizgiye göre konum noktası; tepeden kamera center, yatık kamera bottom (ayak)")
+    ap.add_argument("--conf", type=float, help="tanıma: yeni iz başlatan en düşük güven (0-1)")
+    ap.add_argument("--start", type=float, default=0.0, help="videonun bu saniyesinden başla")
+    ap.add_argument("--end", type=float, help="videonun bu saniyesinde bitir")
+    ap.add_argument("--truth-out", type=int, help="tanıma: elle sayılan doğru çıkış adedi")
     ap.add_argument("--product-length", type=float,
                     help="şerit tarama: tek ürün boyu, ROI'nin akış uzunluğuna oranla (vermezsen otomatik öğrenilir)")
     ap.add_argument("--bg-range", help="boş bandın göründüğü aralık (sn), ör. 0,1.5; bant çok doluysa gerekli")
+    ap.add_argument("--bg-percentile", type=float, default=50.0,
+                    help="bant hiç boşalmıyorsa arka plan yüzdeliği: ürün banttan parlak → 15, koyu → 85 (varsayılan 50)")
+    ap.add_argument("--threshold", type=int,
+                    help="arka plan fark eşiği (5-120); vermezsen gürültüden otomatik (hareketli zeminde yüksek çıkabilir)")
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
@@ -624,12 +747,17 @@ def main(argv: list[str] | None = None) -> int:
     bg_range = tuple(float(v) for v in a.bg_range.split(",")) if a.bg_range else None
     cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction) or profile.countLine is not None,
                     fixed_area=a.expected_area is not None or profile.expectedArea > 0,
-                    bg_range=bg_range)  # type: ignore[arg-type]
-    cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
-        cal.background.astype(np.uint8), (cal.background.shape[1] * 3, cal.background.shape[0] * 3),
-        interpolation=cv2.INTER_NEAREST))
+                    bg_range=bg_range, bg_percentile=a.bg_percentile, threshold=a.threshold)  # type: ignore[arg-type]
+    detect = profile.countMode == "detect"
+    if not detect:                               # tanımada görüntü saklanmaz (kişisel veri)
+        cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
+            cal.background.astype(np.uint8), (cal.background.shape[1] * 3, cal.background.shape[0] * 3),
+            interpolation=cv2.INTER_NEAREST))
     print(f"  yöntem: {MODE_TR.get(profile.countMode, profile.countMode)}")
-    if profile.countMode == "linescan":
+    if detect:
+        print(f"  sınıflar: {', '.join(profile.detectClasses)}  giriş yönü: "
+              f"{DIRECTION_TR.get(profile.direction, profile.direction)}  konum noktası: {profile.countAnchor}")
+    elif profile.countMode == "linescan":
         print(f"  yön={profile.direction} (akış {cal.flow[0]:+.2f}, {cal.flow[1]:+.2f} px/kare)"
               f"  ürün boyu={profile.productLength:.3f} (alanın akış boyuna oranı)")
     else:
@@ -645,7 +773,8 @@ def main(argv: list[str] | None = None) -> int:
     emit(stage="counting")
     report: bool | Callable[[float, int], None] = (
         (lambda f, n: emit(progress=round(f, 4), count=n)) if a.progress_json else True)
-    res = count(info, profile, cal, None if a.no_video else out_dir / "isaretli.mp4", a.out_width, report)
+    res = count(info, profile, cal, None if a.no_video else out_dir / "isaretli.mp4", a.out_width, report,
+                start=a.start, end=a.end)
 
     summary = {
         "video": src.name, "fps": info.fps, "seconds": round(info.duration, 2),
@@ -659,13 +788,28 @@ def main(argv: list[str] | None = None) -> int:
                         "notes": cal.notes},
         "processingFps": round(res.frames / res.seconds, 1) if res.seconds else None,
     }
+    if detect:
+        summary.update({"countOut": res.total_out, "truthOut": a.truth_out, "classes": profile.detectClasses,
+                        "range": [a.start, a.end]})
     (out_dir / "ozet.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "profil.json").write_text(json.dumps(profile.to_dict(), ensure_ascii=False, indent=2),
                                          encoding="utf-8")
     with (out_dir / "sayimlar.csv").open("w", newline="", encoding="utf-8") as fh:
         wr = csv.writer(fh, delimiter=";")
-        wr.writerow(["zaman_sn", "iz", "delta", "toplam"])
-        wr.writerows(res.events)
+        if detect:
+            wr.writerow(["zaman_sn", "iz", "yon", "giris_toplam", "cikis_toplam"])
+            wr.writerows(res.crossings)
+        else:
+            wr.writerow(["zaman_sn", "iz", "delta", "toplam"])
+            wr.writerows(res.events)
+
+    if detect:
+        print(f"\nGİRİŞ: {res.total}   ÇIKIŞ: {res.total_out}")
+        for name, got, truth in (("giriş", res.total, a.truth), ("çıkış", res.total_out, a.truth_out)):
+            if truth:
+                print(f"  {name}: doğru {truth}, fark {got - truth:+d}")
+        print(f"Çıktılar: {out_dir}" + ("" if a.no_video else "  (isaretli.mp4, ozet.json, profil.json, sayimlar.csv)"))
+        return 0
 
     print(f"\nSAYI: {res.total}", end="")
     if a.truth:

@@ -1,11 +1,19 @@
 import Foundation
 import UIKit
 
+/// İki yönlü sayımda olayın yönü (sözleşme `count.direction`: in / out)
+enum CountDirection: String, Codable, Sendable {
+    case entry = "in"
+    case exit = "out"
+}
+
 struct CountEventRecord: Codable, Sendable {
     let ts: Date
     let delta: Int
     let total: Int
     let profile: String
+    /// İki yönlü sayım (kişi): giriş/çıkış; tek yönlü sayımda yok
+    var direction: CountDirection? = nil
 }
 
 struct WebhookPayload: Codable {
@@ -24,10 +32,12 @@ final class CountLogger: ObservableObject {
     var profileName = ""
 
     private var minuteBuckets: [Date: Int] = [:]
+    private var minuteBucketsOut: [Date: Int] = [:]
     private var recent: [(date: Date, delta: Int)] = []
     private var pending: [CountEventRecord] = []
     private var sending = false
     private let totalKey = "bs.sessionTotal"
+    private let totalOutKey = "bs.sessionTotalOut"
     private let deviceID: String
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -36,6 +46,7 @@ final class CountLogger: ObservableObject {
     }()
 
     var restoredTotal: Int { UserDefaults.standard.integer(forKey: totalKey) }
+    var restoredTotalOut: Int { UserDefaults.standard.integer(forKey: totalOutKey) }
 
     init() {
         deviceID = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
@@ -49,22 +60,30 @@ final class CountLogger: ObservableObject {
         }
     }
 
-    func record(delta: Int, total: Int) {
+    /// `direction`: iki yönlü sayımda giriş/çıkış (çıkışlar dakikalık ayrı sütunda; hız yalnızca girişlerden)
+    func record(delta: Int, total: Int, direction: CountDirection? = nil) {
         let now = Date()
         let minute = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 / 60) * 60)
-        minuteBuckets[minute, default: 0] += delta
-        recent.append((date: now, delta: delta))
-        pending.append(CountEventRecord(ts: now, delta: delta, total: total, profile: profileName))
+        if direction == .exit {
+            minuteBucketsOut[minute, default: 0] += delta
+            UserDefaults.standard.set(total, forKey: totalOutKey)
+        } else {
+            minuteBuckets[minute, default: 0] += delta
+            recent.append((date: now, delta: delta))
+            UserDefaults.standard.set(total, forKey: totalKey)
+        }
+        pending.append(CountEventRecord(ts: now, delta: delta, total: total, profile: profileName, direction: direction))
         if pending.count > 5000 { pending.removeFirst(pending.count - 5000) }
-        UserDefaults.standard.set(total, forKey: totalKey)
         updateRate()
     }
 
     func resetSession() {
         minuteBuckets.removeAll()
+        minuteBucketsOut.removeAll()
         recent.removeAll()
         pending.removeAll()
         UserDefaults.standard.set(0, forKey: totalKey)
+        UserDefaults.standard.set(0, forKey: totalOutKey)
         updateRate()
     }
 
@@ -72,9 +91,17 @@ final class CountLogger: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm"
         f.locale = Locale(identifier: "tr_TR")
-        var s = "dakika;adet\n"
-        for k in minuteBuckets.keys.sorted() {
-            s += "\(f.string(from: k));\(minuteBuckets[k] ?? 0)\n"
+        var s: String
+        if minuteBucketsOut.isEmpty {
+            s = "dakika;adet\n"
+            for k in minuteBuckets.keys.sorted() {
+                s += "\(f.string(from: k));\(minuteBuckets[k] ?? 0)\n"
+            }
+        } else {                                       // iki yönlü sayım: giriş ve çıkış ayrı sütunlar
+            s = "dakika;giriş;çıkış\n"
+            for k in Set(minuteBuckets.keys).union(minuteBucketsOut.keys).sorted() {
+                s += "\(f.string(from: k));\(minuteBuckets[k] ?? 0);\(minuteBucketsOut[k] ?? 0)\n"
+            }
         }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("bant-sayim-\(Int(Date().timeIntervalSince1970)).csv")

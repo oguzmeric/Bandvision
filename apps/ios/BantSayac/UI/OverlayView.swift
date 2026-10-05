@@ -33,8 +33,41 @@ struct OverlayView: View {
             line.move(to: a)
             line.addLine(to: b)
             ctx.stroke(line, with: .color(.orange), lineWidth: 4)
-            if profile.countLine != nil {
+            if profile.isTwoWay {
+                // Kişi sayımı: ok giriş tarafını gösterir (düz çizgide `direction`, açılıda a→b'nin sağ eli)
+                let (ea, eb) = entryOrdered(a, b)
+                ctx.stroke(flowArrow(ea, eb), with: .color(.orange),
+                           style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                let tip = arrowTip(ea, eb, distance: 52)
+                let label = ctx.resolve(Text("GİRİŞ").font(.caption.weight(.heavy)).foregroundColor(.black))
+                let size = label.measure(in: CGSize(width: 120, height: 30))
+                let pill = CGRect(x: tip.x - size.width / 2 - 7, y: tip.y - size.height / 2 - 3,
+                                  width: size.width + 14, height: size.height + 6)
+                ctx.fill(Path(roundedRect: pill, cornerRadius: pill.height / 2), with: .color(.orange))
+                ctx.draw(label, at: CGPoint(x: pill.midX, y: pill.midY))
+            } else if profile.countLine != nil {
                 ctx.stroke(flowArrow(a, b), with: .color(.orange), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            }
+
+            // Kişiler: kutu, iz kuyruğu, sayıldıysa "G3" (yeşil) / "Ç2" (turuncu) rozeti
+            for m in snapshot.people {
+                let r = viewRect(m.box)
+                let color: Color = m.label == nil ? .white.opacity(0.85) : (m.isEntry ? .green : .orange)
+                if m.trail.count > 1 {
+                    var trail = Path()
+                    trail.addLines(m.trail.map { viewPoint($0.x, $0.y) })
+                    ctx.stroke(trail, with: .color(color.opacity(0.7)), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                }
+                ctx.stroke(Path(roundedRect: r, cornerRadius: 6), with: .color(color), lineWidth: m.label == nil ? 2 : 3)
+                if let label = m.label {
+                    let text = ctx.resolve(Text(label).font(.system(size: 15, weight: .heavy).monospacedDigit())
+                                            .foregroundColor(.black))
+                    let size = text.measure(in: CGSize(width: 120, height: 40))
+                    let badge = CGRect(x: r.minX, y: max(fitRect.minY, r.minY - size.height - 8),
+                                       width: size.width + 14, height: size.height + 6)
+                    ctx.fill(Path(roundedRect: badge, cornerRadius: badge.height / 2), with: .color(color))
+                    ctx.draw(text, at: CGPoint(x: badge.midX, y: badge.midY))
+                }
             }
 
             // Lekeler
@@ -79,8 +112,8 @@ struct OverlayView: View {
                 }
             }
 
-            // Akış yönü (açılı çizgide ok çizginin üstünde)
-            if profile.countLine == nil {
+            // Akış yönü (açılı çizgide ve kişi sayımında ok çizginin üstünde)
+            if profile.countLine == nil && !profile.isTwoWay {
                 ctx.draw(Text(profile.direction.arrow).font(.system(size: 28, weight: .bold)).foregroundColor(.yellow),
                          at: CGPoint(x: roi.minX + 22, y: roi.minY + 22))
             }
@@ -148,6 +181,20 @@ struct OverlayView: View {
         path.addLine(to: tip)
         path.addLine(to: CGPoint(x: back.x - side.x, y: back.y - side.y))
         return path
+    }
+
+    /// Kişi sayımında oku giriş tarafına çevirmek için uç sırası: `flowArrow` a→b'nin sağ eline bakar. Düz çizgide
+    /// uçlar soldan sağa (yatay çizgi) ya da yukarıdan aşağı (dikey çizgi) gelir: sağ el aşağı / sola bakar.
+    private func entryOrdered(_ a: CGPoint, _ b: CGPoint) -> (CGPoint, CGPoint) {
+        guard profile.countLine == nil else { return (a, b) }
+        return profile.direction == .up || profile.direction == .right ? (b, a) : (a, b)
+    }
+
+    /// Okun ucunun ilerisinde (etiket yeri)
+    private func arrowTip(_ a: CGPoint, _ b: CGPoint, distance: CGFloat) -> CGPoint {
+        let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+        let len = max(1, hypot(b.x - a.x, b.y - a.y))
+        return CGPoint(x: mid.x - (b.y - a.y) / len * distance, y: mid.y + (b.x - a.x) / len * distance)
     }
 
     /// Görüntünün en-boy oranı (açılı çizginin akış yönü bununla hesaplanır)

@@ -13,7 +13,10 @@ Bir ürün tipinin tüm kalibrasyon ve QC ayarları. iOS'ta da edge'de de aynı 
 | `id`, `name` | uuid, string | |
 | `roi` | `{x,y,width,height}` | Döndürülmüş (dik) görüntüde ilgi alanı |
 | `roiPolygon` | `[{x,y}]`, 3–12 köşe, isteğe bağlı | Çokgen ilgi alanı (eğik bant, kenarda hareket). Varsa maske = `roi` ∩ çokgen ve `roi` çokgenin sınır kutusudur (algoritma §2.0). Yoksa davranış eskisi gibi |
-| `countMode` | `blob` / `linescan`, isteğe bağlı | Sayım yöntemi (algoritma §4.9). `blob` (varsayılan): arka plan farkı + izleme, ayrık ürünler. `linescan`: şerit tarama, tek sıra gelen bitişik/aralıklı hacimli ürünler (torba, koli); boş bant öğrenmesi gerekmez, açılı çizgiyle (`countLine`) kullanılmaz. Hazır profiller: un torbası ve koli `linescan` |
+| `countMode` | `blob` / `linescan` / `detect`, isteğe bağlı | Sayım yöntemi. `blob` (varsayılan): arka plan farkı + izleme, ayrık ürünler. `linescan` (§4.9): şerit tarama, tek sıra gelen bitişik/aralıklı hacimli ürünler (torba, koli); boş bant öğrenmesi gerekmez, açılı çizgiyle (`countLine`) kullanılmaz. Hazır profiller: un torbası ve koli `linescan`. `detect` (§4.10): nesne tanıma + iki yönlü geçiş (kişi, araç, hayvan); `direction` yönünde geçen giriş, ters yönde geçen çıkış. Hazır profiller: mağaza girişi (kişi), araç, hayvan |
+| `detectClasses` | COCO adları dizisi, isteğe bağlı | `detect`: sayılan sınıflar. Kişi `person`; araç `car, truck, bus, motorcycle, bicycle`; hayvan `cow, sheep, horse, dog, cat, bird` |
+| `detectConfidence` | 0,05–0,95, isteğe bağlı | `detect`: yeni iz başlatan en düşük tanıma güveni (varsayılan 0,35); daha düşükler yalnızca mevcut izi sürdürür |
+| `countAnchor` | `center` / `bottom`, isteğe bağlı | `detect`: çizgiye göre konum noktası. `center` tepeden kamera; `bottom` yatık kamera (ayak; çizgi zemine çizilir) |
 | `productLength` | 0–2, isteğe bağlı | `linescan`: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla; 0 = otomatik öğrenilir ("Ürün boyunu öğren" kalibrasyonu bunu yazar) |
 | `linePosition` | 0–1 | Sayım çizgisinin akış eksenindeki konumu |
 | `countLine` | `{a:{x,y}, b:{x,y}}`, isteğe bağlı | Açılı sayım çizgisi (algoritma §4.8). Akış, a'dan b'ye yürürken sağ el tarafı. Varsa `direction`/`linePosition` sayımda kullanılmaz (uyumluluk için yine yazılır: akışa en yakın eksen) |
@@ -61,7 +64,7 @@ Ortak alanlar: `schema` (`bantvision.event.v1`), `eventId`, `ts`, `deviceId`, `c
 
 | `type` | Ek alan | Ne zaman |
 |---|---|---|
-| `count` | `count: {delta, total, trackId}` | İz çizgiyi geçti ya da çarpanı arttı |
+| `count` | `count: {delta, total, trackId, direction?}` | İz çizgiyi geçti ya da çarpanı arttı. `direction` (iki yönlü sayım, `countMode = detect`): `in` giriş, `out` çıkış; yoksa `in`. `total` o yönün toplamı. Backend çıkışları `count`'a değil `minute_stats.count_out`'a ekler |
 | `inspection` | `inspection: {trackId, result, reasons[], metrics{}, sizeClass?, imageRef?}` | QC açıkken her sayılan ürün için |
 | `state` | `state: {running, reason}` | Bant durdu/başladı (hareket yok süresi), kalibrasyon başladı/bitti |
 | `heartbeat` | `heartbeat: {fps, temperatureState, queueDepth, uptimeSec, appVersion}` | 60 sn'de bir |

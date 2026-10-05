@@ -25,8 +25,9 @@ def assert_valid(v: Draft202012Validator, doc: dict[str, Any]) -> None:
     assert errs == []
 
 
-@pytest.mark.parametrize("factory", [Profile, Profile.egg, Profile.flour_sack, Profile.box],
-                         ids=["default", "egg", "flour", "box"])
+@pytest.mark.parametrize("factory", [Profile, Profile.egg, Profile.flour_sack, Profile.box, Profile.people,
+                                     Profile.vehicles, Profile.animals],
+                         ids=["default", "egg", "flour", "box", "people", "vehicle", "animal"])
 def test_builtin_profiles_serialize_to_valid_contract(validator: Draft202012Validator, factory: Any) -> None:
     assert_valid(validator, factory().to_dict())
 

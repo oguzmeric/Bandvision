@@ -81,6 +81,11 @@ class Profile:
     countMode: str = "blob"
     # linescan: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla (0 = otomatik öğren)
     productLength: float = 0.0
+    # detect (§4.10): sayılacak sınıflar (core/detector.py CLASS_IDS), tanıma güven eşiği, isteğe bağlı kapasite
+    detectClasses: list[str] = field(default_factory=lambda: ["person"])
+    detectConfidence: float = 0.35
+    # Çizgiye göre konum noktası: "center" (tepeden kamera) ya da "bottom" (yatık kamera: ayak, zemindeki çizgi)
+    countAnchor: str = "center"
     rotation: int = 0            # source.rotation (saat yönünde derece)
     referenceFps: float = 60.0   # source.referenceFps
     mmPerPixel: float | None = None  # scale.mmPerPixel (tam çözünürlük)
@@ -102,10 +107,13 @@ class Profile:
         p = cls(name=d.get("name", "Profil"))
         simple = ["id", "linePosition", "direction", "diffThreshold", "expectedArea", "minAreaFactor",
                   "minAreaAbs", "splitTouching", "maxMultiplicity", "closeIterations", "processingWidth",
-                  "minHits", "maxMatchDistance", "backgroundRate", "countMode", "productLength"]
+                  "minHits", "maxMatchDistance", "backgroundRate", "countMode", "productLength",
+                  "detectConfidence", "countAnchor"]
         for k in simple:
             if k in d:
                 setattr(p, k, d[k])
+        if d.get("detectClasses"):
+            p.detectClasses = [str(c) for c in d["detectClasses"]]
         if "roi" in d:
             p.roi = Roi(**d["roi"])
         if d.get("roiPolygon"):
@@ -142,6 +150,9 @@ class Profile:
             "minHits": self.minHits, "maxMatchDistance": self.maxMatchDistance,
             "backgroundRate": self.backgroundRate,
             "countMode": self.countMode, "productLength": float(self.productLength),
+            **({"detectClasses": list(self.detectClasses), "detectConfidence": float(self.detectConfidence),
+                "countAnchor": self.countAnchor}
+               if self.countMode == "detect" else {}),
             "source": {"rotation": self.rotation, "referenceFps": self.referenceFps},
             "scale": {"mmPerPixel": self.mmPerPixel},
             "qc": asdict(self.qc),
@@ -183,6 +194,24 @@ class Profile:
         return cls(name="Un torbası", roi=Roi(0.05, 0.05, 0.9, 0.9), diffThreshold=22, minAreaFactor=0.45,
                    minAreaAbs=0.01, splitTouching=True, maxMultiplicity=3, closeIterations=2,
                    processingWidth=240, maxMatchDistance=0.20, countMode="linescan")
+
+    @classmethod
+    def people(cls) -> Profile:
+        """Kişi sayımı (kapı/giriş): iki yönlü geçiş; sayım yönü = giriş."""
+        return cls(name="Kişi sayımı", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="detect", detectClasses=["person"],
+                   linePosition=0.55, direction="down", minHits=3, maxMatchDistance=0.15, processingWidth=640)
+
+    @classmethod
+    def vehicles(cls) -> Profile:
+        return cls(name="Araç sayımı", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="detect",
+                   detectClasses=["car", "truck", "bus", "motorcycle", "bicycle"],
+                   linePosition=0.55, direction="down", minHits=3, maxMatchDistance=0.2, processingWidth=640)
+
+    @classmethod
+    def animals(cls) -> Profile:
+        return cls(name="Hayvan sayımı", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="detect",
+                   detectClasses=["cow", "sheep", "horse", "dog", "cat", "bird"],
+                   linePosition=0.55, direction="down", minHits=3, maxMatchDistance=0.15, processingWidth=640)
 
     @classmethod
     def box(cls) -> Profile:

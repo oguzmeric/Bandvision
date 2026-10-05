@@ -6,9 +6,14 @@ struct CalibrationPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Kalibrasyon").font(.headline)
+                Text(vm.profile.isTwoWay ? "Ayarlar" : "Kalibrasyon").font(.headline)
                 Spacer()
-                if vm.profile.countLine == nil {
+                if vm.profile.isTwoWay {
+                    Button { vm.flipEntryDirection() } label: {
+                        Label("Girişi çevir", systemImage: "arrow.up.arrow.down")
+                    }
+                    .accessibilityIdentifier("flipEntryCalib")
+                } else if vm.profile.countLine == nil {
                     Picker("Akış yönü", selection: $vm.profile.direction) {
                         ForEach(FlowDirection.allCases) { d in
                             Text("\(d.arrow) \(d.title)").tag(d)
@@ -33,16 +38,27 @@ struct CalibrationPanel: View {
                 .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            countModePicker
-            areaShapePicker
-            if vm.profile.mode == .blob {
+            if vm.profile.isTwoWay {
+                cameraPicker
+                areaShapePicker
                 lineModePicker
-            }
-
-            if vm.profile.mode == .linescan {
-                lineScanControls
+                Text("İpucu: çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy. Kapı eşiğine koyma: "
+                     + "kişi kapıda durup kaybolursa geçişi tamamlanmaz.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                blobControls
+                countModePicker
+                areaShapePicker
+                if vm.profile.mode == .blob {
+                    lineModePicker
+                }
+
+                if vm.profile.mode == .linescan {
+                    lineScanControls
+                } else {
+                    blobControls
+                }
             }
         }
         .padding(.horizontal)
@@ -56,13 +72,34 @@ struct CalibrationPanel: View {
                 get: { vm.profile.mode },
                 set: { vm.setCountMode($0) }
             )) {
-                ForEach(CountMode.allCases) { m in Text(m.title).tag(m) }
+                ForEach(CountMode.beltModes) { m in Text(m.title).tag(m) }
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("countMode")
             Text(vm.profile.mode == .linescan
                  ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez."
                  : "Yumurta, meyve gibi ayrık ürünler; bant boşken arka plan öğrenilir.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Kişi sayımı: kamera konumu (çizgiye göre konum noktası ve hareket desteği buna göre)
+    private var cameraPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Kamera", selection: Binding(
+                get: { vm.profile.anchor },
+                set: { vm.profile.countAnchor = $0 }
+            )) {
+                ForEach(CountAnchor.allCases) { a in Text(a.title).tag(a) }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("cameraMount")
+            Text(vm.profile.anchor == .center
+                 ? "Kamera girişe yukarıdan bakıyor: kişinin ortası çizgiyi geçince sayılır; kameranın tam altında "
+                    + "tanınamayan kişi hareketinden izlenir."
+                 : "Kamera girişe yandan/eğik bakıyor: kişinin ayağı çizgiyi geçince sayılır (çizgiyi zemine çiz).")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

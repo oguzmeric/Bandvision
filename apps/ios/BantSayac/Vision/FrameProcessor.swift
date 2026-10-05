@@ -15,11 +15,24 @@ struct EngineSnapshot {
     var perf: String = ""
     /// İz kimliği → sayım sıra numarası ("34", bitişik çiftte "35–36"); ürünün üstünde gösterilir
     var countLabels: [Int: String] = [:]
+    /// Kişi sayımı (§4.10): görünen kişiler ve sayım çizgisi (normalize)
+    var people: [PersonMarker] = []
+    var peopleLine: (NormPoint, NormPoint)?
 
     static var empty: EngineSnapshot {
         EngineSnapshot(frameSize: CGSize(width: 720, height: 1280),
                        blobs: [], tracks: [], fps: 0, mask: nil, perf: "")
     }
+}
+
+/// Kişi sayımında ekranda çizilen kişi: kutu, iz kuyruğu ve sayıldıysa "G3" / "Ç2" etiketi
+struct PersonMarker: Identifiable {
+    let id: Int
+    let box: CGRect
+    let trail: [CGPoint]
+    /// "G3" (3. giriş) ya da "Ç2" (2. çıkış); sayılmadıysa nil
+    let label: String?
+    var isEntry: Bool { label?.hasPrefix("G") ?? false }
 }
 
 /// Çizgiyi ilk kez geçen ürünün tam çözünürlüklü kırpıntısı (kalite kontrol kartı için).
@@ -64,6 +77,11 @@ final class FrameProcessor: @unchecked Sendable {
     private let segmenter = BackgroundSegmenter()
     private let tracker = BlobTracker()
     private let lineScan = LineScanCounter()
+    private let people = PeopleCounter()
+    /// Kişi sayımı: çıkış toplamı (`total` giriş toplamıdır) ve iz → "G3"/"Ç2" etiketi
+    private var totalOut = 0
+    private var personLabels: [Int: String] = [:]
+    private var lastPeople: PeopleFrame?
     private var lastFrameSize = (width: 0, height: 0)
     private var profile = ProductProfile.generic()
     private var counting = false
@@ -108,6 +126,8 @@ final class FrameProcessor: @unchecked Sendable {
     var onCount: (@MainActor (_ delta: Int, _ total: Int) -> Void)?
     var onCrop: (@MainActor (CountCrop) -> Void)?
     var onCalibration: (@MainActor (CalibrationEvent) -> Void)?
+    /// Kişi sayımı (§4.10): bu karede girenler/çıkanlar ve toplamlar (toplam giriş, toplam çıkış)
+    var onCrossing: (@MainActor (_ entered: Int, _ exited: Int, _ totalIn: Int, _ totalOut: Int) -> Void)?
     /// Video ve ağ kamerası modunda ekranda gösterilen kare (iPhone kamerasında önizleme katmanı kullanılır).
     var onFrameImage: (@MainActor (CGImage) -> Void)?
 
@@ -120,6 +140,8 @@ final class FrameProcessor: @unchecked Sendable {
     func setProfile(_ p: ProductProfile) { queue.async { self.profile = p } }
     func setCounting(_ on: Bool) { queue.async { self.counting = on } }
     func setTotal(_ t: Int) { queue.async { self.total = t } }
+    /// Kişi sayımı: giriş ve çıkış toplamları
+    func setTotals(in tIn: Int, out tOut: Int) { queue.async { self.total = tIn; self.totalOut = tOut } }
     func setShowMask(_ on: Bool) { queue.async { self.showMask = on } }
     /// Video modunda işlenen kareyi de anlık görüntüyle yayınla.
     func setEmitFrameImages(_ on: Bool) { queue.async { self.emitFrameImages = on } }
@@ -130,6 +152,9 @@ final class FrameProcessor: @unchecked Sendable {
         queue.async {
             self.tracker.reset()
             self.lineScan.reset()
+            self.people.reset()
+            self.personLabels.removeAll()
+            self.lastPeople = nil
             self.countNumbers.removeAll()
             if resetBackground { self.segmenter.reset() }
         }
@@ -184,6 +209,10 @@ final class FrameProcessor: @unchecked Sendable {
 
     /// ts: kaynağın sunum zamanı (sn). Kamera ve video aynı yoldan gelir.
     func process(_ pixelBuffer: CVPixelBuffer, ts: Double) {
+        if profile.mode == .detect {
+            processPeople(pixelBuffer, ts: ts)
+            return
+        }
         guard let frame = GrayFrame.make(from: pixelBuffer, targetWidth: profile.processingWidth) else { return }
         process(gray: frame, ts: ts, pixelBuffer: pixelBuffer)
     }
@@ -402,6 +431,63 @@ final class FrameProcessor: @unchecked Sendable {
     static func numberLabel(_ nums: [Int]) -> String {
         guard let first = nums.first, let last = nums.last else { return "" }
         return nums.count <= 3 ? nums.map(String.init).joined(separator: "·") : "\(first)…\(last)"
+    }
+
+    // MARK: - Kişi sayımı (§4.10)
+
+    /// Tanıma + hareket + iki yönlü çizgi. Kalibrasyon yok (öğrenme istekleri hemen biter); görüntü saklanmaz.
+    private func processPeople(_ pb: CVPixelBuffer, ts: Double) {
+        let start = CACurrentMediaTime()
+        defer { perfCore = 0.9 * perfCore + 0.1 * (CACurrentMediaTime() - start) * 1000 }
+        tickFPS()
+        let fps = updateSourceFPS(ts)
+        sourceFps = fps
+        switch calib {
+        case .background:
+            calib = .none
+            emit(.backgroundDone(threshold: profile.diffThreshold))
+        case .sample:
+            calib = .none
+        case .none:
+            break
+        }
+        guard let r = people.process(pb, profile: profile, fps: fps) else { return }
+        lastPeople = r
+        lastFrameSize = (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb))
+        if counting && (!r.entered.isEmpty || !r.exited.isEmpty) {
+            for t in r.entered {
+                total += 1
+                personLabels[t.id] = "G\(total)"
+            }
+            for t in r.exited {
+                totalOut += 1
+                personLabels[t.id] = "Ç\(totalOut)"
+            }
+            let ins = r.entered.count, outs = r.exited.count, tIn = total, tOut = totalOut
+            DispatchQueue.main.async { [weak self] in self?.onCrossing?(ins, outs, tIn, tOut) }
+        }
+        let alive = Set(people.tracker.tracks.map(\.id))
+        personLabels = personLabels.filter { alive.contains($0.key) }
+        publishPeople(sourceWidth: CVPixelBufferGetWidth(pb), sourceHeight: CVPixelBufferGetHeight(pb))
+        emitDisplayImage(pb, sourceWidth: CVPixelBufferGetWidth(pb))
+    }
+
+    private func publishPeople(sourceWidth: Int, sourceHeight: Int) {
+        let now = CACurrentMediaTime()
+        guard now - lastPublish >= 1.0 / 12.0, let r = lastPeople else { return }
+        lastPublish = now
+        var snap = EngineSnapshot(frameSize: CGSize(width: sourceWidth, height: sourceHeight),
+                                  blobs: [], tracks: [], fps: fps, mask: nil,
+                                  perf: String(format: "çekirdek %.0f ms · kaynak fps %.1f", perfCore, sourceFps))
+        snap.people = r.tracks.map { t in
+            PersonMarker(id: t.id,
+                         box: CGRect(x: t.box.x1, y: t.box.y1, width: t.box.x2 - t.box.x1, height: t.box.y2 - t.box.y1),
+                         trail: t.trail.map { CGPoint(x: $0.x, y: $0.y) },
+                         label: personLabels[t.id])
+        }
+        snap.peopleLine = r.line
+        let ready = snap
+        DispatchQueue.main.async { [weak self] in self?.onSnapshot?(ready) }
     }
 
     // MARK: - Şerit tarama (§4.9)

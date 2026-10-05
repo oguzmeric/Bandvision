@@ -26,6 +26,15 @@ enum FlowDirection: String, Codable, CaseIterable, Identifiable {
     }
 
     var isVertical: Bool { self == .down || self == .up }
+    /// Ters yön (kişi sayımında giriş ↔ çıkış)
+    var opposite: FlowDirection {
+        switch self {
+        case .down: return .up
+        case .up: return .down
+        case .right: return .left
+        case .left: return .right
+        }
+    }
     /// Akış ekseninde ilerleme yönü: +1 (aşağı/sağa) ya da -1 (yukarı/sola).
     var sign: Double { (self == .down || self == .right) ? 1 : -1 }
 }
@@ -81,6 +90,12 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     var countMode: CountMode? = nil
     /// Şerit tarama: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla. nil/0 = otomatik öğren.
     var productLength: Double? = nil
+    /// Tanıma (§4.10): sayılan sınıflar (COCO adları; iPhone'da şimdilik yalnızca "person")
+    var detectClasses: [String]? = nil
+    /// Tanıma: yeni iz başlatan en düşük güven (nil = 0,35)
+    var detectConfidence: Double? = nil
+    /// Tanıma: çizgiye göre konum noktası (nil = merkez / tepeden)
+    var countAnchor: CountAnchor? = nil
 }
 
 /// Sayım yöntemi (sözleşme `countMode`).
@@ -89,20 +104,30 @@ enum CountMode: String, Codable, CaseIterable, Identifiable {
     case blob
     /// Şerit tarama: tek sıra gelen bitişik/aralıklı hacimli ürünler (torba, koli)
     case linescan
+    /// Nesne tanıma + iki yönlü geçiş (kişi): giriş ve çıkış ayrı sayılır
+    case detect
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .blob: return "Ayrık ürün"
         case .linescan: return "Bitişik / hacimli"
+        case .detect: return "Kişi (giriş/çıkış)"
         }
     }
+
+    /// Bant üstü ürün yöntemleri (kalibrasyondaki yöntem seçicisi); tanıma ayrı bir sayım türüdür
+    static let beltModes: [CountMode] = [.blob, .linescan]
 }
 
 extension ProductProfile {
     static let maxPolygonPoints = 12
 
     var mode: CountMode { countMode ?? .blob }
+    /// Tanıma: çizgiye göre konum noktası
+    var anchor: CountAnchor { countAnchor ?? .center }
+    /// İki yönlü sayım mı (giriş/çıkış)
+    var isTwoWay: Bool { mode == .detect }
     /// Şerit taramada kullanılan ürün boyu (0 = öğrenilecek)
     var lineProductLength: Double { max(0, productLength ?? 0) }
 
@@ -193,6 +218,19 @@ extension ProductProfile {
                        closeIterations: 2, processingWidth: 240,
                        minHits: 2, maxMatchDistance: 0.20, backgroundRate: 0.02,
                        countMode: .linescan)
+    }
+
+    /// Mağaza girişi: kişi sayımı, iki yönlü (giriş = `direction` yönünde geçen). Python `Profile.people` ile aynı.
+    static func people() -> ProductProfile {
+        ProductProfile(name: "Mağaza girişi",
+                       roi: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       linePosition: 0.55, direction: .down,
+                       diffThreshold: 25, expectedArea: 0,
+                       minAreaFactor: 0.4, minAreaAbs: 0.002,
+                       splitTouching: false, maxMultiplicity: 4,
+                       closeIterations: 1, processingWidth: 640,
+                       minHits: 3, maxMatchDistance: 0.15, backgroundRate: 0.02,
+                       countMode: .detect, detectClasses: ["person"], detectConfidence: 0.35, countAnchor: .center)
     }
 
     static func generic() -> ProductProfile {

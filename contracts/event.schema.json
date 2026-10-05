@@ -16,7 +16,9 @@
     "count": {
       "type": "object", "required": ["delta", "total"],
       "properties": { "delta": { "type": "integer", "minimum": 1 }, "total": { "type": "integer", "minimum": 0 },
-                      "trackId": { "type": "integer" } }
+                      "trackId": { "type": "integer" },
+                      "direction": { "enum": ["in", "out"],
+                                     "description": "İki yönlü sayım (countMode detect): in = giriş, out = çıkış. Yoksa in. total o yönün toplamıdır." } }
     },
     "inspection": {
       "type": "object", "required": ["trackId", "result", "reasons"],

@@ -55,13 +55,13 @@ struct ContentView: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             Button { showProfiles = true } label: {
-                Label(vm.profile.name, systemImage: "shippingbox")
+                Label(vm.profile.name, systemImage: vm.profile.isTwoWay ? "person.2" : "shippingbox")
                     .font(.headline)
                     .lineLimit(1)
             }
             .disabled(vm.isCalibrating)
 
-            if vm.profile.expectedArea == 0 {
+            if vm.profile.expectedArea == 0 && vm.profile.mode == .blob {
                 Text("Kalibre edilmedi")
                     .font(.caption2.bold())
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -205,6 +205,22 @@ struct ContentView: View {
 
     private var controlPanel: some View {
         VStack(spacing: 10) {
+            if vm.profile.isTwoWay {
+                PeopleCounters(vm: vm)
+                EntryDirectionButton(vm: vm)
+            } else {
+                beltCounters
+            }
+            runButtons
+        }
+        .padding()
+        .confirmationDialog("Sayaç sıfırlansın mı?", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("Sıfırla", role: .destructive) { vm.reset() }
+        }
+    }
+
+    private var beltCounters: some View {
+        VStack(spacing: 10) {
             HStack(alignment: .lastTextBaseline, spacing: 16) {
                 Text("\(vm.total)")
                     .accessibilityIdentifier("liveCount")
@@ -224,36 +240,35 @@ struct ContentView: View {
                 RateView(logger: vm.logger)
             }
             RecentInspectionStrip(vm: vm)
-            HStack(spacing: 10) {
-                Button { vm.toggleRunning() } label: {
-                    Label(vm.isRunning ? "Durdur" : "Başlat",
-                          systemImage: vm.isRunning ? "pause.fill" : "play.fill")
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(vm.isRunning ? .orange : .green)
+        }
+    }
 
-                Button { confirmReset = true } label: {
-                    Label("Sıfırla", systemImage: "arrow.counterclockwise")
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button { vm.beginCalibration() } label: {
-                    Label("Kalibre", systemImage: "scope")
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+    private var runButtons: some View {
+        HStack(spacing: 10) {
+            Button { vm.toggleRunning() } label: {
+                Label(vm.isRunning ? "Durdur" : "Başlat",
+                      systemImage: vm.isRunning ? "pause.fill" : "play.fill")
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
             }
-            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .tint(vm.isRunning ? .orange : .green)
+
+            Button { confirmReset = true } label: {
+                Label("Sıfırla", systemImage: "arrow.counterclockwise")
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button { vm.beginCalibration() } label: {
+                Label(vm.profile.isTwoWay ? "Ayarla" : "Kalibre", systemImage: "scope")
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
         }
-        .padding()
-        .confirmationDialog("Sayaç sıfırlansın mı?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("Sıfırla", role: .destructive) { vm.reset() }
-        }
+        .controlSize(.large)
     }
 }
 

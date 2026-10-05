@@ -11,3 +11,5 @@ node_modules/
 .next/
 .env*
 .venv/
+# Analiz sunucusunun iş klasörü (yüklenen/işaretlenen videolar): depoya girmez
+services/edge/analyzer-data/

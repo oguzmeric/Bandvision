@@ -33,8 +33,21 @@
       }
     },
     "countMode": {
-      "description": "Sayım yöntemi (algoritma §4.9). blob: arka plan farkı + izleme (ayrık ürünler, varsayılan). linescan: şerit tarama (tek sıra gelen bitişik/aralıklı hacimli ürünler: torba, koli; boş bant öğrenmesi gerekmez, açılı çizgiyle kullanılmaz).",
-      "enum": ["blob", "linescan"]
+      "description": "Sayım yöntemi. blob: arka plan farkı + izleme (ayrık ürünler, varsayılan). linescan: şerit tarama (§4.9; tek sıra gelen bitişik/aralıklı hacimli ürünler: torba, koli; boş bant öğrenmesi gerekmez, açılı çizgiyle kullanılmaz). detect: nesne tanıma + iki yönlü geçiş (§4.10; kişi, araç, hayvan): direction yönünde geçen giriş, tersi çıkış sayılır.",
+      "enum": ["blob", "linescan", "detect"]
+    },
+    "detectClasses": {
+      "description": "detect: sayılacak sınıflar (COCO adları). Kişi: person; araç: car, truck, bus, motorcycle, bicycle; hayvan: cow, sheep, horse, dog, cat, bird.",
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "enum": ["person", "bicycle", "car", "motorcycle", "bus", "truck", "bird", "cat", "dog", "horse", "sheep", "cow"] }
+    },
+    "detectConfidence": {
+      "description": "detect: yeni iz başlatan en düşük tanıma güveni (daha düşükler yalnızca mevcut izi sürdürür).",
+      "type": "number", "minimum": 0.05, "maximum": 0.95
+    },
+    "countAnchor": {
+      "description": "detect: çizgiye göre konum noktası. center: kutu merkezi (tepeden kamera); bottom: alt orta (yatık kamera, ayak — zemindeki çizgiyle tutarlı).",
+      "enum": ["center", "bottom"]
     },
     "productLength": {
       "description": "linescan: tek ürünün akış boyunca boyu, ROI'nin akış eksenindeki uzunluğuna oranla. 0 = otomatik öğren.",

@@ -185,41 +185,20 @@ struct VideoPanel: View {
 
                 VideoTransportBar(vm: vm)
 
-                HStack(alignment: .lastTextBaseline) {
-                    Text("\(vm.total)")
-                        .accessibilityIdentifier("videoCount")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("adet").foregroundStyle(.secondary)
-                        if run.countFrom > 0 {
-                            Text("sayım başlangıcı \(timeText(run.countFrom))")
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    Spacer()
-                    if let acc = accuracy(count: vm.total), run.countFrom == 0 {
-                        VStack(alignment: .trailing, spacing: 0) {
-                            Text(String(format: "%%%.1f", acc))
-                                .font(.title2.bold())
-                                .monospacedDigit()
-                                .foregroundStyle(acc >= 98 ? .green : .orange)
-                            Text("doğruluk").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                if vm.profile.isTwoWay {
+                    PeopleCounters(vm: vm, compact: true)
+                } else {
+                    beltCount(run)
                 }
 
                 if let err = run.error {
                     Text(err).font(.callout).foregroundStyle(.red)
                 }
 
-                RecentInspectionStrip(vm: vm)
+                if !vm.profile.isTwoWay { RecentInspectionStrip(vm: vm) }
 
                 HStack(spacing: 10) {
-                    Text("Doğru adet").font(.callout)
+                    Text(vm.profile.isTwoWay ? "Doğru giriş" : "Doğru adet").font(.callout)
                     TextField("isteğe bağlı", text: $truthText)
                         .keyboardType(.numberPad)
                         .textFieldStyle(.roundedBorder)
@@ -242,7 +221,7 @@ struct VideoPanel: View {
 
                 HStack(spacing: 10) {
                     Button { vm.beginCalibration() } label: {
-                        Label("Kalibre", systemImage: "scope").lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
+                        Label(vm.profile.isTwoWay ? "Ayarla" : "Kalibre", systemImage: "scope").lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     Button(action: onPickVideo) {
@@ -271,6 +250,36 @@ struct VideoPanel: View {
     private func timeText(_ t: Double) -> String {
         let s = max(0, Int(t.rounded(.down)))
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    /// Tek yönlü sayım: büyük sayı + doğruluk
+    private func beltCount(_ run: VideoRun) -> some View {
+        HStack(alignment: .lastTextBaseline) {
+            Text("\(vm.total)")
+                .accessibilityIdentifier("videoCount")
+                .font(.system(size: 48, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("adet").foregroundStyle(.secondary)
+                if run.countFrom > 0 {
+                    Text("sayım başlangıcı \(timeText(run.countFrom))")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            if let acc = accuracy(count: vm.total), run.countFrom == 0 {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(String(format: "%%%.1f", acc))
+                        .font(.title2.bold())
+                        .monospacedDigit()
+                        .foregroundStyle(acc >= 98 ? .green : .orange)
+                    Text("doğruluk").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private func accuracy(count: Int) -> Double? {

@@ -9,8 +9,10 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .detect_count import DetectCounter, DetectResult
 from .lineframe import LineFrame
 from .linescan import LineScanCounter
+from .people_track import anchor
 from .profile import Profile
 from .qc import InspectionResult, inspect
 from .segmenter import BackgroundSegmenter, Blob, downsample
@@ -32,6 +34,9 @@ class FrameResult:
     total: int
     frame_size: tuple[int, int]
     gray_small: np.ndarray | None = field(default=None, repr=False)
+    counts_out: list[CountEvent] = field(default_factory=list)   # detect: ters yönde geçenler (çıkış)
+    total_out: int = 0
+    detect: DetectResult | None = field(default=None, repr=False)   # detect: izler, tespitler, çizgi (çizim)
 
 
 class Pipeline:
@@ -41,6 +46,8 @@ class Pipeline:
         self.segmenter = BackgroundSegmenter()
         self.tracker = BlobTracker()
         self.linescan = LineScanCounter()       # §4.9 (countMode = "linescan")
+        self.detect = DetectCounter()           # §4.10 (countMode = "detect"); model ilk karede yüklenir
+        self.total_out = 0                      # detect: ters yönde geçenler (çıkış)
         self.counting = True
         self.total = 0
         self._calib: str | None = None          # "background" | "sample"
@@ -81,8 +88,10 @@ class Pipeline:
 
     def reset_count(self) -> None:
         self.total = 0
+        self.total_out = 0
         self.tracker.reset()
         self.linescan.reset()
+        self.detect.reset()
 
     def finish(self, ts: float) -> list[CountEvent]:
         """Video sonu (§4.9): şerit taramada çizgiye yarım binmiş son ürünler merkezlerine göre sayılır."""
@@ -130,6 +139,8 @@ class Pipeline:
         p = self.profile
         if p.rotation in _ROT:
             frame = cv2.rotate(frame, _ROT[p.rotation])
+        if p.countMode == "detect":
+            return self._process_detect(frame, ts)
         full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         small, self.factor = downsample(full, p.processingWidth)
         fps = self._update_fps(ts)
@@ -257,3 +268,32 @@ class Pipeline:
             change = now_running
         markers = [TrackMarker(m.id, m.x, m.y, m.counted) for m in self.linescan.markers(small.shape, p)]
         return FrameResult(ts, [], markers, counts, [], calib_events, change, fps, self.total, full_size, small)
+
+    def _process_detect(self, frame: np.ndarray, ts: float) -> FrameResult:
+        """§4.10 Tanıma tabanlı iki yönlü geçiş: `counts` girişler, `counts_out` çıkışlar. Kalibrasyon yok."""
+        p = self.profile
+        bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        fps = self._update_fps(ts)
+        calib: list[tuple[str, Any]] = []
+        if self._calib is not None:                    # boş bant/örnek öğrenme gerekmez: hemen biter
+            calib.append((f"{self._calib}_done", p.diffThreshold if self._calib == "background" else 0.0))
+            self._calib = None
+        r = self.detect.process(bgr, p, fps)
+        ins = [CountEvent(t.id, 1, True, 0.0, None) for t in r.entries] if self.counting else []
+        outs = [CountEvent(t.id, 1, True, 0.0, None) for t in r.exits] if self.counting else []
+        self.total += len(ins)
+        self.total_out += len(outs)
+        if r.tracks or ins or outs:
+            self._last_activity = ts
+        now_running = self._last_activity is not None and ts - self._last_activity <= self.idle_seconds
+        change = None
+        if now_running != self.running:
+            self.running = now_running
+            change = now_running
+        markers = [TrackMarker(t.id, *anchor(t.box, p.countAnchor), t.entries + t.exits > 0) for t in r.tracks]
+        full_size = (bgr.shape[1], bgr.shape[0])
+        res = FrameResult(ts, [], markers, ins, [], calib, change, fps, self.total, full_size, None)
+        res.counts_out = outs
+        res.total_out = self.total_out
+        res.detect = r
+        return res

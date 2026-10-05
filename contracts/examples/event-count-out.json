@@ -1,0 +1,11 @@
+{
+  "schema": "bantvision.event.v1",
+  "eventId": "5b1f2c3d-7e8a-4b9c-a0d1-e2f3a4b5c6d7",
+  "ts": "2026-10-05T17:42:08.500Z",
+  "deviceId": "dev_EDGE01",
+  "cameraId": "cam_giris",
+  "lineId": null,
+  "profileId": null,
+  "type": "count",
+  "count": { "delta": 1, "total": 37, "trackId": 412, "direction": "out" }
+}
