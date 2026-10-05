@@ -93,6 +93,32 @@ Test sayısı: Python 30 test (çekirdek, video aracı, render), sözleşme 38 t
 - **Kalibrasyon düzeltmesi:** video her baştan başladığında boş bant yeniden öğreniliyor ve ürünle başlayan videoda eşik 100'e kaçıyordu (sonra hiçbir şey sayılmıyordu). Artık otomatik öğrenme yalnızca arka plan görüntüsünü yeniler, **Kaydet edilen eşik sabit kalır**; bantta ürün varken "Boş bandı öğren" eşiği bozmaz, uyarır.
 - Hazır profiller: un torbası ve yeni "Koli / kutu" şerit taramayla. iPhone kalibrasyonunda "Sayım yöntemi" ve "Ürün boyunu öğren"; web panelinde yöntem seçimi.
 
+## 5e. Kişi sayımı: mağaza girişi, giriş/çıkış (2026-10-05)
+
+Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectClasses`, `detectConfidence`, `countAnchor`, olayda `count.direction` (in/out), Supabase `minute_stats.count_out`.
+
+- **Tanıma:** web/Python YOLOX-S (Apache-2.0, ONNX Runtime; model ilk kullanımda indirilir, SHA-256 doğrulanır), iPhone Apple Vision insan dikdörtgeni. Görüntü saklanmaz; yalnızca sayılar.
+- **İzleyici** (Python ↔ Swift eşdeğer):
+  - Tek turda eşleştirme: silik tespiti olan kişinin izi yanındakinin güçlü tespitine atlamaz.
+  - Parça (yarım gövde) kutu bastırma; uzun tabanlı hız; hızla büyüyen arama kapısı.
+  - Çizgi yanının iki gözlemle teyidi ve boya göre tampon bant (titreme sayılmaz).
+  - Alandan çıkan iz silinir.
+- **Hareket desteği** (yalnızca tepeden kamerada): kameranın tam altındaki kişiyi hareket lekesi taşır, sayım yine gerçek tanımayla doğrulanınca yapılır.
+  - Yaşam sınırı var; grup lekesi izi sürüklemez.
+  - Yatık kamerada kapalı (kapı, ekran, gölge hareketi hayalet iz üretiyordu).
+- **Doğrulama:**
+  - Yan yana 2–3 kişilik gruplar, sentetik, kusurlu tanıma: mükerrer sayım 0.
+  - Kör bölgeli tepeden simülasyon: %1,4 hata.
+  - Gerçek videolar:
+    - Tepeden mağaza girişi: 3 giriş + 3 çıkış, birebir ve zamanları doğru.
+    - Yatık koridor: 9 giriş + 3 çıkış, 12 geçişin hepsi doğru, sahte olay 0. Kapıya kadar gidip dönen iki kişi giriş + çıkış sayıldı.
+- **Kurulum dersi:** çizgi kişilerin tamamen geçtiği yere, yürüme alanının ortasına konmalı — kapı eşiğinde kişi durup kaybolduğundan geçiş tamamlanmaz (aynı videoda 8/4 ve yanlış olaylar).
+- **Kullanıcı kararları:** yalnızca Giriş ve Çıkış (kapasite/doluluk yok); giriş yönü kullanıcı tarafından tek dokunuşla çevrilir.
+- **Arayüz:**
+  - iPhone: "Kişi sayımı → Mağaza girişi" profili, Giriş/Çıkış sayaçları, kamera konumu (tepeden/yandan), kişi kutuları ve "G3"/"Ç2" rozetleri, CSV'de giriş/çıkış sütunları.
+  - Web paneli: "Kişi (mağaza girişi)" profili, kamera, giriş yönü, çizgi konumu; sonuçta Giriş/Çıkış ve iki çizgili grafik.
+  - Video aracı: `--mode detect`, Türkçe bindirme.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.

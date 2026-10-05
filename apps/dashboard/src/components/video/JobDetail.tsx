@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { bytes, duration, int, num, signedPct, when } from "@/lib/format";
-import { DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
+import { ANCHOR_LABELS, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
 import CountChart from "./CountChart";
 import { StatusPill } from "./JobList";
 
@@ -45,6 +45,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
   }
 
   const accuracy = r?.truth && r.errorPct !== null ? `%${num(Math.max(0, 100 - Math.abs(r.errorPct)), 1)}` : "—";
+  const twoWay = r?.countOut !== undefined;
 
   return (
     <section className="card min-w-0 p-5" aria-labelledby="job-title" data-testid="job-detail">
@@ -83,8 +84,17 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
       {r && (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat hero label="Sayım" value={int(r.count)} />
-            <Stat label="Doğru adet" value={r.truth ? int(r.truth) : "—"} />
+            {twoWay ? (
+              <>
+                <Stat hero label="Giriş" value={int(r.count)} />
+                <Stat label="Çıkış" value={int(r.countOut ?? 0)} />
+              </>
+            ) : (
+              <>
+                <Stat hero label="Sayım" value={int(r.count)} />
+                <Stat label="Doğru adet" value={r.truth ? int(r.truth) : "—"} />
+              </>
+            )}
             <Stat label="Doğruluk" value={accuracy} hint={r.truth && r.errorPct !== null ? signedPct(r.errorPct) : undefined} />
             <Stat label="İşleme hızı" value={r.processingFps ? int(r.processingFps) : "—"} hint="kare/sn" />
           </div>
@@ -106,8 +116,13 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
               <p className="eyebrow mb-2.5">Kalibrasyon</p>
               <dl className="mb-4 grid grid-cols-[120px_1fr] gap-x-3 gap-y-2 text-[13.5px]">
                 <dt className="text-muted">Yöntem</dt><dd className="font-medium">{MODE_LABELS[r.calibration?.countMode ?? "blob"]}</dd>
-                <dt className="text-muted">Akış yönü</dt><dd className="font-medium">{r.calibration?.direction ? DIRECTION_LABELS[r.calibration.direction] : "—"}</dd>
-                {r.calibration?.countMode === "linescan" ? (
+                <dt className="text-muted">{twoWay ? "Giriş yönü" : "Akış yönü"}</dt><dd className="font-medium">{r.calibration?.direction ? DIRECTION_LABELS[r.calibration.direction] : "—"}</dd>
+                {twoWay ? (
+                  <>
+                    <dt className="text-muted">Kamera</dt><dd className="font-medium">{ANCHOR_LABELS[job.options.countAnchor ?? "center"]}</dd>
+                    <dt className="text-muted">Doğru giriş</dt><dd className="font-medium">{r.truth ? int(r.truth) : "—"}</dd>
+                  </>
+                ) : r.calibration?.countMode === "linescan" ? (
                   <>
                     <dt className="text-muted">Ürün boyu</dt>
                     <dd className="font-medium">{r.calibration.productLength ? `alanın %${num(r.calibration.productLength * 100, 0)}` : "—"}</dd>

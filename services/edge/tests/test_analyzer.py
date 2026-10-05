@@ -174,3 +174,18 @@ def test_linescan_options_reach_video_tool() -> None:
     from bantvision.analyzer.jobs import options_to_args
     args = options_to_args({"preset": "box", "countMode": "linescan", "productLength": 0.3})
     assert args == ["--preset", "box", "--mode", "linescan", "--product-length", "0.3"]
+
+
+def test_people_options_reach_video_tool() -> None:
+    """Kişi sayımı seçenekleri (§4.10): hazır profil, kamera konumu, giriş yönü ve çizgi komut satırına geçer."""
+    from bantvision.analyzer.jobs import options_to_args
+    args = options_to_args({"preset": "people", "countAnchor": "bottom", "direction": "up", "line": 0.6})
+    assert args == ["--preset", "people", "--anchor", "bottom", "--direction", "up", "--line", "0.6"]
+
+
+def test_people_options_validate_against_contract() -> None:
+    from bantvision.analyzer.app import OptionsIn
+    o = OptionsIn.model_validate({"preset": "people", "countMode": "detect", "countAnchor": "center"})
+    assert o.countAnchor == "center"
+    with pytest.raises(ValueError):
+        OptionsIn.model_validate({"preset": "people", "countAnchor": "ayak"})

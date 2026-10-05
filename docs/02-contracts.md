@@ -114,9 +114,9 @@ Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`ban
 |---|---|
 | `status` | `queued` → `running` → `done` / `failed`; saklama süresi dolunca `expired` (dosyalar silinir, özet kalır) |
 | `video` | ad, bayt; analizden sonra `seconds`, `fps`, `width`, `height` |
-| `options` | isteğe bağlı: `preset` (`generic/egg/flour/box`), `countMode`, `productLength` (profildeki anlamıyla), `truth`, `direction`, `roi`, `roiPolygon`, `countLine` (profil şemasındakiyle aynı), `line`, `bgRange` |
+| `options` | isteğe bağlı: `preset` (`generic/egg/flour/box/people`), `countMode` (`people` için `detect`), `countAnchor` (`detect`: `center` tepeden / `bottom` yandan), `productLength` (profildeki anlamıyla), `truth` (iki yönlüde doğru giriş), `direction` (iki yönlüde giriş yönü), `roi`, `roiPolygon`, `countLine` (profil şemasındakiyle aynı), `line`, `bgRange` |
 | `progress`, `stage` | 0–1; `calibrating` / `counting` / `encoding` |
-| `result` | `count`, `truth`, `errorPct`, `calibration`, `processingFps`, `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`) |
+| `result` | `count` (iki yönlüde giriş), `countOut` (yalnızca iki yönlü sayımda: çıkış), `truth`, `errorPct`, `calibration`, `processingFps`, `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`). İki yönlü sayımda `counts.csv` sütunları `zaman_sn;iz;yon;giris_toplam;cikis_toplam` (`yon`: `giris`/`cikis`) |
 | `expiresAt` | oluşturma + saklama süresi (varsayılan 7 gün) |
 
 `done` ise `result`, `failed` ise `error` zorunlu. Örnekler: `examples/analysis-job-*.json`.

@@ -15,7 +15,8 @@ export function StatusPill({ job }: { job: AnalysisJob }) {
         return <span className={`${base} ${ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>
           {ok ? `${r.count} / ${r.truth}` : signedPct(r.errorPct ?? 0)}</span>;
       }
-      return <span className={`${base} bg-ok-50 text-ok-600`}>{r?.count ?? 0} adet</span>;
+      return <span className={`${base} bg-ok-50 text-ok-600`}>
+        {r?.countOut !== undefined ? `${r.count} giriş · ${r.countOut} çıkış` : `${r?.count ?? 0} adet`}</span>;
     }
     case "running":
     case "queued":

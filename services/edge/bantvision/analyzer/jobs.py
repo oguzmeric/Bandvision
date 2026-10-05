@@ -86,6 +86,8 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
         args += ["--truth", str(int(options["truth"]))]
     if options.get("countMode"):
         args += ["--mode", options["countMode"]]
+    if options.get("countAnchor"):
+        args += ["--anchor", options["countAnchor"]]
     if options.get("productLength"):
         args += ["--product-length", str(float(options["productLength"]))]
     if options.get("direction"):
@@ -330,6 +332,8 @@ class Worker:
             "calibration": summary.get("calibration") or {}, "processingFps": summary.get("processingFps"),
             "files": [f for f in PUBLIC_FILES if f in files],
         }
+        if summary.get("countOut") is not None:                  # iki yönlü sayım (kişi): çıkış
+            result["countOut"] = int(summary["countOut"])
         job = self.store.get(job_id)
         if job is None:
             return

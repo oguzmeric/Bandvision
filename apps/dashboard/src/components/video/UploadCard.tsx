@@ -3,8 +3,8 @@
 import { useRef, useState } from "react";
 import { bytes } from "@/lib/format";
 import {
-  DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
-  type AnalysisJob, type CountMode, type Direction, type JobOptions, type Preset,
+  ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
+  type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
 } from "@/lib/types";
 
 const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
@@ -27,6 +27,9 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const [direction, setDirection] = useState<Direction | "">("");
   const [bgStart, setBgStart] = useState("");
   const [bgEnd, setBgEnd] = useState("");
+  const [anchor, setAnchor] = useState<CountAnchor>("center");
+  const [linePct, setLinePct] = useState("");
+  const people = preset === "people";
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,14 +41,21 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
 
   function options(): JobOptions | string {
     const o: JobOptions = { preset };
-    if (mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
+    if (!people && mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
     if (truth.trim()) {
       const n = Number(truth);
-      if (!Number.isInteger(n) || n < 1) return "Doğru adet pozitif bir tam sayı olmalı.";
+      if (!Number.isInteger(n) || n < 1) return `${people ? "Doğru giriş" : "Doğru adet"} pozitif bir tam sayı olmalı.`;
       o.truth = n;
     }
     if (direction) o.direction = direction;
-    if (bgStart.trim() || bgEnd.trim()) {
+    if (people) {
+      o.countAnchor = anchor;
+      if (linePct.trim()) {
+        const v = Number(linePct.replace(",", "."));
+        if (!(v > 0 && v < 100)) return "Çizgi konumu 1 ile 99 arasında bir yüzde olmalı.";
+        o.line = v / 100;
+      }
+    } else if (bgStart.trim() || bgEnd.trim()) {
       const a = Number(bgStart.replace(",", ".")), b = Number(bgEnd.replace(",", "."));
       if (!(a >= 0) || !(b > a)) return "Boş bant aralığı: başlangıç ≥ 0 ve bitiş başlangıçtan büyük olmalı (saniye).";
       o.bgRange = [a, b];
@@ -135,29 +145,53 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
           {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => <option key={p} value={p}>{PRESET_LABELS[p]}</option>)}
         </select>
       </label>
-      <label className="mt-3 block text-sm font-medium">Sayım yöntemi
-        <select aria-label="Sayım yöntemi" className={`${field} mt-1.5`} value={mode || PRESET_MODE[preset]}
-                onChange={(e) => setMode(e.target.value as CountMode)}>
-          {(Object.keys(MODE_LABELS) as CountMode[]).map((m) => <option key={m} value={m}>{MODE_LABELS[m]}</option>)}
-        </select>
-      </label>
-      <p className="mt-1 text-xs text-faint">
-        {(mode || PRESET_MODE[preset]) === "linescan"
-          ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez, ürün boyu videodan öğrenilir."
-          : "Yumurta gibi ayrık ürünler; arka plan videodan öğrenilir."}
-      </p>
+      {people ? (
+        <>
+          <label className="mt-3 block text-sm font-medium">Kamera
+            <select aria-label="Kamera konumu" className={`${field} mt-1.5`} value={anchor}
+                    onChange={(e) => setAnchor(e.target.value as CountAnchor)}>
+              {(Object.keys(ANCHOR_LABELS) as CountAnchor[]).map((a) => <option key={a} value={a}>{ANCHOR_LABELS[a]}</option>)}
+            </select>
+          </label>
+          <p className="mt-1 text-xs text-faint">
+            Giren ve çıkan kişiler ayrı sayılır; görüntü saklanmaz. Sayım çizgisi yataydır: kişilerin tamamen geçtiği
+            yere koy (kapı eşiğine değil).
+          </p>
+        </>
+      ) : (
+        <>
+          <label className="mt-3 block text-sm font-medium">Sayım yöntemi
+            <select aria-label="Sayım yöntemi" className={`${field} mt-1.5`} value={mode || PRESET_MODE[preset]}
+                    onChange={(e) => setMode(e.target.value as CountMode)}>
+              {BELT_MODES.map((m) => <option key={m} value={m}>{MODE_LABELS[m]}</option>)}
+            </select>
+          </label>
+          <p className="mt-1 text-xs text-faint">
+            {(mode || PRESET_MODE[preset]) === "linescan"
+              ? "Torba, koli gibi tek sıra gelen ürünler; bitişik ya da üst üste olabilir. Boş bant gerekmez, ürün boyu videodan öğrenilir."
+              : "Yumurta gibi ayrık ürünler; arka plan videodan öğrenilir."}
+          </p>
+        </>
+      )}
       <div className="mt-3 grid grid-cols-2 gap-2.5">
-        <label className="block text-sm font-medium">Doğru adet <span className="font-normal text-faint">(isteğe bağlı)</span>
-          <input className={`${field} mt-1.5`} inputMode="numeric" placeholder="100" value={truth}
+        <label className="block text-sm font-medium">{people ? "Doğru giriş" : "Doğru adet"} <span className="font-normal text-faint">(isteğe bağlı)</span>
+          <input className={`${field} mt-1.5`} inputMode="numeric" placeholder={people ? "12" : "100"} value={truth}
                  onChange={(e) => setTruth(e.target.value.replace(/\D/g, ""))} />
         </label>
-        <label className="block text-sm font-medium">Akış yönü
-          <select className={`${field} mt-1.5`} value={direction} onChange={(e) => setDirection(e.target.value as Direction | "")}>
-            <option value="">Otomatik bul</option>
+        <label className="block text-sm font-medium">{people ? "Giriş yönü" : "Akış yönü"}
+          <select aria-label={people ? "Giriş yönü" : "Akış yönü"} className={`${field} mt-1.5`} value={direction}
+                  onChange={(e) => setDirection(e.target.value as Direction | "")}>
+            <option value="">{people ? "Yukarıdan aşağı (varsayılan)" : "Otomatik bul"}</option>
             {(Object.keys(DIRECTION_LABELS) as Direction[]).map((d) => <option key={d} value={d}>{DIRECTION_LABELS[d]}</option>)}
           </select>
         </label>
       </div>
+      {people ? (
+        <label className="mt-3 block text-sm font-medium">Çizgi konumu <span className="font-normal text-faint">(isteğe bağlı, yukarıdan %)</span>
+          <input aria-label="Çizgi konumu" className={`${field} mt-1.5`} inputMode="decimal" placeholder="55" value={linePct}
+                 onChange={(e) => setLinePct(e.target.value.replace(/[^\d.,]/g, ""))} />
+        </label>
+      ) : (
       <details className="mt-3 text-sm">
         <summary className="cursor-pointer text-muted">Gelişmiş: boş bant aralığı</summary>
         <p className="mt-2 text-xs text-faint">Bant çok doluysa, videoda bandın boş göründüğü aralığı yaz (saniye). Arka plan oradan öğrenilir.</p>
@@ -166,7 +200,8 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
           <input className={field} inputMode="decimal" placeholder="Bitiş (ör. 1,5)" value={bgEnd} onChange={(e) => setBgEnd(e.target.value)} aria-label="Boş bant bitişi (saniye)" />
         </div>
       </details>
-      <p className="mt-2 text-xs text-faint">Doğru adeti yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
+      )}
+      <p className="mt-2 text-xs text-faint">{people ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
 
       {error && <p role="alert" data-testid="upload-error" className="mt-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
 

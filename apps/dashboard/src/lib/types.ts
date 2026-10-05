@@ -2,8 +2,10 @@
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "expired";
 export type JobStage = "calibrating" | "counting" | "encoding";
-export type Preset = "generic" | "egg" | "flour" | "box";
-export type CountMode = "blob" | "linescan";
+export type Preset = "generic" | "egg" | "flour" | "box" | "people";
+export type CountMode = "blob" | "linescan" | "detect";
+/** Kişi sayımı: kamera tepeden (center) ya da yandan/eğik (bottom, çizgi zeminde) */
+export type CountAnchor = "center" | "bottom";
 export type Direction = "down" | "up" | "right" | "left";
 export type ResultFile = "annotated.mp4" | "counts.csv" | "profile.json" | "background.png";
 
@@ -15,6 +17,7 @@ export interface Point {
 export interface JobOptions {
   preset?: Preset;
   countMode?: CountMode;
+  countAnchor?: CountAnchor;
   productLength?: number;
   truth?: number;
   direction?: Direction;
@@ -37,7 +40,10 @@ export interface AnalysisJob {
   progress: number;
   stage?: JobStage;
   result?: {
+    /** Sayılan adet; iki yönlü sayımda giriş */
     count: number;
+    /** Yalnızca iki yönlü sayımda (kişi): çıkış */
+    countOut?: number;
     truth: number | null;
     errorPct: number | null;
     calibration?: {
@@ -63,14 +69,26 @@ export const PRESET_LABELS: Record<Preset, string> = {
   flour: "Un torbası",
   box: "Koli / kutu",
   generic: "Genel ürün",
+  people: "Kişi (mağaza girişi)",
 };
 
 /** Hazır profilin varsayılan sayım yöntemi (services/edge Profile ile aynı) */
-export const PRESET_MODE: Record<Preset, CountMode> = { egg: "blob", flour: "linescan", box: "linescan", generic: "blob" };
+export const PRESET_MODE: Record<Preset, CountMode> = {
+  egg: "blob", flour: "linescan", box: "linescan", generic: "blob", people: "detect",
+};
 
 export const MODE_LABELS: Record<CountMode, string> = {
   blob: "Ayrık ürün (arka plan farkı)",
   linescan: "Bitişik / hacimli (şerit tarama)",
+  detect: "Kişi tanıma (giriş / çıkış)",
+};
+
+/** Bant üstü ürün yöntemleri (yöntem seçicisi); kişi tanıma hazır profille gelir */
+export const BELT_MODES: CountMode[] = ["blob", "linescan"];
+
+export const ANCHOR_LABELS: Record<CountAnchor, string> = {
+  center: "Tepeden bakıyor",
+  bottom: "Yandan / eğik bakıyor",
 };
 
 export const DIRECTION_LABELS: Record<Direction, string> = {
