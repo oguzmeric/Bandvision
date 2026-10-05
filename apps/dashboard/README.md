@@ -7,6 +7,9 @@ Panel analiz sunucusuna (`services/edge`, `bantvision.analyzer`) **kendi sunucu 
 `ANALYZER_TOKEN` tarayıcıya hiç gitmez.
 
 ## Yerel çalıştırma
+**Windows'ta tek tık:** `tools/panel_baslat.bat` (ya da masaüstündeki kısayolu). İlk seferde analiz sunucusu ortamını (`services/edge/.venv`) ve panel paketlerini kurar, sonra ikisini küçültülmüş pencerelerde başlatıp tarayıcıyı açar; çalışıyorlarsa yeniden başlatmaz.
+
+Elle:
 1. Analiz sunucusu (Python 3.11+):
    ```bash
    cd services/edge
