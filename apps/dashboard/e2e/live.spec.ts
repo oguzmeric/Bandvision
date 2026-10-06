@@ -123,3 +123,32 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   }
   await expect(page.getByText("Henüz kaynak yok")).toBeVisible();
 });
+
+test("kişi sayımı: personel rengi öğret, örnek görünür, sil", async ({ page }) => {
+  page.on("dialog", (d) => d.accept());
+  await login(page);
+  await page.getByRole("radio", { name: "IP kamera" }).click();
+  await page.getByLabel("Kamera markası").selectOption("custom");
+  await page.getByLabel("RTSP adresi").fill(CLIP);
+  await page.getByRole("textbox", { name: /^Ad/ }).fill("Giriş kamerası");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await page.getByTestId("source-card").filter({ hasText: "Giriş kamerası" }).getByRole("button", { name: "Canlı sayım" }).click();
+  const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
+  await dialog.getByRole("button", { name: /^Mağaza girişi/ }).click();
+  await dialog.getByRole("button", { name: "Başlat", exact: true }).click();
+  await expect(page.getByTestId("live-state")).toContainText("Canlı", { timeout: 30_000 });
+
+  await page.getByRole("button", { name: "Ayarla" }).click();
+  const staff = page.getByRole("group", { name: "Personel rengi" });
+  await expect(staff.getByText("Kapalı — tüm geçişler sayılır.")).toBeVisible();
+  await staff.getByRole("button", { name: "Personel rengini öğret" }).click();
+  await page.getByRole("button", { name: "Görüntüde personelin üstüne tıklayın" }).click({ position: { x: 200, y: 200 } });
+  await expect(staff.getByTestId("staff-swatch")).toHaveCount(1);
+  await staff.getByRole("button", { name: "1. personel rengini sil" }).click();
+  await expect(staff.getByTestId("staff-swatch")).toHaveCount(0);
+  await page.getByRole("button", { name: "İptal" }).click();
+  await page.getByRole("button", { name: "Canlı sayımı kapat" }).click();
+  await expect(page.getByText("Açık canlı sayım yok")).toBeVisible();
+  await page.getByRole("link", { name: "Kameralara git" }).click();
+  await page.getByTestId("source-card").filter({ hasText: "Giriş kamerası" }).getByRole("button", { name: "Sil" }).click();
+});

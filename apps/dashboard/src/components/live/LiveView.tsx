@@ -8,7 +8,8 @@ import RoiEditor from "@/components/geometry/RoiEditor";
 import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
 import { StreamChoice } from "./StartSessionDialog";
-import { api, STATE_LABELS, type LiveSession, type Profile } from "@/lib/live";
+import StaffColors from "./StaffColors";
+import { api, STATE_LABELS, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "brand" | "in" | "out"; hint?: string; testId: string }) {
@@ -76,6 +77,7 @@ export default function LiveView() {
   const [draft, setDraft] = useState<Profile | null>(null);
   const original = useRef<Profile | null>(null);
   const [frameTick, setFrameTick] = useState(0);
+  const [teaching, setTeaching] = useState(false);
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(() => {
@@ -133,6 +135,7 @@ export default function LiveView() {
   }
 
   async function finishCalibration(save: boolean) {
+    setTeaching(false);
     if (!draft) return;
     if (pushTimer.current) clearTimeout(pushTimer.current);
     if (save) await pushProfile(draft, true);
@@ -150,6 +153,20 @@ export default function LiveView() {
     const g = flip(geometryOf(p), aspect);
     await pushProfile(withGeometry(p, g), true);              // ana ekrandan çevirme hemen kaydedilir (telefondaki gibi)
     load();
+  }
+
+  async function teachAt(e: React.MouseEvent<HTMLButtonElement>) {
+    if (!session || !draft) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    try {
+      const c = await api<LabColor & { achromatic: boolean }>(`sessions/${session.id}/staff-color`, { method: "POST", json: { x, y } });
+      edit({ ...draft, staffColors: [...(draft.staffColors ?? []), { L: c.L, a: c.a, b: c.b }] });
+      setTeaching(false);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    }
   }
 
   /** Alt ↔ ana akış: aynı oturum yeni akışa bağlanır, sayaçlar sıfırlanmaz */
@@ -231,7 +248,12 @@ export default function LiveView() {
           </div>
           {draft ? (
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
-                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} />
+                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
+              {teaching && (
+                <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt}
+                        className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-500" />
+              )}
+            </RoiEditor>
           ) : (
             <div className="relative w-full overflow-hidden rounded-2xl bg-[#111]" style={{ aspectRatio: String(aspect) }}>
               {/* eslint-disable-next-line @next/next/no-img-element -- MJPEG canlı akış */}
@@ -252,6 +274,11 @@ export default function LiveView() {
                 </div>
               ) : (
                 <Counter label="Sayılan" value={session.total} tone="brand" hint={`${int(session.ratePerMinute)} adet/dk`} testId="live-count" />
+              )}
+              {twoWay && (p.staffColors?.length ?? 0) > 0 && (
+                <p className="mt-2 text-center text-[12.5px] text-muted" data-testid="live-staff">
+                  Personel geçişi: <b className="tabular-nums text-ink">{int(session.staffIn + session.staffOut)}</b>
+                </p>
               )}
               {twoWay && (
                 <button type="button" onClick={flipEntry} className={`${btn} mt-3 flex w-full items-center justify-between`}>
@@ -303,6 +330,10 @@ export default function LiveView() {
                         ? "Kamera girişe yukarıdan bakıyor; kameranın tam altında tanınamayan kişi hareketinden izlenir."
                         : "Kamera yandan/eğik bakıyor; kişinin ayağı çizgiyi geçince sayılır (çizgiyi zemine çiz)."}
                     </p>
+                    <div className="mt-3">
+                      <StaffColors colors={p.staffColors ?? []} teaching={teaching} onTeach={setTeaching}
+                                   onRemove={(i) => edit({ ...p, staffColors: (p.staffColors ?? []).filter((_, k) => k !== i) })} />
+                    </div>
                   </div>
                 ) : (
                   <div>

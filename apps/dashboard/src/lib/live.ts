@@ -75,6 +75,9 @@ export interface LiveSession {
   counting: boolean;
   total: number;
   totalOut: number;
+  /** Kişi sayımı: personel geçişleri (giriş/çıkışa eklenmez) */
+  staffIn: number;
+  staffOut: number;
   twoWay: boolean;
   ratePerMinute: number;
   calibrating: "background" | "sample" | null;
