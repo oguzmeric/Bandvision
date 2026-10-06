@@ -36,9 +36,12 @@ birbirinin önünden geçer; tanıma bazı karelerde kişiyi kaçırır. Bu yüz
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
+
+from .staff_color import is_staff
 
 Box = tuple[float, float, float, float]          # x1, y1, x2, y2 (normalize)
 
@@ -90,6 +93,9 @@ class MotTrack:
     verified: bool = True                           # en az bir yüksek güvenli tanımayla eşleşti (hareket izi: False)
     born: int = 0                                   # doğduğu kare
     last_det: int = 0                               # son tanımayla eşleştiği kare
+    votes: int = 0                                  # personel rengi oyu verilen kare sayısı (§4.10 eki)
+    staff_votes: int = 0                            # bunların personel oyu olanları
+    staff_crossings: int = 0                        # personel geçişleri (giriş/çıkışa eklenmez)
 
 
 def iou(a: np.ndarray, b: np.ndarray) -> float:
@@ -157,16 +163,24 @@ class MotTracker:
         self.tracks: list[MotTrack] = []
         self.next_id = 1
         self.frame = 0
+        self.staff_entered: list[MotTrack] = []
+        self.staff_exited: list[MotTrack] = []
 
     def reset(self) -> None:
         self.tracks.clear()
+        self.staff_entered = []
+        self.staff_exited = []
 
     def update(self, dets: list[tuple[Box, float]], side_of: object, anchor_mode: str = "center",
-               motion: list[Box] | None = None, bounds: Box = (0.0, 0.0, 1.0, 1.0)
+               motion: list[Box] | None = None, bounds: Box = (0.0, 0.0, 1.0, 1.0),
+               staff_vote: Callable[[np.ndarray, list[np.ndarray]], bool | None] | None = None
                ) -> tuple[list[MotTrack], list[MotTrack]]:
         """Bir kare. `side_of(x, y) -> s` çizgiye işaretli uzaklık (giriş yönü pozitif); `motion`: hareket lekeleri
-        (isteğe bağlı); `bounds`: sayım alanı (ROI) — tahmini merkezi dışına çıkan iz silinir. (girenler, çıkanlar)."""
+        (isteğe bağlı); `bounds`: sayım alanı (ROI) — tahmini merkezi dışına çıkan iz silinir. (girenler, çıkanlar).
+        `staff_vote(kutu, diğer kutular)`: tanımayla gözlenen kutunun personel oyu (§4.10 eki; None: oy yok).
+        Personel geçişleri dönüşe girmez, `staff_entered` / `staff_exited`'a yazılır."""
         p = self.p
+        self.staff_entered, self.staff_exited = [], []
         for t in self.tracks:                                     # tahmin
             t.box = t.box + t.vel
         dets = suppress_parts(dets, p.contain, p.part_area)
@@ -253,6 +267,7 @@ class MotTracker:
                     t.verified = True
                     t.hist = []                                   # hız artık tanıma gözlemlerinden
                 t.last_det = self.frame
+                self._vote(t, di, boxes, staff_vote)
                 self._update(t, boxes[di], True, side_of, anchor_mode, entered, exited)
             elif ti in matched_m:
                 self._update(t, matched_m[ti], False, side_of, anchor_mode, entered, exited)
@@ -261,7 +276,8 @@ class MotTracker:
         used = set(matched_d.values())
         for di in high:
             if di not in used:
-                self._new(boxes[di], scores[di], True, side_of, anchor_mode, entered, exited)
+                self._new(boxes[di], scores[di], True, side_of, anchor_mode, entered, exited,
+                          lambda t, di=di: self._vote(t, di, boxes, staff_vote))
         for m in mboxes:                                          # hiçbir izin açıklamadığı leke: doğrulanmamış iz
             if not any(iou(t.box, m) > 0 or _center_in(m, t.box) for t in self.tracks):
                 self._new(m, 0.0, False, side_of, anchor_mode, entered, exited)
@@ -282,13 +298,25 @@ class MotTracker:
         h = max(float(t.last[3] - t.last[1]), 1e-6)
         return self.p.gate_grow * t.misses * float(np.hypot(t.vel[0] / w, t.vel[1] / h))
 
+    def _vote(self, t: MotTrack, di: int, boxes: list[np.ndarray],
+              staff_vote: Callable[[np.ndarray, list[np.ndarray]], bool | None] | None) -> None:
+        if staff_vote is None:
+            return
+        v = staff_vote(boxes[di], [b for k, b in enumerate(boxes) if k != di])
+        if v is not None:
+            t.votes += 1
+            t.staff_votes += int(v)
+
     def _new(self, box: np.ndarray, score: float, verified: bool, side_of: object, anchor_mode: str,
-             entered: list[MotTrack], exited: list[MotTrack]) -> None:
+             entered: list[MotTrack], exited: list[MotTrack],
+             before_observe: Callable[[MotTrack], None] | None = None) -> None:
         t = MotTrack(self.next_id, box, np.zeros(4), box, score, verified=verified, born=self.frame,
                      last_det=self.frame)
         t.hist.append((self.frame, box))
         self.next_id += 1
         self.tracks.append(t)
+        if before_observe is not None:
+            before_observe(t)
         self._observe(t, side_of, anchor_mode, entered, exited)
 
     def _update(self, t: MotTrack, box: np.ndarray, from_det: bool, side_of: object, anchor_mode: str,
@@ -331,8 +359,12 @@ class MotTracker:
         if not t.confirmed and t.verified and t.hits >= self.p.min_hits:
             t.confirmed = True
         if t.confirmed and t.pending:
+            staff = is_staff(t.votes, t.staff_votes)
             for x in t.pending:
-                if x > 0:
+                if staff:                                        # §4.10 eki: personel, müşteri sayısına girmez
+                    t.staff_crossings += 1
+                    (self.staff_entered if x > 0 else self.staff_exited).append(t)
+                elif x > 0:
                     t.entries += 1
                     entered.append(t)
                 else:

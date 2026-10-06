@@ -201,3 +201,35 @@ def test_large_near_person_jitter_uses_size_relative_band() -> None:
     # kameraya yakın büyük kişi (boy 0.5) çizgi üstünde ±0.035 titriyor: bant boyla genişler, sayılmaz
     frames = [[(box(0.5, LINE + (0.035 if k % 2 else -0.035), w=0.2, h=0.5), 0.8)] for k in range(80)]
     assert run(frames)[:2] == (0, 0)
+
+
+def _walk_staff(n: int, vote_of: dict[int, bool | None]) -> tuple[int, int, int, int]:
+    """Tek kişi yukarıdan aşağı yürür; kare k'deki oy vote_of[k] (yoksa None). (giriş, çıkış, p_giriş, p_çıkış)."""
+    t = MotTracker(MotParams(max_age=30))
+    ins = outs = s_in = s_out = 0
+    for k in range(n):
+        y = 0.2 + 0.7 * k / (n - 1)
+        box = (0.46, y - 0.08, 0.54, y + 0.08)
+        e, x = t.update([(box, 0.8)], lambda _x, yy: yy - 0.55,
+                        staff_vote=lambda _b, _o, k=k: vote_of.get(k))
+        ins, outs = ins + len(e), outs + len(x)
+        s_in, s_out = s_in + len(t.staff_entered), s_out + len(t.staff_exited)
+    return ins, outs, s_in, s_out
+
+
+def test_staff_crossing_is_counted_separately() -> None:
+    assert _walk_staff(40, {k: True for k in range(40)}) == (0, 0, 1, 0)
+
+
+def test_customer_with_few_or_minority_staff_votes_counts_as_entry() -> None:
+    assert _walk_staff(40, {0: True, 1: True}) == (1, 0, 0, 0)                        # < 3 oy
+    assert _walk_staff(40, {k: k % 3 == 0 for k in range(40)}) == (1, 0, 0, 0)         # azınlık
+    assert _walk_staff(40, {}) == (1, 0, 0, 0)                                         # oy yok (renk yok gibi)
+
+
+def test_vote_receives_other_boxes_of_the_frame() -> None:
+    seen: list[int] = []
+    t = MotTracker(MotParams(max_age=30))
+    a, b = (0.30, 0.1, 0.38, 0.3), (0.60, 0.1, 0.68, 0.3)
+    t.update([(a, 0.8), (b, 0.8)], lambda _x, y: y - 0.55, staff_vote=lambda _bx, o: seen.append(len(o)))
+    assert seen == [1, 1]
