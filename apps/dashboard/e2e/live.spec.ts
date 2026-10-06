@@ -82,10 +82,33 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   const csv = await page.request.get(csvHref!);
   expect(csv.status()).toBe(200);
 
-  // Kapat → boş durum; kaynağı sil
+  // İkinci kamera: ilk sayım sürerken başka kamerada da canlı sayım açılır; ikisi kartlarda görünür
+  await expect(page.getByTestId("session-card")).toHaveCount(1);
+  await page.getByRole("link", { name: "+ Kamera ekle" }).click();
+  // Sayımı süren kamera "Sayılıyor" ile işaretli (yeniden başlatılmaz, o sayıma gider)
+  await expect(page.getByTestId("source-card").filter({ hasText: "Test bandı" }).getByRole("link", { name: "Sayılıyor" })).toBeVisible();
+  await page.getByRole("radio", { name: "IP kamera" }).click();
+  await page.getByLabel("Kamera markası").selectOption("custom");
+  await page.getByLabel("RTSP adresi").fill(CLIP);
+  await page.getByRole("textbox", { name: /^Ad/ }).fill("İkinci bant");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await page.getByTestId("source-card").filter({ hasText: "İkinci bant" }).getByRole("button", { name: "Canlı sayım" }).click();
+  const dialog2 = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
+  await dialog2.getByRole("button", { name: /^Yumurta/ }).click();
+  await dialog2.getByRole("button", { name: "Başlat", exact: true }).click();
+  await expect(page.getByTestId("session-card")).toHaveCount(2);
+  await expect(page.getByTestId("session-card").filter({ hasText: "Test bandı" })).toBeVisible();
+  await expect(page.getByTestId("live-state")).toContainText("Canlı", { timeout: 30_000 });
+
+  // Kapat (ikisi de) → boş durum; kaynakları sil
+  await page.getByRole("button", { name: "Canlı sayımı kapat" }).click();
+  await expect(page.getByTestId("session-card")).toHaveCount(1);
   await page.getByRole("button", { name: "Canlı sayımı kapat" }).click();
   await expect(page.getByText("Açık canlı sayım yok")).toBeVisible();
   await page.getByRole("link", { name: "Kameralara git" }).click();
-  await page.getByTestId("source-card").filter({ hasText: "Test bandı" }).getByRole("button", { name: "Sil" }).click();
+  for (const name of ["Test bandı", "İkinci bant"]) {
+    await page.getByTestId("source-card").filter({ hasText: name }).getByRole("button", { name: "Sil" }).click();
+    await expect(page.getByTestId("source-card").filter({ hasText: name })).toHaveCount(0);
+  }
   await expect(page.getByText("Henüz kaynak yok")).toBeVisible();
 });

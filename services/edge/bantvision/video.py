@@ -425,9 +425,10 @@ def _hex_id(i: int) -> str:
 
 
 def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float,
-         labels: dict[int, str] | None = None) -> np.ndarray:
+         labels: dict[int, str] | None = None, panel: bool = True) -> np.ndarray:
+    """`panel=False`: sayaç kutusu çizilmez (canlı panelde sayılar yan tarafta)."""
     h, w = frame.shape[:2]
-    s = max(1.0, w / 960)                       # çizgi kalınlıkları çözünürlükle ölçeklensin
+    s = max(0.6, w / 960)                       # yazı ve çizgiler görüntüyle orantılı (alt akış 640 px'te küçülür)
     th = max(1, round(2 * s))
     roi = profile.roi
     x0, y0 = int(roi.x * w), int(roi.y * h)
@@ -475,6 +476,8 @@ def draw(frame: np.ndarray, profile: Profile, r: FrameResult, flash: float,
                         (20, 20, 20), max(1, th), cv2.LINE_AA)
         else:
             cv2.circle(frame, c, max(3, round(5 * s)), CYAN if t.counted else WHITE, -1, cv2.LINE_AA)
+    if not panel:
+        return frame
     # sayaç kutusu; yeni sayımda kısa süre yeşil yanar
     box = (0, 160, 0) if flash > 0 else (30, 30, 30)
     cv2.rectangle(frame, (0, 0), (int(330 * s), int(70 * s)), box, -1)

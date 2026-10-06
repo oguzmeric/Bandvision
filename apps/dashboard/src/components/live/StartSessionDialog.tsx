@@ -15,15 +15,33 @@ export function profileStatus(p: Profile): string {
   return p.expectedArea > 0 ? "Kalibre edildi" : "Kalibre edilmedi";
 }
 
+/** Alt akış (hızlı, sayım için yeterli) / ana akış (net, uzak ya da küçük nesne) seçimi */
+export function StreamChoice({ value, onChange }: { value: boolean; onChange: (sub: boolean) => void }) {
+  const opt = (sub: boolean, title: string, hint: string) => (
+    <button type="button" role="radio" aria-checked={value === sub} onClick={() => onChange(sub)}
+            className={`rounded-[8px] px-3 py-2 text-left transition ${value === sub ? "bg-white shadow-sm" : "hover:bg-white/60"}`}>
+      <span className={`block text-[13px] font-semibold ${value === sub ? "text-ink" : "text-muted"}`}>{title}</span>
+      <span className="block text-[11.5px] text-faint">{hint}</span>
+    </button>
+  );
+  return (
+    <div role="radiogroup" aria-label="Görüntü akışı" className="grid grid-cols-2 gap-0.5 rounded-[10px] border border-line bg-canvas p-0.5">
+      {opt(true, "Alt akış", "Hızlı, önerilen")}
+      {opt(false, "Ana akış", "Net; daha yavaş")}
+    </div>
+  );
+}
+
 /** Kamera seçildi: profil seç (ya da hazır profilden ekle) → canlı oturum başlar, canlı sayfaya geçilir */
-export default function StartSessionDialog({ sourceId, channelId, title, onClose }: {
-  sourceId: string; channelId: string | null; title: string; onClose: () => void;
+export default function StartSessionDialog({ sourceId, channelId, title, substream, streamChoice, onClose }: {
+  sourceId: string; channelId: string | null; title: string; substream: boolean; streamChoice: boolean; onClose: () => void;
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDialogElement>(null);
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [catalog, setCatalog] = useState<CatalogCategory[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [sub, setSub] = useState(substream);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,7 +67,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, onClose
     setBusy(true);
     setError(null);
     try {
-      const s = await api<LiveSession>("sessions", { method: "POST", json: { sourceId, channelId, profileId: selected } });
+      const s = await api<LiveSession>("sessions", { method: "POST", json: { sourceId, channelId, profileId: selected, substream: streamChoice ? sub : null } });
       dialog.current?.close();
       router.push(`/live?s=${s.id}`);
     } catch (e) {
@@ -98,6 +116,12 @@ export default function StartSessionDialog({ sourceId, channelId, title, onClose
             <p className="text-xs text-faint">Yakında: {catalog.filter((c) => !c.available).map((c) => c.title).join(", ")}</p>
           )}
         </div>
+        {streamChoice && (
+          <div className="mt-4">
+            <p className="eyebrow mb-2">Görüntü</p>
+            <StreamChoice value={sub} onChange={setSub} />
+          </div>
+        )}
         {error && <p role="alert" className="mt-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
         <div className="mt-5 flex gap-2">
           <button type="button" onClick={() => dialog.current?.close()}

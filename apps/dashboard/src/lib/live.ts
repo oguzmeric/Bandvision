@@ -78,6 +78,8 @@ export interface LiveSession {
   sourceId: string | null;
   channelId: string | null;
   profileId: string | null;
+  /** true alt akış (hızlı), false ana akış (net); null: kaynak ayarı bilinmiyor */
+  substream: boolean | null;
 }
 
 export const CAMERA_BRANDS: Array<[CameraBrand, string]> = [

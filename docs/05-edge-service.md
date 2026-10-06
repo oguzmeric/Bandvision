@@ -37,7 +37,7 @@ class FrameSource(Protocol):
     def close(self) -> None: ...
     info: SourceInfo  # width, height, nominal_fps, kind
 ```
-- **RTSP:** `cv2.VideoCapture(url, cv2.CAP_FFMPEG)`, `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;tcp|stimeout;5000000"`. Okuma ayrı iş parçacığında; işleme kuyruğu boyutu 4. Kuyruk doluysa **en eskiyi at** ve `dropped_frames` sayacını artır (heartbeat'te raporla). Zaman damgası okuma anında `time.monotonic()`.
+- **RTSP:** `cv2.VideoCapture(url, cv2.CAP_FFMPEG)`, `OPENCV_FFMPEG_CAPTURE_OPTIONS="rtsp_transport;tcp|timeout;5000000"` (FFmpeg 5+; eski `stimeout` yok sayılır). Okuma ayrı iş parçacığında; işleme kuyruğu boyutu 4. Kuyruk doluysa **en eskiyi at** ve `dropped_frames` sayacını artır (heartbeat'te raporla). Zaman damgası okuma anında `time.monotonic()`.
 - Bağlantı koparsa üstel bekleme (1→30 sn), `state` olayı `source_lost` / `source_restored`; tekrar bağlanınca izler sıfırlanır, arka plan korunur.
 - Donanım çözme: Intel'de `cv2.CAP_PROP_HW_ACCELERATION = cv2.VIDEO_ACCELERATION_ANY` dene; çalışmazsa yazılım.
 - **USB:** `cv2.VideoCapture(index, cv2.CAP_V4L2)`, MJPG FOURCC, 720p/25.

@@ -91,9 +91,10 @@ def entry_arrow(profile: Profile, w: int, h: int, line: tuple[tuple[float, float
 
 
 def draw_detect(frame: np.ndarray, profile: Profile, det: DetectResult | None, entries: int, exits: int,
-                ts: float, flash: float, flash_in: bool, labels: dict[int, str]) -> np.ndarray:
+                ts: float, flash: float, flash_in: bool, labels: dict[int, str], panel: bool = True) -> np.ndarray:
+    """`panel=False`: sayaç kutusu çizilmez (canlı panelde sayılar yan tarafta)."""
     h, w = frame.shape[:2]
-    s = max(1.0, w / 960)
+    s = max(0.6, w / 960)                       # yazı ve çizgiler görüntüyle orantılı (alt akış 640 px'te küçülür)
     th = max(1, round(2 * s))
     if det is not None:
         (ax, ay), (bx, by) = det.line
@@ -116,6 +117,8 @@ def draw_detect(frame: np.ndarray, profile: Profile, det: DetectResult | None, e
             ty = max(0, y1 - tht - int(8 * s))
             cv2.rectangle(frame, (x1, ty), (x1 + tw + int(8 * s), ty + tht + int(8 * s)), col, -1)
             put_text(frame, tag, (x1 + int(4 * s), ty + int(2 * s)), size, DARK)
+    if not panel:
+        return frame
     # panel: yeni girişte kısa süre yeşil, çıkışta turuncu yanar
     bg = (GREEN if flash_in else ORANGE) if flash > 0 else DARK
     pw, ph = int(380 * s), int(84 * s)

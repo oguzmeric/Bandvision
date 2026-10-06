@@ -123,12 +123,22 @@ class MotionDetector:
         return out
 
 
+GATE_RECHECK_S = 1.0                            # hareket yokken de en geç bu aralıkla tanıma
+
+
 class DetectCounter:
     def __init__(self, detector: ObjectDetector | None = None, tiles: int = 0, motion: bool = True) -> None:
         self._detector = detector
         self.tiles = tiles
         self.motion = MotionDetector() if motion else None
         self.tracker = MotTracker()
+        self._gate: MotionDetector | None = None
+        self._idle_frames = 0
+
+    def enable_gate(self) -> None:
+        """Canlı (çok kamera): alanda hareket ve iz yokken kişi tanıma atlanır (saniyede bir yine çalışır).
+        Boş giriş/koridorda işlemci kişinin olduğu kameraya kalır. Hassas eşik: kaçırmak yerine boşuna çalışsın."""
+        self._gate = MotionDetector(threshold=12.0)
 
     @property
     def detector(self) -> ObjectDetector:
@@ -140,6 +150,9 @@ class DetectCounter:
         self.tracker.reset()
         if self.motion is not None:
             self.motion.reset()
+        if self._gate is not None:
+            self._gate.reset()
+        self._idle_frames = 0
 
     def detect(self, bgr: np.ndarray, profile: Profile, low: float) -> list[tuple[NormBox, float]]:
         h, w = bgr.shape[:2]
@@ -170,7 +183,14 @@ class DetectCounter:
         p.min_hits = max(1, profile.minHits)
         p.max_age = max(5, round(fps * 1.0))
         p.high = max(profile.detectConfidence, p.low + 0.05)
-        dets = self.detect(bgr, profile, p.low)
+        if self._gate is not None and not self.tracker.tracks and not self._gate(bgr, profile)                 and self._idle_frames < max(1, round(fps * GATE_RECHECK_S)):
+            self._idle_frames += 1
+            dets: list[tuple[NormBox, float]] = []
+        else:
+            if self._gate is not None and self.tracker.tracks:
+                self._gate(bgr, profile)                # arka plan güncel kalsın
+            self._idle_frames = 0
+            dets = self.detect(bgr, profile, p.low)
         side_of, line = side_function(profile, w, h)
         # Hareket desteği yalnızca tepeden kamerada (konum noktası merkez): yatık/yandan kamerada tanıyıcı kişiyi
         # zaten bulur; kapı, ekran, gölge hareketi ise hayalet iz üretir.

@@ -29,7 +29,9 @@ from ..overlay import draw_detect
 from ..video import draw, number_label, split_numbers
 
 # Canlı akışta FFmpeg'e RTSP üzerinden TCP (kayıpsız, NVR'larla uyumlu) ve kısa zaman aşımı
-_FFMPEG_OPTIONS = "rtsp_transport;tcp|stimeout;5000000"
+# FFmpeg 5+ (OpenCV 4.6+): `timeout` = bağlanma ve okuma zaman aşımı (µs). Eski `stimeout` artık yok sayılıyor;
+# kapalı kamerada açılış 30 sn takılıyordu.
+_FFMPEG_OPTIONS = "rtsp_transport;tcp|timeout;5000000"
 
 
 @dataclass
@@ -63,7 +65,9 @@ class LiveSession:
     """Bir kameranın canlı sayımı. Tüm genel yöntemler iş parçacığı güvenlidir."""
 
     def __init__(self, name: str, open_url: Callable[[], str], profile: Profile,
-                 keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True) -> None:
+                 keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True,
+                 detector: Any | None = None) -> None:
+        """`detector`: kişi tanıma modeli (birden çok kamerada ortak; yoksa ilk karede yüklenir)."""
         self.id = str(uuid.uuid4())
         self.name = name
         self.created = time.time()
@@ -75,6 +79,9 @@ class LiveSession:
         self._frame_cv = threading.Condition(threading.Lock())  # kare alışverişi (okuyucu sayımı beklemesin)
         self.profile = profile
         self._pipe = Pipeline(profile)
+        self._pipe.detect.enable_gate()                     # boş sahnede tanıma atlanır: çok kamerada işlemci paylaşımı
+        if detector is not None:
+            self._pipe.detect._detector = detector
         self.counting = False
         self.status = SessionStatus()
         self.calibrating: str | None = None         # "background" | "sample" | None
@@ -90,6 +97,7 @@ class LiveSession:
         self._numbers: dict[int, list[int]] = {}
         self._labels: dict[int, str] = {}
         self._stop = threading.Event()
+        self._switch = threading.Event()                    # akış değişti (alt/ana): okuyucu yeniden bağlansın
         self._reader = threading.Thread(target=self._read_loop, name=f"live-read-{self.id[:8]}", daemon=True)
         self._worker = threading.Thread(target=self._work_loop, name=f"live-work-{self.id[:8]}", daemon=True)
         self._reader.start()
@@ -106,6 +114,14 @@ class LiveSession:
         with self._lock:
             self.status.state = "stopped"
             self._pipe.detect._detector = None              # tanıma modeli ve iş parçacıkları bırakılsın
+
+    def switch_source(self, open_url: Callable[[], str], keep_alive: Callable[[str], None] | None = None) -> None:
+        """Görüntü kaynağını değiştirir (ör. alt ↔ ana akış). Sayaçlar, izler ve ayarlar korunur; okuyucu yeni
+        adrese bağlanır. Kare boyutu değişirse bant sayımı arka planı yeniden öğrenir (sayaçlar yine korunur)."""
+        with self._lock:
+            self._open_url, self._keep_alive = open_url, keep_alive
+            self.status.state, self.status.message = "reconnecting", "Görüntü akışı değiştiriliyor…"
+        self._switch.set()
 
     def set_counting(self, on: bool) -> None:
         with self._lock:
@@ -208,8 +224,11 @@ class LiveSession:
         backoff = 1.0
         file_offset = 0.0                                    # dosya başa sarınca zaman geriye gitmesin
         while not self._stop.is_set():
+            self._switch.clear()
             try:
-                url = self._open_url()
+                with self._lock:
+                    open_url = self._open_url
+                url = open_url()
             except Exception as e:  # noqa: BLE001 — adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
                 self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {e}")
                 self._stop.wait(backoff)
@@ -229,7 +248,7 @@ class LiveSession:
             started = time.monotonic()
             last_ping = time.monotonic()
             n = 0
-            while not self._stop.is_set():
+            while not self._stop.is_set() and not self._switch.is_set():
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -249,6 +268,8 @@ class LiveSession:
             cap.release()
             if self._stop.is_set():
                 return
+            if self._switch.is_set():                       # akış değişti: beklemeden yeni adrese
+                continue
             if is_file:
                 if self.loop_file:                          # test/gösterim: video başa sarar, canlı kamera gibi
                     file_offset += n / file_fps
@@ -273,6 +294,7 @@ class LiveSession:
     def _work_loop(self) -> None:
         done = 0
         last_render = 0.0
+        shape: tuple[int, ...] | None = None
         stamps: list[float] = []
         while not self._stop.is_set():
             with self._frame_cv:
@@ -285,6 +307,9 @@ class LiveSession:
             done = seq
             with self._lock:
                 profile = self.profile
+                if shape is not None and frame.shape != shape and profile.countMode != "detect":
+                    self._pipe.set_profile(profile, reset_background=True)   # akış değişti: arka plan yeni boyutta
+                shape = frame.shape
                 try:
                     r = self._pipe.process(frame, ts)
                 except Exception as e:                       # noqa: BLE001 — tek karelik hata oturumu düşürmesin
@@ -375,11 +400,13 @@ class LiveSession:
             labels = dict(self._labels)
             flash, flash_in = self._flash, self._flash_in
             total, total_out = self._pipe.total, self._pipe.total_out
+        if frame.shape[1] < 720:                              # alt akış (352–640 px): çizim tarayıcıda net görünsün
+            frame = cv2.resize(frame, (720, round(frame.shape[0] * 720 / frame.shape[1])),
+                               interpolation=cv2.INTER_LINEAR)
         if profile.countMode == "detect":
-            img = draw_detect(frame, profile, r.detect, total, total_out, r.ts if r.ts < 1e6 else 0.0, flash,
-                              flash_in, labels)
+            img = draw_detect(frame, profile, r.detect, total, total_out, 0.0, flash, flash_in, labels, panel=False)
         else:
-            img = draw(frame, profile, r, flash, labels)
+            img = draw(frame, profile, r, flash, labels, panel=False)   # sayılar panelin yan tarafında
         w = img.shape[1]
         if w > 1280:                                          # tarayıcıya yeterli; yerel ağ dostu
             img = cv2.resize(img, (1280, round(img.shape[0] * 1280 / w)), interpolation=cv2.INTER_AREA)

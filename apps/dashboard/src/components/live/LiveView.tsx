@@ -7,6 +7,7 @@ import GeometryControls from "@/components/geometry/GeometryControls";
 import RoiEditor from "@/components/geometry/RoiEditor";
 import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
+import { StreamChoice } from "./StartSessionDialog";
 import { api, STATE_LABELS, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
@@ -22,6 +23,31 @@ function Counter({ label, value, tone, hint, testId }: { label: string; value: n
       <p className="text-[44px] font-semibold leading-none tracking-tight text-ink tabular-nums" data-testid={testId}>{int(value)}</p>
       {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}
     </div>
+  );
+}
+
+/** Açık canlı sayımların özeti: her kamerada giriş/çıkış (ya da adet) bir bakışta; tıklayınca o kamera açılır */
+function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: boolean; onSelect: () => void }) {
+  const ok = s.state === "live";
+  return (
+    <button type="button" role="tab" aria-selected={selected} onClick={onSelect} data-testid="session-card"
+            className={`rounded-2xl border px-3.5 py-2.5 text-left transition ${selected ? "border-brand-500 bg-brand-50 shadow-sm" : "border-line bg-white hover:border-brand-100"}`}>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ok ? "bg-ok-600" : s.state === "error" || s.state === "ended" ? "bg-nok-600" : "bg-[#f08a24]"}`} />
+        <span className="truncate text-[13px] font-semibold">{s.name}</span>
+      </span>
+      <span className="mt-1 block truncate text-[11.5px] text-faint">{s.profile.name}{s.counting ? "" : " · duruyor"}</span>
+      <span className="mt-1.5 flex gap-3 text-sm tabular-nums">
+        {s.twoWay ? (
+          <>
+            <span><span className="text-[11.5px] font-medium text-ok-600">Giriş</span> <b>{int(s.total)}</b></span>
+            <span><span className="text-[11.5px] font-medium text-warn-700">Çıkış</span> <b>{int(s.totalOut)}</b></span>
+          </>
+        ) : (
+          <span><b>{int(s.total)}</b> <span className="text-[11.5px] text-muted">adet</span></span>
+        )}
+      </span>
+    </button>
   );
 }
 
@@ -126,12 +152,32 @@ export default function LiveView() {
     load();
   }
 
+  /** Alt ↔ ana akış: aynı oturum yeni akışa bağlanır, sayaçlar sıfırlanmaz */
+  async function switchStream(sub: boolean) {
+    if (!session || session.substream === sub) return;
+    try {
+      await api(`sessions/${session.id}/stream`, { method: "PUT", json: { substream: sub } });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function closeSession() {
     if (!session || !confirm("Canlı sayım kapatılsın mı? Sayılar sıfırlanır.")) return;
     await api(`sessions/${session.id}`, { method: "DELETE" }).catch(() => undefined);
     router.replace("/live");
     load();
   }
+
+  // Canlı akış: oturum bağlanırken açılan istek boş kalabilir → "Canlı" olunca ve akış koparsa yeniden açılır
+  const state = session?.state;
+  const [streamKey, setStreamKey] = useState(0);
+  const prevState = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (state === "live" && prevState.current !== "live") setStreamKey((k) => k + 1);
+    prevState.current = state;
+  }, [state]);
 
   const aspect = session && session.width && session.height ? session.width / session.height : 16 / 9;
 
@@ -160,17 +206,16 @@ export default function LiveView() {
 
   return (
     <div>
-      {sessions.length > 1 && (
-        <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Canlı sayımlar">
-          {sessions.map((s) => (
-            <button key={s.id} type="button" role="tab" aria-selected={s.id === session.id}
-                    onClick={() => { setDraft(null); router.replace(`/live?s=${s.id}`); }}
-                    className={`h-9 rounded-full border px-3.5 text-[13px] font-medium ${s.id === session.id ? "border-brand-500 bg-brand-500 text-white" : "border-line bg-white hover:border-brand-100"}`}>
-              {s.name}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="mb-4 grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2.5" role="tablist" aria-label="Canlı sayımlar">
+        {sessions.map((s) => (
+          <SessionCard key={s.id} s={s} selected={s.id === session.id}
+                       onSelect={() => { setDraft(null); router.replace(`/live?s=${s.id}`); }} />
+        ))}
+        <Link href="/cameras"
+              className="grid min-h-[76px] place-items-center rounded-2xl border border-dashed border-line px-3 text-[13px] font-medium text-muted transition hover:border-brand-100 hover:text-brand-500">
+          + Kamera ekle
+        </Link>
+      </div>
       {error && <p role="alert" className="mb-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
 
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -190,7 +235,9 @@ export default function LiveView() {
           ) : (
             <div className="relative w-full overflow-hidden rounded-2xl bg-[#111]" style={{ aspectRatio: String(aspect) }}>
               {/* eslint-disable-next-line @next/next/no-img-element -- MJPEG canlı akış */}
-              <img src={`/api/live/sessions/${session.id}/stream`} alt="İşaretli canlı görüntü" className="absolute inset-0 h-full w-full" />
+              <img src={`/api/live/sessions/${session.id}/stream?k=${streamKey}`} alt="İşaretli canlı görüntü"
+                   onError={() => setTimeout(() => setStreamKey((k) => k + 1), 2000)}
+                   className="absolute inset-0 h-full w-full" />
             </div>
           )}
         </section>
@@ -220,6 +267,12 @@ export default function LiveView() {
                 <button type="button" className={btn} onClick={() => confirm("Sayaç sıfırlansın mı?") && act("reset")}>Sıfırla</button>
                 <button type="button" className={btn} onClick={beginCalibration}>{twoWay ? "Ayarla" : "Kalibre"}</button>
               </div>
+              {session.substream !== null && (
+                <div className="mt-3">
+                  <p className="mb-1.5 text-xs font-medium text-muted">Görüntü</p>
+                  <StreamChoice value={session.substream} onChange={switchStream} />
+                </div>
+              )}
               {!session.counting && (
                 <p className="mt-2 text-xs text-faint">Sayım duruyor: görüntü işleniyor ama sayılmıyor. &quot;Başlat&quot; ile sayım başlar.</p>
               )}

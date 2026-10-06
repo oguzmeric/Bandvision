@@ -173,3 +173,145 @@ def test_live_session_end_to_end(client: TestClient, monkeypatch: pytest.MonkeyP
 
     assert client.delete(f"/api/v1/live/sources/{src['id']}").status_code == 204    # kaynağın oturumu da kapanır
     assert client.get("/api/v1/live/sessions").json() == []
+
+
+def test_session_stream_choice_overrides_source(client: TestClient) -> None:
+    """Alt/ana akış oturum başına seçilir; kaynağın kayıtlı ayarı değişmez."""
+    src = client.post("/api/v1/live/sources", json=camera(substream=True)).json()
+    manager = client.app.state.live
+    sub_url = manager.opener(manager.source_or_404(src["id"]), None)[0]()
+    main_url = manager.opener(manager.source_or_404(src["id"]), None, False)[0]()
+    assert sub_url != main_url and SECRET in main_url                      # kimlik bilgisi yalnızca sunucu içinde
+    assert manager.opener(manager.source_or_404(src["id"]), None, True)[0]() == sub_url
+    assert client.get("/api/v1/live/sources").json()[0]["substream"] is True
+
+
+def test_live_view_hides_counter_box(tmp_path: pathlib.Path) -> None:
+    """Canlı görüntüde sayaç kutusu yok (sayılar panelde); yazılar alt akışta (640 px) küçük."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.overlay import draw_detect
+
+    frame = np.full((360, 640, 3), 200, np.uint8)
+    with_box = draw_detect(frame.copy(), Profile.people(), None, 3, 1, 0.0, 0.0, True, {})
+    without = draw_detect(frame.copy(), Profile.people(), None, 3, 1, 0.0, 0.0, True, {}, panel=False)
+    assert (without == 200).all() and not (with_box == 200).all()
+    dark = (with_box[:, :, :] < 120).all(axis=2)                              # kutu: sol üstte koyu alan
+    assert dark[:, :].any(axis=0).sum() < 0.45 * 640                          # 640 px'te genişliğin yarısından az
+
+
+def test_failed_thumbnail_is_not_retried_for_a_minute(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kapalı kamera: küçük resim bir kez denenir; 1 dk içinde yeniden RTSP açılmaz (kayıt cihazı boğulmasın)."""
+    from fastapi import HTTPException
+
+    src = client.post("/api/v1/live/sources", json=camera()).json()
+    manager = client.app.state.live
+    calls: list[str | None] = []
+
+    def failing(_src: dict[str, Any], channel_id: str | None) -> bytes:
+        calls.append(channel_id)
+        raise HTTPException(502, "yok")
+
+    monkeypatch.setattr(manager, "_snapshot", failing)
+    for _ in range(3):
+        assert client.get(f"/api/v1/live/sources/{src['id']}/snapshot").status_code == 502
+    assert len(calls) == 1
+    monkeypatch.setattr(manager, "_snapshot", lambda _s, _c: b"\xff\xd8jpeg")
+    manager._snap_failed.clear()                                   # süre doldu gibi
+    assert client.get(f"/api/v1/live/sources/{src['id']}/snapshot").content == b"\xff\xd8jpeg"
+
+
+def test_rtsp_uses_ffmpeg7_timeout_option() -> None:
+    """FFmpeg 5+ `stimeout`'u yok sayar (kapalı kamerada 30 sn takılma); `timeout` kullanılmalı."""
+    from bantvision.live import session
+
+    opts = dict(o.split(";") for o in session._FFMPEG_OPTIONS.split("|"))
+    assert opts["rtsp_transport"] == "tcp" and "stimeout" not in opts and int(opts["timeout"]) <= 10_000_000
+
+
+def test_stream_switch_keeps_counts() -> None:
+    """Alt ↔ ana akış değişince oturum aynı kalır: sayaçlar sıfırlanmaz, okuyucu yeni adrese bağlanır."""
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    opened: list[str] = []
+
+    def url_a() -> str:
+        opened.append("a")
+        return str(CLIP)
+
+    def url_b() -> str:
+        opened.append("b")
+        return str(CLIP)
+
+    s = LiveSession("test", url_a, Profile.egg())
+    try:
+        wait_for(lambda: s.snapshot_status()["state"] == "live" and s.snapshot_status()["fps"] > 0)
+        with s._lock:                                                  # sayım sürmüş gibi
+            s._pipe.total = s._counts.total = 7
+        sid = s.id
+        s.switch_source(url_b)
+        assert s.snapshot_status()["message"] == "Görüntü akışı değiştiriliyor…"
+        wait_for(lambda: opened[-1:] == ["b"] and s.snapshot_status()["state"] == "live")
+        seq = s._seq
+        wait_for(lambda: s._seq > seq + 3)                             # yeni akıştan kare geliyor
+        st = s.snapshot_status()
+        assert st["id"] == sid and st["total"] == 7 and s._pipe.total >= 7
+    finally:
+        s.stop()
+
+
+def test_sessions_share_one_detector_and_custom_url_has_no_stream_choice(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    egg = next(p for p in client.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
+    ids = []
+    for name in ("Kamera 1", "Kamera 2"):
+        src = client.post("/api/v1/live/sources",
+                          json=camera(name=name, brand="custom", customUrl=str(CLIP), password="")).json()
+        r = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": egg["id"]})
+        assert r.status_code == 201 and r.json()["substream"] is None
+        ids.append(r.json()["id"])
+    manager = client.app.state.live
+    assert len(client.get("/api/v1/live/sessions").json()) == 2                     # iki kamera aynı anda
+    assert all(manager.sessions[i]._pipe.detect._detector is manager.detector for i in ids)
+    r = client.put(f"/api/v1/live/sessions/{ids[0]}/stream", json={"substream": False})
+    assert r.status_code == 400
+
+
+def test_idle_scene_skips_detection_but_rechecks_every_second() -> None:
+    """Canlı: hareket ve iz yokken tanıma atlanır (saniyede bir yine çalışır); hareket olunca her karede."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.detect_count import DetectCounter
+
+    class Fake:
+        calls = 0
+
+        def detect(self, *_a: Any, **_k: Any) -> list[Any]:
+            Fake.calls += 1
+            return []
+
+    dc = DetectCounter(detector=Fake())               # type: ignore[arg-type]
+    dc.enable_gate()
+    p = Profile.people()
+    still = np.full((288, 352, 3), 90, np.uint8)
+    for _ in range(60):                                # 10 fps'te 6 sn boş sahne
+        dc.process(still, p, 10.0)
+    assert 4 <= Fake.calls <= 8, Fake.calls           # yaklaşık saniyede bir
+
+    Fake.calls = 0
+    for k in range(20):                                # alanda hareket eden koyu leke (kişi gibi)
+        f = still.copy()
+        x = 60 + k * 10
+        f[100:220, x:x + 40] = 20
+        dc.process(f, p, 10.0)
+    assert Fake.calls >= 17, Fake.calls
+
+    plain = DetectCounter(detector=Fake())            # varsayılan (video, iPhone eşdeğeri): her karede tanıma
+    Fake.calls = 0
+    for _ in range(10):
+        plain.process(still, p, 10.0)
+    assert Fake.calls == 10

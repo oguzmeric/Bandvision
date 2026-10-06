@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, RECORDER_BRANDS, type Channel, type Source } from "@/lib/live";
+import Link from "next/link";
+import { api, RECORDER_BRANDS, type Channel, type LiveSession, type Source } from "@/lib/live";
 import SourceForm from "./SourceForm";
 import StartSessionDialog from "./StartSessionDialog";
 
@@ -11,6 +12,16 @@ function describe(s: Source): string {
     return `${b?.[1] ?? s.recorderBrand} · ${s.host}`;
   }
   return s.brand === "custom" ? "RTSP adresi" : `${s.brand[0].toUpperCase()}${s.brand.slice(1)} · ${s.host} · kanal ${s.channel}`;
+}
+
+/** Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir) */
+function CountingLink({ session }: { session: LiveSession }) {
+  return (
+    <Link href={`/live?s=${session.id}`}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[9px] border border-[#bfe8d3] bg-ok-50 px-3 text-[12.5px] font-semibold text-ok-600 hover:brightness-95">
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-ok-600" />Sayılıyor
+    </Link>
+  );
 }
 
 /** Küçük resim: kayıt cihazının görüntü API'si ya da RTSP'den ilk kare (yavaş olabilir) */
@@ -29,7 +40,9 @@ function Thumb({ src, alt }: { src: string; alt: string }) {
   );
 }
 
-function RecorderChannels({ source, onStart }: { source: Source; onStart: (ch: Channel) => void }) {
+function RecorderChannels({ source, sessions, onStart }: {
+  source: Source; sessions: LiveSession[]; onStart: (ch: Channel) => void;
+}) {
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -60,10 +73,15 @@ function RecorderChannels({ source, onStart }: { source: Source; onStart: (ch: C
                 <p className="truncate text-sm font-medium">{c.title}</p>
                 {c.number !== null && <p className="text-xs text-faint">Kanal {c.number}</p>}
               </div>
-              <button type="button" onClick={() => onStart(c)}
-                      className="h-8 shrink-0 rounded-[9px] bg-brand-500 px-3 text-[12.5px] font-semibold text-white hover:bg-brand-600">
-                Canlı sayım
-              </button>
+              {(() => {
+                const active = sessions.find((x) => x.sourceId === source.id && x.channelId === c.id);
+                return active ? <CountingLink session={active} /> : (
+                  <button type="button" onClick={() => onStart(c)}
+                          className="h-8 shrink-0 rounded-[9px] bg-brand-500 px-3 text-[12.5px] font-semibold text-white hover:bg-brand-600">
+                    Canlı sayım
+                  </button>
+                );
+              })()}
             </div>
           </div>
         ))}
@@ -80,8 +98,11 @@ export default function CamerasView() {
   const [editing, setEditing] = useState<Source | null>(null);
   const [starting, setStarting] = useState<{ source: Source; channel: Channel | null } | null>(null);
 
+  const [sessions, setSessions] = useState<LiveSession[]>([]);
+
   const load = useCallback(() => {
     api<Source[]>("sources").then((s) => { setSources(s); setError(null); }).catch((e: Error) => setError(e.message));
+    api<LiveSession[]>("sessions").then(setSessions).catch(() => undefined);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -137,6 +158,8 @@ export default function CamerasView() {
                             className="h-9 rounded-[10px] bg-brand-500 px-3 text-[13px] font-semibold text-white hover:bg-brand-600">
                       {open === s.id ? "Kameraları gizle" : "Kameraları göster"}
                     </button>
+                  ) : sessions.find((x) => x.sourceId === s.id) ? (
+                    <CountingLink session={sessions.find((x) => x.sourceId === s.id)!} />
                   ) : (
                     <button type="button" onClick={() => setStarting({ source: s, channel: null })}
                             className="h-9 rounded-[10px] bg-brand-500 px-3 text-[13px] font-semibold text-white hover:bg-brand-600">
@@ -151,7 +174,7 @@ export default function CamerasView() {
                 <div className="mt-3 max-w-[360px]"><Thumb src={`/api/live/sources/${s.id}/snapshot`} alt={s.name} /></div>
               )}
               {s.kind === "recorder" && open === s.id && (
-                <RecorderChannels source={s} onStart={(c) => setStarting({ source: s, channel: c })} />
+                <RecorderChannels source={s} sessions={sessions} onStart={(c) => setStarting({ source: s, channel: c })} />
               )}
             </article>
           ))}
@@ -159,6 +182,8 @@ export default function CamerasView() {
       </section>
       {starting && (
         <StartSessionDialog sourceId={starting.source.id} channelId={starting.channel?.id ?? null}
+                            substream={starting.source.substream}
+                            streamChoice={starting.source.kind === "recorder" ? (starting.channel?.hasSubstream ?? true) : starting.source.brand !== "custom"}
                             title={`${starting.source.name}${starting.channel ? ` · ${starting.channel.title}` : ""}`}
                             onClose={() => setStarting(null)} />
       )}

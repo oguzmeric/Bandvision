@@ -55,10 +55,32 @@ class SourceIn(_Strict):
         return data
 
 
+class StreamIn(_Strict):
+    substream: bool
+
+
+class SharedDetector:
+    """Tüm canlı kameralarda tek tanıma modeli: bellek bir kez, kareler sırayla işlenir (işlemci aşırı yüklenmez;
+    N kamera varsa her biri toplam hızın yaklaşık 1/N'ini alır)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._inner: Any = None
+
+    def detect(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            if self._inner is None:
+                from ..core.detector import ObjectDetector
+
+                self._inner = ObjectDetector()
+            return self._inner.detect(*args, **kwargs)
+
+
 class SessionIn(_Strict):
     sourceId: str
     channelId: str | None = None
     profileId: str
+    substream: bool | None = None           # None: kaynağın ayarı; True alt akış (hızlı), False ana akış (net)
 
 
 class ActionIn(_Strict):
@@ -80,6 +102,8 @@ class LiveManager:
         self._clients: dict[str, tuple[str, rec.RecorderClient]] = {}   # kaynak → (ayar imzası, istemci)
         self._channels: dict[str, list[rec.RecorderChannel]] = {}
         self._lock = threading.Lock()
+        self.detector = SharedDetector()
+        self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
     def source_or_404(self, source_id: str) -> dict[str, Any]:
@@ -143,8 +167,12 @@ class LiveManager:
         password = self.store.password(src["id"])
         return rec.with_credentials(url, src.get("username", ""), password) if src.get("username") else url
 
-    def opener(self, src: dict[str, Any], channel_id: str | None) -> tuple[Any, Any]:
-        """(adres üretici, canlı tutma). Kayıt cihazında adres her bağlanışta yeniden alınır (TRASSIR jetonu)."""
+    def opener(self, src: dict[str, Any], channel_id: str | None, substream: bool | None = None
+               ) -> tuple[Any, Any]:
+        """(adres üretici, canlı tutma). Kayıt cihazında adres her bağlanışta yeniden alınır (TRASSIR jetonu).
+        `substream` verilirse kaynağın alt/ana akış ayarı yerine o kullanılır (oturum başına seçim)."""
+        if substream is not None:
+            src = {**src, "substream": substream}
         if src["kind"] == "camera":
             url = self.camera_url(src)
             return (lambda: url), None
@@ -165,6 +193,18 @@ class LiveManager:
         return open_url, client.keep_alive
 
     def snapshot(self, src: dict[str, Any], channel_id: str | None) -> bytes:
+        key = f"{src['id']}|{channel_id}"
+        if time.monotonic() - self._snap_failed.get(key, -1e9) < SNAPSHOT_RETRY_S:
+            raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).")
+        try:
+            jpeg = self._snapshot(src, channel_id)
+        except HTTPException:
+            self._snap_failed[key] = time.monotonic()
+            raise
+        self._snap_failed.pop(key, None)
+        return jpeg
+
+    def _snapshot(self, src: dict[str, Any], channel_id: str | None) -> bytes:
         if src["kind"] == "recorder" and channel_id:
             client = self.recorder(src)
             ch = self.channel(src, channel_id)
@@ -177,21 +217,20 @@ class LiveManager:
         return grab_jpeg(open_url())
 
 
+SNAPSHOT_RETRY_S = 60.0
+_GRAB_SLOTS = threading.BoundedSemaphore(2)   # aynı anda en çok 2 RTSP küçük resim: kayıt cihazını ve canlı oturumu boğmasın
+
+
 def grab_jpeg(url: str, timeout: float = 10.0) -> bytes:
     result: dict[str, bytes] = {}
 
     def run() -> None:
-        cap = open_capture(url)
+        if not _GRAB_SLOTS.acquire(timeout=timeout):
+            return
         try:
-            for _ in range(30):                             # ilk tam kareye kadar (anahtar kare)
-                ok, frame = cap.read()
-                if ok and frame is not None:
-                    ok2, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    if ok2:
-                        result["jpeg"] = buf.tobytes()
-                    return
+            _grab(url, result)
         finally:
-            cap.release()
+            _GRAB_SLOTS.release()
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
@@ -201,8 +240,23 @@ def grab_jpeg(url: str, timeout: float = 10.0) -> bytes:
     return result["jpeg"]
 
 
+def _grab(url: str, result: dict[str, bytes]) -> None:
+    cap = open_capture(url)
+    try:
+        for _ in range(30):                                 # ilk tam kareye kadar (anahtar kare)
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                ok2, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok2:
+                    result["jpeg"] = buf.tobytes()
+                return
+    finally:
+        cap.release()
+
+
 def _public_channel(c: rec.RecorderChannel) -> dict[str, Any]:
-    return {"id": c.id, "name": c.name, "number": c.number, "title": c.title, "hasSubstream": c.has_substream}
+    return {"id": c.id, "name": c.name.strip(), "number": c.number, "title": c.title.strip(),
+            "hasSubstream": c.has_substream}
 
 
 def make_router(manager: LiveManager, auth: Any) -> APIRouter:
@@ -257,6 +311,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.post("/sources", status_code=201)
     def create_source(body: SourceIn) -> dict[str, Any]:
         data = body.model_dump(exclude={"password"})
+        data["name"] = data["name"].strip()
         if not data["name"]:
             data["name"] = _default_name(data)
         return store.save_source(data, body.password or "")
@@ -265,6 +320,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def update_source(source_id: str, body: SourceIn) -> dict[str, Any]:
         manager.source_or_404(source_id)
         data = body.model_dump(exclude={"password"})
+        data["name"] = data["name"].strip()
         if not data["name"]:
             data["name"] = _default_name(data)
         manager.forget(source_id)
@@ -316,15 +372,18 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
                 s.stop()
                 manager.sessions.pop(s.id, None)
         try:
-            open_url, keep_alive = manager.opener(src, body.channelId)
-            name = src.get("name") or "Kamera"
+            open_url, keep_alive = manager.opener(src, body.channelId, body.substream)
+            name = str(src.get("name") or "").strip() or "Kamera"
             if body.channelId:
-                name = f"{name} · {manager.channel(src, body.channelId).title}"
+                name = f"{name} · {manager.channel(src, body.channelId).title.strip()}"
         except rec.RecorderError as e:
             raise _err(e) from e
-        s = LiveSession(name, open_url, profile, keep_alive)
+        s = LiveSession(name, open_url, profile, keep_alive, detector=manager.detector)
         s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
         s.source_id, s.channel_id, s.profile_id = body.sourceId, body.channelId, body.profileId  # type: ignore[attr-defined]
+        fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok
+        sub = bool(src.get("substream", True)) if body.substream is None else body.substream
+        s.substream = None if fixed_url else sub  # type: ignore[attr-defined]
         manager.sessions[s.id] = s
         return _session_view(s)
 
@@ -351,6 +410,22 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         {"start": lambda: s.set_counting(True), "stop": lambda: s.set_counting(False), "reset": s.reset,
          "learnBackground": s.learn_background, "learnSample": s.learn_sample,
          "cancelCalibration": s.cancel_calibration}[body.action]()
+        return _session_view(s)
+
+    @r.put("/sessions/{session_id}/stream")
+    def set_stream(session_id: str, body: StreamIn) -> dict[str, Any]:
+        """Alt ↔ ana akış: aynı oturum yeni akışa bağlanır; sayaçlar sıfırlanmaz."""
+        s = session_or_404(session_id)
+        if getattr(s, "substream", None) is None:
+            raise HTTPException(400, "Bu kaynakta akış seçilemez (tam RTSP adresi).")
+        src = manager.source_or_404(getattr(s, "source_id", ""))
+        try:
+            open_url, keep_alive = manager.opener(src, getattr(s, "channel_id", None), body.substream)
+        except rec.RecorderError as e:
+            raise _err(e) from e
+        if body.substream != s.substream:  # type: ignore[attr-defined]
+            s.switch_source(open_url, keep_alive)
+            s.substream = body.substream  # type: ignore[attr-defined]
         return _session_view(s)
 
     @r.put("/sessions/{session_id}/profile")
@@ -418,5 +493,5 @@ def _default_name(data: dict[str, Any]) -> str:
 def _session_view(s: LiveSession) -> dict[str, Any]:
     v = s.snapshot_status()
     v.update(sourceId=getattr(s, "source_id", None), channelId=getattr(s, "channel_id", None),
-             profileId=getattr(s, "profile_id", None))
+             profileId=getattr(s, "profile_id", None), substream=getattr(s, "substream", None))
     return v
