@@ -9,12 +9,41 @@ final class StaffColorTests: XCTestCase {
         struct Dominant: Decodable { let rgb: [[Int]]; let lab: [Double]? }
         struct Frame: Decodable { let d: [[Double]]; let v: [Int] }
         struct Scenario: Decodable { let name: String; let line: Double; let maxAge: Int; let frames: [Frame]; let events: [[Int]] }
+        struct Image: Decodable { let w: Int; let h: Int; let px: String }
+        struct VoteFrame: Decodable {
+            let name: String; let image: Int; let box: [Double]; let others: [[Double]]; let anchor: String
+            let colors: [[Double]]; let vote: Bool?
+        }
+        struct TeachFrame: Decodable {
+            let name: String; let image: Int; let boxes: [[Double]]; let point: [Double]; let anchor: String; let lab: [Double]?
+        }
         let lab: [[Double]]
         let points: [Points]
         let votes: [Vote]
         let dominant: [Dominant]
         let tracker: [Scenario]
+        let palette: [[Int]]
+        let images: [Image]
+        let voteFrames: [VoteFrame]
+        let teachFrames: [TeachFrame]
     }
+
+    /// Fikstür karesi: palet + satır sıralı indeks dizgisi (her piksel tek karakter)
+    private struct Pixels {
+        static let alphabet = Array("0123456789abcdefghijklmnopqrstuvwxyz".utf8)
+        let w: Int, h: Int
+        let rgb: [(UInt8, UInt8, UInt8)]
+        init(_ img: Fixture.Image, palette: [[Int]]) {
+            w = img.w; h = img.h
+            rgb = img.px.utf8.map { ch in
+                let c = palette[Pixels.alphabet.firstIndex(of: ch)!]
+                return (UInt8(c[0]), UInt8(c[1]), UInt8(c[2]))
+            }
+        }
+        func at(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) { rgb[y * w + x] }
+    }
+
+    private static func nbox(_ v: [Double]) -> NBox { NBox(x1: v[0], y1: v[1], x2: v[2], y2: v[3]) }
 
     private func fixture() throws -> Fixture {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "staff_parity", withExtension: "json"))
@@ -74,6 +103,38 @@ final class StaffColorTests: XCTestCase {
                 got += tracker.staffEntered.map { [k, $0.id, 1, 1] } + tracker.staffExited.map { [k, $0.id, -1, 1] }
             }
             XCTAssertEqual(got, s.events, "\(s.name): Swift ve Python personel kararları farklı")
+        }
+    }
+
+    func testFrameVoteEntryPointMatchesPython() throws {
+        let fx = try fixture()
+        let images = fx.images.map { Pixels($0, palette: fx.palette) }
+        XCTAssertFalse(fx.voteFrames.isEmpty)
+        for v in fx.voteFrames {
+            let img = images[v.image]
+            let got = StaffColor.vote(box: Self.nbox(v.box), others: v.others.map(Self.nbox), anchor: CountAnchor(rawValue: v.anchor)!,
+                                      colors: v.colors.map { LabColor(L: $0[0], a: $0[1], b: $0[2]) },
+                                      width: img.w, height: img.h, rgbAt: img.at)
+            XCTAssertEqual(got, v.vote, "\(v.name): Swift ve Python kare oyu farklı")
+        }
+    }
+
+    func testFrameTeachEntryPointMatchesPython() throws {
+        let fx = try fixture()
+        let images = fx.images.map { Pixels($0, palette: fx.palette) }
+        XCTAssertFalse(fx.teachFrames.isEmpty)
+        for t in fx.teachFrames {
+            let img = images[t.image]
+            let got = StaffColor.teach(boxes: t.boxes.map(Self.nbox), point: (t.point[0], t.point[1]),
+                                       anchor: CountAnchor(rawValue: t.anchor)!, width: img.w, height: img.h, rgbAt: img.at)
+            if let ref = t.lab {
+                let c = try XCTUnwrap(got, "\(t.name): Swift nil, Python renk verdi")
+                XCTAssertEqual(c.L, ref[0], accuracy: 1e-4, t.name)
+                XCTAssertEqual(c.a, ref[1], accuracy: 1e-4, t.name)
+                XCTAssertEqual(c.b, ref[2], accuracy: 1e-4, t.name)
+            } else {
+                XCTAssertNil(got, "\(t.name): Python nil (çok karanlık), Swift renk verdi")
+            }
         }
     }
 
