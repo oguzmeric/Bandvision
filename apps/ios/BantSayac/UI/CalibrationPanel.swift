@@ -217,6 +217,9 @@ struct CalibrationPanel: View {
                     Text("Bu renk müşterilerde de sık görülür; müşteri yanlışlıkla düşülebilir.")
                         .font(.caption2).foregroundStyle(.orange)
                 }
+                if colors.count >= StaffColor.maxColors && !vm.teachingStaff {
+                    Text("En fazla \(StaffColor.maxColors) renk.").font(.caption2).foregroundStyle(.secondary)
+                }
             }
             Text("Bu renkte giyinenlerin geçişi giriş/çıkışa eklenmez, ayrı sayılır.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -155,6 +155,8 @@ final class FrameProcessor: @unchecked Sendable {
     func setTotals(in tIn: Int, out tOut: Int) { queue.async { self.total = tIn; self.totalOut = tOut } }
     func setStaffTotals(in sIn: Int, out sOut: Int) { queue.async { self.staffIn = sIn; self.staffOut = sOut } }
     func teachStaffColor(at p: CGPoint) { queue.async { self.pendingTeach = p } }
+    /// Bekleyen öğretmeyi bırakır (kare akmadı ya da kalibrasyon kapandı): sonradan eski dokunuştan renk eklenmesin
+    func cancelStaffTeach() { queue.async { self.pendingTeach = nil } }
     func setShowMask(_ on: Bool) { queue.async { self.showMask = on } }
     /// Video modunda işlenen kareyi de anlık görüntüyle yayınla.
     func setEmitFrameImages(_ on: Bool) { queue.async { self.emitFrameImages = on } }

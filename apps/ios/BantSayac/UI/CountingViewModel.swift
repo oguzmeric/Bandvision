@@ -31,6 +31,8 @@ final class CountingViewModel: ObservableObject {
     @Published private(set) var staffOut = 0
     /// Personel rengi öğretme modu: görüntüde dokunulan kişinin gövde rengi alınır
     @Published var teachingStaff = false
+    /// Öğretme dokunuşunun sonucu gelmezse (kare akmıyor) uyarı; başarılı öğretmede uyarı kalkar
+    private let staffFeedback: StaffTeachFeedback
     @Published private(set) var snapshot: EngineSnapshot = .empty
     /// Video/ağ kamerası modunda ekranda gösterilen son kare
     @Published private(set) var frameImage: CGImage?
@@ -94,6 +96,7 @@ final class CountingViewModel: ObservableObject {
         self.settings = AppSettings()
         self.logger = CountLogger()
         self.processor = FrameProcessor(queue: camera.processingQueue)
+        self.staffFeedback = StaffTeachFeedback()
         self.profile = store.selectedProfile
 
         processor.setProfile(profile)
@@ -125,15 +128,26 @@ final class CountingViewModel: ObservableObject {
             self?.staffOut = sOut
         }
         processor.onStaffColor = { [weak self] color in
-            guard let self, self.isCalibrating else { return }
+            guard let self else { return }
+            self.staffFeedback.resolved()
+            guard self.isCalibrating else { return }
             guard let color else {
-                self.calibrationMessage = "Burası çok karanlık; personelin üstüne dokunun."
+                self.calibrationMessage = self.staffFeedback.notice(StaffTeachFeedback.darkMessage,
+                                                                    current: self.calibrationMessage)
                 return
             }
+            self.calibrationMessage = self.staffFeedback.cleared(current: self.calibrationMessage)
             var colors = self.profile.staffColors ?? []
             guard colors.count < StaffColor.maxColors else { return }
             colors.append(color)
             self.profile.staffColors = colors
+        }
+        staffFeedback.onTimeout = { [weak self] in
+            guard let self else { return }
+            self.processor.cancelStaffTeach()               // eski dokunuştan sonradan renk eklenmesin
+            guard self.isCalibrating else { return }
+            self.calibrationMessage = self.staffFeedback.notice(StaffTeachFeedback.noFrameMessage,
+                                                                current: self.calibrationMessage)
         }
         processor.onSnapshot = { [weak self] snap in
             self?.snapshot = snap
@@ -280,9 +294,11 @@ final class CountingViewModel: ObservableObject {
         profile.countLine == nil ? "\(profile.direction.arrow) \(profile.direction.title.lowercased())" : "çizgideki ok yönünde"
     }
 
-    /// Personel rengi öğretme: bir sonraki karede bu normalize noktadaki kişinin gövde rengi alınır
+    /// Personel rengi öğretme: bir sonraki karede bu normalize noktadaki kişinin gövde rengi alınır. ~1,5 sn içinde
+    /// kare işlenmezse (video duraklatılmış ya da bitmiş) bekleyen öğretme bırakılır ve kullanıcı uyarılır.
     func teachStaffColor(at p: CGPoint) {
         teachingStaff = false
+        staffFeedback.tapped()
         processor.teachStaffColor(at: p)
     }
 
@@ -309,6 +325,8 @@ final class CountingViewModel: ObservableObject {
     private func finishCalibration() {
         isCalibrating = false
         teachingStaff = false
+        staffFeedback.reset()
+        processor.cancelStaffTeach()
         processor.setShowMask(settings.showMask)
         processor.resetTracking(resetBackground: false)
         if video != nil {
