@@ -99,12 +99,13 @@ export default function LiveView() {
     return () => clearInterval(t);
   }, [load]);
 
-  // kalibrasyonda düzenleyicinin arka planı: işaretsiz son kare (~1,5/sn)
+  // kalibrasyonda düzenleyicinin arka planı: işaretsiz son işlenen kare (~1,5/sn). Personel rengi öğretirken görüntü
+  // donar: sunucu, en son verdiği kareyi (ve o karenin kişi kutularını) örnekler — tıklanan kare ile aynı.
   useEffect(() => {
-    if (!draft) return;
+    if (!draft || teaching) return;
     const t = setInterval(() => setFrameTick((x) => x + 1), 650);
     return () => clearInterval(t);
-  }, [draft]);
+  }, [draft, teaching]);
 
   // öğrenilen değerler (eşik, tek ürün alanı, ürün boyu) sunucudan taslağa
   useEffect(() => {

@@ -380,7 +380,7 @@ def test_staff_teach_endpoint_and_status(client: TestClient, monkeypatch: pytest
     st = client.get(base).json()
     assert st["staffIn"] == 0 and st["staffOut"] == 0
 
-    r = client.post(f"{base}/staff-color", json={"x": 0.5, "y": 0.5})
+    r = wait_for(lambda: (q := client.post(f"{base}/staff-color", json={"x": 0.5, "y": 0.5})).status_code != 503 and q)
     assert r.status_code == 200, r.text
     c = r.json()
     assert set(c) == {"L", "a", "b", "achromatic"} and 0 <= c["L"] <= 100
@@ -392,16 +392,167 @@ def test_staff_teach_endpoint_and_status(client: TestClient, monkeypatch: pytest
     assert client.put(f"{base}/profile", json=prof).json()["profile"]["staffColors"][0]["L"] == c["L"]
 
 
+# ---------------------------------------------------------------------- personel rengi (oturum içi)
+
+def _offline_session(profile: Any) -> Any:
+    """Okuyucusu kaynak açamayan oturum ("yok.mp4"): işleyici kare almaz; kareler `_after_frame` ile elle verilir."""
+    from bantvision.live.session import LiveSession
+
+    return LiveSession("test", lambda: "yok.mp4", profile)
+
+
+def _detect_result(boxes: list[tuple[float, float, float, float]], counts: list[int] | None = None,
+                   counts_out: list[int] | None = None, staff: list[tuple[int, int]] | None = None) -> Any:
+    """Kişi sayımı (detect) için sahte kare sonucu: verilen tanıma kutuları, giriş/çıkış ve personel olayları."""
+    from bantvision.core.detect_count import DetectResult
+    from bantvision.core.pipeline import FrameResult
+    from bantvision.core.tracker import CountEvent
+
+    ins = [CountEvent(t, 1, True, 0.0, None) for t in counts or []]
+    outs = [CountEvent(t, 1, True, 0.0, None) for t in counts_out or []]
+    r = FrameResult(0.0, [], [], ins, [], [], None, 10.0, 0, (352, 288), None)
+    r.counts_out = outs
+    r.staff_events = list(staff or [])
+    r.detect = DetectResult([], [(b, 0.9) for b in boxes], [], [])
+    return r
+
+
+def _feed(s: Any, r: Any, frame: Any) -> None:
+    with s._lock:                                       # işleyici gibi: kilit altında
+        s._after_frame(r, frame)
+
+
+def _decode(jpeg: bytes) -> Any:
+    import cv2
+    import numpy as np
+
+    return cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+
+
 def test_staff_teach_rejects_dark_spot() -> None:
     import numpy as np
 
     from bantvision.core import Profile
-    from bantvision.live.session import LiveSession
 
-    s = LiveSession("test", lambda: "yok.mp4", Profile.egg())          # okuyucu açamaz: sahte kare ezilmez
+    s = _offline_session(Profile.egg())
     try:
-        with s._frame_cv:
-            s._latest = (1, 0.0, np.zeros((288, 352, 3), np.uint8))
+        with pytest.raises(LookupError):
+            s.teach_staff_color(0.5, 0.5)                 # henüz işlenen kare yok
+        r = _detect_result([])
+        r.detect = None
+        _feed(s, r, np.zeros((288, 352, 3), np.uint8))
         assert s.teach_staff_color(0.5, 0.5) is None
+    finally:
+        s.stop()
+
+
+ORANGE_BGR = (30, 120, 230)
+BLUE_BGR = (200, 60, 20)
+GRAY_BGR = (128, 128, 128)
+PERSON = (0.30, 0.10, 0.60, 0.95)               # normalize kişi kutusu; gövdesi turuncu
+CLICK = (0.45, 0.80)                            # kutunun bacak bölgesi: kutusuz örneklenseydi gri
+
+
+def _person_frame() -> Any:
+    """Gri sahne; kişi kutusunun gövde bölgesi turuncu (tıklama noktası kutu içinde ama gövde dışında: gri)."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.staff_color import torso_region
+
+    h, w = 288, 352
+    f = np.full((h, w, 3), GRAY_BGR, np.uint8)
+    x0, y0, x1, y1 = torso_region(PERSON, Profile.people().countAnchor)
+    f[int(y0 * h):int(y1 * h) + 1, int(x0 * w):int(x1 * w) + 1] = ORANGE_BGR
+    return f
+
+
+def test_staff_teach_uses_served_frame_and_its_boxes() -> None:
+    """Panel `frame.jpg` ile hangi kareyi gösterdiyse öğretme onu ve onun kutularını örnekler — sonra daha yeni
+    kareler işlense de. Daha yeni karenin pikselleri (mavi) ya da kutuları (yok → tıklanan yer: gri) kullanılsaydı
+    turuncu çıkmazdı."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.staff_color import color_distance, srgb_to_lab
+
+    orange = srgb_to_lab(*ORANGE_BGR[::-1])
+    blue = srgb_to_lab(*BLUE_BGR[::-1])
+    s = _offline_session(Profile.people())
+    try:
+        assert s.raw_jpeg() is None                                 # kare yok
+        _feed(s, _detect_result([PERSON]), _person_frame())
+        served = s.raw_jpeg()
+        assert served is not None
+        assert _decode(served)[int(0.5 * 288), int(0.45 * 352)][2] > 180     # verilen kare: turuncu gövde
+        _feed(s, _detect_result([]), np.full((288, 352, 3), BLUE_BGR, np.uint8))       # daha yeni kareler
+        _feed(s, _detect_result([(0.0, 0.0, 0.2, 0.3)]), np.full((288, 352, 3), BLUE_BGR, np.uint8))
+        c = s.teach_staff_color(*CLICK)
+        assert c is not None and color_distance(c, orange) < 1.0, c
+        assert s.teach_staff_color(*CLICK) == c                     # tekrar öğretme aynı kareden
+
+        s.raw_jpeg()                                                # yeni kare verildi: öğretme artık onu örnekler
+        c2 = s.teach_staff_color(*CLICK)
+        assert c2 is not None and color_distance(c2, blue) < 1.0, c2
+    finally:
+        s.stop()
+
+
+def test_staff_teach_without_served_frame_uses_latest_processed() -> None:
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.staff_color import color_distance, srgb_to_lab
+
+    s = _offline_session(Profile.people())
+    try:
+        _feed(s, _detect_result([]), np.full((288, 352, 3), BLUE_BGR, np.uint8))
+        _feed(s, _detect_result([PERSON]), _person_frame())
+        c = s.teach_staff_color(*CLICK)                             # son işlenen kare ve kendi kutusu
+        assert c is not None and color_distance(c, srgb_to_lab(*ORANGE_BGR[::-1])) < 1.0
+        s.raw_jpeg()
+        s.set_profile(Profile.people())                             # aynı yöntem (ör. renk eklendi): kare korunur
+        assert s.teach_staff_color(*CLICK) == c
+        s.set_profile(Profile.egg())                                # yöntem değişti: eski kutular kullanılmaz
+        with pytest.raises(LookupError):
+            s.teach_staff_color(*CLICK)
+    finally:
+        s.stop()
+
+
+def test_staff_events_reach_status_csv_and_labels() -> None:
+    """Personel geçişleri (§4.10 eki) web çıkışında: durumda staffIn/staffOut, CSV'de personel_giris/cikis, iz
+    etiketi "P"; giriş/çıkış toplamları personelden etkilenmez."""
+    import types
+
+    import numpy as np
+
+    from bantvision.core import Profile
+
+    s = _offline_session(Profile.people())
+    try:
+        s._pipe.detect.tracker.tracks = [types.SimpleNamespace(id=i) for i in (3, 4, 7, 8)]   # canlı izler
+        frame = np.full((288, 352, 3), GRAY_BGR, np.uint8)
+        with s._lock:
+            s._pipe.total, s._pipe.total_out = 1, 1           # sayım hattı bu karede 1 giriş, 1 çıkış saydı
+        _feed(s, _detect_result([], counts=[3], counts_out=[4], staff=[(7, 1), (8, -1)]), frame)
+        st = s.snapshot_status()
+        assert (st["staffIn"], st["staffOut"], st["total"], st["totalOut"]) == (1, 1, 1, 1)
+        assert s._labels == {3: "G1", 4: "Ç1", 7: "P", 8: "P"}
+
+        _feed(s, _detect_result([], staff=[(7, 1)]), frame)  # yalnızca personel: toplamlar değişmez
+        st = s.snapshot_status()
+        assert (st["staffIn"], st["staffOut"], st["total"], st["totalOut"]) == (2, 1, 1, 1)
+
+        rows = [line.split(";") for line in s.counts_csv().strip().splitlines()]
+        assert rows[0] == ["zaman", "iz", "yon", "giris_toplam", "cikis_toplam"]
+        assert [tuple(r[1:]) for r in rows[1:]] == [
+            ("3", "giris", "1", "0"), ("4", "cikis", "1", "1"),
+            ("7", "personel_giris", "1", "1"), ("8", "personel_cikis", "1", "1"),
+            ("7", "personel_giris", "1", "1")]
+
+        s.reset()
+        st = s.snapshot_status()
+        assert (st["staffIn"], st["staffOut"]) == (0, 0)
     finally:
         s.stop()

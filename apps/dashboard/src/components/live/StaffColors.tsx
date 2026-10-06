@@ -17,7 +17,7 @@ export default function StaffColors({ colors, teaching, onTeach, onRemove }: {
           {teaching ? "Vazgeç" : "Personel rengini öğret"}
         </button>
       </div>
-      {teaching && <p className="mb-1.5 rounded-lg bg-warn-50 px-2.5 py-1.5 text-[12px] text-warn-700">Görüntüde bir personelin gövdesine tıklayın.</p>}
+      {teaching && <p className="mb-1.5 rounded-lg bg-warn-50 px-2.5 py-1.5 text-[12px] text-warn-700">Görüntü donduruldu: bir personelin gövdesine tıklayın.</p>}
       {colors.length === 0 ? (
         <p className="text-[11.5px] text-faint">Kapalı — tüm geçişler sayılır.</p>
       ) : (

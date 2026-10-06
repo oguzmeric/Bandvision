@@ -142,6 +142,12 @@ test("kişi sayımı: personel rengi öğret, örnek görünür, sil", async ({ 
   const staff = page.getByRole("group", { name: "Personel rengi" });
   await expect(staff.getByText("Kapalı — tüm geçişler sayılır.")).toBeVisible();
   await staff.getByRole("button", { name: "Personel rengini öğret" }).click();
+  await expect(staff.getByText("Görüntü donduruldu: bir personelin gövdesine tıklayın.")).toBeVisible();
+  // öğretirken düzenleyicinin görüntüsü yenilenmez (sunucu tıklanan kareyi örnekler)
+  const editorImg = page.locator('img[src*="/frame.jpg"]');
+  const frozenSrc = await editorImg.getAttribute("src");
+  await page.waitForTimeout(1500);
+  await expect(editorImg).toHaveAttribute("src", frozenSrc ?? "");
   await page.getByRole("button", { name: "Görüntüde personelin üstüne tıklayın" }).click({ position: { x: 200, y: 200 } });
   await expect(staff.getByTestId("staff-swatch")).toHaveCount(1);
   await staff.getByRole("button", { name: "1. personel rengini sil" }).click();

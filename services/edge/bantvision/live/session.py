@@ -55,6 +55,13 @@ class _Counts:
     staff_out: int = 0
 
 
+@dataclass(frozen=True)
+class _Snapshot:
+    """İşlenen kare ve o karenin tanıma kutuları (normalize). Değişmez: başvuru takası atomiktir."""
+    frame: np.ndarray
+    boxes: tuple[tuple[float, float, float, float], ...]
+
+
 def open_capture(url: str) -> cv2.VideoCapture:
     """RTSP için FFmpeg seçenekleri; dosya/HTTP adresleri olduğu gibi açılır."""
     import os
@@ -99,7 +106,11 @@ class LiveSession:
         self._flash_in = True
         self._numbers: dict[int, list[int]] = {}
         self._labels: dict[int, str] = {}
-        self._last_boxes: list[tuple[float, float, float, float]] = []   # son karedeki tanıma kutuları (öğretme)
+        # Personel rengi öğretme (§4.10 eki): işlenen kare ve o karenin tanıma kutuları tek çift olarak tutulur.
+        # `raw_jpeg` son işlenen çiftin karesini verir ve onu "öğretme anlık görüntüsü" olarak hatırlar; öğretme o
+        # çiftten örnekler — kullanıcının tıkladığı kare ile örneklenen pikseller/kutular aynıdır.
+        self._processed: _Snapshot | None = None
+        self._teach_snapshot: _Snapshot | None = None
         self._stop = threading.Event()
         self._switch = threading.Event()                    # akış değişti (alt/ana): okuyucu yeniden bağlansın
         self._reader = threading.Thread(target=self._read_loop, name=f"live-read-{self.id[:8]}", daemon=True)
@@ -147,6 +158,9 @@ class LiveSession:
             self._pipe.set_profile(profile, reset_background=mode_changed)
             self._numbers.clear()
             self._labels.clear()
+        if mode_changed:                                    # kutular eski yöntemle bulundu: öğretmede kullanılmasın
+            with self._frame_cv:
+                self._processed = self._teach_snapshot = None
 
     def learn_background(self) -> None:
         with self._lock:
@@ -169,12 +183,14 @@ class LiveSession:
             self.calibration_message = ""
 
     def teach_staff_color(self, x: float, y: float) -> tuple[float, float, float] | None:
-        """Tıklanan noktadaki kişinin gövde rengi (§4.10 eki). Çok karanlıksa None; henüz kare yoksa LookupError."""
+        """Tıklanan noktadaki kişinin gövde rengi (§4.10 eki). Çok karanlıksa None; henüz işlenen kare yoksa
+        LookupError. Örnek, panelde gösterilen kareden (`raw_jpeg`'in son verdiği) ve o karenin kutularından alınır;
+        hiç kare verilmediyse son işlenen kareden. Sayım hattının kilidi beklenmez."""
         with self._frame_cv:
-            latest = self._latest
-        if latest is None:
+            snap = self._teach_snapshot or self._processed
+        if snap is None:
             raise LookupError("kare yok")
-        return teach_bgr(latest[2], list(self._last_boxes), (x, y), self.profile.countAnchor)
+        return teach_bgr(snap.frame, list(snap.boxes), (x, y), self.profile.countAnchor)
 
     # ------------------------------------------------------------------ okuma
 
@@ -207,12 +223,19 @@ class LiveSession:
             return self._jpeg_seq, self._jpeg
 
     def raw_jpeg(self) -> bytes | None:
-        """İşaretsiz son kare (kalibrasyon düzenleyicisinin arka planı)."""
+        """İşaretsiz son işlenen kare (kalibrasyon düzenleyicisinin arka planı). Verilen kare, kutularıyla birlikte
+        personel rengi öğretmesinin örnekleyeceği kare olarak hatırlanır. Henüz işlenen kare yoksa son okunan kare
+        (öğretme anlık görüntüsü değişmez)."""
         with self._frame_cv:
-            latest = self._latest
-        if latest is None:
-            return None
-        ok, buf = cv2.imencode(".jpg", latest[2], [cv2.IMWRITE_JPEG_QUALITY, 85])
+            snap = self._processed
+            if snap is not None:
+                self._teach_snapshot = snap
+                img = snap.frame
+            elif self._latest is not None:
+                img = self._latest[2]
+            else:
+                return None
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return buf.tobytes() if ok else None
 
     def counts_csv(self) -> str:
@@ -373,8 +396,6 @@ class LiveSession:
                 else:
                     c.staff_out += 1
                 c.events.append((now, tid, "personel_giris" if d > 0 else "personel_cikis", n_in, n_out))
-            if r.detect is not None:
-                self._last_boxes = [tuple(float(v) for v in b) for b, _ in r.detect.detections]
             alive = {t.id for t in self._pipe.detect.tracker.tracks}
             self._labels = {i: lab for i, lab in self._labels.items() if i in alive}
         else:
@@ -393,6 +414,10 @@ class LiveSession:
         if len(c.events) > 20000:                            # uzun oturumda bellek sınırlı (CSV son 20 bin olay)
             del c.events[: len(c.events) - 20000]
         self._flash = max(0.0, self._flash - 1 / max(5.0, r.fps or 25.0))
+        boxes = tuple((float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b, _ in r.detect.detections)             if r.detect is not None else ()
+        snap = _Snapshot(frame, boxes)
+        with self._frame_cv:                                 # kısa kilit: öğretme sayım hattını beklemez
+            self._processed = snap
 
     def _calibration_event(self, kind: str, value: Any) -> None:
         p = self.profile
