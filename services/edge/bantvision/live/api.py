@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core import Profile
+from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
@@ -26,6 +27,11 @@ from .store import CATALOG, LiveStore, make_preset
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class StaffColorIn(_Strict):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
 
 
 class SourceIn(_Strict):
@@ -443,6 +449,18 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             s.substream = body.substream  # type: ignore[attr-defined]
         return _session_view(s)
 
+    @r.post("/sessions/{session_id}/staff-color")
+    def teach_staff_color(session_id: str, body: StaffColorIn) -> dict[str, Any]:
+        """Personel rengini öğret: tıklanan kişinin gövde rengi (Lab). Profile eklemek panelin işi (PUT profile)."""
+        s = session_or_404(session_id)
+        try:
+            c = s.teach_staff_color(body.x, body.y)
+        except LookupError as e:
+            raise HTTPException(503, "Henüz görüntü yok.") from e
+        if c is None:
+            raise HTTPException(422, "Burası çok karanlık; personelin üstüne tıklayın.")
+        return {"L": round(c[0], 2), "a": round(c[1], 2), "b": round(c[2], 2), "achromatic": is_achromatic(c)}
+
     @r.put("/sessions/{session_id}/profile")
     def set_profile(session_id: str, body: dict[str, Any], save: bool = False) -> dict[str, Any]:
         """Oturumun profilini değiştirir (alan, çizgi, yön, yöntem…); `save=true` ise **bu kamera için** kaydeder
@@ -494,9 +512,12 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
 def _profile_from(body: dict[str, Any]) -> Profile:
     try:
-        return Profile.from_dict(body)
+        p = Profile.from_dict(body)
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(422, f"Profil geçersiz: {e}") from e
+    if len(p.staffColors) > MAX_COLORS:
+        raise HTTPException(422, f"En fazla {MAX_COLORS} personel rengi öğretilebilir.")
+    return p
 
 
 def _unique_name(name: str, taken: set[str]) -> str:

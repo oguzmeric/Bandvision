@@ -25,6 +25,7 @@ import numpy as np
 
 from ..core import Pipeline, Profile
 from ..core.pipeline import FrameResult
+from ..core.staff_color import teach_bgr
 from ..overlay import draw_detect
 from ..video import draw, number_label, split_numbers
 
@@ -50,6 +51,8 @@ class _Counts:
     per_minute: dict[int, int] = field(default_factory=dict)        # dakika (epoch // 60) → giriş/adet
     per_minute_out: dict[int, int] = field(default_factory=dict)
     events: list[tuple[float, int, str, int, int]] = field(default_factory=list)  # (epoch, iz, yön, toplam, çıkış)
+    staff_in: int = 0                       # §4.10 eki: personel geçişleri (giriş/çıkışa eklenmez)
+    staff_out: int = 0
 
 
 def open_capture(url: str) -> cv2.VideoCapture:
@@ -96,6 +99,7 @@ class LiveSession:
         self._flash_in = True
         self._numbers: dict[int, list[int]] = {}
         self._labels: dict[int, str] = {}
+        self._last_boxes: list[tuple[float, float, float, float]] = []   # son karedeki tanıma kutuları (öğretme)
         self._stop = threading.Event()
         self._switch = threading.Event()                    # akış değişti (alt/ana): okuyucu yeniden bağlansın
         self._reader = threading.Thread(target=self._read_loop, name=f"live-read-{self.id[:8]}", daemon=True)
@@ -164,6 +168,14 @@ class LiveSession:
             self.calibrating = None
             self.calibration_message = ""
 
+    def teach_staff_color(self, x: float, y: float) -> tuple[float, float, float] | None:
+        """Tıklanan noktadaki kişinin gövde rengi (§4.10 eki). Çok karanlıksa None; henüz kare yoksa LookupError."""
+        with self._frame_cv:
+            latest = self._latest
+        if latest is None:
+            raise LookupError("kare yok")
+        return teach_bgr(latest[2], list(self._last_boxes), (x, y), self.profile.countAnchor)
+
     # ------------------------------------------------------------------ okuma
 
     def snapshot_status(self) -> dict[str, Any]:
@@ -176,6 +188,7 @@ class LiveSession:
                 "state": self.status.state, "message": self.status.message,
                 "fps": round(self.status.fps, 1), "width": self.status.width, "height": self.status.height,
                 "counting": self.counting, "total": c.total, "totalOut": c.total_out,
+                "staffIn": c.staff_in, "staffOut": c.staff_out,
                 "twoWay": self.profile.countMode == "detect",
                 "ratePerMinute": rate // 2 if rate else 0,
                 "calibrating": self.calibrating, "calibrationMessage": self.calibration_message,
@@ -353,6 +366,15 @@ class LiveSession:
                 c.per_minute_out[minute] = c.per_minute_out.get(minute, 0) + 1
                 c.events.append((now, e.track_id, "cikis", n_in, n_out))
                 self._flash, self._flash_in = 0.35, False
+            for tid, d in r.staff_events:
+                self._labels[tid] = "P"
+                if d > 0:
+                    c.staff_in += 1
+                else:
+                    c.staff_out += 1
+                c.events.append((now, tid, "personel_giris" if d > 0 else "personel_cikis", n_in, n_out))
+            if r.detect is not None:
+                self._last_boxes = [tuple(float(v) for v in b) for b, _ in r.detect.detections]
             alive = {t.id for t in self._pipe.detect.tracker.tracks}
             self._labels = {i: lab for i, lab in self._labels.items() if i in alive}
         else:

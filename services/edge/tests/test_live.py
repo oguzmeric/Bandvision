@@ -367,3 +367,41 @@ def test_profile_names_rename_and_delete_rules(client: TestClient, monkeypatch: 
     assert client.delete(base).status_code == 204
     assert client.delete(f"/api/v1/live/profiles/{third['id']}").status_code == 204
     assert [p["name"] for p in client.get("/api/v1/live/profiles").json()].count("Yumurta") == 1
+
+
+def test_staff_teach_endpoint_and_status(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Personel rengi öğretme: tıklanan yerin rengi döner; durumda staffIn/staffOut; en çok 3 renk."""
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    src = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="")).json()
+    egg = next(p for p in client.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
+    s = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": egg["id"]}).json()
+    base = f"/api/v1/live/sessions/{s['id']}"
+    wait_for(lambda: client.get(f"{base}/frame.jpg").status_code == 200)
+    st = client.get(base).json()
+    assert st["staffIn"] == 0 and st["staffOut"] == 0
+
+    r = client.post(f"{base}/staff-color", json={"x": 0.5, "y": 0.5})
+    assert r.status_code == 200, r.text
+    c = r.json()
+    assert set(c) == {"L", "a", "b", "achromatic"} and 0 <= c["L"] <= 100
+    assert client.post(f"{base}/staff-color", json={"x": 1.5, "y": 0.5}).status_code == 422
+
+    prof = dict(st["profile"], staffColors=[{"L": 50, "a": 10, "b": 10}] * 4)
+    assert client.put(f"{base}/profile", json=prof).status_code == 422
+    prof["staffColors"] = [{"L": c["L"], "a": c["a"], "b": c["b"]}]
+    assert client.put(f"{base}/profile", json=prof).json()["profile"]["staffColors"][0]["L"] == c["L"]
+
+
+def test_staff_teach_rejects_dark_spot() -> None:
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("test", lambda: "yok.mp4", Profile.egg())          # okuyucu açamaz: sahte kare ezilmez
+    try:
+        with s._frame_cv:
+            s._latest = (1, 0.0, np.zeros((288, 352, 3), np.uint8))
+        assert s.teach_staff_color(0.5, 0.5) is None
+    finally:
+        s.stop()
