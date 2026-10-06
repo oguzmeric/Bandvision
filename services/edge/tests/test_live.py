@@ -92,6 +92,12 @@ def test_api_never_returns_password(client: TestClient) -> None:
     r = client.put(f"/api/v1/live/sources/{src['id']}", json={**camera(host="192.168.1.65"), "password": None})
     assert r.status_code == 200 and r.json()["hasPassword"]           # düzenlemede şifre korunur
 
+    # Panelin kaynağın kendi görünümünü geri göndermesi (kimlik, zaman, hasPassword) reddedilmez (eski hata: 3× 422)
+    view = {**r.json(), "name": "Ofis NVR", "password": None}
+    r = client.put(f"/api/v1/live/sources/{src['id']}", json=view)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Ofis NVR" and r.json()["hasPassword"] and r.json()["id"] == src["id"]
+
     for path in ("sources", "sessions", "profiles"):
         assert SECRET not in client.get(f"/api/v1/live/{path}").text
     assert SECRET not in r.text

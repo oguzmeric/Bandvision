@@ -98,6 +98,25 @@ export const STATE_LABELS: Record<LiveSession["state"], string> = {
 };
 
 /** JSON isteği; hata gövdesindeki `detail` Türkçe iletiyle fırlatılır */
+const FIELD_LABELS: Record<string, string> = {
+  host: "IP adresi", port: "RTSP portu", channel: "Kanal", httpPort: "Web/SDK portu", rtspPort: "Görüntü portu",
+  username: "Kullanıcı adı", password: "Şifre", name: "Ad", customUrl: "RTSP adresi",
+};
+
+/** Sunucunun alan doğrulama hataları (FastAPI 422) → kullanıcıya Türkçe, tekrarsız ileti */
+function validationMessage(errors: unknown[]): string {
+  const msgs = errors.map((e) => {
+    const { type = "", loc = [] } = e as { type?: string; loc?: unknown[] };
+    const field = String(loc[loc.length - 1] ?? "");
+    const label = FIELD_LABELS[field] ?? field;
+    if (type.startsWith("greater_than") || type.startsWith("less_than")) return `${label}: geçersiz sayı.`;
+    if (type === "string_too_long") return `${label} çok uzun.`;
+    if (type === "extra_forbidden") return "Panel ile analiz sunucusu sürümleri uyuşmuyor; ikisini de güncelleyip yeniden başlatın.";
+    return `${label || "Bilgi"} geçersiz.`;
+  });
+  return [...new Set(msgs)].join(" ");
+}
+
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
   const res = await fetch(`/api/live/${path}`, {
@@ -110,7 +129,7 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const d = (body as { detail?: unknown } | null)?.detail;
-    throw new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map((x) => (x as { msg?: string }).msg).join("; ")
+    throw new Error(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
       : `İstek başarısız (HTTP ${res.status}).`);
   }
   return body as T;

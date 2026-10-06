@@ -15,7 +15,7 @@ from typing import Any, Literal
 import cv2
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core import Profile
 from . import recorders as rec
@@ -45,6 +45,14 @@ class SourceIn(_Strict):
     # ortak
     username: str = Field(default="admin", max_length=128)
     password: str | None = Field(default=None, max_length=256)     # None: kayıtlı şifre korunur
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_read_only(cls, data: Any) -> Any:
+        """Kaynağın kendi görünümü (kimlik, zaman, şifre var mı) geri gönderilirse yok sayılır; bilinmeyen alan yine 422."""
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k not in ("id", "createdAt", "hasPassword")}
+        return data
 
 
 class SessionIn(_Strict):

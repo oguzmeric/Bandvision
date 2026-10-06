@@ -34,8 +34,16 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect(page.getByText("RTSP adresini yaz.")).toBeVisible();     // boş adres reddedilir
   await page.getByLabel("RTSP adresi").fill(CLIP);
+  await page.getByRole("textbox", { name: /^Ad/ }).fill("Test kamerası");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+
+  // Düzenle → Kaydet: ad değişir, kayıt reddedilmez (eski hata: "Extra inputs are not permitted")
+  await page.getByTestId("source-card").filter({ hasText: "Test kamerası" }).getByRole("button", { name: "Düzenle" }).click();
+  await expect(page.getByText("Kaynağı düzenle")).toBeVisible();
   await page.getByRole("textbox", { name: /^Ad/ }).fill("Test bandı");
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(page.getByText("Kaynağı düzenle")).toBeHidden();
+  await expect(page.getByText(/Extra inputs|geçersiz/)).toHaveCount(0);
 
   const card = page.getByTestId("source-card").filter({ hasText: "Test bandı" });
   await expect(card).toBeVisible();

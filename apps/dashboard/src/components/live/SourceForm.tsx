@@ -13,6 +13,13 @@ const EMPTY: Form = {
   recorderBrand: "trassir", httpPort: null, rtspPort: null, username: "admin", password: "",
 };
 
+/** Kayıtlı kaynaktan form: yalnızca düzenlenebilir alanlar (kimlik, oluşturma zamanı, "şifre kayıtlı" gönderilmez). */
+function toForm(s: Source): Form {
+  const { kind, name, brand, host, port, channel, substream, customUrl, recorderBrand, httpPort, rtspPort, username } = s;
+  return { kind, name, brand, host, port, channel, substream, customUrl, recorderBrand, httpPort, rtspPort, username,
+           password: null };
+}
+
 /**
  * IP kamera ya da kayıt cihazı (NVR/XVR) ekleme/düzenleme — telefondaki ağ kamerası formunun karşılığı.
  * Şifre yalnızca bu bilgisayardaki analiz sunucusuna gider; düzenlemede boş bırakılırsa kayıtlı şifre korunur.
@@ -20,9 +27,7 @@ const EMPTY: Form = {
 export default function SourceForm({ editing, onSaved, onCancel }: {
   editing: Source | null; onSaved: (s: Source) => void; onCancel?: () => void;
 }) {
-  const [f, setF] = useState<Form>(() => editing
-    ? { ...editing, password: null }
-    : EMPTY);
+  const [f, setF] = useState<Form>(() => (editing ? toForm(editing) : EMPTY));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((x) => ({ ...x, [k]: v }));
