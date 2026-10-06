@@ -517,6 +517,9 @@ def _profile_from(body: dict[str, Any]) -> Profile:
         raise HTTPException(422, f"Profil geçersiz: {e}") from e
     if len(p.staffColors) > MAX_COLORS:
         raise HTTPException(422, f"En fazla {MAX_COLORS} personel rengi öğretilebilir.")
+    for L, a, b in p.staffColors:                    # sözleşme: L 0–100, a/b −128–127 (NaN da reddedilir)
+        if not (0.0 <= L <= 100.0 and -128.0 <= a <= 127.0 and -128.0 <= b <= 127.0):
+            raise HTTPException(422, "Personel rengi geçersiz: L 0–100, a ve b −128–127 arasında olmalı.")
     return p
 
 

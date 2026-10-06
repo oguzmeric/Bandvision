@@ -388,6 +388,12 @@ def test_staff_teach_endpoint_and_status(client: TestClient, monkeypatch: pytest
 
     prof = dict(st["profile"], staffColors=[{"L": 50, "a": 10, "b": 10}] * 4)
     assert client.put(f"{base}/profile", json=prof).status_code == 422
+    for bad in ({"L": 101, "a": 0, "b": 0}, {"L": -1, "a": 0, "b": 0}, {"L": 50, "a": 128, "b": 0},
+                {"L": 50, "a": 0, "b": -129}):
+        r = client.put(f"{base}/profile", json=dict(prof, staffColors=[bad]))
+        assert r.status_code == 422 and "Personel rengi geçersiz" in r.json()["detail"], (bad, r.text)
+    edge = [{"L": 0, "a": -128, "b": 127}, {"L": 100, "a": 127, "b": -128}]      # sınırlar geçerli
+    assert client.put(f"{base}/profile", json=dict(prof, staffColors=edge)).status_code == 200
     prof["staffColors"] = [{"L": c["L"], "a": c["a"], "b": c["b"]}]
     assert client.put(f"{base}/profile", json=prof).json()["profile"]["staffColors"][0]["L"] == c["L"]
 
