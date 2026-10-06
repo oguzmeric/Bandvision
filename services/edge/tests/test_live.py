@@ -342,3 +342,28 @@ def test_area_and_line_are_saved_per_camera(client: TestClient, monkeypatch: pyt
     store = client.app.state.live.store                       # kaynak silinince kamera ayarı da silinir
     assert client.delete(f"/api/v1/live/sources/{srcs[0]['id']}").status_code == 204
     assert store.camera_profile(srcs[0]["id"], None, people["id"]) is None
+
+
+def test_profile_names_rename_and_delete_rules(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aynı hazır profil ikinci kez eklenince "Yumurta 2"; yeniden adlandırma boş/çakışan adı reddeder;
+    açık canlı sayımı olan profil silinmez."""
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    second = client.post("/api/v1/live/profiles", json={"preset": "egg"}).json()
+    third = client.post("/api/v1/live/profiles", json={"preset": "egg"}).json()
+    assert (second["name"], third["name"]) == ("Yumurta 2", "Yumurta 3")
+
+    base = f"/api/v1/live/profiles/{second['id']}"
+    assert client.put(base, json={**second, "name": "  "}).status_code == 422
+    assert client.put(base, json={**second, "name": "Yumurta"}).status_code == 409
+    r = client.put(base, json={**second, "name": " Hat 2 yumurta "})
+    assert r.status_code == 200 and r.json()["name"] == "Hat 2 yumurta"
+
+    src = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="")).json()
+    s = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": second["id"]}).json()
+    assert s["profile"]["name"] == "Hat 2 yumurta"
+    r = client.delete(base)
+    assert r.status_code == 409 and "açık canlı sayım" in r.json()["detail"]
+    assert client.delete(f"/api/v1/live/sessions/{s['id']}").status_code == 204
+    assert client.delete(base).status_code == 204
+    assert client.delete(f"/api/v1/live/profiles/{third['id']}").status_code == 204
+    assert [p["name"] for p in client.get("/api/v1/live/profiles").json()].count("Yumurta") == 1

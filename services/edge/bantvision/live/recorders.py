@@ -54,6 +54,7 @@ __all__ = [
 T = TypeVar("T")
 
 REQUEST_TIMEOUT_S = 8.0
+SNAPSHOT_TIMEOUT_S = 4.0     # küçük resim: görüntüsü olmayan kanal listeyi bekletmesin
 _JPEG_MAGIC = b"\xff\xd8"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
 
@@ -483,7 +484,7 @@ class _DeviceHTTP:
             url += "?" + "&".join(f"{_encode(k)}={_encode(v)}" for k, v in query)
         return self.get_url(url)
 
-    def get_url(self, url: str) -> bytes:
+    def get_url(self, url: str, timeout: float | None = None) -> bytes:
         try:
             parsed = httpx.URL(url)
         except httpx.InvalidURL:
@@ -492,7 +493,8 @@ class _DeviceHTTP:
             raise RecorderError.unexpected("geçersiz adres")
         target = f"{self.host}:{parsed.port or ''}"
         try:
-            response = self._client.get(parsed, auth=_DeviceAuth(self._username, self._password))
+            response = self._client.get(parsed, auth=_DeviceAuth(self._username, self._password),
+                                        **({"timeout": timeout} if timeout else {}))
         except httpx.TimeoutException:
             raise RecorderError.unreachable(f"{target} yanıt vermedi") from None
         except httpx.ConnectError as exc:
@@ -662,7 +664,8 @@ class TrassirClient(RecorderClient):
 
     def snapshot(self, channel: RecorderChannel) -> bytes:
         token = self._video_token(channel, "jpeg", "sub" if channel.has_substream else "main")
-        return _require_jpeg(self._http.get_url(f"http://{self.host}:{self.rtsp_port}/{token}"))
+        return _require_jpeg(self._http.get_url(f"http://{self.host}:{self.rtsp_port}/{token}",
+                                                timeout=SNAPSHOT_TIMEOUT_S))
 
     def keep_alive(self, stream_url: str) -> None:
         """Jeton yalnızca istek geldikçe yaşar; akış açıkken düzenli `?ping`. Hata yutulur."""

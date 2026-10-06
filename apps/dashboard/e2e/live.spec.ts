@@ -54,6 +54,17 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Kişi sayımı")).toBeVisible();
+
+  // Profil yönetimi: aynı hazır profil "Yumurta 2" olur; yeniden adlandırılır ve silinir
+  await dialog.getByRole("button", { name: "+ Yumurta profili ekle" }).click();
+  await expect(dialog.getByTestId("profile-row").filter({ hasText: "Yumurta 2" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Yeniden adlandır: Yumurta 2" }).click();
+  await dialog.getByLabel("Profil adı").fill("Hat 2 yumurta");
+  await dialog.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(dialog.getByTestId("profile-row").filter({ hasText: "Hat 2 yumurta" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Sil: Hat 2 yumurta" }).click();
+  await expect(dialog.getByTestId("profile-row").filter({ hasText: "Hat 2 yumurta" })).toHaveCount(0);
+  await expect(dialog.getByTestId("profile-row").filter({ hasText: /^Yumurta/ })).toHaveCount(1);
   await dialog.getByRole("button", { name: /^Yumurta/ }).click();
   await dialog.getByRole("button", { name: "Başlat", exact: true }).click();
 

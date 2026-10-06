@@ -141,6 +141,8 @@ class LiveManager:
 
     def channels(self, src: dict[str, Any], refresh: bool = False) -> list[rec.RecorderChannel]:
         sid = src["id"]
+        if refresh:                                         # "Yenile": küçük resimler de yeniden denensin
+            self._snap_failed = {k: v for k, v in self._snap_failed.items() if not k.startswith(f"{sid}|")}
         if not refresh and sid in self._channels:
             return self._channels[sid]
         chans = self.recorder(src).channels()
@@ -213,11 +215,14 @@ class LiveManager:
             except rec.RecorderError as e:
                 if e.kind == "unauthorized":
                     raise
+                # Kayıt cihazının görüntü API'si var: alınamadıysa kamera görüntü vermiyor. RTSP'yi ayrıca denemek
+                # küçük resmi 10+ sn bekletiyordu (kapalı kanallar listeyi ve paneli tıkıyordu).
+                raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).") from e
         open_url, _ = self.opener(src, channel_id)          # küçük resim API'si yok: RTSP'den ilk kare
         return grab_jpeg(open_url())
 
 
-SNAPSHOT_RETRY_S = 60.0
+SNAPSHOT_RETRY_S = 300.0                    # görüntüsü gelmeyen kamera 5 dk denenmez ("Yenile" ile hemen)
 _GRAB_SLOTS = threading.BoundedSemaphore(2)   # aynı anda en çok 2 RTSP küçük resim: kayıt cihazını ve canlı oturumu boğmasın
 
 
@@ -286,6 +291,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         else:
             p = _profile_from(body)
             p.id = Profile().id                             # yeni kimlik
+        p.name = _unique_name(p.name.strip() or "Profil", {x.get("name", "") for x in store.profiles()})
         return store.save_profile(p)
 
     @r.put("/profiles/{profile_id}")
@@ -294,10 +300,17 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Profil bulunamadı.")
         p = _profile_from(body)
         p.id = profile_id
+        p.name = p.name.strip()[:80]
+        if not p.name:
+            raise HTTPException(422, "Profil adı boş olamaz.")
+        if any(x.get("name") == p.name and x.get("id") != profile_id for x in store.profiles()):
+            raise HTTPException(409, "Bu adda başka bir profil var.")
         return store.save_profile(p)
 
     @r.delete("/profiles/{profile_id}", status_code=204)
     def delete_profile(profile_id: str) -> Response:
+        if any(getattr(s, "profile_id", None) == profile_id for s in manager.sessions.values()):
+            raise HTTPException(409, "Bu profille açık canlı sayım var; önce o sayımı kapatın.")
         if not store.delete_profile(profile_id):
             raise HTTPException(409, "Profil silinemedi (bulunamadı ya da son profil).")
         return Response(status_code=204)
@@ -364,10 +377,11 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.post("/sessions", status_code=201)
     def create_session(body: SessionIn) -> dict[str, Any]:
         src = manager.source_or_404(body.sourceId)
-        profile = (store.camera_profile(body.sourceId, body.channelId, body.profileId)   # bu kameranın ayarı
-                   or store.profile(body.profileId))                                   # yoksa şablon
-        if profile is None or store.profile(body.profileId) is None:
+        template = store.profile(body.profileId)
+        profile = store.camera_profile(body.sourceId, body.channelId, body.profileId) or template  # kamera ayarı ya da şablon
+        if profile is None or template is None:
             raise HTTPException(404, "Profil bulunamadı.")
+        profile.name = template.name                         # yeniden adlandırma kamera ayarlarına da yansısın
         for s in list(manager.sessions.values()):           # aynı kamera iki kez açılmasın
             if getattr(s, "source_id", None) == body.sourceId and getattr(s, "channel_id", None) == body.channelId:
                 s.stop()
@@ -483,6 +497,16 @@ def _profile_from(body: dict[str, Any]) -> Profile:
         return Profile.from_dict(body)
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(422, f"Profil geçersiz: {e}") from e
+
+
+def _unique_name(name: str, taken: set[str]) -> str:
+    """Aynı adlı ikinci profil "Yumurta 2" olur (listede ayırt edilsin)."""
+    if name not in taken:
+        return name
+    n = 2
+    while f"{name} {n}" in taken:
+        n += 1
+    return f"{name} {n}"[:80]
 
 
 def _default_name(data: dict[str, Any]) -> str:

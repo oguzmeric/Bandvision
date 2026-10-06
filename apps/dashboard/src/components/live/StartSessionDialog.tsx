@@ -62,6 +62,33 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
     }
   }
 
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+
+  async function rename(p: Profile, name: string) {
+    if (!name.trim() || name.trim() === p.name) { setRenaming(null); return; }
+    try {
+      const saved = await api<Profile>(`profiles/${p.id}`, { method: "PUT", json: { ...p, name: name.trim() } });
+      setProfiles((x) => (x ?? []).map((q) => (q.id === p.id ? saved : q)));
+      setRenaming(null);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function remove(p: Profile) {
+    if (!confirm(`"${p.name}" profili silinsin mi? Bu profille kameralarda kaydedilen alan ve çizgi ayarları da silinir.`)) return;
+    try {
+      await api(`profiles/${p.id}`, { method: "DELETE" });
+      setProfiles((x) => (x ?? []).filter((q) => q.id !== p.id));
+      if (selected === p.id) setSelected(null);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function start() {
     if (!selected) return;
     setBusy(true);
@@ -83,7 +110,11 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
         <p id="start-title" className="text-lg font-semibold">Canlı sayımı başlat</p>
         <p className="mb-4 truncate text-[13px] text-muted">{title}</p>
         <p className="eyebrow mb-2">Ne sayacaksın?</p>
-        {profiles === null && !error && <div className="h-24 animate-pulse rounded-xl bg-canvas" />}
+        {profiles === null && !error && (
+          <div className="grid h-24 place-items-center rounded-xl bg-canvas text-[13px] text-muted" aria-live="polite">
+            <span className="animate-pulse">Profiller yükleniyor…</span>
+          </div>
+        )}
         <div className="grid max-h-[50vh] gap-4 overflow-y-auto pr-1">
           {catalog.filter((c) => c.available).map((cat) => {
             const list = (profiles ?? []).filter((p) => categoryOf(p) === cat.id);
@@ -92,15 +123,39 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
                 <p className="mb-1.5 text-sm font-semibold">{cat.title}</p>
                 <div className="grid gap-1.5">
                   {list.map((p) => (
-                    <button key={p.id} type="button" onClick={() => setSelected(p.id)} aria-pressed={selected === p.id}
-                            className={`flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition ${selected === p.id
-                              ? "border-brand-500 bg-brand-50" : "border-line hover:border-brand-100"}`}>
-                      <span>
-                        <span className="block text-sm font-medium">{p.name}</span>
-                        <span className="block text-xs text-faint">{profileStatus(p)}</span>
-                      </span>
-                      <span aria-hidden="true" className={`h-4 w-4 rounded-full border-2 ${selected === p.id ? "border-brand-500 bg-brand-500" : "border-line"}`} />
-                    </button>
+                    <div key={p.id} data-testid="profile-row"
+                         className={`flex items-center gap-1 rounded-xl border pr-1.5 transition ${selected === p.id
+                           ? "border-brand-500 bg-brand-50" : "border-line hover:border-brand-100"}`}>
+                      {renaming === p.id ? (
+                        <form className="flex flex-1 items-center gap-1.5 py-1.5 pl-2" onSubmit={(e) => { e.preventDefault(); rename(p, newName); }}>
+                          <input autoFocus aria-label="Profil adı" value={newName} maxLength={80}
+                                 onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setRenaming(null)}
+                                 className="h-8 min-w-0 flex-1 rounded-[8px] border border-line bg-white px-2 text-sm outline-none focus:border-brand-500" />
+                          <button type="submit" className="h-8 rounded-[8px] bg-brand-500 px-2.5 text-[12.5px] font-semibold text-white">Kaydet</button>
+                          <button type="button" onClick={() => setRenaming(null)} className="h-8 rounded-[8px] px-2 text-[12.5px] text-muted">Vazgeç</button>
+                        </form>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => setSelected(p.id)} aria-pressed={selected === p.id}
+                                  className="flex flex-1 items-center gap-2.5 px-3 py-2.5 text-left">
+                            <span aria-hidden="true" className={`h-4 w-4 shrink-0 rounded-full border-2 ${selected === p.id ? "border-brand-500 bg-brand-500" : "border-line"}`} />
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium">{p.name}</span>
+                              <span className="block text-xs text-faint">{profileStatus(p)}</span>
+                            </span>
+                          </button>
+                          <button type="button" aria-label={`Yeniden adlandır: ${p.name}`} title="Yeniden adlandır"
+                                  onClick={() => { setRenaming(p.id); setNewName(p.name); }}
+                                  className="grid h-8 w-8 place-items-center rounded-[8px] text-muted hover:bg-white hover:text-ink">
+                            <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" /></svg>
+                          </button>
+                          <button type="button" aria-label={`Sil: ${p.name}`} title="Sil" onClick={() => remove(p)}
+                                  className="grid h-8 w-8 place-items-center rounded-[8px] text-muted hover:bg-nok-50 hover:text-nok-600">
+                            <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   ))}
                   {cat.presets.map((pr) => (
                     <button key={pr.key} type="button" onClick={() => addPreset(pr.key)}
