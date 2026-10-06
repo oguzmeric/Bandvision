@@ -96,3 +96,55 @@ def test_teach_from_box_patch_and_dark() -> None:
     assert c2 is not None and sc.color_distance(c2, lab_of(ORANGE)) < 3
     black = np.zeros((360, 640, 3), np.uint8)
     assert sc.teach_bgr(black, [], (0.5, 0.5), "bottom") is None
+
+
+class _FakeDetector:
+    """Karedeki renkli dikdörtgenleri kişi kutusu olarak döndürür (tanıma modeli gerekmez)."""
+
+    def __init__(self, boxes_per_frame: list[list[tuple[float, float, float, float]]]) -> None:
+        self.frames = boxes_per_frame
+        self.k = 0
+
+    def detect(self, crop: np.ndarray, _classes: object, conf: float = 0.15) -> list[object]:
+        from types import SimpleNamespace
+
+        h, w = crop.shape[:2]
+        out = [SimpleNamespace(x1=b[0] * w, y1=b[1] * h, x2=b[2] * w, y2=b[3] * h, score=0.9)
+               for b in self.frames[self.k]]
+        self.k += 1
+        return out
+
+
+def _run(people: list[tuple[tuple[int, int, int], float]], colors: list[sc.LabColor]) -> tuple[int, int, int]:
+    """Yan yana kişiler (renk, x merkezi) yukarıdan aşağı geçer; (giriş, personel giriş, personel çıkış)."""
+    from bantvision.core import Pipeline, Profile
+
+    p = Profile.people()
+    p.direction, p.linePosition, p.countAnchor, p.staffColors = "down", 0.55, "bottom", colors
+    n = 40
+    frames, boxes = [], []
+    for k in range(n):
+        y = 0.05 + 0.6 * k / (n - 1)
+        img = np.full((360, 640, 3), 128, np.uint8)
+        fb = []
+        for rgb, cx in people:
+            b = (cx - 0.04, y, cx + 0.04, y + 0.33)
+            img[int(b[1] * 360):int(b[3] * 360), int(b[0] * 640):int(b[2] * 640)] = rgb[::-1]
+            fb.append(b)
+        frames.append(img)
+        boxes.append(fb)
+    pipe = Pipeline(p)
+    pipe.detect._detector = _FakeDetector(boxes)            # type: ignore[assignment]
+    pipe.detect.motion = None
+    pipe.counting = True
+    for k, img in enumerate(frames):
+        pipe.process(img, k / 10)
+    return pipe.total, pipe.total_staff_in, pipe.total_staff_out
+
+
+def test_pipeline_counts_staff_separately_in_group() -> None:
+    staff = [lab_of(ORANGE)]
+    assert _run([(ORANGE, 0.40)], staff) == (0, 1, 0)
+    assert _run([(NAVY, 0.40)], staff) == (1, 0, 0)
+    assert _run([(ORANGE, 0.40), (NAVY, 0.52)], staff) == (1, 1, 0)       # yan yana: personel + müşteri
+    assert _run([(ORANGE, 0.40), (NAVY, 0.52)], []) == (2, 0, 0)          # renk yok: bugünkü davranış

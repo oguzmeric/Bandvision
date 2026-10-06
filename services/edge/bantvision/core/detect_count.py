@@ -23,6 +23,7 @@ from .detector import ObjectDetector
 from .lineframe import LineFrame
 from .people_track import MotTrack, MotTracker, iou
 from .profile import Profile
+from .staff_color import vote_bgr
 
 NormBox = tuple[float, float, float, float]
 
@@ -35,6 +36,8 @@ class DetectResult:
     exits: list[MotTrack]
     line: tuple[tuple[float, float], tuple[float, float]] = field(default=((0.0, 0.5), (1.0, 0.5)))
     motion: list[NormBox] = field(default_factory=list)  # hareket lekeleri (çizim/teşhis)
+    staff_entries: list[MotTrack] = field(default_factory=list)     # §4.10 eki: personel geçişleri
+    staff_exits: list[MotTrack] = field(default_factory=list)
 
 
 def inside_roi(profile: Profile, x: float, y: float) -> bool:
@@ -198,7 +201,16 @@ class DetectCounter:
         # zaten bulur; kapı, ekran, gölge hareketi ise hayalet iz üretir.
         blobs = self.motion(bgr, profile) if self.motion is not None and profile.countAnchor == "center" else None
         r = profile.roi
+        colors = profile.staffColors
+        anchor_mode = profile.countAnchor
+
+        def staff_vote(box: np.ndarray, others: list[np.ndarray]) -> bool | None:
+            return vote_bgr(bgr, tuple(float(v) for v in box), [tuple(float(v) for v in o) for o in others],
+                            anchor_mode, colors)
+
         ins, outs = self.tracker.update(dets, side_of, profile.countAnchor, blobs,
-                                        (r.x, r.y, r.x + r.width, r.y + r.height))
+                                        (r.x, r.y, r.x + r.width, r.y + r.height),
+                                        staff_vote if colors else None)
         seen = [t for t in self.tracker.tracks if t.confirmed and t.misses == 0]
-        return DetectResult(seen, dets, ins, outs, line, blobs or [])
+        return DetectResult(seen, dets, ins, outs, line, blobs or [],
+                            list(self.tracker.staff_entered), list(self.tracker.staff_exited))

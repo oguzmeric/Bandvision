@@ -37,6 +37,7 @@ class FrameResult:
     counts_out: list[CountEvent] = field(default_factory=list)   # detect: ters yönde geçenler (çıkış)
     total_out: int = 0
     detect: DetectResult | None = field(default=None, repr=False)   # detect: izler, tespitler, çizgi (çizim)
+    staff_events: list[tuple[int, int]] = field(default_factory=list)   # detect: personel (iz, +1 giriş/−1 çıkış)
 
 
 class Pipeline:
@@ -48,6 +49,8 @@ class Pipeline:
         self.linescan = LineScanCounter()       # §4.9 (countMode = "linescan")
         self.detect = DetectCounter()           # §4.10 (countMode = "detect"); model ilk karede yüklenir
         self.total_out = 0                      # detect: ters yönde geçenler (çıkış)
+        self.total_staff_in = 0                 # detect §4.10 eki: personel geçişleri (giriş/çıkışa eklenmez)
+        self.total_staff_out = 0
         self.counting = True
         self.total = 0
         self._calib: str | None = None          # "background" | "sample"
@@ -89,6 +92,8 @@ class Pipeline:
     def reset_count(self) -> None:
         self.total = 0
         self.total_out = 0
+        self.total_staff_in = 0
+        self.total_staff_out = 0
         self.tracker.reset()
         self.linescan.reset()
         self.detect.reset()
@@ -283,7 +288,10 @@ class Pipeline:
         outs = [CountEvent(t.id, 1, True, 0.0, None) for t in r.exits] if self.counting else []
         self.total += len(ins)
         self.total_out += len(outs)
-        if r.tracks or ins or outs:
+        staff = ([(t.id, 1) for t in r.staff_entries] + [(t.id, -1) for t in r.staff_exits]) if self.counting else []
+        self.total_staff_in += sum(1 for _, d in staff if d > 0)
+        self.total_staff_out += sum(1 for _, d in staff if d < 0)
+        if r.tracks or ins or outs or staff:
             self._last_activity = ts
         now_running = self._last_activity is not None and ts - self._last_activity <= self.idle_seconds
         change = None
@@ -295,5 +303,6 @@ class Pipeline:
         res = FrameResult(ts, [], markers, ins, [], calib, change, fps, self.total, full_size, None)
         res.counts_out = outs
         res.total_out = self.total_out
+        res.staff_events = staff
         res.detect = r
         return res

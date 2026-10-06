@@ -106,7 +106,7 @@ def draw_detect(frame: np.ndarray, profile: Profile, det: DetectResult | None, e
         for t in det.tracks:
             x1, y1, x2, y2 = (int(t.box[0] * w), int(t.box[1] * h), int(t.box[2] * w), int(t.box[3] * h))
             lab = labels.get(t.id)
-            col = GREEN if lab and lab.startswith("G") else (RED if lab else WHITE)
+            col = GRAY if lab == "P" else (GREEN if lab and lab.startswith("G") else (RED if lab else WHITE))
             cv2.rectangle(frame, (x1, y1), (x2, y2), col, th, cv2.LINE_AA)
             if len(t.trail) > 1:
                 pts = np.array([[int(px * w), int(py * h)] for px, py in t.trail], np.int32)
