@@ -69,7 +69,7 @@ export default function CountChart({ jobId, seconds }: { jobId: string; seconds?
   };
   const drawn = series.map((s) => ({ ...s, ...step(s.points) }));
   const single = drawn.length === 1;
-  const summary = drawn.map((s) => `${int(s.total)} ${s.label}`).join(" · ");
+  const summary = single ? `${int(drawn[0].total)} ürün` : drawn.map((s) => `${int(s.total)} ${s.label}`).join(" · ");
 
   return (
     <figure>
