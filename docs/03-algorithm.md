@@ -124,6 +124,43 @@ Sonuç: çizgide sallanan/bekleyen ve kutu kenarı tek karelik zıplayan sayılm
     - Tepeden kamera mağaza girişi (46 sn, 3 giriş + 3 çıkış): 3/3. Altı geçişin zamanı da doğru, çizgi 0,50–0,65 ve `center`/`bottom` ile aynı. Hareket desteği olmadan 1/2.
     - Yatık koridor kamerası (78 sn, 9 giriş + 3 çıkış; ikisi kapıya kadar gidip dönen kişi): 9/3, 12 geçişin hepsi doğru, sahte olay 0. Çizgi kapı eşiğindeyken (kurulum hatası) 8/4 ve olaylar yanlıştı.
 
+#### §4.10 eki: personel rengi (isteğe bağlı, kamera/profil başına)
+
+Mağaza personeli belirgin renkte üniforma/yelek giyiyorsa bu renk bir kez öğretilir (`staffColors`, en çok 3 renk, Lab); o renkteki kişilerin geçişi **müşteri** `total` / `total_out` toplamına eklenmez, ayrı **personel geçişi** (`staff_in` / `staff_out`) sayılır. `staffColors` yoksa ya da boşsa kod yolu çalışmaz, davranış bu eke kadar olanla birebir aynıdır. Kutular normalize `(x1, y1, x2, y2)`, `w = x2 − x1`, `h = y2 − y1`. Python başvurusu `core/staff_color.py`; Swift `Vision/StaffColor.swift`; ikisi aşağıdakini birebir uygular.
+
+**Gövde bölgesi:** `x ∈ [x1 + 0,30w, x1 + 0,70w]`; `countAnchor = bottom` (yandan/yatık) için `y ∈ [y1 + 0,15h, y1 + 0,45h]`, `center` (tepeden) için `y ∈ [y1 + 0,30h, y1 + 0,70h]`. Kutu `w·W < 8` ya da `h·H < 16` pikselse oy yok.
+
+**Oy verilen kutular:** o karede **tanımayla gözlenen** her kutu (eşleşen düşük güvenli tespit dahil); tahmin ya da hareket lekesiyle sürdürülen karede oy yok. `others` = aynı karede parça bastırmadan sonra kalan **diğer tüm** tanıma kutuları (düşük güvenliler dahil).
+
+**Örtüşme dışlama:** ızgara noktası `others` kutularından birinin içine düşüyorsa (sınır dahil) atılır — yan yana/üst üste grupta komşunun rengi karışmasın. Kalan nokta `< 36` (ızgaranın %25'i) ise o karede oy yok.
+
+**Örnekleme:** bölgede 12 × 12 ızgara; nokta `(i, j)`: `px = rx0 + (i + 0,5)/12 · rw`, `py = ry0 + (j + 0,5)/12 · rh`; piksel `⌊px · W⌋`, `⌊py · H⌋`, `[0, W−1] × [0, H−1]` aralığına kırpılır. Görüntü sRGB 8 bit. iPhone'da kameranın YUV verisi yalnızca örnek noktalarda RGB'ye çevrilir; matris (BT.709 / BT.601) tampon eki (attachment) bilgisinden seçilir. Eşdeğerlik RGB örneklerinden itibaren tanımlıdır.
+
+**sRGB → CIE Lab (D65):**
+- Doğrusallaştırma: `c = v/255`; `c ≤ 0,04045 ? c/12,92 : ((c + 0,055)/1,055)^2,4`.
+- `X = 0,4124564 R + 0,3575761 G + 0,1804375 B`, `Y = 0,2126729 R + 0,7151522 G + 0,0721750 B`, `Z = 0,0193339 R + 0,1191920 G + 0,9503041 B`; beyaz nokta `Xn = 0,95047`, `Yn = 1`, `Zn = 1,08883`.
+- `f(t) = t > 0,008856 ? ∛t : 7,787 t + 16/116`; `L = 116 f(Y/Yn) − 16`, `a = 500 (f(X/Xn) − f(Y/Yn))`, `b = 200 (f(Y/Yn) − f(Z/Zn))`.
+
+**Eşleşme:** nokta öğretilen renklerden birine `d = √((0,5 ΔL)² + Δa² + Δb²) < 20` uzaklıktaysa ve `L ≥ 8` ise eşleşir (parlaklık yarım ağırlıklı: gölge/ışık farkına dayanıklı; çok karanlık nokta eşleşmez).
+
+**Kare oyu:** kalan noktaların eşleşen oranı `≥ 0,25` → personel oyu. İz başına `votes` (oy verilen kare) ve `staff_votes` birikir. Oy, aynı karenin geçiş gözleminden (adım 8) **önce** işlenir; böylece geçişin gerçekleştiği karenin oyu da karara girer.
+
+**Geçiş kararı:** geçiş onaylanıp sayıldığı anda (bekleyen geçişler dahil) `votes ≥ 3` ve `2 · staff_votes ≥ votes` ise geçiş **personel** (`staff_in` / `staff_out`), değilse müşteri. Karar her geçişte oylar birikmiş haliyle yeniden verilir. Karanlık/belirsiz sahnede noktalar eşleşmez → müşteri sayılır (güvenli yön).
+
+**Öğretme:** (1) tıklanan noktayı içeren en küçük alanlı tanıma kutusunun gövde bölgesi; kutu yoksa tıklanan yer merkezli, kenarı görüntü genişliğinin 0,06'sı olan kare (yükseklik oranlı). (2) 12 × 12 nokta Lab'a çevrilir; `(⌊a/8⌋, ⌊b/8⌋)` kutucuklarından en çok nokta düşen seçilir (eşitlikte ilk görülen). (3) Sonuç = o kutucuktaki noktaların L, a, b **medyanı**. Medyan `L < 8` ise reddedilir (çok karanlık).
+
+**Arayüz uyarısı (sayımı etkilemez):** öğretilen renk akromatik (`C = √(a² + b²) < 15`) ya da koyuysa (`L < 30`, `COMMON_DARK_L`) "Bu renk müşterilerde de sık görülür; müşteri yanlışlıkla düşülebilir." gösterilir.
+
+**Çıktı:** web canlı sayım `staffIn` / `staffOut` ve CSV'de `personel_giris` / `personel_cikis` satırları (giriş/çıkış toplamlarına katılmaz); iPhone ekranda "Personel geçişi: N". Personel geçişi **olay olarak gönderilmez**; iPhone CSV ve webhook değişmez (yalnızca müşteri).
+
+**Sabitler** (`staff_color.py` ↔ `StaffColor.swift`): `GRID = 12`, `MATCH_DIST = 20`, `MIN_FRACTION = 0,25`, `MIN_POINTS = 36`, `DARK_L = 8`, `MIN_VOTES = 3`, `ACHROMATIC_C = 15`, `COMMON_DARK_L = 30`, `TEACH_PATCH = 0,06`, `MAX_COLORS = 3`, `MIN_BOX_PX = (8, 16)`. Oy `people_track.py` (`votes`, `staff_votes`), `detect_count.py`, `pipeline.py`; Swift `PeopleTracker.swift`, `PeopleCounter.swift`, `FrameProcessor.swift`.
+
+**Doğrulama:**
+- `test_staff_color.py`: Lab referans değerleri, oy (tam üniforma, gövdenin %30'u yelek, gölge, başka renk, akromatik, örtüşme), öğretme; izleyici/boru hattı testleri (tek başına personel, personel + müşteri yan yana, renk yokken birebir aynı sayılar).
+- Eşdeğerlik: `tools/make_staff_fixture.py` → `apps/ios/BantSayacTests/staff_parity.json`; Python `test_staff_fixture.py` ve Swift `StaffColorTests` aynı fikstürü doğrular.
+- **Kabul ölçütü: her kamera açısında (tepeden, eğik ~45°, yandan) personel yakalama ≥ %95 ve yanlış hariç tutma ≤ %5.** Ölçüm: `python tools/eval_staff.py VIDEO --profile profil.json --labels VIDEO.staff.json --angle tepeden`. Etiket `[{"t": sn, "dir": "in"|"out", "staff": true|false}]`; her etiket aynı yönde ±1,5 sn içindeki en yakın tahmine eşlenir. Açı başına en az 20 personel + 20 müşteri geçişi (müşterilerin bir kısmı koyu/siyah giyimli, bir kısmı yan yana grupta). Gerçek ölçümler bekliyor (kayıt gerekli; kayıtlar public repoya konmaz). %95'i tutmayan açıda eşikler (`MATCH_DIST`, `MIN_FRACTION`, gövde bölgesi) yalnızca ölçümle ayarlanır ve iki tarafta birlikte değişir.
+
+
 ## 5. Kalibrasyon
 **Boş bant öğrenme** (`backgroundSeconds = 1.0`, `N = round(fps · 1.0)`, en az 15 kare):
 - 0. kare: `bg = gray`. Sonrakiler: `bg += 0.15·(gray − bg)` (koşulsuz).

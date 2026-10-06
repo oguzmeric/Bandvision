@@ -115,6 +115,11 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
   - Gerçek videolar:
     - Tepeden mağaza girişi: 3 giriş + 3 çıkış, birebir ve zamanları doğru.
     - Yatık koridor: 9 giriş + 3 çıkış, 12 geçişin hepsi doğru, sahte olay 0. Kapıya kadar gidip dönen iki kişi giriş + çıkış sayıldı.
+- **Personel rengi** (2026-10-06, `personel-rengi` dalında; main'e birleştirilene kadar yayında değil):
+  - Üniforma/yelek rengi kamera (web) ya da profil (iPhone) başına bir kez öğretilir (en çok 3 renk, isteğe bağlı); o renkteki kişilerin geçişi müşteri Giriş/Çıkış'a eklenmez, ayrı "Personel geçişi" sayılır. Renk yoksa davranış değişmez. Algoritma `03-algorithm.md` §4.10 eki.
+  - Web: `staffIn`/`staffOut`, CSV'de `personel_giris`/`personel_cikis`; iPhone yalnızca ekranda gösterir (CSV/webhook değişmez). Personel geçişi olay olarak gönderilmez.
+  - Python ↔ Swift eşdeğerliği `staff_parity.json` ile sınanır.
+  - **Gerçek ölçüm BEKLİYOR:** kabul ölçütü her kamera açısında (tepeden, eğik ~45°, yandan) personel yakalama ≥ %95 ve yanlış hariç tutma ≤ %5; `tools/eval_staff.py` ile ölçülecek, etiketli kayıtlar (açı başına ≥ 20 personel + ≥ 20 müşteri geçişi) kullanıcıdan gelmeli. Sonuçlar ölçülünce buraya yazılacak; şimdilik doğruluk iddiası yok.
 - **Kurulum dersi:** çizgi kişilerin tamamen geçtiği yere, yürüme alanının ortasına konmalı — kapı eşiğinde kişi durup kaybolduğundan geçiş tamamlanmaz (aynı videoda 8/4 ve yanlış olaylar).
 - **Kullanıcı kararları:** yalnızca Giriş ve Çıkış (kapasite/doluluk yok); giriş yönü kullanıcı tarafından tek dokunuşla çevrilir.
 - **Arayüz:**

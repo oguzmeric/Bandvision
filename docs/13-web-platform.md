@@ -61,13 +61,16 @@ Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve
 | `GET` | `/sources/{id}/channels?refresh=` | Kayıt cihazındaki kameralar (önbellekli) |
 | `GET` | `/sources/{id}/snapshot?channel=` | Küçük resim (JPEG) |
 | `GET` `POST` | `/sessions` | Canlı oturumlar; `POST {sourceId, channelId?, profileId, substream?}` (aynı kamera yeniden açılırsa eskisi kapanır) |
-| `GET` `DELETE` | `/sessions/{id}` | Durum (durum, fps, sayılar, kalibrasyon, profil) / kapat |
+| `GET` `DELETE` | `/sessions/{id}` | Durum (durum, fps, sayılar, `staffIn`/`staffOut`, kalibrasyon, profil) / kapat |
 | `POST` | `/sessions/{id}/actions` | `{"action": "start" \| "stop" \| "reset" \| "learnBackground" \| "learnSample" \| "cancelCalibration"}` |
 | `PUT` | `/sessions/{id}/stream` | `{"substream": true \| false}`: alt/ana akış; sayaçlar korunur |
 | `PUT` | `/sessions/{id}/profile?save=` | Alan, çizgi, yön, yöntem; `save=true` **bu kamera için** kaydeder (şablon değişmez) |
+| `POST` | `/sessions/{id}/staff-color` | `{x, y}` (0–1): tıklanan kişinin gövde rengi `{L, a, b, achromatic}`; `422` çok karanlık ("Burası çok karanlık; personelin üstüne tıklayın.") ya da koordinat aralık dışı, `503` kare yok. Profile eklemek `PUT profile` ile (`staffColors`, en çok 3; fazlası `422`) |
 | `GET` | `/sessions/{id}/stream` | İşaretli MJPEG akışı |
 | `GET` | `/sessions/{id}/frame.jpg` | Ham kare (alan düzenleyici için) |
-| `GET` | `/sessions/{id}/counts.csv` | Sayım kaydı |
+| `GET` | `/sessions/{id}/counts.csv` | Sayım kaydı; personel geçişleri `personel_giris` / `personel_cikis` satırlarıdır (giriş/çıkış toplamlarına katılmaz) |
+
+**Personel rengi** (isteğe bağlı, kamera başına; algoritma `03-algorithm.md` §4.10 eki): **Ayarla** panelinde "Personel rengi" bölümünden öğretilir (ham karede kişiye tıkla, en çok 3 renk). Renk öğretilmişse sayaç kartında "Personel geçişi" (`staffIn` + `staffOut`) görünür; personel geçişi olay olarak gönderilmez. Renk akromatik/koyuysa arayüz uyarı gösterir (sayımı etkilemez).
 
 Panel bu API'ye `/api/live/...` vekili üzerinden gider (sunucu tarafı; `ANALYZER_TOKEN` tarayıcıya verilmez). Testler: `services/edge/tests/test_live.py`, `test_recorders.py`; tarayıcıda `apps/dashboard/e2e/live.spec.ts`.
 Yerelde çalıştırma: `tools/panel_baslat.bat` (analiz sunucusu + panel, **Kameralar** sayfasını açar).
