@@ -23,6 +23,7 @@ MIN_POINTS = 36                 # ızgaranın %25'i: komşu kutular çıkarıld�
 DARK_L = 8.0
 MIN_VOTES = 3
 ACHROMATIC_C = 15.0
+COMMON_DARK_L = 30.0
 TEACH_PATCH = 0.06              # kutusuz öğretmede kare kenarı (görüntü genişliğine oran)
 MAX_COLORS = 3
 MIN_BOX_PX = (8.0, 16.0)
@@ -104,7 +105,8 @@ def is_staff(votes: int, staff_votes: int) -> bool:
 
 
 def is_achromatic(c: LabColor) -> bool:
-    return math.hypot(c[1], c[2]) < ACHROMATIC_C
+    """Müşterilerde sık görülen renk: akromatik (siyah, beyaz, gri) ya da koyu (lacivert, koyu kahve) — yalnızca arayüz uyarısı, sayımı etkilemez."""
+    return math.hypot(c[1], c[2]) < ACHROMATIC_C or c[0] < COMMON_DARK_L
 
 
 def dominant_color(labs: np.ndarray) -> LabColor | None:
