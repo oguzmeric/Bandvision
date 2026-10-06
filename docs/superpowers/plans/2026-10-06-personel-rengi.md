@@ -237,7 +237,7 @@ git commit -m "Sözleşme: profilde isteğe bağlı staffColors (personel ünifo
   - `is_achromatic(c: LabColor) -> bool`
   - `dominant_color(labs: np.ndarray) -> LabColor | None`
   - `teach_bgr(bgr: np.ndarray, boxes: Sequence[Box], point: tuple[float, float], anchor: str) -> LabColor | None`
-  - Sabitler `GRID, MATCH_DIST, MIN_FRACTION, MIN_POINTS, DARK_L, MIN_VOTES, ACHROMATIC_C, TEACH_PATCH, MAX_COLORS`.
+  - Sabitler `GRID, MATCH_DIST, MIN_FRACTION, MIN_POINTS, DARK_L, MIN_VOTES, ACHROMATIC_C, COMMON_DARK_L, TEACH_PATCH, MAX_COLORS`.
 
 - [ ] **Adım 1: Başarısız testleri yaz** — `tests/test_staff_color.py`
 
@@ -375,6 +375,7 @@ MIN_POINTS = 36                 # ızgaranın %25'i: komşu kutular çıkarıld�
 DARK_L = 8.0
 MIN_VOTES = 3
 ACHROMATIC_C = 15.0
+COMMON_DARK_L = 30.0             # uyarı: bundan koyu renkler de müşterilerde yaygın
 TEACH_PATCH = 0.06              # kutusuz öğretmede kare kenarı (görüntü genişliğine oran)
 MAX_COLORS = 3
 MIN_BOX_PX = (8.0, 16.0)
@@ -456,7 +457,8 @@ def is_staff(votes: int, staff_votes: int) -> bool:
 
 
 def is_achromatic(c: LabColor) -> bool:
-    return math.hypot(c[1], c[2]) < ACHROMATIC_C
+    """Müşterilerde sık görülen renk: akromatik ya da koyu (lacivert) — yalnızca arayüz uyarısı."""
+    return math.hypot(c[1], c[2]) < ACHROMATIC_C or c[0] < COMMON_DARK_L
 
 
 def dominant_color(labs: np.ndarray) -> LabColor | None:
