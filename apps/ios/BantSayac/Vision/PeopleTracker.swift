@@ -5,7 +5,7 @@ import Foundation
 /// (BantSayacTests/PeopleTrackerTests: Python'un ürettiği senaryolarda aynı karede aynı iz kimliğiyle aynı olaylar).
 
 /// Normalize kutu (x1, y1, x2, y2)
-struct NBox: Equatable {
+struct NBox: Equatable, Hashable {
     var x1: Double, y1: Double, x2: Double, y2: Double
 
     var area: Double { max(0, x2 - x1) * max(0, y2 - y1) }
@@ -90,6 +90,11 @@ final class MotTrack {
     /// Doğduğu ve son tanımayla eşleştiği kare
     let born: Int
     var lastDet: Int
+    /// Personel rengi oyu verilen kare sayısı ve bunların personel oyu olanları (§4.10 eki)
+    var votes = 0
+    var staffVotes = 0
+    /// Personel geçişleri (giriş/çıkışa eklenmez)
+    var staffCrossings = 0
 
     init(id: Int, box: NBox, vel: NBox, last: NBox, score: Double, verified: Bool, born: Int) {
         self.id = id
@@ -167,6 +172,9 @@ final class MotTracker {
     private(set) var tracks: [MotTrack] = []
     private(set) var nextId = 1
     private(set) var frame = 0
+    /// Son karede personel geçişi yapan izler (§4.10 eki; `update` dönüşüne girmez)
+    private(set) var staffEntered: [MotTrack] = []
+    private(set) var staffExited: [MotTrack] = []
 
     init(params: MotParams = MotParams()) {
         p = params
@@ -174,13 +182,18 @@ final class MotTracker {
 
     func reset() {
         tracks.removeAll()
+        staffEntered = []
+        staffExited = []
     }
 
     /// Bir kare. `sideOf(x, y)`: çizgiye işaretli uzaklık (giriş yönü pozitif); `motion`: hareket lekeleri;
     /// `bounds`: sayım alanı (ROI) — tahmini merkezi dışına çıkan iz silinir. Dönüş: (girenler, çıkanlar)
     func update(_ input: [Detection], sideOf: (Double, Double) -> Double, anchor: CountAnchor = .center,
-                motion: [NBox]? = nil, bounds: NBox = NBox(x1: 0, y1: 0, x2: 1, y2: 1))
+                motion: [NBox]? = nil, bounds: NBox = NBox(x1: 0, y1: 0, x2: 1, y2: 1),
+                staffVote: ((NBox, [NBox]) -> Bool?)? = nil)
         -> (entered: [MotTrack], exited: [MotTrack]) {
+        staffEntered = []
+        staffExited = []
         for t in tracks { t.box = t.box + t.vel }                       // tahmin
         let dets = suppressParts(input, contain: p.contain, partArea: p.partArea)
         let high = dets.indices.filter { dets[$0].score >= p.high }
@@ -262,6 +275,7 @@ final class MotTracker {
                     t.hist = []                                         // hız artık tanıma gözlemlerinden
                 }
                 t.lastDet = frame
+                vote(t, di, dets, staffVote)
                 observeUpdate(t, dets[di].box, fromDet: true, sideOf, anchor, &entered, &exited)
             } else if let mb = matchedM[ti] {
                 observeUpdate(t, mb, fromDet: false, sideOf, anchor, &entered, &exited)
@@ -271,7 +285,9 @@ final class MotTracker {
         }
         let used = Set(matchedD.values)
         for di in high where !used.contains(di) {
-            newTrack(dets[di].box, dets[di].score, verified: true, sideOf, anchor, &entered, &exited)
+            newTrack(dets[di].box, dets[di].score, verified: true, sideOf, anchor, &entered, &exited) { t in
+                self.vote(t, di, dets, staffVote)
+            }
         }
         for m in mboxes {                                               // hiçbir izin açıklamadığı leke: doğrulanmamış iz
             if !tracks.contains(where: { iou($0.box, m) > 0 || centerIn(m, $0.box) }) {
@@ -297,12 +313,23 @@ final class MotTracker {
         return p.gateGrow * Double(t.misses) * hypot(t.vel.x1 / w, t.vel.y1 / h)
     }
 
+    private func vote(_ t: MotTrack, _ di: Int, _ dets: [Detection], _ staffVote: ((NBox, [NBox]) -> Bool?)?) {
+        guard let staffVote else { return }
+        let others = dets.indices.filter { $0 != di }.map { dets[$0].box }
+        if let v = staffVote(dets[di].box, others) {
+            t.votes += 1
+            if v { t.staffVotes += 1 }
+        }
+    }
+
     private func newTrack(_ box: NBox, _ score: Double, verified: Bool, _ sideOf: (Double, Double) -> Double,
-                          _ anchor: CountAnchor, _ entered: inout [MotTrack], _ exited: inout [MotTrack]) {
+                          _ anchor: CountAnchor, _ entered: inout [MotTrack], _ exited: inout [MotTrack],
+                          beforeObserve: ((MotTrack) -> Void)? = nil) {
         let t = MotTrack(id: nextId, box: box, vel: .zero, last: box, score: score, verified: verified, born: frame)
         t.hist.append((frame, box))
         nextId += 1
         tracks.append(t)
+        beforeObserve?(t)
         observe(t, sideOf, anchor, &entered, &exited)
     }
 
@@ -353,8 +380,12 @@ final class MotTracker {
         }
         if !t.confirmed && t.verified && t.hits >= p.minHits { t.confirmed = true }
         if t.confirmed && !t.pending.isEmpty {
+            let staff = StaffColor.isStaff(votes: t.votes, staffVotes: t.staffVotes)
             for x in t.pending {
-                if x > 0 {
+                if staff {                                              // §4.10 eki: personel müşteri sayılmaz
+                    t.staffCrossings += 1
+                    if x > 0 { staffEntered.append(t) } else { staffExited.append(t) }
+                } else if x > 0 {
                     t.entries += 1
                     entered.append(t)
                 } else {
