@@ -183,7 +183,9 @@ class DetectCounter:
         p.min_hits = max(1, profile.minHits)
         p.max_age = max(5, round(fps * 1.0))
         p.high = max(profile.detectConfidence, p.low + 0.05)
-        if self._gate is not None and not self.tracker.tracks and not self._gate(bgr, profile)                 and self._idle_frames < max(1, round(fps * GATE_RECHECK_S)):
+        idle = (self._gate is not None and not self.tracker.tracks and not self._gate(bgr, profile)
+                and self._idle_frames < max(1, round(fps * GATE_RECHECK_S)))
+        if idle:
             self._idle_frames += 1
             dets: list[tuple[NormBox, float]] = []
         else:
