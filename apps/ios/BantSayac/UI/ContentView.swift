@@ -6,6 +6,8 @@ struct ContentView: View {
     @State private var showProfiles = false
     @State private var confirmReset = false
     @State private var showVideoSheet = false
+    /// Güncellemeyle gelen kişi sayımı bir kez tanıtılır
+    @AppStorage("bs.peopleTipSeen") private var peopleTipSeen = false
     // Görünüm yakınlaştırma (yalnızca ekran; sayım tam kare üzerinden sürer)
     @State private var zoom: CGFloat = 1
     @State private var pan: CGSize = .zero
@@ -205,6 +207,9 @@ struct ContentView: View {
 
     private var controlPanel: some View {
         VStack(spacing: 10) {
+            if !peopleTipSeen && !vm.profile.isTwoWay {
+                peopleTip
+            }
             if vm.profile.isTwoWay {
                 PeopleCounters(vm: vm)
                 EntryDirectionButton(vm: vm)
@@ -217,6 +222,40 @@ struct ContentView: View {
         .confirmationDialog("Sayaç sıfırlansın mı?", isPresented: $confirmReset, titleVisibility: .visible) {
             Button("Sıfırla", role: .destructive) { vm.reset() }
         }
+    }
+
+    /// "Yeni: Kişi sayımı" kartı: dokununca profiller açılır (Kişi sayımı → Mağaza girişi)
+    private var peopleTip: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.2.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Yeni: Kişi sayımı").font(.subheadline.weight(.semibold))
+                Text("Mağaza girişinde giren ve çıkanları sayar. Profillerden \"Mağaza girişi\"ni seç.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            Button {
+                peopleTipSeen = true
+            } label: {
+                Image(systemName: "xmark").font(.caption.weight(.bold)).padding(6)
+            }
+            .accessibilityLabel("Tanıtımı kapat")
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.green.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.green.opacity(0.35), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            peopleTipSeen = true
+            showProfiles = true
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("peopleTip")
+        .accessibilityHint("Profilleri açar")
     }
 
     private var beltCounters: some View {

@@ -36,6 +36,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **19** | Kalibrasyon paneli ekranın en çok üçte biri (kayar, Kaydet/İptal sabit); şerit taramada **alan bandın dışına taşsa da yalnızca hareketli bant** kullanılır (ekran kaydı, menüler, raylar, siyah ilk kare) |
 | **20** | Şerit tarama: **aralıklı ürünler ve güçlü perspektif** (ikinci gerçek video 11 → 8–9, doğru 9), açık/koyu kararı satır içi yayılım ipucuyla, ön sayım yalnızca ilk ürün |
 | **21** | Şerit tarama: sayılar topluca gelmesin — video modunda oynatmadan önce **ön tarama** (ürün boyu), canlıda **güvenilir erken öğrenme** (≥ 4 tam ürün, tutarlı boylar) |
+| **22** | **Kişi sayımı (mağaza girişi)**: Giriş/Çıkış sayaçları, giriş yönünü tek dokunuşla çevirme, kamera konumu (tepeden/yandan), kişi kutuları ve G/Ç rozetleri, yan yana gruplarda mükerrer sayım yok (§4.10; Swift izleyici Python ile eşdeğer). Sayım türü kategorileri (bant üstü ürün, kişi; araç/hayvan/stok "yakında"); kişi sayımına uygun montaj listesi |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 

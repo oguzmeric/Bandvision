@@ -11,6 +11,14 @@ struct SettingsView: View {
     @State private var csvURL: URL?
     @AppStorage("bs.onboarded") private var onboarded = true
 
+    /// "1.0.0 (23)": TestFlight'taki derleme numarasıyla aynı
+    static var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (derleme \(build))"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -54,6 +62,10 @@ struct SettingsView: View {
                     Text("Sayım olayları 5 sn'de bir JSON olarak bu adrese POST edilir (n8n, Supabase Edge Function vb.). Boş bırakılırsa gönderilmez.")
                 }
 
+                Section("Hakkında") {
+                    LabeledContent("Sürüm", value: Self.versionText)
+                        .accessibilityIdentifier("appVersion")
+                }
                 if vm != nil {
                     Section {
                         Button("Kurulum sihirbazını yeniden aç") { onboarded = false }

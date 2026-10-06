@@ -9,70 +9,97 @@ struct ProfilesView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(store.profiles) { p in
-                    Button {
-                        vm.selectProfile(p.id)
-                        dismiss()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(p.name).foregroundStyle(.primary)
-                                Text(p.expectedArea > 0 ? "Kalibre edildi" : "Kalibre edilmedi")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if p.id == store.selectedID {
-                                Image(systemName: "checkmark").foregroundStyle(.tint)
-                            }
+                // Sayım türüne göre gruplu (bant üstü ürün, kişi sayımı)
+                ForEach(ProductCatalog.categories.filter(\.available)) { cat in
+                    let list = store.profiles.filter(cat.contains)
+                    if !list.isEmpty {
+                        Section {
+                            ForEach(list) { p in row(p) }
+                        } header: {
+                            Label(cat.title, systemImage: cat.icon)
                         }
-                    }
-                    .swipeActions(edge: .trailing) {
-                        if store.profiles.count > 1 {
-                            Button(role: .destructive) { vm.deleteProfile(p.id) } label: {
-                                Label("Sil", systemImage: "trash")
-                            }
-                        }
-                        Button { editing = p } label: {
-                            Label("Düzenle", systemImage: "slider.horizontal.3")
-                        }
-                        .tint(.blue)
-                        Button { vm.duplicateProfile(p) } label: {
-                            Label("Kopyala", systemImage: "plus.square.on.square")
-                        }
-                        .tint(.gray)
                     }
                 }
             }
-            .navigationTitle("Ürün Profilleri")
+            .navigationTitle("Profiller")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Kapat") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        ForEach(ProductCatalog.categories) { cat in
-                            Section(cat.available ? cat.title : "\(cat.title) · yakında") {
-                                if cat.available {
-                                    ForEach(cat.presets) { preset in
-                                        Button(preset.name) { store.add(preset.make()) }
-                                    }
-                                } else {
-                                    Button {} label: { Label(cat.subtitle, systemImage: cat.icon) }
-                                        .disabled(true)
-                                }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
+                    addMenu
                 }
             }
             .sheet(item: $editing) { p in
                 ProfileEditView(profile: p) { vm.saveEditedProfile($0) }
             }
         }
+    }
+
+    private func row(_ p: ProductProfile) -> some View {
+        Button {
+            vm.selectProfile(p.id)
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.name).foregroundStyle(.primary)
+                    Text(Self.status(p))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if p.id == store.selectedID {
+                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                }
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if store.profiles.count > 1 {
+                Button(role: .destructive) { vm.deleteProfile(p.id) } label: {
+                    Label("Sil", systemImage: "trash")
+                }
+            }
+            Button { editing = p } label: {
+                Label("Düzenle", systemImage: "slider.horizontal.3")
+            }
+            .tint(.blue)
+            Button { vm.duplicateProfile(p) } label: {
+                Label("Kopyala", systemImage: "plus.square.on.square")
+            }
+            .tint(.gray)
+        }
+    }
+
+    /// Profilin altındaki kısa durum yazısı
+    static func status(_ p: ProductProfile) -> String {
+        switch p.mode {
+        case .detect: return "Giriş / çıkış sayımı"
+        case .linescan: return "Bitişik / hacimli ürün"
+        case .blob: return p.expectedArea > 0 ? "Kalibre edildi" : "Kalibre edilmedi"
+        }
+    }
+
+    /// Hazır profilden ekle: sayım türüne göre (yakında olanlar görünür ama seçilemez)
+    private var addMenu: some View {
+        Menu {
+            ForEach(ProductCatalog.categories) { cat in
+                Section(cat.available ? cat.title : "\(cat.title) · yakında") {
+                    if cat.available {
+                        ForEach(cat.presets) { preset in
+                            Button(preset.name) { store.add(preset.make()) }
+                        }
+                    } else {
+                        Button {} label: { Label(cat.subtitle, systemImage: cat.icon) }
+                            .disabled(true)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+        .accessibilityLabel("Profil ekle")
     }
 }
 

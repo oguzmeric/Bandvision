@@ -7,6 +7,8 @@ final class ProfileStore: ObservableObject {
 
     private static let profilesKey = "bs.profiles"
     private static let selectedKey = "bs.selectedProfile"
+    /// Yeni sayım türü hazır profili mevcut kullanıcının listesine bir kez eklendi mi (kişi sayımı: derleme 23)
+    private static let peopleAddedKey = "bs.peopleProfileAdded"
 
     init() {
         let d = UserDefaults.standard
@@ -18,6 +20,12 @@ final class ProfileStore: ObservableObject {
         } else {
             loaded = [.egg(), .flourSack(), .box(), .generic(), .people()]
         }
+        // Güncellemeyle gelen kişi sayımı: önceden kurulmuş uygulamada profil listesi kayıtlı olduğundan hazır
+        // profil görünmüyordu. Bir kez eklenir; kullanıcı silerse geri gelmez.
+        if !d.bool(forKey: Self.peopleAddedKey) {
+            if !loaded.contains(where: { $0.mode == .detect }) { loaded.append(.people()) }
+            d.set(true, forKey: Self.peopleAddedKey)
+        }
         profiles = loaded
         if let s = d.string(forKey: Self.selectedKey), let id = UUID(uuidString: s),
            loaded.contains(where: { $0.id == id }) {
@@ -25,6 +33,7 @@ final class ProfileStore: ObservableObject {
         } else {
             selectedID = loaded[0].id
         }
+        persist()
     }
 
     var selectedProfile: ProductProfile {

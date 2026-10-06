@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import GeometryDialog from "@/components/geometry/GeometryDialog";
 import { bytes } from "@/lib/format";
+import { clampLine, type Geometry } from "@/lib/geometry";
 import {
   ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
   type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
@@ -28,15 +30,23 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const [bgStart, setBgStart] = useState("");
   const [bgEnd, setBgEnd] = useState("");
   const [anchor, setAnchor] = useState<CountAnchor>("center");
-  const [linePct, setLinePct] = useState("");
+  const [geom, setGeom] = useState<Geometry | null>(null);       // null: tüm görüntü, çizgi ortada
+  const [editing, setEditing] = useState(false);
   const people = preset === "people";
+  const effectiveMode = people ? "detect" : (mode || PRESET_MODE[preset]);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function pick(f: File | undefined | null) {
     if (!f) return;
     setFile(f);
+    setGeom(null);                       // başka video: alan ve çizgi yeniden ayarlanır
     setError(null);
+  }
+
+  function changeDirection(d: Direction | "") {
+    setDirection(d);
+    if (geom && d && !geom.countLine) setGeom(clampLine({ ...geom, direction: d }));
   }
 
   function options(): JobOptions | string {
@@ -48,13 +58,15 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       o.truth = n;
     }
     if (direction) o.direction = direction;
+    if (geom) {                          // düzenleyiciden: alan, çokgen, düz ya da açılı çizgi ve yön
+      o.roi = geom.roi;
+      if (geom.roiPolygon) o.roiPolygon = geom.roiPolygon;
+      if (geom.countLine && effectiveMode !== "linescan") o.countLine = geom.countLine;
+      else o.line = geom.linePosition;
+      o.direction = geom.direction;
+    }
     if (people) {
       o.countAnchor = anchor;
-      if (linePct.trim()) {
-        const v = Number(linePct.replace(",", "."));
-        if (!(v > 0 && v < 100)) return "Çizgi konumu 1 ile 99 arasında bir yüzde olmalı.";
-        o.line = v / 100;
-      }
     } else if (bgStart.trim() || bgEnd.trim()) {
       const a = Number(bgStart.replace(",", ".")), b = Number(bgEnd.replace(",", "."));
       if (!(a >= 0) || !(b > a)) return "Boş bant aralığı: başlangıç ≥ 0 ve bitiş başlangıçtan büyük olmalı (saniye).";
@@ -179,19 +191,38 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
                  onChange={(e) => setTruth(e.target.value.replace(/\D/g, ""))} />
         </label>
         <label className="block text-sm font-medium">{people ? "Giriş yönü" : "Akış yönü"}
-          <select aria-label={people ? "Giriş yönü" : "Akış yönü"} className={`${field} mt-1.5`} value={direction}
-                  onChange={(e) => setDirection(e.target.value as Direction | "")}>
-            <option value="">{people ? "Yukarıdan aşağı (varsayılan)" : "Otomatik bul"}</option>
+          <select aria-label={people ? "Giriş yönü" : "Akış yönü"} className={`${field} mt-1.5`} value={geom ? geom.direction : direction}
+                  disabled={!!geom?.countLine} onChange={(e) => changeDirection(e.target.value as Direction | "")}>
+            <option value="" disabled={!!geom}>{people ? "Yukarıdan aşağı (varsayılan)" : "Otomatik bul"}</option>
             {(Object.keys(DIRECTION_LABELS) as Direction[]).map((d) => <option key={d} value={d}>{DIRECTION_LABELS[d]}</option>)}
           </select>
         </label>
       </div>
-      {people ? (
-        <label className="mt-3 block text-sm font-medium">Çizgi konumu <span className="font-normal text-faint">(isteğe bağlı, yukarıdan %)</span>
-          <input aria-label="Çizgi konumu" className={`${field} mt-1.5`} inputMode="decimal" placeholder="55" value={linePct}
-                 onChange={(e) => setLinePct(e.target.value.replace(/[^\d.,]/g, ""))} />
-        </label>
-      ) : (
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-line bg-canvas px-3 py-2.5">
+        <div className="min-w-0 text-sm">
+          <p className="font-medium">Alan ve sayım çizgisi</p>
+          <p className="truncate text-xs text-faint" data-testid="geometry-summary">
+            {geom
+              ? `${geom.roiPolygon ? `${geom.roiPolygon.length} köşeli çokgen` : "Dikdörtgen alan"} · ${geom.countLine ? "açılı çizgi" : "düz çizgi"}`
+              : "Tüm görüntü · çizgi ortada"}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          {geom && (
+            <button type="button" onClick={() => setGeom(null)} className="h-8 rounded-[9px] px-2 text-xs text-muted hover:text-ink">Kaldır</button>
+          )}
+          <button type="button" disabled={!file} onClick={() => setEditing(true)}
+                  title={file ? undefined : "Önce bir video seç"}
+                  className="h-8 rounded-[9px] border border-line bg-white px-3 text-[13px] font-semibold text-brand-500 hover:border-brand-100 disabled:cursor-not-allowed disabled:opacity-50">
+            Ayarla
+          </button>
+        </div>
+      </div>
+      {editing && file && (
+        <GeometryDialog file={file} initial={geom} twoWay={people} allowAngled={effectiveMode !== "linescan"}
+                        onSave={(g) => { setGeom(g); setDirection(g.direction); }} onClose={() => setEditing(false)} />
+      )}
+      {people ? null : (
       <details className="mt-3 text-sm">
         <summary className="cursor-pointer text-muted">Gelişmiş: boş bant aralığı</summary>
         <p className="mt-2 text-xs text-faint">Bant çok doluysa, videoda bandın boş göründüğü aralığı yaz (saniye). Arka plan oradan öğrenilir.</p>

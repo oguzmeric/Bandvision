@@ -81,6 +81,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         stop_cleanup.set()
         worker.stop()
+        for s in list(app.state.live.sessions.values()):     # canlı oturumlar kapanırken kamerayı bırak
+            s.stop()
 
     app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
@@ -96,6 +98,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(401, "Yetkisiz: geçerli bir erişim anahtarı gerekli.")
 
     Auth = Depends(auth)
+
+    # Canlı sayım (web paneli): ağ kamerası / kayıt cihazı → sayım (bantvision/live)
+    from ..live.api import LiveManager, make_router
+    from ..live.store import LiveStore
+
+    live = LiveManager(LiveStore(settings.data_dir))
+    app.state.live = live
+    app.include_router(make_router(live, Auth))
 
     def job_or_404(job_id: str) -> dict[str, Any]:
         job = store.get(job_id)
