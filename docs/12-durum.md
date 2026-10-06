@@ -39,6 +39,7 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **22** | **Kişi sayımı (mağaza girişi)**: Giriş/Çıkış sayaçları, giriş yönünü tek dokunuşla çevirme, kamera konumu (tepeden/yandan), kişi kutuları ve G/Ç rozetleri, yan yana gruplarda mükerrer sayım yok (§4.10; Swift izleyici Python ile eşdeğer). Sayım türü kategorileri (bant üstü ürün, kişi; araç/hayvan/stok "yakında"); kişi sayımına uygun montaj listesi |
 | 23 | Yüklenmedi (açılı çizginin alana uyması eklensin diye iptal edildi; içeriği 24'te) |
 | **24** | **Kişi sayımı mevcut kullanıcıya da görünür**: kayıtlı profillere "Mağaza girişi" eklenir, profiller sayım türüne göre gruplu (bant üstü ürün / kişi), ana ekranda kişi sayımı ipucu kartı, Ayarlar → Hakkında'da sürüm ve derleme numarası. **Açılı sayım çizgisi alanla birlikte uzar** (alan büyütülünce/taşınınca çizgi kenardan kenara; Python ve web aynı) |
+| **25** | **Personel rengi** (kişi sayımı, §4.10 eki): Ayarlar'da personelin gövdesine dokunarak üniforma rengi öğretilir (en çok 3); o renkteki kişinin geçişi Giriş/Çıkış'a eklenmez, "Personel geçişi: N" ayrı görünür, kutusu gri "P". Yaygın renk uyarısı, karanlık/duraklatılmış video geri bildirimi. Hareket desteği yalnızca tepeden kamerada (Python ile eşdeğer). Gerçek açı ölçümü (≥ %95) bekliyor |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
