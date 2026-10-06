@@ -21,7 +21,7 @@
 ## Genel kısıtlar
 - Sabitler (iki dilde aynı):
   - `GRID = 12`, `MATCH_DIST = 20`, `MIN_FRACTION = 0,25`, `MIN_POINTS = 36`, `DARK_L = 8`.
-  - `MIN_VOTES = 3`, `ACHROMATIC_C = 15`, `TEACH_PATCH = 0,06`, `MAX_COLORS = 3`.
+  - `MIN_VOTES = 3`, `ACHROMATIC_C = 15`, `COMMON_DARK_L = 30` (uyarı: C < 15 ya da L < 30), `TEACH_PATCH = 0,06`, `MAX_COLORS = 3`.
   - En küçük kutu 8 × 16 piksel.
 - Gövde bölgesi:
   - `bottom`: x 0,30–0,70 · y 0,15–0,45.
@@ -1246,8 +1246,8 @@ export function labToCss(c: LabColor): string {
   return `#${hex.join("")}`;
 }
 
-/** Siyah, beyaz, gri, lacivert gibi renkler müşterilerde de sık görülür (Python is_achromatic ile aynı eşik) */
-export const isAchromatic = (c: LabColor) => Math.hypot(c.a, c.b) < 15;
+/** Siyah, beyaz, gri (akromatik) ya da lacivert gibi koyu renkler müşterilerde de sık görülür (Python is_achromatic ile aynı) */
+export const isAchromatic = (c: LabColor) => Math.hypot(c.a, c.b) < 15 || c.L < 30;
 ```
 
 - [ ] **Adım 3: `components/live/StaffColors.tsx`**
@@ -1501,6 +1501,7 @@ enum StaffColor {
     static let darkL = 8.0
     static let minVotes = 3
     static let achromaticC = 15.0
+    static let commonDarkL = 30.0
     static let teachPatch = 0.06
     static let maxColors = 3
     static let minBoxPx = (w: 8.0, h: 16.0)
@@ -1582,7 +1583,8 @@ enum StaffColor {
 
     static func isStaff(votes: Int, staffVotes: Int) -> Bool { votes >= minVotes && 2 * staffVotes >= votes }
 
-    static func isAchromatic(_ c: LabColor) -> Bool { hypot(c.a, c.b) < achromaticC }
+    /// Müşterilerde sık görülen renk: akromatik (siyah, beyaz, gri) ya da koyu (lacivert, koyu kahve) — yalnızca uyarı
+    static func isAchromatic(_ c: LabColor) -> Bool { hypot(c.a, c.b) < achromaticC || c.L < commonDarkL }
 
     private static func median(_ v: [Double]) -> Double {
         let s = v.sorted(), n = s.count

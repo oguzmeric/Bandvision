@@ -42,7 +42,7 @@ Ayrıca:
 ## Kullanıcı akışı (web ve iPhone)
 1. Kişi sayımında "Ayarla" panelinde **Personel rengi** bölümü bulunur. Renk yoksa "Kapalı — tüm geçişler sayılır" yazar.
 2. "Personel rengini öğret" → görüntüde bir personelin üstüne tıklanır/dokunulur → renk örnek kare olarak eklenir. **En fazla 3 renk**; her biri × ile silinir.
-3. Öğretilen renk akromatikse (renk doygunluğu `C = √(a² + b²) < 15`; siyah, beyaz, gri, lacivert) örneğin yanında uyarı çıkar: "Bu renk müşterilerde de sık görülür; müşteri yanlışlıkla düşülebilir."
+3. Öğretilen renk müşterilerde sık görülen bir renkse — akromatik (renk doygunluğu `C = √(a² + b²) < 15`: siyah, beyaz, gri) ya da koyu (`L < 30`: lacivert, koyu kahve) — örneğin yanında uyarı çıkar: "Bu renk müşterilerde de sık görülür; müşteri yanlışlıkla düşülebilir."
 4. Kaydetme: web'de **kamera başına** (`camera_profiles.json`), iPhone'da profil başına.
 5. Sayaçlar: Giriş, Çıkış. Altında küçük "Personel geçişi: N" (giriş + çıkış), yalnızca renk öğretilmişse görünür.
    - Görüntüde personel izinin kutusu gri, etiketi "P".
