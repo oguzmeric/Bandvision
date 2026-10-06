@@ -12,7 +12,12 @@ giriş/çıkışına eklenmez**, ayrıca "Personel geçişi" olarak gösterilir.
 - Üniforma rengi şirketten şirkete değişiyor, bu yüzden ayar isteğe bağlı ve kamera başına.
 - Personel geçişleri ayrı gösterilsin.
 
-**Başarı ölçütü:**
+**Başarı ölçütü (kullanıcı, 2026-10-06):** kamera farklı açılardan (tepeden, eğik ~45°, yandan) konumlandırıldığında
+her açıda **geçiş başına doğruluk ≥ %95**. Ölçüm iki taraflıdır:
+- Personel geçişlerinin en az %95'i personel olarak ayrılır (yakalama).
+- Müşteri geçişlerinin en az %95'i müşteri kalır (yanlış hariç tutma ≤ %5).
+
+Ayrıca:
 - Öğretilen renkte giyinmiş kişi geçişte personel sayılır.
 - Başka renkte giyinmiş kişi normal sayılır.
 - Yan yana grupta (personel + müşteri) yalnızca müşteri giriş/çıkışa eklenir.
@@ -41,7 +46,8 @@ giriş/çıkışına eklenmez**, ayrıca "Personel geçişi" olarak gösterilir.
 4. Kaydetme: web'de **kamera başına** (`camera_profiles.json`), iPhone'da profil başına.
 5. Sayaçlar: Giriş, Çıkış. Altında küçük "Personel geçişi: N" (giriş + çıkış), yalnızca renk öğretilmişse görünür.
    - Görüntüde personel izinin kutusu gri, etiketi "P".
-   - CSV'de personel geçişleri `yön = personel giriş` / `personel çıkış` satırlarıyla yer alır; giriş/çıkış toplamlarına katılmaz.
+   - Web canlı CSV'sinde (olay başına satır) personel geçişleri `yon = personel_giris` / `personel_cikis` satırlarıyla yer alır; giriş/çıkış toplamlarına katılmaz.
+   - iPhone'un dakikalık CSV'si ve webhook'u değişmez: yalnızca müşteri giriş/çıkışı. Personel sayısı ekranda görünür.
 
 ## Algoritma (§4.10 eki — Python ve Swift birebir)
 Tanımlar normalize koordinatlarda; kutu `(x1, y1, x2, y2)`, `w = x2 − x1`, `h = y2 − y1`.
@@ -49,6 +55,9 @@ Tanımlar normalize koordinatlarda; kutu `(x1, y1, x2, y2)`, `w = x2 − x1`, `h
 **Gövde bölgesi:**
 - `countAnchor = bottom` (yandan/yatık kamera): `x ∈ [x1 + 0,30w, x1 + 0,70w]`, `y ∈ [y1 + 0,15h, y1 + 0,45h]`.
 - `countAnchor = center` (tepeden kamera): `x ∈ [x1 + 0,30w, x1 + 0,70w]`, `y ∈ [y1 + 0,30h, y1 + 0,70h]`.
+
+**Örtüşme dışlama:** ızgara noktası aynı karedeki **başka bir tanıma kutusunun** içine düşüyorsa atılır (yan yana/üst üste
+grupta komşunun rengi karışmasın). Kalan nokta sayısı 36'dan (ızgaranın %25'i) azsa o karede oy yok.
 
 **Örnekleme:**
 - Bölgede 12 × 12 ızgara; nokta `(i, j)`: `px = rx0 + (i + 0,5)/12 · rw`, `py = ry0 + (j + 0,5)/12 · rh`.
@@ -70,7 +79,7 @@ Tanımlar normalize koordinatlarda; kutu `(x1, y1, x2, y2)`, `w = x2 − x1`, `h
 - `L < 8` olan (çok karanlık) nokta eşleşmez.
 
 **Kare oyu:**
-- Yalnızca bu karede **tanımayla gözlenen** kutu için (tahmin ya da hareket lekesiyle sürdürülen karede oy yok): eşleşen nokta oranı `≥ 0,25` → personel oyu.
+- Yalnızca bu karede **tanımayla gözlenen** kutu için (tahmin ya da hareket lekesiyle sürdürülen karede oy yok): eşleşen nokta oranı (kalan noktalara göre) `≥ 0,25` → personel oyu.
 - İz başına `votes` (oy verilen kare sayısı) ve `staff_votes` birikir.
 
 **Geçiş kararı:**
@@ -138,7 +147,12 @@ Tanımlar normalize koordinatlarda; kutu `(x1, y1, x2, y2)`, `w = x2 − x1`, `h
   - API: öğret uç noktası, durumda `staffIn/staffOut`, CSV.
 - **Eşdeğerlik:** `tools/make_staff_fixture.py` → `staff_parity.json` (RGB örnekleri → Lab, oy, karar); Python testi ve Swift `StaffColorTests` aynı fikstürü doğrular.
 - **Web e2e:** Ayarla → Personel rengi → öğret (test klibinde tıklama) → örnek görünür → sil.
-- **Gerçek doğrulama:** ofis kamerasında belirgin renkli yelek/tişörtle birkaç geçiş (kullanıcı yardımıyla); sonuç docs/12'ye yazılır.
+- **Açı doğrulaması (kabul ölçütü, ≥ %95 her açıda):** `tools/eval_staff.py`.
+  - Etiketli kayıtlarda geçiş başına personel/müşteri kararını elle etiketle karşılaştırır, açı başına yakalama ve yanlış hariç tutma oranını yazar.
+  - **Kayıt protokolü:** 3 açı (tepeden, eğik ~45°, yandan). Her açıda en az 20 personel geçişi (belirgin renkli yelek/tişört; giriş ve çıkış, tek başına ve müşteriyle yan yana) ve en az 20 müşteri geçişi (yelek rengine yakın olmayan ve bir kısmı koyu/siyah giyimli).
+  - Etiket dosyası: `<video>.staff.json` = `[{"t": saniye, "dir": "in"|"out", "staff": true|false}]`.
+  - Kayıtlar kullanıcının; **public repoya konmaz** (yerelde kalır); sonuçlar docs/12'ye yazılır.
+  - %95 tutmayan açıda eşikler (`MATCH_DIST`, `MIN_FRACTION`, gövde bölgesi) yalnızca ölçümle ayarlanır ve iki tarafta birlikte değişir.
 - Mevcut kişi sayımı testleri ve iki gerçek video (3/3, 9/3) renk yokken değişmeden geçmeli.
 
 ## Gizlilik (KVKK)
