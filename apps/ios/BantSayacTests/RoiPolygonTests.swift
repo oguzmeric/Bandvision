@@ -101,4 +101,27 @@ final class RoiPolygonTests: XCTestCase {
         XCTAssertEqual(first["y"] as? Double, 0.05)
         XCTAssertEqual(try JSONDecoder().decode(ProductProfile.self, from: data), p)
     }
+
+    /// Açılı çizgi alan değişince açısını koruyarak kenardan kenara uzar (Python test_angled_line_follows_area_edges)
+    func testAngledLineFollowsAreaEdges() throws {
+        var p = ProductProfile.generic()
+        p.roi = CGRect(x: 0.3, y: 0.2, width: 0.4, height: 0.6)
+        p.countLine = CountLine(a: NormPoint(x: 0.45, y: 0.5), b: NormPoint(x: 0.55, y: 0.52))
+        p.setPolygon([NormPoint(x: 0.1, y: 0.1), NormPoint(x: 0.9, y: 0.1), NormPoint(x: 0.9, y: 0.9), NormPoint(x: 0.1, y: 0.9)])
+        var cl = try XCTUnwrap(p.countLine)
+        XCTAssertEqual(cl.a.x, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(cl.b.x, 0.9, accuracy: 1e-9)
+        XCTAssertEqual((cl.b.y - cl.a.y) / (cl.b.x - cl.a.x), 0.2, accuracy: 1e-9)
+        p.setPolygon([NormPoint(x: 0.2, y: 0.1), NormPoint(x: 0.8, y: 0.1), NormPoint(x: 0.7, y: 0.9), NormPoint(x: 0.3, y: 0.9)])
+        cl = try XCTUnwrap(p.countLine)
+        XCTAssertTrue(cl.a.x > 0.2 && cl.a.x < 0.3 && cl.b.x > 0.7 && cl.b.x < 0.8)
+    }
+
+    func testLineFitLeavesLineOutsideAreaAlone() {
+        var p = ProductProfile.generic()
+        let line = CountLine(a: NormPoint(x: 0.0, y: 0.05), b: NormPoint(x: 0.2, y: 0.05))
+        p.countLine = line
+        p.setPolygon([NormPoint(x: 0.3, y: 0.3), NormPoint(x: 0.9, y: 0.3), NormPoint(x: 0.9, y: 0.9), NormPoint(x: 0.3, y: 0.9)])
+        XCTAssertEqual(p.countLine, line)
+    }
 }

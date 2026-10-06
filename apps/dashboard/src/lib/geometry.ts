@@ -40,12 +40,41 @@ export function clampLine(g: Geometry): Geometry {
 
 /** Çokgeni ayarlar: köşeler kırpılır, alan çokgenin sınır kutusu olur, çizgi kutunun içine çekilir. null → dikdörtgen. */
 export function setPolygon(g: Geometry, points: Point[] | null): Geometry {
-  if (!points || points.length < 3) return { ...g, roiPolygon: null };
+  if (!points || points.length < 3) return fitCountLine({ ...g, roiPolygon: null });
   const pts = points.slice(0, MAX_POLYGON_POINTS).map(clampPoint);
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
   const minX = Math.min(...xs), minY = Math.min(...ys);
   const roi = { x: minX, y: minY, width: Math.max(Math.max(...xs) - minX, 0.01), height: Math.max(Math.max(...ys) - minY, 0.01) };
-  return clampLine({ ...g, roiPolygon: pts, roi });
+  return fitCountLine(clampLine({ ...g, roiPolygon: pts, roi }));
+}
+
+/**
+ * Açılı çizgiyi açısını ve konumunu koruyarak alanın kenarından kenarına uzatır/kısaltır (alan büyüyünce çizgi de
+ * büyür; telefondaki `fitCountLineToArea`, Python `fit_count_line_to_area` ile aynı). Yalnızca çizim: sayım
+ * çizginin doğrusuna bağlıdır. Ortası alanın dışındaysa dokunulmaz.
+ */
+export function fitCountLine(g: Geometry): Geometry {
+  const cl = g.countLine;
+  if (!cl) return g;
+  const pts = g.roiPolygon ?? roiCorners(g.roi);
+  const mx = (cl.a.x + cl.b.x) / 2, my = (cl.a.y + cl.b.y) / 2;
+  const dx = cl.b.x - cl.a.x, dy = cl.b.y - cl.a.y;
+  if (Math.hypot(dx, dy) <= 1e-9 || pts.length < 3) return g;
+  let lo: number | null = null, hi: number | null = null;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const ex = q.x - p.x, ey = q.y - p.y;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const wx = p.x - mx, wy = p.y - my;
+    const t = (wx * ey - wy * ex) / den;
+    const s = (wx * dy - wy * dx) / den;
+    if (s < 0 || s > 1) continue;
+    if (t <= 0) lo = lo === null ? t : Math.max(lo, t);
+    if (t >= 0) hi = hi === null ? t : Math.min(hi, t);
+  }
+  if (lo === null || hi === null || hi - lo <= 1e-6) return g;
+  return { ...g, countLine: { a: { x: mx + lo * dx, y: my + lo * dy }, b: { x: mx + hi * dx, y: my + hi * dy } } };
 }
 
 export function roiCorners(r: Rect): Point[] {

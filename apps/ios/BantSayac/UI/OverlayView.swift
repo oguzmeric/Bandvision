@@ -277,12 +277,16 @@ struct OverlayView: View {
                     return
                 }
                 profile.roi = r
-                // Çizgi ROI içinde kalsın
+                // Çizgi ROI içinde kalsın; açılı çizgi alanla birlikte uzar
                 let lo = profile.direction.isVertical ? r.minY : r.minX
                 let hi = profile.direction.isVertical ? r.maxY : r.maxX
                 profile.linePosition = clamp(profile.linePosition, lo + 0.02, hi - 0.02)
+                profile.fitCountLineToArea()
             }
             .onEnded { _ in
+                // Uç ya da çizgi sürüklemesi bitince açılı çizgi alanın kenarından kenarına (sürüklerken parmağın
+                // altındaki uç kaçmasın diye bırakınca)
+                if activeHandle != nil { profile.fitCountLineToArea() }
                 activeHandle = nil
                 dragStartLine = nil
             }

@@ -1,6 +1,7 @@
 """Ürün profili (contracts/product-profile.schema.json) için tipli model."""
 from __future__ import annotations
 
+import math
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -180,6 +181,42 @@ class Profile:
         lo = self.roi.y if self.vertical else self.roi.x
         hi = lo + (self.roi.height if self.vertical else self.roi.width)
         self.linePosition = min(max(self.linePosition, lo + 0.02), max(lo + 0.02, hi - 0.02))
+        self.fit_count_line_to_area()
+
+    def fit_count_line_to_area(self) -> None:
+        """Açılı çizgiyi açısını ve konumunu koruyarak alanın kenarından kenarına uzatır/kısaltır (alan büyüyünce
+        çizgi de büyür; Swift `fitCountLineToArea` ile aynı). Yalnızca çizimi değiştirir: sayım çizginin doğrusuna
+        bağlıdır, uçlarına değil. Ortası alanın dışındaysa dokunulmaz."""
+        if not self.countLine:
+            return
+        (ax, ay), (bx, by) = self.countLine
+        r = self.roi
+        pts = self.roiPolygon or [(r.x, r.y), (r.x + r.width, r.y), (r.x + r.width, r.y + r.height),
+                                  (r.x, r.y + r.height)]
+        mx, my = (ax + bx) / 2, (ay + by) / 2
+        dx, dy = bx - ax, by - ay
+        if math.hypot(dx, dy) <= 1e-9 or len(pts) < 3:
+            return
+        lo: float | None = None
+        hi: float | None = None
+        for i, (px, py) in enumerate(pts):
+            qx, qy = pts[(i + 1) % len(pts)]
+            ex, ey = qx - px, qy - py
+            den = dx * ey - dy * ex
+            if abs(den) < 1e-12:
+                continue
+            wx, wy = px - mx, py - my
+            t = (wx * ey - wy * ex) / den
+            s = (wx * dy - wy * dx) / den
+            if not 0 <= s <= 1:
+                continue
+            if t <= 0:
+                lo = t if lo is None else max(lo, t)
+            if t >= 0:
+                hi = t if hi is None else min(hi, t)
+        if lo is None or hi is None or hi - lo <= 1e-6:
+            return
+        self.countLine = ((mx + lo * dx, my + lo * dy), (mx + hi * dx, my + hi * dy))
 
     # --- hazır profiller ---
     @classmethod

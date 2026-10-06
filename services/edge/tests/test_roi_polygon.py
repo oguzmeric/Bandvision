@@ -120,3 +120,27 @@ def test_segmenter_percentile_only_inside_polygon() -> None:
     poly = [(0.5, 0.0), (1.0, 0.0), (1.0, 1.0), (0.5, 1.0)]
     assert seg.diff_percentile(frame, Roi(0, 0, 1, 1), 0.995, poly) == 0
     assert seg.diff_percentile(frame, Roi(0, 0, 1, 1), 0.995) == 200
+
+
+def test_angled_line_follows_area_edges() -> None:
+    """Açılı çizgi alan değişince açısını koruyarak kenardan kenara uzar (Swift `fitCountLineToArea` ile aynı)."""
+    p = Profile()
+    p.roi = Roi(0.3, 0.2, 0.4, 0.6)
+    p.countLine = ((0.45, 0.5), (0.55, 0.52))                 # kısa, hafif eğik çizgi
+    p.set_polygon([(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)])
+    (ax, ay), (bx, by) = p.countLine
+    assert abs(ax - 0.1) < 1e-9 and abs(bx - 0.9) < 1e-9        # alan kenarlarına uzadı
+    assert abs((by - ay) / (bx - ax) - 0.2) < 1e-9             # açı korundu
+    assert ax < bx                                              # a→b sırası (akış yönü) korundu
+    # eğik kenarlı çokgen: uçlar kenarların üstünde
+    p.set_polygon([(0.2, 0.1), (0.8, 0.1), (0.7, 0.9), (0.3, 0.9)])
+    (ax, ay), (bx, by) = p.countLine
+    assert 0.2 < ax < 0.3 and 0.7 < bx < 0.8
+
+
+def test_line_fit_leaves_line_outside_area_alone() -> None:
+    p = Profile()
+    p.countLine = ((0.0, 0.05), (0.2, 0.05))
+    before = p.countLine
+    p.set_polygon([(0.3, 0.3), (0.9, 0.3), (0.9, 0.9), (0.3, 0.9)])   # çizginin ortası alanın dışında
+    assert p.countLine == before

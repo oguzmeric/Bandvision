@@ -2,7 +2,7 @@
 
 import { DIRECTION_LABELS, type Direction } from "@/lib/types";
 import {
-  flip, roiCorners, setCountLine, setPolygon, straightCountLine, clampLine, type Geometry,
+  flip, fitCountLine, roiCorners, setCountLine, setPolygon, straightCountLine, clampLine, type Geometry,
 } from "@/lib/geometry";
 
 const ARROW: Record<Direction, string> = { down: "↓", up: "↑", right: "→", left: "←" };
@@ -55,7 +55,7 @@ export default function GeometryControls({ value, onChange, aspect, twoWay = fal
         {allowAngled ? (
           <Segmented label="Sayım çizgisi" testId="line-mode" value={g.countLine !== null}
                      options={[[false, "Düz çizgi"], [true, "Açılı çizgi"]]}
-                     onChange={(angled) => onChange(setCountLine(g, angled ? straightCountLine(g) : null, aspect))} />
+                     onChange={(angled) => onChange(fitCountLine(setCountLine(g, angled ? straightCountLine(g) : null, aspect)))} />
         ) : (
           <p className="text-[12px] text-faint">Bu yöntemde düz çizgi kullanılır.</p>
         )}

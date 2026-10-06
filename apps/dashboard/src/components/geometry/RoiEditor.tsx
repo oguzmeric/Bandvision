@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  isVertical, lineEndpoints, MAX_POLYGON_POINTS, setCountLine, setPolygon, clampLine,
+  isVertical, lineEndpoints, MAX_POLYGON_POINTS, setCountLine, setPolygon, clampLine, fitCountLine,
   type Geometry, type Line,
 } from "@/lib/geometry";
 import type { Point } from "@/lib/types";
@@ -131,7 +131,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
         let x0 = r.x, y0 = r.y, x1 = r.x + r.width, y1 = r.y + r.height;
         if (h.i === 0 || h.i === 3) x0 = Math.min(p.x, x1 - 0.05); else x1 = Math.max(p.x, x0 + 0.05);
         if (h.i === 0 || h.i === 1) y0 = Math.min(p.y, y1 - 0.05); else y1 = Math.max(p.y, y0 + 0.05);
-        onChange(clampLine({ ...g0, roi: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } }));
+        onChange(fitCountLine(clampLine({ ...g0, roi: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } })));
         return;
       }
       case "vertex": {
@@ -175,7 +175,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
           let next = setPolygon(g0, g0.roiPolygon.map((q) => ({ x: q.x + mx, y: q.y + my })));
           next = { ...next, linePosition: g0.linePosition + (isVertical(g0.direction) ? my : mx) };
           if (g0.countLine) next = setCountLine(next, { a: { x: g0.countLine.a.x + mx, y: g0.countLine.a.y + my }, b: { x: g0.countLine.b.x + mx, y: g0.countLine.b.y + my } }, aspect);
-          onChange(clampLine(next));
+          onChange(fitCountLine(clampLine(next)));
         } else {
           const r = g0.roi;
           const mx = Math.min(Math.max(dx, -r.x), 1 - r.x - r.width);
@@ -183,7 +183,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
           let next: Geometry = { ...g0, roi: { ...r, x: r.x + mx, y: r.y + my },
                                  linePosition: g0.linePosition + (isVertical(g0.direction) ? my : mx) };
           if (g0.countLine) next = setCountLine(next, { a: { x: g0.countLine.a.x + mx, y: g0.countLine.a.y + my }, b: { x: g0.countLine.b.x + mx, y: g0.countLine.b.y + my } }, aspect);
-          onChange(clampLine(next));
+          onChange(fitCountLine(clampLine(next)));
         }
         return;
       }
@@ -207,6 +207,13 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
     apply(d.h, norm(e), d.start, d.g0);
   }
 
+  /** Çizgi sürüklemesi bitince açılı çizgi alanın kenarından kenarına (sürüklerken uç parmağın altından kaçmasın) */
+  function endDrag() {
+    const d = drag.current;
+    drag.current = null;
+    if (d && (d.h.kind === "lineA" || d.h.kind === "lineB" || d.h.kind === "lineMid")) onChange(fitCountLine(value));
+  }
+
   function onDoubleClick(e: React.MouseEvent) {
     if (!editable || !g.roiPolygon || g.roiPolygon.length <= 3) return;
     const rect = box.current!.getBoundingClientRect();
@@ -226,7 +233,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
       )}
       <svg viewBox={`0 0 ${W} ${H}`} className={`absolute inset-0 h-full w-full ${editable ? "cursor-crosshair touch-none" : "pointer-events-none"}`}
            onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-           onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
+           onPointerUp={endDrag} onPointerCancel={endDrag}
            onDoubleClick={onDoubleClick}
            role="img" aria-label={`İlgi alanı: ${g.roiPolygon ? `${g.roiPolygon.length} köşeli çokgen` : "dikdörtgen"}; sayım çizgisi ${g.countLine ? "açılı" : "düz"}`}>
         <path d={`M0,0 H${W} V${H} H0 Z ${areaPath}`} fill="black" fillOpacity={0.38} fillRule="evenodd" />

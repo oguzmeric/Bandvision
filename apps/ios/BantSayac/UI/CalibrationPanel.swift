@@ -190,6 +190,7 @@ struct CalibrationPanel: View {
                 get: { vm.profile.countLine != nil },
                 set: { angled in
                     vm.profile.setCountLine(angled ? vm.profile.straightCountLine : nil, aspect: imageAspect)
+                    vm.profile.fitCountLineToArea()
                 }
             )) {
                 Text("Düz çizgi").tag(false)

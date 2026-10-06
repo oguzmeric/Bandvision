@@ -147,6 +147,33 @@ extension ProductProfile {
         let lo = direction.isVertical ? roi.minY : roi.minX
         let hi = direction.isVertical ? roi.maxY : roi.maxX
         linePosition = min(max(linePosition, lo + 0.02), max(lo + 0.02, hi - 0.02))
+        fitCountLineToArea()
+    }
+
+    /// Açılı çizgiyi açısını ve konumunu koruyarak alanın kenarından kenarına uzatır/kısaltır (alan büyüyünce çizgi
+    /// de büyür). Yalnızca çizimi değiştirir: sayım çizginin doğrusuna bağlıdır, uçlarına değil. Ortası alanın
+    /// dışındaysa dokunulmaz. Python `Profile.fit_count_line_to_area` ve paneldeki `fitCountLine` ile aynı.
+    mutating func fitCountLineToArea() {
+        guard let cl = countLine else { return }
+        let pts = roiPolygon ?? roiCorners
+        let mx = (cl.a.x + cl.b.x) / 2, my = (cl.a.y + cl.b.y) / 2
+        let dx = cl.b.x - cl.a.x, dy = cl.b.y - cl.a.y
+        guard hypot(dx, dy) > 1e-9, pts.count >= 3 else { return }
+        var lo: Double?, hi: Double?
+        for i in pts.indices {
+            let p = pts[i], q = pts[(i + 1) % pts.count]
+            let ex = q.x - p.x, ey = q.y - p.y
+            let den = dx * ey - dy * ex
+            if abs(den) < 1e-12 { continue }
+            let wx = p.x - mx, wy = p.y - my
+            let t = (wx * ey - wy * ex) / den                 // çizgi üzerindeki konum (orta 0, uçlar ±0,5)
+            let s = (wx * dy - wy * dx) / den                 // kenar üzerindeki konum (0…1)
+            guard s >= 0, s <= 1 else { continue }
+            if t <= 0 { lo = max(lo ?? -.infinity, t) }
+            if t >= 0 { hi = min(hi ?? .infinity, t) }
+        }
+        guard let lo, let hi, hi - lo > 1e-6 else { return }
+        countLine = CountLine(a: NormPoint(x: mx + lo * dx, y: my + lo * dy), b: NormPoint(x: mx + hi * dx, y: my + hi * dy))
     }
 
     /// Açılı çizgiyi ayarlar; `direction` akışa en yakın eksene güncellenir (uyumluluk, ekrandaki ok).
