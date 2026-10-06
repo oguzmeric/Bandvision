@@ -76,7 +76,9 @@ class ObjectDetector:
         import onnxruntime as ort  # isteğe bağlı bağımlılık (analyzer/detect extra)
 
         so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
+        so.intra_op_num_threads = max(1, min(6, (os.cpu_count() or 2) // 2))
+        # Boşta dönerek bekleme kapalı: canlı sayımda okuyucu, sunucu ve başka oturumlarla işlemci paylaşılır
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self.session = ort.InferenceSession(str(path or ensure_model()), so, providers=["CPUExecutionProvider"])
         self._grid, self._stride = _grids(INPUT)
 

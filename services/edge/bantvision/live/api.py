@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..core import Profile
 from . import recorders as rec
+from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
 
@@ -71,6 +72,7 @@ class LiveManager:
         self._clients: dict[str, tuple[str, rec.RecorderClient]] = {}   # kaynak → (ayar imzası, istemci)
         self._channels: dict[str, list[rec.RecorderChannel]] = {}
         self._lock = threading.Lock()
+        disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
     def source_or_404(self, source_id: str) -> dict[str, Any]:
         src = self.store.source(source_id)
@@ -313,6 +315,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         except rec.RecorderError as e:
             raise _err(e) from e
         s = LiveSession(name, open_url, profile, keep_alive)
+        s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
         s.source_id, s.channel_id, s.profile_id = body.sourceId, body.channelId, body.profileId  # type: ignore[attr-defined]
         manager.sessions[s.id] = s
         return _session_view(s)

@@ -31,7 +31,8 @@ export default defineConfig({
       command: `${PYTHON} -m bantvision.analyzer --port ${ANALYZER_PORT}`,
       cwd: path.resolve(__dirname, "../../services/edge"),
       url: `http://127.0.0.1:${ANALYZER_PORT}/healthz`,
-      env: { ANALYZER_DATA_DIR: DATA_DIR, PYTHONIOENCODING: "utf-8" },
+      // Canlı sayım testi yerel video dosyasını kamera gibi açar (yalnızca test bayrağıyla mümkün)
+      env: { ANALYZER_DATA_DIR: DATA_DIR, PYTHONIOENCODING: "utf-8", ANALYZER_ALLOW_FILE_SOURCES: "1" },
       reuseExistingServer: false,
       timeout: 60_000,
     },

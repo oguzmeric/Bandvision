@@ -13,6 +13,12 @@ if not exist "%EDGE%\.venv\Scripts\python.exe" (
   python -m venv "%EDGE%\.venv" || goto :hata
   "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
 )
+rem Eski kurulumda canli sayim paketleri (kamera/NVR baglantisi, kisi tanima) yoksa tamamla
+"%EDGE%\.venv\Scripts\python.exe" -c "import httpx, onnxruntime, PIL" >nul 2>&1
+if errorlevel 1 (
+  echo Canli sayim paketleri kuruluyor ^(bir kez^)...
+  "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
+)
 if not exist "%DASH%\node_modules" (
   echo Panel paketleri kuruluyor ^(ilk sefer^)...
   pushd "%DASH%"
@@ -35,7 +41,7 @@ pause
 exit /b 1
 
 :hazir
-start "" http://localhost:3000/videos
+start "" http://localhost:3000/cameras
 exit /b 0
 
 :hata

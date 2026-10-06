@@ -37,6 +37,8 @@ TestFlight kurulumunda çözülen sorunlar: .p8 anahtarı tarayıcı formunda CR
 | **20** | Şerit tarama: **aralıklı ürünler ve güçlü perspektif** (ikinci gerçek video 11 → 8–9, doğru 9), açık/koyu kararı satır içi yayılım ipucuyla, ön sayım yalnızca ilk ürün |
 | **21** | Şerit tarama: sayılar topluca gelmesin — video modunda oynatmadan önce **ön tarama** (ürün boyu), canlıda **güvenilir erken öğrenme** (≥ 4 tam ürün, tutarlı boylar) |
 | **22** | **Kişi sayımı (mağaza girişi)**: Giriş/Çıkış sayaçları, giriş yönünü tek dokunuşla çevirme, kamera konumu (tepeden/yandan), kişi kutuları ve G/Ç rozetleri, yan yana gruplarda mükerrer sayım yok (§4.10; Swift izleyici Python ile eşdeğer). Sayım türü kategorileri (bant üstü ürün, kişi; araç/hayvan/stok "yakında"); kişi sayımına uygun montaj listesi |
+| 23 | Yüklenmedi (açılı çizginin alana uyması eklensin diye iptal edildi; içeriği 24'te) |
+| **24** | **Kişi sayımı mevcut kullanıcıya da görünür**: kayıtlı profillere "Mağaza girişi" eklenir, profiller sayım türüne göre gruplu (bant üstü ürün / kişi), ana ekranda kişi sayımı ipucu kartı, Ayarlar → Hakkında'da sürüm ve derleme numarası. **Açılı sayım çizgisi alanla birlikte uzar** (alan büyütülünce/taşınınca çizgi kenardan kenara; Python ve web aynı) |
 
 ## 3. Yol haritası (F0) ve sözleşmeler
 
@@ -142,7 +144,7 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
 ## 8. Sırada
 
 1. Derleme 13'ün telefonda denenmesi: gerçek kayıt cihazı (TRASSIR: Ayarlar → Web sunucusu (SDK) açık olmalı), video oynatıcı, kartlar, öğretme.
-2. **Web platformu** (`13-web-platform.md`): W1 video analiz sunucusu ✅ → W2 web paneli (video analizi sayfası, BandVision kimliği) → W3 canlı hat (yerel Supabase) → W4 barındırma, NOK galerisi.
+2. **Web platformu** (`13-web-platform.md`): W1 video analiz sunucusu ✅ → W2 web paneli (video analizi sayfası, BandVision kimliği) → W3 canlı hat (yerel Supabase) → W4 barındırma, NOK galerisi. **Canlı sayım (kamera / kayıt cihazı) panelde hazır** (2026-10-06, `13-web-platform.md` "Canlı sayım"): Kameralar sayfası, canlı akış, alan/çizgi düzenleyici, Giriş/Çıkış. Kalan: QC (OK/NOK) kartları ve öğretme web'de yok.
 2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.

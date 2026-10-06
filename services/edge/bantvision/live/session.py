@@ -70,8 +70,9 @@ class LiveSession:
         self._open_url = open_url
         self._keep_alive = keep_alive
         self._realtime_file = realtime_file
-        self._lock = threading.RLock()
-        self._frame_cv = threading.Condition(self._lock)
+        self.loop_file = False                              # yerel video kaynağı bitince başa sarsın mı
+        self._lock = threading.RLock()                       # sayım hattı ve durum
+        self._frame_cv = threading.Condition(threading.Lock())  # kare alışverişi (okuyucu sayımı beklemesin)
         self.profile = profile
         self._pipe = Pipeline(profile)
         self.counting = False
@@ -104,6 +105,7 @@ class LiveSession:
         self._worker.join(timeout=5)
         with self._lock:
             self.status.state = "stopped"
+            self._pipe.detect._detector = None              # tanıma modeli ve iş parçacıkları bırakılsın
 
     def set_counting(self, on: bool) -> None:
         with self._lock:
@@ -177,7 +179,7 @@ class LiveSession:
 
     def raw_jpeg(self) -> bytes | None:
         """İşaretsiz son kare (kalibrasyon düzenleyicisinin arka planı)."""
-        with self._lock:
+        with self._frame_cv:
             latest = self._latest
         if latest is None:
             return None
@@ -204,6 +206,7 @@ class LiveSession:
 
     def _read_loop(self) -> None:
         backoff = 1.0
+        file_offset = 0.0                                    # dosya başa sarınca zaman geriye gitmesin
         while not self._stop.is_set():
             try:
                 url = self._open_url()
@@ -231,7 +234,7 @@ class LiveSession:
                 if not ok:
                     break
                 n += 1
-                ts = n / file_fps if is_file else time.monotonic()
+                ts = file_offset + n / file_fps if is_file else time.monotonic()
                 with self._frame_cv:
                     self._seq += 1
                     self._latest = (self._seq, ts, frame)
@@ -247,6 +250,9 @@ class LiveSession:
             if self._stop.is_set():
                 return
             if is_file:
+                if self.loop_file:                          # test/gösterim: video başa sarar, canlı kamera gibi
+                    file_offset += n / file_fps
+                    continue
                 self._set_state("ended", "Video bitti.")
                 return
             self._set_state("reconnecting", "Görüntü kesildi; yeniden bağlanılıyor.")

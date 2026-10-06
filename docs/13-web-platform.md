@@ -39,6 +39,35 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 
 Güvenlik: `ANALYZER_TOKEN` tanımlıysa `Authorization: Bearer <token>` zorunlu (panelin sunucu tarafı çağırır; tarayıcıya verilmez). Yükleme sınırı `ANALYZER_MAX_UPLOAD_MB` (varsayılan 2048), video olmayan dosya reddedilir. CORS: `ANALYZER_CORS_ORIGINS`.
 
+## Canlı sayım: kamera ve kayıt cihazı (panel, `bantvision/live`)
+Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve canlı sayım web'de de olsun; ofis NVR'ından görüntü alınıp yerelde test edilebilsin.
+- **Nerede çalışır:** analiz sunucusu kameralarla **aynı ağdaki bilgisayarda** (ofis ağı ya da VPN). Görüntü yalnızca orada işlenir; panel işaretli akışı (MJPEG) aynı bilgisayardan alır. Telefondaki ile aynı Python referans çekirdeği (bant üstü ürün, şerit tarama, kişi sayımı §4.10).
+- **Panel:** **Kameralar** (kayıt cihazı: TRASSIR / Hikvision / Dahua; IP kamera: marka şablonu ya da özel RTSP; kameralar küçük resimle, arama) → **Canlı sayımı başlat** (ne sayılacak: profil seç ya da hazır profilden ekle) → **Canlı sayım** (işaretli akış, sayaç ya da Giriş/Çıkış, Başlat/Durdur/Sıfırla, giriş yönünü çevir, CSV; **Kalibre/Ayarla**: ham kare üstünde alan ve çizgi düzenleyici, boş bandı / ürün boyunu öğren, `Kaydet` profili de saklar).
+- **Kalıcı ayarlar** (`<ANALYZER_DATA_DIR>/live/`): `sources.json` (şifresiz), `secrets.json` (şifreler; POSIX'te 0600), `profiles.json` (sözleşme `product-profile`; ilk açılışta telefondaki hazır profillerle). **Hiçbir API yanıtı şifre döndürmez** (`hasPassword` yalnızca var/yok); düzenlemede şifre boş bırakılırsa kayıtlı şifre korunur.
+- **Oturumlar** bellekte (sunucu yeniden başlarsa kapanır). Okuyucu iş parçacığı her zaman en son kareyi tutar (RTSP TCP, kopunca artan beklemeyle yeniden bağlanır, TRASSIR jetonu her bağlanışta yenilenir); işleyici en son kareyi sayar, işaretli kare en çok 12/sn. Aynı kamera ikinci kez açılırsa eski oturum kapanır; kaynak silinince oturumları da kapanır.
+- **Windows:** sunucu kendini güç kısmasından (verimlilik modu / EcoQoS) çıkarır (`live/power.py`); arka planda tanıma kare başına 65 ms'den ~350 ms'ye çıkıp canlı sayım 13'ten 2–3 kare/sn'ye düşüyordu. Sistem ayarı değişmez.
+- **Test:** `ANALYZER_ALLOW_FILE_SOURCES=1` iken "Özel RTSP" adresine yerel video dosyası yazılabilir (başa sararak "kamera" gibi oynar). Yalnızca test/e2e içindir; bayraksız sunucu dosya okumaz.
+
+| Yöntem | Yol (`/api/v1/live`) | Açıklama |
+|---|---|---|
+| `GET` | `/catalog` | Sayım türleri ve hazır profiller (telefondaki katalog) |
+| `GET` `POST` | `/profiles` | Profiller; `POST {"preset": "people", "name"?}` ya da tam profil |
+| `PUT` `DELETE` | `/profiles/{id}` | Profili güncelle / sil (son profil silinmez: `409`) |
+| `GET` `POST` | `/sources` | Kaynaklar; `POST` kamera (`kind: camera`, `brand`, `host`, `port`, `channel`, `substream`, `customUrl`) ya da kayıt cihazı (`kind: recorder`, `recorderBrand`, `host`, `httpPort`, `rtspPort`) + `username`, `password` |
+| `PUT` `DELETE` | `/sources/{id}` | Düzenle (`password: null` → korunur) / sil (şifre ve oturumlar da) |
+| `GET` | `/sources/{id}/channels?refresh=` | Kayıt cihazındaki kameralar (önbellekli) |
+| `GET` | `/sources/{id}/snapshot?channel=` | Küçük resim (JPEG) |
+| `GET` `POST` | `/sessions` | Canlı oturumlar; `POST {sourceId, channelId?, profileId}` |
+| `GET` `DELETE` | `/sessions/{id}` | Durum (durum, fps, sayılar, kalibrasyon, profil) / kapat |
+| `POST` | `/sessions/{id}/actions` | `{"action": "start" \| "stop" \| "reset" \| "learnBackground" \| "learnSample" \| "cancelCalibration"}` |
+| `PUT` | `/sessions/{id}/profile?save=` | Alan, çizgi, yön, yöntem; `save=true` profili de kaydeder |
+| `GET` | `/sessions/{id}/stream` | İşaretli MJPEG akışı |
+| `GET` | `/sessions/{id}/frame.jpg` | Ham kare (alan düzenleyici için) |
+| `GET` | `/sessions/{id}/counts.csv` | Sayım kaydı |
+
+Panel bu API'ye `/api/live/...` vekili üzerinden gider (sunucu tarafı; `ANALYZER_TOKEN` tarayıcıya verilmez). Testler: `services/edge/tests/test_live.py`, `test_recorders.py`; tarayıcıda `apps/dashboard/e2e/live.spec.ts`.
+Yerelde çalıştırma: `tools/panel_baslat.bat` (analiz sunucusu + panel, **Kameralar** sayfasını açar).
+
 ## Fazlar
 | Faz | İçerik | Kabul |
 |---|---|---|
