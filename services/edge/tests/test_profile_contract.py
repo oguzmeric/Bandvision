@@ -46,3 +46,15 @@ def test_example_round_trips_through_model(validator: Draft202012Validator, exam
     assert out["scale"]["mmPerPixel"] == src.get("scale", {}).get("mmPerPixel")
     assert out["io"] == src.get("io", {})
     assert Profile.from_dict(out) == p
+
+
+def test_staff_colors_round_trip_and_validate(validator: Draft202012Validator) -> None:
+    p = Profile.people()
+    assert "staffColors" not in p.to_dict()                       # boşsa yazılmaz
+    p.staffColors = [(62.5, 48.25, 63.0), (30.0, -12.5, -40.0)]
+    d = p.to_dict()
+    assert d["staffColors"] == [{"L": 62.5, "a": 48.25, "b": 63.0}, {"L": 30.0, "a": -12.5, "b": -40.0}]
+    assert_valid(validator, d)
+    assert Profile.from_dict(d).staffColors == p.staffColors
+    d["staffColors"] = d["staffColors"] * 2                         # 4 renk: şema reddeder
+    assert list(validator.iter_errors(d))

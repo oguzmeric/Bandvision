@@ -96,6 +96,8 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     var detectConfidence: Double? = nil
     /// Tanıma: çizgiye göre konum noktası (nil = merkez / tepeden)
     var countAnchor: CountAnchor? = nil
+    /// Tanıma (kişi): personel üniforma renkleri (en çok 3). nil/boş = kapalı; bu renkteki kişinin geçişi müşteri sayılmaz
+    var staffColors: [LabColor]? = nil
 }
 
 /// Sayım yöntemi (sözleşme `countMode`).

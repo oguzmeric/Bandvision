@@ -49,6 +49,18 @@
       "description": "detect: çizgiye göre konum noktası. center: kutu merkezi (tepeden kamera); bottom: alt orta (yatık kamera, ayak — zemindeki çizgiyle tutarlı).",
       "enum": ["center", "bottom"]
     },
+    "staffColors": {
+      "description": "detect (kişi): personel üniforma renkleri, CIE Lab (D65). Bu renkteki kişilerin geçişleri giriş/çıkışa eklenmez, personel geçişi sayılır (algoritma §4.10 eki). Yoksa ya da boşsa kapalı.",
+      "type": "array", "maxItems": 3,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["L", "a", "b"],
+        "properties": {
+          "L": { "type": "number", "minimum": 0, "maximum": 100 },
+          "a": { "type": "number", "minimum": -128, "maximum": 127 },
+          "b": { "type": "number", "minimum": -128, "maximum": 127 }
+        }
+      }
+    },
     "productLength": {
       "description": "linescan: tek ürünün akış boyunca boyu, ROI'nin akış eksenindeki uzunluğuna oranla. 0 = otomatik öğren.",
       "type": "number", "minimum": 0, "maximum": 2

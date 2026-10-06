@@ -87,6 +87,8 @@ class Profile:
     detectConfidence: float = 0.35
     # Çizgiye göre konum noktası: "center" (tepeden kamera) ya da "bottom" (yatık kamera: ayak, zemindeki çizgi)
     countAnchor: str = "center"
+    # Personel üniforma renkleri (CIE Lab; §4.10 eki): bu renkteki kişinin geçişi müşteri sayılmaz. Boş = kapalı
+    staffColors: list[tuple[float, float, float]] = field(default_factory=list)
     rotation: int = 0            # source.rotation (saat yönünde derece)
     referenceFps: float = 60.0   # source.referenceFps
     mmPerPixel: float | None = None  # scale.mmPerPixel (tam çözünürlük)
@@ -119,6 +121,8 @@ class Profile:
             p.roi = Roi(**d["roi"])
         if d.get("roiPolygon"):
             p.roiPolygon = [(float(pt["x"]), float(pt["y"])) for pt in d["roiPolygon"]]
+        if d.get("staffColors"):
+            p.staffColors = [(float(c["L"]), float(c["a"]), float(c["b"])) for c in d["staffColors"]]
         if d.get("countLine"):
             cl = d["countLine"]
             p.countLine = ((float(cl["a"]["x"]), float(cl["a"]["y"])), (float(cl["b"]["x"]), float(cl["b"]["y"])))
@@ -159,6 +163,8 @@ class Profile:
             "qc": asdict(self.qc),
             "io": self.io,
         }
+        if self.staffColors:
+            d["staffColors"] = [{"L": L, "a": a, "b": b} for L, a, b in self.staffColors]
         if self.roiPolygon:
             d["roiPolygon"] = [{"x": x, "y": y} for x, y in self.roiPolygon]
         if self.countLine:

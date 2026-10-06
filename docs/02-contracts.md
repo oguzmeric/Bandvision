@@ -17,6 +17,7 @@ Bir ürün tipinin tüm kalibrasyon ve QC ayarları. iOS'ta da edge'de de aynı 
 | `detectClasses` | COCO adları dizisi, isteğe bağlı | `detect`: sayılan sınıflar. Kişi `person`; araç `car, truck, bus, motorcycle, bicycle`; hayvan `cow, sheep, horse, dog, cat, bird` |
 | `detectConfidence` | 0,05–0,95, isteğe bağlı | `detect`: yeni iz başlatan en düşük tanıma güveni (varsayılan 0,35); daha düşükler yalnızca mevcut izi sürdürür |
 | `countAnchor` | `center` / `bottom`, isteğe bağlı | `detect`: çizgiye göre konum noktası. `center` tepeden kamera; `bottom` yatık kamera (ayak; çizgi zemine çizilir) |
+| `staffColors` | dizi (en çok 3) `{L, a, b}`, isteğe bağlı | `detect`: personel üniforma renkleri (CIE Lab, D65). Bu renkteki kişilerin geçişi giriş/çıkışa eklenmez, ayrı "personel geçişi" sayılır (§4.10 eki). Yoksa/boşsa kapalı; boş dizi yazılmaz |
 | `productLength` | 0–2, isteğe bağlı | `linescan`: tek ürünün akış boyunca boyu, ROI'nin akış uzunluğuna oranla; 0 = otomatik öğrenilir ("Ürün boyunu öğren" kalibrasyonu bunu yazar) |
 | `linePosition` | 0–1 | Sayım çizgisinin akış eksenindeki konumu |
 | `countLine` | `{a:{x,y}, b:{x,y}}`, isteğe bağlı | Açılı sayım çizgisi (algoritma §4.8). Akış, a'dan b'ye yürürken sağ el tarafı. Varsa `direction`/`linePosition` sayımda kullanılmaz (uyumluluk için yine yazılır: akışa en yakın eksen) |

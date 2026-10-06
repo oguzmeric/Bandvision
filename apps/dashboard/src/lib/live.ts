@@ -33,6 +33,9 @@ export interface Channel {
   hasSubstream: boolean;
 }
 
+/** Personel üniforma rengi (CIE Lab, D65; sözleşme `staffColors`) */
+export interface LabColor { L: number; a: number; b: number }
+
 /** Profil (sözleşme `product-profile.schema.json`); panelin kullandığı alanlar, gerisi olduğu gibi taşınır */
 export interface Profile {
   id: string;
@@ -48,6 +51,8 @@ export interface Profile {
   countMode?: CountMode;
   productLength?: number;
   countAnchor?: CountAnchor;
+  /** Kişi sayımı: personel renkleri (en çok 3); yoksa kapalı */
+  staffColors?: LabColor[];
   [key: string]: unknown;
 }
 
