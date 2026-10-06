@@ -11,6 +11,7 @@ jobs:
       - run: pip install -e ".[dev,analyzer]"
       - run: ruff check . ../../tools
       - run: pytest -q
+      - run: pytest -q ../../tools/tests/test_eval_staff.py   # profil/video testleri edge bağımlılıklarıyla
   contracts:
     runs-on: ubuntu-24.04
     steps:
