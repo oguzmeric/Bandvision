@@ -297,7 +297,7 @@ def test_vote_full_uniform_partial_vest_shade_and_other_colour() -> None:
     colors = [lab_of(ORANGE)]
     assert sc.vote_bgr(frame_with(ORANGE, box), box, [], "bottom", colors) is True
     assert sc.vote_bgr(frame_with(ORANGE, box, vest=0.35), box, [], "bottom", colors) is True      # yelek
-    assert sc.vote_bgr(frame_with(ORANGE, box, shade=0.7), box, [], "bottom", colors) is True      # gölge
+    assert sc.vote_bgr(frame_with(ORANGE, box, shade=0.85), box, [], "bottom", colors) is True     # hafif gölge
     assert sc.vote_bgr(frame_with(NAVY, box), box, [], "bottom", colors) is False
 
 
@@ -310,7 +310,7 @@ def test_vote_ignores_points_inside_neighbour_box() -> None:
     img[int(0.1 * h):int(0.9 * h), int(0.45 * w):int(0.55 * w)] = ORANGE[::-1]     # öndeki personel örtüyor
     colors = [lab_of(ORANGE)]
     assert sc.vote_bgr(img, cust, [], "bottom", colors) is True                     # dışlamasız: karışır
-    assert sc.vote_bgr(img, cust, [staff], "bottom", colors) is None                # kalan nokta < 36: oy yok
+    assert sc.vote_bgr(img, cust, [staff], "bottom", colors) is False               # komşunun noktaları dışlandı
 
 
 def test_vote_none_for_tiny_box_and_dark_points_never_match() -> None:
@@ -493,7 +493,7 @@ def teach_bgr(bgr: np.ndarray, boxes: Sequence[Box], point: tuple[float, float],
 Çalıştır: `cd services/edge && .venv/Scripts/python -m pytest tests/test_staff_color.py -q && .venv/Scripts/ruff check .`
 Beklenen: tümü PASS, ruff temiz.
 
-Not: `test_torso_region_depends_on_camera_mount` kutuya göre oranları sınar (`0,2 + 0,3 · 0,2 = 0,26`, …). `test_vote_ignores_points_inside_neighbour_box`'ta komşu kutu gövde ızgarasının çoğunu kaplar; kalan nokta < 36 → `None`.
+Not: `test_torso_region_depends_on_camera_mount` kutuya göre oranları sınar (`0,2 + 0,3 · 0,2 = 0,26`, …). `test_vote_ignores_points_inside_neighbour_box`'ta komşu kutu gövde ızgarasının sağ yarısını (6 sütun) kaplar; kalan 72 nokta lacivert → `False`.
 
 - [ ] **Adım 5: Commit**
 
