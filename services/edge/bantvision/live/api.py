@@ -364,8 +364,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.post("/sessions", status_code=201)
     def create_session(body: SessionIn) -> dict[str, Any]:
         src = manager.source_or_404(body.sourceId)
-        profile = store.profile(body.profileId)
-        if profile is None:
+        profile = (store.camera_profile(body.sourceId, body.channelId, body.profileId)   # bu kameranın ayarı
+                   or store.profile(body.profileId))                                   # yoksa şablon
+        if profile is None or store.profile(body.profileId) is None:
             raise HTTPException(404, "Profil bulunamadı.")
         for s in list(manager.sessions.values()):           # aynı kamera iki kez açılmasın
             if getattr(s, "source_id", None) == body.sourceId and getattr(s, "channel_id", None) == body.channelId:
@@ -430,13 +431,14 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.put("/sessions/{session_id}/profile")
     def set_profile(session_id: str, body: dict[str, Any], save: bool = False) -> dict[str, Any]:
-        """Oturumun profilini değiştirir (alan, çizgi, yön, yöntem…); `save=true` ise profili de kaydeder."""
+        """Oturumun profilini değiştirir (alan, çizgi, yön, yöntem…); `save=true` ise **bu kamera için** kaydeder
+        (profil şablonu ve diğer kameralar değişmez)."""
         s = session_or_404(session_id)
         p = _profile_from(body)
         p.id = getattr(s, "profile_id", p.id)
         s.set_profile(p)
         if save:
-            store.save_profile(p)
+            store.save_camera_profile(getattr(s, "source_id", ""), getattr(s, "channel_id", None), p)
         return _session_view(s)
 
     @r.get("/sessions/{session_id}/stream")

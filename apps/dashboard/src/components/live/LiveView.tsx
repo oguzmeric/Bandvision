@@ -363,6 +363,7 @@ export default function LiveView() {
                 <button type="button" onClick={() => finishCalibration(true)}
                         className="brand-gradient h-10 flex-1 rounded-[10px] text-sm font-semibold text-white">Kaydet</button>
               </div>
+              <p className="mt-2 text-[11.5px] text-faint">Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez.</p>
             </section>
           )}
         </aside>

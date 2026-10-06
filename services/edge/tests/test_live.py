@@ -160,14 +160,15 @@ def test_live_session_end_to_end(client: TestClient, monkeypatch: pytest.MonkeyP
     prof = dict(live["profile"], linePosition=0.4)
     v = client.put(f"{base}/profile", params={"save": "true"}, json=prof).json()
     assert v["profile"]["linePosition"] == 0.4 and v["profile"]["id"] == egg["id"]
-    saved = next(p for p in client.get("/api/v1/live/profiles").json() if p["id"] == egg["id"])
-    assert saved["linePosition"] == 0.4
+    template = next(p for p in client.get("/api/v1/live/profiles").json() if p["id"] == egg["id"])
+    assert template["linePosition"] == egg["linePosition"]           # şablon değişmez; ayar bu kameraya kaydedildi
 
     csv = client.get(f"{base}/counts.csv")
     assert csv.status_code == 200 and "attachment" in csv.headers["content-disposition"]
 
-    # Aynı kamera ikinci kez açılırsa eski oturum kapanır (kamera iki kez okunmaz)
+    # Aynı kamera ikinci kez açılırsa eski oturum kapanır (kamera iki kez okunmaz); kayıtlı kamera ayarı gelir
     r2 = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": egg["id"]}).json()
+    assert r2["profile"]["linePosition"] == 0.4
     assert [s["id"] for s in client.get("/api/v1/live/sessions").json()] == [r2["id"]]
     assert client.get(base).status_code == 404
 
@@ -315,3 +316,29 @@ def test_idle_scene_skips_detection_but_rechecks_every_second() -> None:
     for _ in range(10):
         plain.process(still, p, 10.0)
     assert Fake.calls == 10
+
+
+def test_area_and_line_are_saved_per_camera(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aynı profil iki kamerada: birinde ayarlanıp kaydedilen alan/çizgi diğerini ve şablonu etkilemez."""
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    people = next(p for p in client.get("/api/v1/live/profiles").json() if p["name"] == "Mağaza girişi")
+    srcs = [client.post("/api/v1/live/sources", json=camera(name=n, brand="custom", customUrl=str(CLIP), password="")
+                        ).json() for n in ("Hol", "Dış cephe")]
+    hol = client.post("/api/v1/live/sessions", json={"sourceId": srcs[0]["id"], "profileId": people["id"]}).json()
+    poly = [{"x": 0.1, "y": 0.0}, {"x": 0.5, "y": 0.0}, {"x": 0.5, "y": 0.8}, {"x": 0.1, "y": 0.8}]
+    edited = dict(hol["profile"], roiPolygon=poly, direction="up",
+                  roi={"x": 0.1, "y": 0.0, "width": 0.4, "height": 0.8})
+    r = client.put(f"/api/v1/live/sessions/{hol['id']}/profile", params={"save": "true"}, json=edited)
+    assert r.status_code == 200 and r.json()["profile"]["direction"] == "up"
+
+    cephe = client.post("/api/v1/live/sessions", json={"sourceId": srcs[1]["id"], "profileId": people["id"]}).json()
+    assert cephe["profile"]["direction"] == people["direction"] and not cephe["profile"].get("roiPolygon")
+    template = next(p for p in client.get("/api/v1/live/profiles").json() if p["id"] == people["id"])
+    assert template["direction"] == people["direction"] and not template.get("roiPolygon")
+
+    again = client.post("/api/v1/live/sessions", json={"sourceId": srcs[0]["id"], "profileId": people["id"]}).json()
+    assert again["profile"]["direction"] == "up" and len(again["profile"]["roiPolygon"]) == 4
+
+    store = client.app.state.live.store                       # kaynak silinince kamera ayarı da silinir
+    assert client.delete(f"/api/v1/live/sources/{srcs[0]['id']}").status_code == 204
+    assert store.camera_profile(srcs[0]["id"], None, people["id"]) is None

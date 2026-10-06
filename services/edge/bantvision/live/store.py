@@ -3,7 +3,9 @@
 Dosyalar analiz sunucusunun veri klasöründe (`<ANALYZER_DATA_DIR>/live/`):
 - `sources.json`: kaynaklar — **şifre içermez**;
 - `secrets.json`: kaynak şifreleri (yalnızca bu sunucu okur; API hiçbir yanıtta şifre döndürmez; POSIX'te 0600);
-- `profiles.json`: profiller (sözleşme `contracts/product-profile.schema.json`).
+- `profiles.json`: profiller (sözleşme `contracts/product-profile.schema.json`) — kameraya başlangıç şablonu;
+- `camera_profiles.json`: kamera başına kaydedilmiş ayar (alan, çizgi, yön, eşik…): `kaynak|kanal|profil` → profil.
+  Her kameranın sahnesi farklı; bir kamerada ayarlanan alan başka kamerayı etkilemez.
 Tüm yazmalar kilit altında ve atomik (geçici dosya + yeniden adlandırma).
 """
 from __future__ import annotations
@@ -130,6 +132,7 @@ class LiveStore:
             secrets = self._read("secrets.json", {})
             if secrets.pop(source_id, None) is not None:
                 self._write("secrets.json", secrets)
+            self._drop_camera_profiles(lambda k: k.split("|")[0] == source_id)
             return True
 
     # ------------------------------------------------------------------ profiller
@@ -162,4 +165,32 @@ class LiveStore:
             if len(keep) == len(items) or not keep:          # son profil silinmez
                 return False
             self._write("profiles.json", keep)
+            self._drop_camera_profiles(lambda k: k.split("|")[-1] == profile_id)
             return True
+
+    # ------------------------------------------------------------------ kamera başına ayar
+
+    @staticmethod
+    def camera_key(source_id: str, channel_id: str | None, profile_id: str) -> str:
+        return f"{source_id}|{channel_id or ''}|{profile_id}"
+
+    def camera_profile(self, source_id: str, channel_id: str | None, profile_id: str) -> Profile | None:
+        """Bu kamerada bu profille kaydedilmiş ayar; yoksa None (şablon kullanılır)."""
+        with self._lock:
+            d = self._read("camera_profiles.json", {}).get(self.camera_key(source_id, channel_id, profile_id))
+        return Profile.from_dict(d) if d else None
+
+    def save_camera_profile(self, source_id: str, channel_id: str | None, profile: Profile) -> dict[str, Any]:
+        d = profile.to_dict()
+        with self._lock:
+            items = self._read("camera_profiles.json", {})
+            items[self.camera_key(source_id, channel_id, profile.id)] = d
+            self._write("camera_profiles.json", items)
+        return d
+
+    def _drop_camera_profiles(self, match: Any) -> None:
+        with self._lock:
+            items = self._read("camera_profiles.json", {})
+            keep = {k: v for k, v in items.items() if not match(k)}
+            if len(keep) != len(items):
+                self._write("camera_profiles.json", keep)
