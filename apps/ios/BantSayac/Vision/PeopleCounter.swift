@@ -204,7 +204,9 @@ final class PeopleCounter {
         tracker.p.maxAge = max(5, roundHalfEven(fps * 1.0))
         tracker.p.high = max(profile.detectConfidence ?? 0.35, tracker.p.low + 0.05)
         let dets = detector.detect(pb, profile: profile)
-        let blobs = motion.detect(small, profile: profile)
+        // Hareket desteği yalnızca tepeden kamerada (Python detect_count.py ile aynı): yatık/yandan kamerada tanıyıcı
+        // kişiyi zaten bulur; kapı, ekran, gölge hareketi hayalet iz üretir.
+        let blobs: [NBox]? = profile.anchor == .center ? motion.detect(small, profile: profile) : nil
         let (side, line) = peopleSideFunction(profile, width: small.sourceWidth, height: small.sourceHeight)
         let r = profile.roi
         let (ins, outs) = tracker.update(dets, sideOf: side, anchor: profile.anchor, motion: blobs,
