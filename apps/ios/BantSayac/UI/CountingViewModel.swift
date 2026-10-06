@@ -26,6 +26,11 @@ final class CountingViewModel: ObservableObject {
     @Published private(set) var total = 0
     /// Kişi sayımı (§4.10): çıkış toplamı (`total` giriş toplamıdır)
     @Published private(set) var totalOut = 0
+    /// Kişi sayımı: personel geçişleri (giriş/çıkışa eklenmez; yalnızca ekranda)
+    @Published private(set) var staffIn = 0
+    @Published private(set) var staffOut = 0
+    /// Personel rengi öğretme modu: görüntüde dokunulan kişinin gövde rengi alınır
+    @Published var teachingStaff = false
     @Published private(set) var snapshot: EngineSnapshot = .empty
     /// Video/ağ kamerası modunda ekranda gösterilen son kare
     @Published private(set) var frameImage: CGImage?
@@ -77,6 +82,8 @@ final class CountingViewModel: ObservableObject {
     private var videoGeneration = 0
     private var liveTotal = 0
     private var liveTotalOut = 0
+    private var liveStaffIn = 0
+    private var liveStaffOut = 0
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -112,6 +119,21 @@ final class CountingViewModel: ObservableObject {
                 if ins > 0 { self.logger.record(delta: ins, total: tIn, direction: .entry) }
                 if outs > 0 { self.logger.record(delta: outs, total: tOut, direction: .exit) }
             }
+        }
+        processor.onStaff = { [weak self] sIn, sOut in
+            self?.staffIn = sIn
+            self?.staffOut = sOut
+        }
+        processor.onStaffColor = { [weak self] color in
+            guard let self, self.isCalibrating else { return }
+            guard let color else {
+                self.calibrationMessage = "Burası çok karanlık; personelin üstüne dokunun."
+                return
+            }
+            var colors = self.profile.staffColors ?? []
+            guard colors.count < StaffColor.maxColors else { return }
+            colors.append(color)
+            self.profile.staffColors = colors
         }
         processor.onSnapshot = { [weak self] snap in
             self?.snapshot = snap
@@ -188,6 +210,9 @@ final class CountingViewModel: ObservableObject {
         total = 0
         totalOut = 0
         processor.setTotals(in: 0, out: 0)
+        staffIn = 0
+        staffOut = 0
+        processor.setStaffTotals(in: 0, out: 0)
         processor.resetTracking(resetBackground: false)
         logger.resetSession()
     }
@@ -255,6 +280,19 @@ final class CountingViewModel: ObservableObject {
         profile.countLine == nil ? "\(profile.direction.arrow) \(profile.direction.title.lowercased())" : "çizgideki ok yönünde"
     }
 
+    /// Personel rengi öğretme: bir sonraki karede bu normalize noktadaki kişinin gövde rengi alınır
+    func teachStaffColor(at p: CGPoint) {
+        teachingStaff = false
+        processor.teachStaffColor(at: p)
+    }
+
+    /// Öğretilmiş personel renklerinden birini siler; sonuncusu silinince alan yazılmaz (sözleşme: boş dizi yok)
+    func removeStaffColor(at i: Int) {
+        guard var colors = profile.staffColors, colors.indices.contains(i) else { return }
+        colors.remove(at: i)
+        profile.staffColors = colors.isEmpty ? nil : colors
+    }
+
     func saveCalibration() {
         autoProductLength = false            // kullanıcı kaydetti: boy artık profilin
         processor.cancelCalibration()
@@ -270,6 +308,7 @@ final class CountingViewModel: ObservableObject {
 
     private func finishCalibration() {
         isCalibrating = false
+        teachingStaff = false
         processor.setShowMask(settings.showMask)
         processor.resetTracking(resetBackground: false)
         if video != nil {
@@ -313,6 +352,8 @@ final class CountingViewModel: ObservableObject {
         if video == nil {
             liveTotal = total
             liveTotalOut = totalOut
+            liveStaffIn = staffIn
+            liveStaffOut = staffOut
         }
         camera.stop()
         stopNetwork()
@@ -369,6 +410,9 @@ final class CountingViewModel: ObservableObject {
         total = 0
         totalOut = 0
         processor.setTotals(in: 0, out: 0)
+        staffIn = 0
+        staffOut = 0
+        processor.setStaffTotals(in: 0, out: 0)
         processor.resetClock()
         processor.resetTracking(resetBackground: fromStart)
         if fromStart && videoLearnBackground && !isCalibrating && profile.mode == .blob {
@@ -423,6 +467,9 @@ final class CountingViewModel: ObservableObject {
         total = liveTotal
         totalOut = liveTotalOut
         processor.setTotals(in: liveTotal, out: liveTotalOut)
+        staffIn = liveStaffIn
+        staffOut = liveStaffOut
+        processor.setStaffTotals(in: liveStaffIn, out: liveStaffOut)
         processor.setCounting(isRunning)
         startCamera()
     }

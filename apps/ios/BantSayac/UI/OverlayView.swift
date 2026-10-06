@@ -52,7 +52,7 @@ struct OverlayView: View {
             // Kişiler: kutu, iz kuyruğu, sayıldıysa "G3" (yeşil) / "Ç2" (turuncu) rozeti
             for m in snapshot.people {
                 let r = viewRect(m.box)
-                let color: Color = m.label == nil ? .white.opacity(0.85) : (m.isEntry ? .green : .orange)
+                let color: Color = m.label == nil ? .white.opacity(0.85) : (m.isStaff ? .gray : (m.isEntry ? .green : .orange))
                 if m.trail.count > 1 {
                     var trail = Path()
                     trail.addLines(m.trail.map { viewPoint($0.x, $0.y) })

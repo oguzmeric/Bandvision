@@ -123,6 +123,18 @@ struct ContentView: View {
                     OverlayView(profile: $vm.profile, snapshot: vm.snapshot,
                                 fitRect: fit, editable: vm.isCalibrating, verdicts: vm.trackVerdicts)
                         .frame(width: geo.size.width, height: geo.size.height)
+
+                    if vm.teachingStaff {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .onTapGesture(coordinateSpace: .local) { loc in
+                                let x = (loc.x - fit.minX) / fit.width, y = (loc.y - fit.minY) / fit.height
+                                guard (0...1).contains(x), (0...1).contains(y) else { return }
+                                vm.teachStaffColor(at: CGPoint(x: x, y: y))
+                            }
+                            .accessibilityIdentifier("staffTeachLayer")
+                    }
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
                 .scaleEffect(scale)

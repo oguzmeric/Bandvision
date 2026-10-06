@@ -42,6 +42,7 @@ struct CalibrationPanel: View {
                 cameraPicker
                 areaShapePicker
                 lineModePicker
+                staffSection
                 Text("İpucu: çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy. Kapı eşiğine koyma: "
                      + "kişi kapıda durup kaybolursa geçişi tamamlanmaz.")
                     .font(.caption2)
@@ -181,6 +182,45 @@ struct CalibrationPanel: View {
     private var imageAspect: Double {
         let s = vm.snapshot.frameSize
         return s.height > 0 ? Double(s.width / s.height) : 9.0 / 16.0
+    }
+
+    /// Kişi sayımı §4.10 eki: personel üniforma renkleri (en çok 3)
+    private var staffSection: some View {
+        let colors = vm.profile.staffColors ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Personel rengi").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button(vm.teachingStaff ? "Vazgeç" : "Personel rengini öğret") { vm.teachingStaff.toggle() }
+                    .disabled(!vm.teachingStaff && colors.count >= StaffColor.maxColors)
+                    .accessibilityIdentifier("teachStaff")
+            }
+            if vm.teachingStaff {
+                Text("Görüntüde bir personelin gövdesine dokunun.").font(.caption2).foregroundStyle(.yellow)
+            }
+            if colors.isEmpty {
+                Text("Kapalı — tüm geçişler sayılır.").font(.caption2).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    ForEach(Array(colors.enumerated()), id: \.offset) { i, c in
+                        let s = StaffColor.srgb(from: c)
+                        Button { vm.removeStaffColor(at: i) } label: {
+                            HStack(spacing: 4) {
+                                Circle().fill(Color(red: s.r, green: s.g, blue: s.b)).frame(width: 22, height: 22)
+                                Image(systemName: "xmark.circle.fill").font(.caption)
+                            }
+                        }
+                        .accessibilityLabel("\(i + 1). personel rengini sil")
+                    }
+                }
+                if colors.contains(where: StaffColor.isAchromatic) {
+                    Text("Bu renk müşterilerde de sık görülür; müşteri yanlışlıkla düşülebilir.")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            Text("Bu renkte giyinenlerin geçişi giriş/çıkışa eklenmez, ayrı sayılır.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// Sayım çizgisi: düz (akış eksenine dik) ya da açılı (iki ucu sürüklenir, akış çizgiye dik) — §4.8

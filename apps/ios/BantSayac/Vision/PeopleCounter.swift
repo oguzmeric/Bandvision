@@ -186,12 +186,16 @@ struct PeopleFrame {
     var entered: [MotTrack]
     var exited: [MotTrack]
     var line: (NormPoint, NormPoint)
+    var staffEntered: [MotTrack] = []
+    var staffExited: [MotTrack] = []
 }
 
 final class PeopleCounter {
     let tracker = MotTracker()
     private let motion = MotionDetector()
     private let detector = HumanDetector()
+    /// Son karedeki tanıma kutuları (personel rengi öğretme için)
+    private(set) var lastBoxes: [NBox] = []
 
     func reset() {
         tracker.reset()
@@ -209,10 +213,61 @@ final class PeopleCounter {
         let blobs: [NBox]? = profile.anchor == .center ? motion.detect(small, profile: profile) : nil
         let (side, line) = peopleSideFunction(profile, width: small.sourceWidth, height: small.sourceHeight)
         let r = profile.roi
-        let (ins, outs) = tracker.update(dets, sideOf: side, anchor: profile.anchor, motion: blobs,
-                                         bounds: NBox(x1: Double(r.minX), y1: Double(r.minY),
-                                                      x2: Double(r.maxX), y2: Double(r.maxY)))
+        lastBoxes = dets.map(\.box)
+        let colors = profile.staffColors ?? []
+        let anchor = profile.anchor
+        let update = { (vote: ((NBox, [NBox]) -> Bool?)?) in
+            self.tracker.update(dets, sideOf: side, anchor: anchor, motion: blobs,
+                                bounds: NBox(x1: Double(r.minX), y1: Double(r.minY), x2: Double(r.maxX), y2: Double(r.maxY)),
+                                staffVote: vote)
+        }
+        let result: (entered: [MotTrack], exited: [MotTrack])
+        if colors.isEmpty {
+            result = update(nil)
+        } else {
+            result = YUVSampler.with(pb) { w, h, rgbAt in
+                update { box, others in
+                    StaffColor.vote(box: box, others: others, anchor: anchor, colors: colors, width: w, height: h, rgbAt: rgbAt)
+                }
+            } ?? update(nil)
+        }
         let seen = tracker.tracks.filter { $0.confirmed && $0.misses == 0 }
-        return PeopleFrame(tracks: seen, entered: ins, exited: outs, line: line)
+        return PeopleFrame(tracks: seen, entered: result.entered, exited: result.exited, line: line,
+                           staffEntered: tracker.staffEntered, staffExited: tracker.staffExited)
+    }
+}
+
+/// 420f/420v piksel tamponundan tek noktada sRGB (yalnızca örnek noktalarında; tüm kare çevrilmez).
+/// Matris tampondaki eke göre (BT.709 ya da BT.601).
+enum YUVSampler {
+    /// `body`'nin aldığı okuyucu yalnızca `body` süresince geçerlidir (tampon kilitli); izleyiciye oy kapanışı içinde
+    /// verildiği için `@escaping` (optional kapanış parametresi kaçan sayılır), ama `body` dışında saklanmaz.
+    static func with<T>(_ pb: CVPixelBuffer, _ body: (Int, Int, @escaping (Int, Int) -> (UInt8, UInt8, UInt8)) -> T) -> T? {
+        let format = CVPixelBufferGetPixelFormatType(pb)
+        guard format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(pb) == 2 else { return nil }
+        let full = format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        let matrix = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String
+        let bt709 = matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String)
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+              let cBase = CVPixelBufferGetBaseAddressOfPlane(pb, 1) else { return nil }
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        let yStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0), cStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+        let yp = yBase.assumingMemoryBound(to: UInt8.self), cp = cBase.assumingMemoryBound(to: UInt8.self)
+        let rgb: (Int, Int) -> (UInt8, UInt8, UInt8) = { x, y in
+            var Y = Double(yp[y * yStride + x])
+            var cb = Double(cp[(y / 2) * cStride + (x / 2) * 2]) - 128
+            var cr = Double(cp[(y / 2) * cStride + (x / 2) * 2 + 1]) - 128
+            if !full { Y = (Y - 16) * 255 / 219; cb *= 255 / 224; cr *= 255 / 224 }
+            let r, g, b: Double
+            if bt709 { r = Y + 1.5748 * cr; g = Y - 0.1873 * cb - 0.4681 * cr; b = Y + 1.8556 * cb }
+            else { r = Y + 1.402 * cr; g = Y - 0.344136 * cb - 0.714136 * cr; b = Y + 1.772 * cb }
+            func u8(_ v: Double) -> UInt8 { UInt8(min(255, max(0, v.rounded()))) }
+            return (u8(r), u8(g), u8(b))
+        }
+        return body(w, h, rgb)
     }
 }

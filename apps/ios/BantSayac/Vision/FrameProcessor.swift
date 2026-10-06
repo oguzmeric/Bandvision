@@ -33,6 +33,8 @@ struct PersonMarker: Identifiable {
     /// "G3" (3. giriş) ya da "Ç2" (2. çıkış); sayılmadıysa nil
     let label: String?
     var isEntry: Bool { label?.hasPrefix("G") ?? false }
+    /// Personel geçişi ("P"): giriş/çıkışa eklenmez
+    var isStaff: Bool { label == "P" }
 }
 
 /// Çizgiyi ilk kez geçen ürünün tam çözünürlüklü kırpıntısı (kalite kontrol kartı için).
@@ -81,6 +83,11 @@ final class FrameProcessor: @unchecked Sendable {
     /// Kişi sayımı: çıkış toplamı (`total` giriş toplamıdır) ve iz → "G3"/"Ç2" etiketi
     private var totalOut = 0
     private var personLabels: [Int: String] = [:]
+    /// Kişi sayımı: personel geçişi toplamları (giriş/çıkıştan ayrı; CSV/webhook'a gitmez)
+    private var staffIn = 0
+    private var staffOut = 0
+    /// Personel rengi öğretme isteği: sonraki kişi karesinde bu noktadan renk alınır (normalize)
+    private var pendingTeach: CGPoint?
     private var lastPeople: PeopleFrame?
     private var lastFrameSize = (width: 0, height: 0)
     private var profile = ProductProfile.generic()
@@ -128,6 +135,10 @@ final class FrameProcessor: @unchecked Sendable {
     var onCalibration: (@MainActor (CalibrationEvent) -> Void)?
     /// Kişi sayımı (§4.10): bu karede girenler/çıkanlar ve toplamlar (toplam giriş, toplam çıkış)
     var onCrossing: (@MainActor (_ entered: Int, _ exited: Int, _ totalIn: Int, _ totalOut: Int) -> Void)?
+    /// Kişi sayımı §4.10 eki: personel geçişi toplamları (giriş, çıkış)
+    var onStaff: (@MainActor (_ staffIn: Int, _ staffOut: Int) -> Void)?
+    /// Personel rengi öğretme sonucu (çok karanlıksa nil)
+    var onStaffColor: (@MainActor (LabColor?) -> Void)?
     /// Video ve ağ kamerası modunda ekranda gösterilen kare (iPhone kamerasında önizleme katmanı kullanılır).
     var onFrameImage: (@MainActor (CGImage) -> Void)?
 
@@ -142,6 +153,8 @@ final class FrameProcessor: @unchecked Sendable {
     func setTotal(_ t: Int) { queue.async { self.total = t } }
     /// Kişi sayımı: giriş ve çıkış toplamları
     func setTotals(in tIn: Int, out tOut: Int) { queue.async { self.total = tIn; self.totalOut = tOut } }
+    func setStaffTotals(in sIn: Int, out sOut: Int) { queue.async { self.staffIn = sIn; self.staffOut = sOut } }
+    func teachStaffColor(at p: CGPoint) { queue.async { self.pendingTeach = p } }
     func setShowMask(_ on: Bool) { queue.async { self.showMask = on } }
     /// Video modunda işlenen kareyi de anlık görüntüyle yayınla.
     func setEmitFrameImages(_ on: Bool) { queue.async { self.emitFrameImages = on } }
@@ -465,6 +478,21 @@ final class FrameProcessor: @unchecked Sendable {
             }
             let ins = r.entered.count, outs = r.exited.count, tIn = total, tOut = totalOut
             DispatchQueue.main.async { [weak self] in self?.onCrossing?(ins, outs, tIn, tOut) }
+        }
+        if counting && (!r.staffEntered.isEmpty || !r.staffExited.isEmpty) {
+            for t in r.staffEntered + r.staffExited { personLabels[t.id] = "P" }
+            staffIn += r.staffEntered.count
+            staffOut += r.staffExited.count
+            let sIn = staffIn, sOut = staffOut
+            DispatchQueue.main.async { [weak self] in self?.onStaff?(sIn, sOut) }
+        }
+        if let p = pendingTeach {
+            pendingTeach = nil
+            let boxes = people.lastBoxes, anchor = profile.anchor
+            let color = YUVSampler.with(pb) { w, h, rgbAt in
+                StaffColor.teach(boxes: boxes, point: (Double(p.x), Double(p.y)), anchor: anchor, width: w, height: h, rgbAt: rgbAt)
+            } ?? nil
+            DispatchQueue.main.async { [weak self] in self?.onStaffColor?(color) }
         }
         let alive = Set(people.tracker.tracks.map(\.id))
         personLabels = personLabels.filter { alive.contains($0.key) }

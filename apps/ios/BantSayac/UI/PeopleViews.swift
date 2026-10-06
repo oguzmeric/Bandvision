@@ -41,11 +41,18 @@ struct PeopleCounters: View {
     var compact = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            CounterTile(title: "Giriş", value: vm.total, icon: "figure.walk.arrival", color: .green,
-                        compact: compact, identifier: "countIn")
-            CounterTile(title: "Çıkış", value: vm.totalOut, icon: "figure.walk.departure", color: .orange,
-                        compact: compact, identifier: "countOut")
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                CounterTile(title: "Giriş", value: vm.total, icon: "figure.walk.arrival", color: .green,
+                            compact: compact, identifier: "countIn")
+                CounterTile(title: "Çıkış", value: vm.totalOut, icon: "figure.walk.departure", color: .orange,
+                            compact: compact, identifier: "countOut")
+            }
+            if !(vm.profile.staffColors ?? []).isEmpty {
+                Text("Personel geçişi: \(vm.staffIn + vm.staffOut)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("staffCount")
+            }
         }
     }
 }
