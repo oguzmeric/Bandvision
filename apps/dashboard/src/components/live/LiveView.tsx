@@ -9,6 +9,7 @@ import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
 import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
+import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, STATE_LABELS, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
@@ -78,7 +79,16 @@ export default function LiveView() {
   const original = useRef<Profile | null>(null);
   const [frameTick, setFrameTick] = useState(0);
   const [teaching, setTeaching] = useState(false);
+  const [teachBusy, setTeachBusy] = useState(false);
+  // yanıt gelince güncel taslak/oturum okunur (kapanmış ya da başka oturuma geçilmiş olabilir)
+  const draftRef = useRef<Profile | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // taslak kapanınca (Kaydet/İptal/oturum sekmesi değişimi) öğretme modu da kapanır
+  useEffect(() => { if (!draft) setTeaching(false); }, [draft]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  useEffect(() => { sessionIdRef.current = session?.id ?? null; }, [session?.id]);
 
   const load = useCallback(() => {
     api<LiveSession[]>("sessions").then((s) => { setSessions(s); setError(null); }).catch((e: Error) => setError(e.message));
@@ -156,16 +166,24 @@ export default function LiveView() {
   }
 
   async function teachAt(e: React.MouseEvent<HTMLButtonElement>) {
-    if (!session || !draft) return;
+    if (!session || !draft || teachBusy) return;
     const r = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    const clamp = (v: number) => Math.min(1, Math.max(0, v));
+    const x = clamp((e.clientX - r.left) / r.width), y = clamp((e.clientY - r.top) / r.height);
+    const sid = session.id;
+    setTeachBusy(true);
     try {
-      const c = await api<LabColor & { achromatic: boolean }>(`sessions/${session.id}/staff-color`, { method: "POST", json: { x, y } });
-      edit({ ...draft, staffColors: [...(draft.staffColors ?? []), { L: c.L, a: c.a, b: c.b }] });
+      const c = await api<LabColor & { achromatic: boolean }>(`sessions/${sid}/staff-color`, { method: "POST", json: { x, y } });
+      const d = draftRef.current;
+      if (!d || sessionIdRef.current !== sid) return;           // beklerken Kaydet/İptal/sekme değişti
+      const cur = d.staffColors ?? [];
+      if (cur.length < MAX_STAFF_COLORS) edit({ ...d, staffColors: [...cur, { L: c.L, a: c.a, b: c.b }] });
       setTeaching(false);
       setError(null);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setTeachBusy(false);
     }
   }
 
@@ -250,7 +268,7 @@ export default function LiveView() {
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
                        value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
               {teaching && (
-                <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt}
+                <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt} disabled={teachBusy}
                         className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-500" />
               )}
             </RoiEditor>
