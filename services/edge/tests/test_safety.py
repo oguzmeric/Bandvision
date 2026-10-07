@@ -4,8 +4,8 @@ import numpy as np
 from fakes_safety import FakeDetector, FakePose, hands_up_kp
 
 from bantvision.core import Pipeline, Profile
-from bantvision.core.detect_count import inside_roi
-from bantvision.core.safety import SafetyAnalyzer, SafetyResult, anchor_point
+from bantvision.core.profile import Roi
+from bantvision.core.safety import SafetyAnalyzer, SafetyResult
 
 BOX = (280, 80, 360, 440)                                              # 640×480'de ayakta kişi (alt orta ≈ 0,92)
 FRAME = np.zeros((480, 640, 3), np.uint8)
@@ -54,13 +54,21 @@ def test_alarm_fires_once_at_one_fps_with_adaptive_grace() -> None:
     assert len(fired) == 1 and fired[0][1] == "hands_up"
 
 
-def test_disabled_rule_and_area_outside_do_not_fire() -> None:
+def test_disabled_rule_does_not_fire() -> None:
     p = Profile.jeweler()
     p.safety.handsUp.enabled = False
     assert not any(r.fired for r in run(hands_up_kp(), 5.0, profile=p))
+
+
+def test_person_outside_drawn_area_still_fires() -> None:
+    """Kullanıcı kararı (2026-10-07): güvenlikte alan kısıtı yok; eski profilde çizili alan yok sayılır."""
     q = Profile.jeweler()
     q.set_polygon([(0.0, 0.0), (0.3, 0.0), (0.3, 0.3), (0.0, 0.3)])  # kişi alanın dışında
-    assert not any(r.fired for r in run(hands_up_kp(), 5.0, profile=q))
+    fired = [a for r in run(hands_up_kp(), 5.0, profile=q) for a in r.fired]
+    assert len(fired) == 1 and fired[0].kind == "hands_up"
+    r = Profile.jeweler()
+    r.roi = Roi(0.0, 0.0, 0.2, 0.2)                                   # dikdörtgen alan da yok sayılır
+    assert sum(len(x.fired) for x in run(hands_up_kp(), 5.0, profile=r)) == 1
 
 
 def test_hidden_hips_never_lying() -> None:
@@ -136,7 +144,7 @@ def test_pipeline_reset_resets_safety_analyzer() -> None:
     assert not pipe.safety.dc.tracker.tracks
 
 
-# ---------------------------------------------------------------- alan kuralı ve poz çağrıları
+# ---------------------------------------------------------------- alan yok sayılır; poz çağrıları
 
 def test_person_touching_frame_bottom_is_analysed() -> None:
     """Tanıma kutusu kareye kırpılır (y2 = 1,0); yarı açık ROI bunu dışarıda saymamalı (tezgah kamerası, bel üstü)."""
@@ -144,13 +152,6 @@ def test_person_touching_frame_bottom_is_analysed() -> None:
     fired = [a for r in feed(an, p, 0, 50) for a in r.fired]
     assert len(fired) == 1 and fired[0].kind == "hands_up" and pose.calls > 0
     assert fired[0].box[3] >= 0.999
-
-
-def test_anchor_point_is_clamped_inside_frame() -> None:
-    ax, ay = anchor_point((0.4, 0.2, 0.6, 1.0))
-    assert ay < 1.0 and inside_roi(Profile.jeweler(), ax, ay)
-    ax, ay = anchor_point((0.95, 0.2, 1.3, 1.2))
-    assert ax < 1.0 and ay < 1.0 and inside_roi(Profile.jeweler(), ax, ay)
 
 
 def test_empty_scene_makes_no_pose_calls() -> None:
@@ -171,25 +172,16 @@ def test_unobserved_track_makes_no_pose_calls() -> None:
     assert an.dc.tracker.tracks and pose.calls == before
 
 
-def test_area_uses_bottom_centre_anchor_not_box_centre() -> None:
-    """Kutu merkezi alanın içinde ama ayak noktası dışında: iz var, poz çağrısı ve alarm yok."""
+def test_area_is_ignored_and_callers_profile_unchanged() -> None:
+    """Alan kısıtı yok: kutu merkezi ve ayak noktası alanın dışında olsa da poz çağrılır, alarm doğar; çağıranın profili
+    değişmez (tanıma ve izleme tam karede)."""
     p = Profile.jeweler()
-    p.roiPolygon = [(0.3, 0.2), (0.7, 0.2), (0.7, 0.7), (0.3, 0.7)]    # ROI tam kare kalır
+    p.roiPolygon = [(0.0, 0.0), (0.2, 0.0), (0.2, 0.2), (0.0, 0.2)]    # kişi (x ≈ 0,44–0,56) tamamen dışarıda
     roi, poly = p.roi, list(p.roiPolygon)
-    an, _, pose, p = make([BOX], p)
-    res = feed(an, p, 0, 50)
-    assert any(r.tracks for r in res) and an.dc.tracker.tracks         # izleyici kişiyi görüyor
-    assert pose.calls == 0 and not any(r.fired or r.poses for r in res)
-    assert p.roi == roi and p.roiPolygon == poly                       # çağıranın profili değişmedi
-
-
-def test_person_standing_in_floor_polygon_is_analysed() -> None:
-    """Ayak noktası zemindeki alanın içinde, kutu merkezi üstünde: izlenir, poz çağrılır, alarm doğar."""
-    p = Profile.jeweler()
-    p.roiPolygon = [(0.3, 0.8), (0.7, 0.8), (0.7, 1.0), (0.3, 1.0)]
     an, _, pose, p = make([BOX], p)
     fired = [a for r in feed(an, p, 0, 50) for a in r.fired]
     assert len(fired) == 1 and fired[0].kind == "hands_up" and pose.calls > 0
+    assert p.roi == roi and p.roiPolygon == poly                       # çağıranın profili değişmedi
 
 
 # ---------------------------------------------------------------- kutu sürekliliği ve reset()

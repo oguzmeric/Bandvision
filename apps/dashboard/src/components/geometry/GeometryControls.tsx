@@ -24,11 +24,9 @@ function Segmented<T extends string | boolean>({ label, value, options, onChange
 }
 
 /** Alan biçimi, çizgi türü, yön / giriş yönü — telefondaki kalibrasyon panelinin karşılığı */
-export default function GeometryControls({ value, onChange, aspect, twoWay = false, allowAngled = true, showLine = true, compact = false }: {
+export default function GeometryControls({ value, onChange, aspect, twoWay = false, allowAngled = true, compact = false }: {
   value: Geometry; onChange: (g: Geometry) => void; aspect: number;
-  twoWay?: boolean; allowAngled?: boolean;
-  /** false: yalnızca alan denetimleri (sayım çizgisi ve yön gizlenir; ör. güvenlik) */
-  showLine?: boolean; compact?: boolean;
+  twoWay?: boolean; allowAngled?: boolean; compact?: boolean;
 }) {
   const g = value;
   return (
@@ -52,43 +50,39 @@ export default function GeometryControls({ value, onChange, aspect, twoWay = fal
             : "Köşelerden sürükleyerek boyutlandır · içinden tutup taşı"}
         </p>
       </div>
-      {showLine && (
-        <>
-          <div>
-            <p className="mb-1.5 text-xs font-medium text-muted">Sayım çizgisi</p>
-            {allowAngled ? (
-              <Segmented label="Sayım çizgisi" testId="line-mode" value={g.countLine !== null}
-                         options={[[false, "Düz çizgi"], [true, "Açılı çizgi"]]}
-                         onChange={(angled) => onChange(fitCountLine(setCountLine(g, angled ? straightCountLine(g) : null, aspect)))} />
-            ) : (
-              <p className="text-[12px] text-faint">Bu yöntemde düz çizgi kullanılır.</p>
-            )}
-            <p className="mt-1 text-[11.5px] text-faint">
-              {g.countLine ? "Uçlarını sürükle · ortasından tutup taşı · ok yönü gösterir" : "Turuncu çizgiyi ortasındaki tutamaçla kaydır"}
-            </p>
-          </div>
-          <div>
-            <p className="mb-1.5 text-xs font-medium text-muted">{twoWay ? "Giriş yönü" : "Akış yönü"}</p>
-            <div className="flex items-center gap-2">
-              {!g.countLine ? (
-                <select aria-label={twoWay ? "Giriş yönü" : "Akış yönü"} value={g.direction}
-                        onChange={(e) => onChange(clampLine({ ...g, direction: e.target.value as Direction }))}
-                        className="h-9 flex-1 rounded-[10px] border border-line bg-white px-2.5 text-[13px] outline-none focus:border-brand-500">
-                  {(Object.keys(DIRECTION_LABELS) as Direction[]).map((d) => (
-                    <option key={d} value={d}>{ARROW[d]} {DIRECTION_LABELS[d]}</option>
-                  ))}
-                </select>
-              ) : (
-                <span className="flex-1 text-[13px] text-muted">Çizgideki ok yönünde</span>
-              )}
-              <button type="button" onClick={() => onChange(flip(g, aspect))} data-testid="flip-direction"
-                      className="h-9 rounded-[10px] border border-line bg-white px-3 text-[13px] font-medium hover:border-brand-100">
-                ⇅ {twoWay ? "Girişi çevir" : "Yönü çevir"}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      <div>
+        <p className="mb-1.5 text-xs font-medium text-muted">Sayım çizgisi</p>
+        {allowAngled ? (
+          <Segmented label="Sayım çizgisi" testId="line-mode" value={g.countLine !== null}
+                     options={[[false, "Düz çizgi"], [true, "Açılı çizgi"]]}
+                     onChange={(angled) => onChange(fitCountLine(setCountLine(g, angled ? straightCountLine(g) : null, aspect)))} />
+        ) : (
+          <p className="text-[12px] text-faint">Bu yöntemde düz çizgi kullanılır.</p>
+        )}
+        <p className="mt-1 text-[11.5px] text-faint">
+          {g.countLine ? "Uçlarını sürükle · ortasından tutup taşı · ok yönü gösterir" : "Turuncu çizgiyi ortasındaki tutamaçla kaydır"}
+        </p>
+      </div>
+      <div>
+        <p className="mb-1.5 text-xs font-medium text-muted">{twoWay ? "Giriş yönü" : "Akış yönü"}</p>
+        <div className="flex items-center gap-2">
+          {!g.countLine ? (
+            <select aria-label={twoWay ? "Giriş yönü" : "Akış yönü"} value={g.direction}
+                    onChange={(e) => onChange(clampLine({ ...g, direction: e.target.value as Direction }))}
+                    className="h-9 flex-1 rounded-[10px] border border-line bg-white px-2.5 text-[13px] outline-none focus:border-brand-500">
+              {(Object.keys(DIRECTION_LABELS) as Direction[]).map((d) => (
+                <option key={d} value={d}>{ARROW[d]} {DIRECTION_LABELS[d]}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="flex-1 text-[13px] text-muted">Çizgideki ok yönünde</span>
+          )}
+          <button type="button" onClick={() => onChange(flip(g, aspect))} data-testid="flip-direction"
+                  className="h-9 rounded-[10px] border border-line bg-white px-3 text-[13px] font-medium hover:border-brand-100">
+            ⇅ {twoWay ? "Girişi çevir" : "Yönü çevir"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

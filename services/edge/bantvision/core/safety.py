@@ -1,10 +1,10 @@
 """Poz güvenlik çözümleyicisi: kişi tanıma + izleyici (detect_count.DetectCounter) + poz (MoveNet) + kurallar.
 
-Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır. Alan kuralı tek: kişinin konum noktası
-(alt orta, çerçeve kenarına kırpılmış) profildeki alanda (ROI / çokgen) olmalı. İzleyici ise her zaman tam karede çalışır
-(alan kırpması ya da kutu merkezi süzgeci yok): zemine çizilmiş bir alanın içindeki kişinin gövde merkezi alanın üstünde
-kalabilir. Kurallar ve süreler pose_rules.py'de; tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md.
-Kopma toleransı kare hızına uyar: yavaş akışta (örn. 1 kare/sn) sabit 0,5 sn tolerans bölümü sürekli koparırdı.
+Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır. **Alan kısıtı yok** (kullanıcı kararı,
+2026-10-07): kural karedeki her kişiye uygulanır; profilde çizili bir alan (ROI / çokgen) varsa yok sayılır, tanıma ve
+izleme her zaman tam karede çalışır. Kurallar ve süreler pose_rules.py'de; tasarım
+docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md. Kopma toleransı kare hızına uyar: yavaş akışta (örn. 1 kare/sn)
+sabit 0,5 sn tolerans bölümü sürekli koparırdı.
 """
 from __future__ import annotations
 
@@ -13,13 +13,12 @@ from typing import Any
 
 import numpy as np
 
-from .detect_count import DetectCounter, inside_roi
+from .detect_count import DetectCounter
 from .people_track import MotTrack
 from .pose_rules import GRACE_S, EpisodeTracker, hands_up, lying
 from .profile import Profile, Roi
 
 Box = tuple[float, float, float, float]
-_EDGE = 1.0 - 1e-6                              # inside_roi yarı açık: alt/sağ kenara değen kutu içeride sayılsın
 
 
 @dataclass
@@ -46,19 +45,12 @@ def grace_for(fps: float) -> float:
     return max(GRACE_S, 2.5 / fps) if fps > 0 else GRACE_S
 
 
-def anchor_point(box: Box) -> tuple[float, float]:
-    """Konum noktası: alt orta. Tanıma kutuları kareye kırpılır (alt kenar y2 = 1,0); `inside_roi` yarı açık olduğundan
-    kareye değen kişi dışarıda sayılmasın diye [0, 1) içine çekilir."""
-    x1, _, x2, y2 = box
-    return min(max((x1 + x2) / 2, 0.0), _EDGE), min(y2, _EDGE)
-
-
 class SafetyAnalyzer:
     def __init__(self, detector: Any | None = None, pose: Any | None = None) -> None:
         self.dc = DetectCounter(detector=detector, motion=False)
         self._pose = pose
         self.episodes = EpisodeTracker()
-        self._last_box: dict[int, Box] = {}                         # iz → son gözlenen (alanda) kutu
+        self._last_box: dict[int, Box] = {}                         # iz → son gözlenen kutu
         self._reset_ended: list[tuple[int, str, bool]] = []         # reset() ile kesilen alarmlı bölümler
 
     @property
@@ -91,7 +83,7 @@ class SafetyAnalyzer:
 
     def process(self, bgr: np.ndarray, profile: Profile, fps: float, ts: float) -> SafetyResult:
         h, w = bgr.shape[:2]
-        # İzleyici tam karede (alan yok, sayım çizgisi önemsiz): alan kuralı aşağıda yalnızca konum noktasına uygulanır.
+        # Tanıma ve izleyici tam karede (alan kısıtı yok, sayım çizgisi önemsiz); profildeki alan yok sayılır.
         full = replace(profile, roi=Roi(0.0, 0.0, 1.0, 1.0), roiPolygon=None, countLine=None)
         r = self.dc.process(bgr, full, fps)
         res = SafetyResult(tracks=r.tracks)
@@ -101,8 +93,6 @@ class SafetyAnalyzer:
         for t in r.tracks:
             x1, y1, x2, y2 = (float(v) for v in t.box)
             box = (x1, y1, x2, y2)
-            if not inside_roi(profile, *anchor_point(box)):
-                continue
             self._last_box[t.id] = box
             kp = self.pose.estimate(bgr, (x1 * w, y1 * h, x2 * w, y2 * h))
             if kp is None:                                          # poz modeli hazır değil / yüklenemedi: karar yok

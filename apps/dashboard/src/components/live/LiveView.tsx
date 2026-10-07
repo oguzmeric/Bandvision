@@ -117,7 +117,7 @@ export default function LiveView() {
   // kalibrasyonda düzenleyicinin arka planı: işaretsiz son işlenen kare (~1,5/sn). Personel rengi öğretirken görüntü
   // donar: sunucu, en son verdiği kareyi (ve o karenin kişi kutularını) örnekler — tıklanan kare ile aynı.
   useEffect(() => {
-    if (!draft || teaching) return;
+    if (!draft || teaching || draft.countMode === "safety") return;   // güvenlikte alan yok: düzenleyici açılmaz
     const t = setInterval(() => setFrameTick((x) => x + 1), 650);
     return () => clearInterval(t);
   }, [draft, teaching]);
@@ -284,9 +284,10 @@ export default function LiveView() {
               {STATE_LABELS[session.state]}{live && session.fps ? ` · ${num(session.fps, 0)} fps` : ""}
             </span>
           </div>
-          {draft ? (
+          {draft && !safety ? (
+            // güvenlikte alan kısıtı yok (kullanıcı kararı, 2026-10-07): Ayarla'da da iskeletli canlı görüntü kalır
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
-                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} showLine={!safety} editable={!teaching}>
+                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
               {teaching && (
                 <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt} disabled={teachBusy}
                         className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-500" />
@@ -398,12 +399,9 @@ export default function LiveView() {
                     </p>
                   </div>
                 )}
-                <GeometryControls value={g} onChange={(ng) => edit(withGeometry(p, ng))} aspect={aspect} twoWay={twoWay}
-                                  allowAngled={mode !== "linescan" && !safety} showLine={!safety} compact />
-                {safety && (
-                  <p className="rounded-xl bg-brand-50 px-3 py-2 text-[12px] text-brand-600">
-                    Alan: kural yalnızca alandaki kişilere uygulanır (ör. tezgah arkası).
-                  </p>
+                {!safety && (
+                  <GeometryControls value={g} onChange={(ng) => edit(withGeometry(p, ng))} aspect={aspect} twoWay={twoWay}
+                                    allowAngled={mode !== "linescan"} compact />
                 )}
                 {mode === "blob" && (
                   <>
@@ -449,7 +447,7 @@ export default function LiveView() {
                         className="brand-gradient h-10 flex-1 rounded-[10px] text-sm font-semibold text-white">Kaydet</button>
               </div>
               <p className="mt-2 text-[11.5px] text-faint">
-                {safety ? "Alan ve kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."
+                {safety ? "Kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez. Kural görüntüdeki herkese uygulanır."
                   : "Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."}
               </p>
             </section>

@@ -24,15 +24,13 @@ const YELLOW = "#facc15", ORANGE = "#f97316";
  * dikdörtgen köşeleri; çokgende köşeler, kenar ortasındaki "+" ile köşe ekleme, köşeye çift tıklayınca silme;
  * düz çizgi ortasından akış ekseninde; açılı çizgi uçlarından ve ortasından. Alanın içinden tutup alan taşınır.
  */
-export default function RoiEditor({ src, aspect, value, onChange, twoWay = false, showLine = true, editable = true, children }: {
+export default function RoiEditor({ src, aspect, value, onChange, twoWay = false, editable = true, children }: {
   src: string | null;
   /** görüntü genişliği / yüksekliği */
   aspect: number;
   value: Geometry;
   onChange: (g: Geometry) => void;
   twoWay?: boolean;
-  /** false: sayım çizgisi, oku ve tutamaçları çizilmez (yalnızca alan; ör. güvenlik) */
-  showLine?: boolean;
   editable?: boolean;
   children?: React.ReactNode;
 }) {
@@ -78,7 +76,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
     }
     if (g.countLine) out.push([{ kind: "lineA" }, la], [{ kind: "lineB" }, lb], [{ kind: "lineMid" }, mid]);
     else out.push([{ kind: "line" }, mid]);
-    return showLine ? out : out.filter(([h]) => !h.kind.startsWith("line"));
+    return out;
   }
 
   function midpoints(): Array<[Handle, Point]> {
@@ -121,7 +119,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
     const l2 = ab.x * ab.x + ab.y * ab.y || 1;
     const t = Math.max(0, Math.min(1, ((pt.x - la.x) * ab.x + (pt.y - la.y) * ab.y) / l2));
     const dl = Math.hypot(pt.x - (la.x + ab.x * t), pt.y - (la.y + ab.y * t)) / u;
-    if (showLine && dl < 16) return g.countLine ? { kind: "lineMid" } : { kind: "line" };
+    if (dl < 16) return g.countLine ? { kind: "lineMid" } : { kind: "line" };
     return insideArea(p) ? { kind: "area" } : null;
   }
 
@@ -237,21 +235,17 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
            onPointerDown={onPointerDown} onPointerMove={onPointerMove}
            onPointerUp={endDrag} onPointerCancel={endDrag}
            onDoubleClick={onDoubleClick}
-           role="img" aria-label={`İlgi alanı: ${g.roiPolygon ? `${g.roiPolygon.length} köşeli çokgen` : "dikdörtgen"}${showLine ? `; sayım çizgisi ${g.countLine ? "açılı" : "düz"}` : ""}`}>
+           role="img" aria-label={`İlgi alanı: ${g.roiPolygon ? `${g.roiPolygon.length} köşeli çokgen` : "dikdörtgen"}; sayım çizgisi ${g.countLine ? "açılı" : "düz"}`}>
         <path d={`M0,0 H${W} V${H} H0 Z ${areaPath}`} fill="black" fillOpacity={0.38} fillRule="evenodd" />
         <path d={areaPath} fill="none" stroke={YELLOW} strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
-        {showLine && (
-          <>
-            <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke={ORANGE} strokeWidth={4} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-            <path d={`M${mid.x + n.x * 12 * u},${mid.y + n.y * 12 * u} L${tip.x},${tip.y} M${back.x + side.x},${back.y + side.y} L${tip.x},${tip.y} L${back.x - side.x},${back.y - side.y}`}
-                  fill="none" stroke={ORANGE} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-            {twoWay && (
-              <g transform={`translate(${tip.x + n.x * 22 * u},${tip.y + n.y * 22 * u}) scale(${u})`}>
-                <rect x={-26} y={-10} width={52} height={20} rx={10} fill={ORANGE} />
-                <text x={0} y={4.5} textAnchor="middle" fontSize={11.5} fontWeight={800} fill="#111">GİRİŞ</text>
-              </g>
-            )}
-          </>
+        <line x1={la.x} y1={la.y} x2={lb.x} y2={lb.y} stroke={ORANGE} strokeWidth={4} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        <path d={`M${mid.x + n.x * 12 * u},${mid.y + n.y * 12 * u} L${tip.x},${tip.y} M${back.x + side.x},${back.y + side.y} L${tip.x},${tip.y} L${back.x - side.x},${back.y - side.y}`}
+              fill="none" stroke={ORANGE} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {twoWay && (
+          <g transform={`translate(${tip.x + n.x * 22 * u},${tip.y + n.y * 22 * u}) scale(${u})`}>
+            <rect x={-26} y={-10} width={52} height={20} rx={10} fill={ORANGE} />
+            <text x={0} y={4.5} textAnchor="middle" fontSize={11.5} fontWeight={800} fill="#111">GİRİŞ</text>
+          </g>
         )}
         {editable && (
           <>
