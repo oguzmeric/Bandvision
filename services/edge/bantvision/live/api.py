@@ -24,6 +24,7 @@ from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .alarms import AlarmStore
+from .clips import ClipWriter
 from .jsonfile import quarantine, read_json, write_json_atomic
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
@@ -235,6 +236,7 @@ class LiveManager:
         self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
         root = data_dir or store.root.parent
         self.alarms = AlarmStore(root)
+        self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
         self.pose = SharedPose()
         # Güvenlik alarmı: `on_safety` birden çok oturum iş parçacığından gelir; iki tablo bu kilitle korunur
@@ -259,8 +261,10 @@ class LiveManager:
     def _text(self, kind: str, camera: str, ts: float) -> str:
         return f"{self._TITLES[kind]} — {camera} · {time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(ts))}"
 
-    def on_safety(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None) -> None:
-        """Oturumdan: biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim). Biten önce işlenir: aynı karede
+    def on_safety(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]],
+                  jpeg: bytes | None) -> list[str]:
+        """Oturumdan: biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim); yeni alarm kayıtlarının kimlikleri
+        döner (oturum bunlar için olay kaydı yakalar; aynı karedekiler tek kaydı paylaşır). Biten önce işlenir: aynı karede
         aynı (iz, tür) için eski bölümün sonu ile yeni alarm gelirse eski kapanır, yeni açık kalır; yeni alarm aynı
         anahtarda hâlâ açık eski bir alarmın üstüne yazmaz (önce onu kapatır). Tekrar önleme (kamera ve tür başına
         `COOLDOWN_S`, tekdüze saatle) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez.
@@ -272,6 +276,7 @@ class LiveManager:
         camera = getattr(s, "name", "Kamera")
         send_image = bool(getattr(s.profile, "safety", None) and s.profile.safety.sendImage)
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
+        new_ids: list[str] = []
         with self._alarm_lock:
             in_safety = getattr(s.profile, "countMode", "safety") == "safety"
             for tid, kind, _was_fired in ended:
@@ -284,6 +289,7 @@ class LiveManager:
                     last = self._last_sent.get((cam_key, a.kind))
                     notify = "suppressed" if last is not None and mono - last < COOLDOWN_S else "queued"
                 rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify)
+                new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
                     self.alarms.end(old, now)
@@ -294,6 +300,7 @@ class LiveManager:
                 if notify == "queued":
                     self._last_sent[(cam_key, a.kind)] = mono
                     self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now), jpeg if send_image else None)
+        return new_ids
 
     def close_alarms(self, session_id: str, now: float | None = None) -> None:
         """Oturumun açık alarmlarının sonunu yazar (oturum silindi/durdu, yöntem değişti, sunucu kapanıyor)."""
@@ -346,7 +353,7 @@ class LiveManager:
         except rec.RecorderError as e:
             raise _err(e) from e
         s = LiveSession(name, open_url, profile, keep_alive, detector=self.detector, pose=self.pose,
-                        alarm_sink=self.on_safety)
+                        alarm_sink=self.on_safety, clip_sink=self.clips.submit)
         s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
         s.source_id, s.channel_id, s.profile_id = source_id, channel_id, profile_id  # type: ignore[attr-defined]
         fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok

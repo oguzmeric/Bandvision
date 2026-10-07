@@ -5,7 +5,8 @@ işlenir; tarayıcıya yerel ağdan işaretli kare gider, hiçbir yere kaydedilm
 
 İki iş parçacığı:
 - okuyucu: kaynaktan sürekli kare çeker, yalnızca en yenisini tutar (sayım hiçbir zaman eski kare kuyruğunda
-  gecikmez); koparsa artan beklemeyle yeniden bağlanır, her bağlanışta adres yeniden alınır (TRASSIR jetonu);
+  gecikmez); koparsa artan beklemeyle yeniden bağlanır, her bağlanışta adres yeniden alınır (TRASSIR jetonu).
+  Güvenlik oturumunda ayrıca olay kaydının ön kaydını (`clips.ClipBuffer`, işaretsiz, ≤ 10 kare/sn) doldurur;
 - işleyici: en yeni kareyi sayım hattından geçirir, işaretli kareyi (en çok ~12/sn) JPEG olarak hazırlar.
 """
 from __future__ import annotations
@@ -30,6 +31,7 @@ from ..core.pipeline import FrameResult
 from ..core.staff_color import teach_bgr
 from ..overlay import draw_detect, draw_safety
 from ..video import draw, number_label, split_numbers
+from .clips import ClipBuffer, ClipJob
 
 _LOG = logging.getLogger(__name__)
 
@@ -115,11 +117,14 @@ class LiveSession:
     def __init__(self, name: str, open_url: Callable[[], str], profile: Profile,
                  keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True,
                  detector: Any | None = None, pose: Any | None = None,
-                 alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None], None]
-                 | None = None) -> None:
+                 alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None],
+                                      list[str] | None] | None = None,
+                 clip_sink: Callable[[ClipJob], None] | None = None) -> None:
         """`detector`: kişi tanıma modeli, `pose`: poz modeli (ikisi de birden çok kamerada ortak; yoksa ilk karede
         yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik alarmları (çalışma
-        iş parçacığından, sayım kilidi dışında çağrılır); çalışma döngüsü biterken açık alarmların sonu da buradan gelir."""
+        iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının kimliklerini döndürür; çalışma döngüsü
+        biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı yazıcısı (engellemez); verilirse
+        güvenlik oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım oturumunda tampon yok, ek iş yok)."""
         self.id = str(uuid.uuid4())
         self.name = name
         self.created = time.time()
@@ -135,6 +140,8 @@ class LiveSession:
         self._detector = detector
         self._pose = pose
         self._alarm_sink = alarm_sink
+        self._clip_sink = clip_sink
+        self._clips: ClipBuffer | None = None               # yalnızca güvenlik oturumunda (okuyucu doldurur)
         self._last_alarm_at: float | None = None
         self._unhealthy_since: float | None = time.monotonic()   # güvenlik: ne zamandır izlenmiyor (sağlıklıysa None)
         if detector is not None:
@@ -176,6 +183,9 @@ class LiveSession:
             self._frame_cv.notify_all()
         self._reader.join(timeout=5)
         self._worker.join(timeout=5)
+        clips = self._clips
+        if clips is not None:                               # süren yakalamalar elindeki karelerle yazılır
+            clips.flush()
         with self._lock:
             self.status.state = "stopped"
             self._pipe.detect._detector = None              # tanıma modeli ve iş parçacıkları bırakılsın
@@ -208,9 +218,14 @@ class LiveSession:
             self._pipe.set_profile(profile, reset_background=mode_changed)
             if profile.countMode == "safety" and (mode_changed or self._pipe.safety is None):
                 self._setup_safety()                        # güvenliğe geçiş: ortak modellerle taze analizör
+            leaving = self._clips if profile.countMode != "safety" else None
+            if leaving is not None:
+                self._clips = None                          # güvenlikten çıkış: ön kayıt bırakılır
             self._warm(profile)
             self._numbers.clear()
             self._labels.clear()
+        if leaving is not None:
+            leaving.flush()                                 # süren yakalama elindekiyle yazılır
         if mode_changed:                                    # kutular eski yöntemle bulundu: öğretmede kullanılmasın
             with self._frame_cv:
                 self._processed = self._teach_snapshot = None
@@ -222,6 +237,21 @@ class LiveSession:
         self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
         self._pipe.safety.enable_gate()
         self._unhealthy_since = time.monotonic()            # güvenliğe geçiş: izleme yeniden kanıtlanmalı
+        if self._clip_sink is not None and self._clips is None:
+            self._clips = ClipBuffer(self._clip_sink)
+
+    def capture_clip(self, ids: list[str], post_s: float | None = None) -> bool:
+        """Alarm kayıtları için olay kaydı: ön kayıt + `post_s` (varsayılan `clips.POST_S`) sn sonrası (0: yalnızca ön
+        kayıt, hemen yazılır — deneme alarmı). Güvenlik oturumu değilse ya da henüz kare yoksa False. Engellemez, hata
+        fırlatmaz."""
+        clips = self._clips
+        if clips is None or not ids:
+            return False
+        try:
+            return clips.capture(ids, time.monotonic(), post_s)
+        except Exception:  # noqa: BLE001 — kayıt hatası alarmı/oturumu düşürmez
+            _LOG.exception("Olay kaydı başlatılamadı (oturum %s)", self.id[:8])
+            return False
 
     def _warm(self, profile: Profile) -> None:
         """Ortak modeller ilk kişiyi/kareyi beklemeden arka planda yüklenmeye başlar: kişi sayımı ve güvenlik tanıma
@@ -393,6 +423,9 @@ class LiveSession:
                     self._seq += 1
                     self._latest = (self._seq, ts, frame)
                     self._frame_cv.notify_all()
+                clips = self._clips
+                if clips is not None:                       # güvenlik: olay kaydının ön kaydı (gerçek zamanlı kareler)
+                    clips.push(frame, time.monotonic(), time.time())
                 if is_file and self._realtime_file:          # dosya: gerçek zamanlı oynat (canlı kamera gibi)
                     lag = n / file_fps - (time.monotonic() - started)
                     if lag > 0:
@@ -401,6 +434,9 @@ class LiveSession:
                     last_ping = time.monotonic()
                     threading.Thread(target=self._ping, args=(url,), daemon=True).start()
             cap.release()
+            clips = self._clips
+            if clips is not None:                           # kamera koptuysa süresi dolan yakalamalar beklemesin
+                clips.flush_due(time.monotonic())
             if self._stop.is_set():
                 return
             if self._switch.is_set():                       # akış değişti: beklemeden yeni adrese
@@ -461,10 +497,13 @@ class LiveSession:
                 jpeg = buf.tobytes() if ok else None
             except Exception:  # noqa: BLE001
                 _LOG.exception("Alarm resmi hazırlanamadı (oturum %s)", self.id[:8])
+        ids: list[str] | None = None
         try:
-            self._alarm_sink(self, sr.fired, sr.ended, jpeg)
+            ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg)
         except Exception:  # noqa: BLE001
             _LOG.exception("Alarm alıcısı hata verdi (oturum %s)", self.id[:8])
+        if sr.fired and ids:                                # aynı karedeki alarmlar tek kaydı paylaşır
+            self.capture_clip(list(ids))
 
     def _work(self) -> None:
         done = 0

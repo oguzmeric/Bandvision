@@ -1698,3 +1698,41 @@ def test_test_alarm_stores_camera_frame_and_sends_photo_only_when_enabled(
     mgr.notifier.flush()                                    # arka plan iş parçacığı da göndermiş olabilir
     assert paths == ["sendPhoto" if send_image else "sendMessage"]
     assert mgr.alarms.get(rec["id"])["notify"] == "sent"
+
+
+# ---------------------------------------------------------------------- görev 13: olay kaydı (video klip)
+
+def _clip_frames(content: bytes, tmp_path: pathlib.Path) -> int:
+    import cv2
+
+    p = tmp_path / "indirilen.webm"
+    p.write_bytes(content)
+    cap = cv2.VideoCapture(str(p))
+    n = 0
+    while cap.read()[0]:
+        n += 1
+    cap.release()
+    return n
+
+
+def test_fired_alarm_gets_an_event_clip_from_the_reader(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                                        tmp_path: pathlib.Path) -> None:
+    """Alarm → ön kayıt + sonrası WebM olarak yazılır; kayıt `clip: true` ve `clipStartedAt` (ilk karenin duvar saati)
+    alır. Test süresi için ön/son süreler kısaltıldı (3 + 1,5 sn)."""
+    from fakes_safety import FakePose, hands_up_kp
+
+    from bantvision.live import clips
+
+    monkeypatch.setattr(clips, "PRE_S", 3.0)
+    monkeypatch.setattr(clips, "POST_S", 1.5)
+    pose = FakePose(None)                                       # önce poz yok: ön kayıt dolsun
+    sess, sid = _safety_session_with_fake(client, monkeypatch, pose=pose)
+    wait_for(lambda: len(sess._clips.frames()) > 0 and sess._clips.frames()[-1][0] - sess._clips.frames()[0][0] > 2.8)
+    pose.kp = hands_up_kp()
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    assert a["sessionId"] == sid and a["clip"] is False and a["clipStartedAt"] is None   # sonrası toplanıyor
+    rec = wait_for(lambda: (r := client.app.state.live.alarms.get(a["id"]))["clip"] and r, timeout=30)
+    assert abs(rec["clipStartedAt"] - (rec["firedAt"] - 3.0)) < 0.8
+    path = client.app.state.live.alarms.clips / f"{a['id']}.webm"
+    n = _clip_frames(path.read_bytes(), tmp_path)
+    assert abs(n - (3.0 + 1.5) * clips.CLIP_FPS) <= 6              # ≈ (ön + son) × 10 kare/sn

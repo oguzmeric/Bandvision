@@ -1,7 +1,10 @@
-"""Poz güvenlik alarm günlüğü: <data>/live/alarms.json ve alarm-images/<id>.jpg (yalnızca bu bilgisayarda, 7 gün).
+"""Poz güvenlik alarm günlüğü: <data>/live/alarms.json, alarm-images/<id>.jpg ve olay kaydı alarm-clips/<id>.webm
+(yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"test"), startedAt, firedAt, endedAt, acked,
-notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image}. Tüm yazmalar kilit altında ve atomik.
+notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt}. `clip`: olay kaydı (video)
+var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati. Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm
+yazmalar kilit altında ve atomik.
 
 Dosya açılışta okunamazsa (Windows'ta virüs tarayıcı/yedekleme kilidi) birkaç kez yeniden denenir; yine okunamazsa günlük
 boş başlar ama dosyaya dokunulmaz: ilk kayıtta yeniden okunup birleştirilir (geçmiş ezilmez). Yalnızca JSON'u bozuk
@@ -24,7 +27,9 @@ from .jsonfile import quarantine, read_json, write_json_atomic
 _LOG = logging.getLogger(__name__)
 _ID = re.compile(r"[0-9a-f]{32}")
 _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "startedAt": 0.0, "endedAt": None,
-                             "acked": False, "notify": "disabled", "image": False}
+                             "acked": False, "notify": "disabled", "image": False, "clip": False,
+                             "clipStartedAt": None}
+MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 
 
 def _record(item: Any) -> dict[str, Any] | None:
@@ -44,6 +49,8 @@ class AlarmStore:
         self.root = root / "live"
         self.images = self.root / "alarm-images"
         self.images.mkdir(parents=True, exist_ok=True)
+        self.clips = self.root / "alarm-clips"
+        self.clips.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._file = self.root / "alarms.json"
         self._items: list[dict[str, Any]] = []
@@ -90,7 +97,7 @@ class AlarmStore:
             jpeg: bytes | None, notify: str) -> dict[str, Any]:
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
-             "image": jpeg is not None}
+             "image": jpeg is not None, "clip": False, "clipStartedAt": None}
         with self._lock:
             if jpeg is not None:
                 try:
@@ -127,6 +134,50 @@ class AlarmStore:
             if stale:
                 self._save()
         return len(stale)
+
+    def set_clip(self, alarm_id: str, started_at: float) -> bool:
+        """Olay kaydı yazıldı: `clip: true`, `clipStartedAt` (ilk karenin duvar saati). Kayıt yoksa False."""
+        return self._update(alarm_id, clip=True, clipStartedAt=started_at)
+
+    def clip_file(self, alarm_id: str) -> Path | None:
+        """Olay kaydı dosyası (varsa); kimlik 32 küçük onaltılık değilse None (yol olarak kullanılır)."""
+        if not _ID.fullmatch(alarm_id):
+            return None
+        p = self.clips / f"{alarm_id}.webm"
+        return p if p.is_file() else None
+
+    def enforce_clip_cap(self, max_clips: int = MAX_CLIPS) -> int:
+        """En çok `max_clips` kayıt dosyası kalır: fazlası en eskiden (dosya zamanı) silinir, kayıtları `clip: false`
+        olur; günlüğe yazılır. Silinen sayısı döner."""
+        with self._lock:
+            files: list[tuple[float, Path]] = []
+            for p in self.clips.glob("*.webm"):
+                if not _ID.fullmatch(p.stem):
+                    continue                                # geçici dosya (yazılıyor)
+                try:
+                    files.append((p.stat().st_mtime, p))
+                except OSError:
+                    continue
+            if len(files) <= max_clips:
+                return 0
+            files.sort(key=lambda x: (x[0], x[1].name))
+            removed: set[str] = set()
+            for _, p in files[: len(files) - max_clips]:
+                try:
+                    p.unlink(missing_ok=True)
+                    removed.add(p.stem)
+                except OSError as e:
+                    _LOG.warning("Olay kaydı silinemedi (%s): %s", p.stem, e)
+            changed = False
+            for a in self._items:
+                if a["id"] in removed and a.get("clip"):
+                    a["clip"], a["clipStartedAt"] = False, None
+                    changed = True
+            if changed:
+                self._save()
+        if removed:
+            _LOG.warning("Olay kaydı sınırı (%d dosya) aşıldı: en eski %d kayıt silindi", max_clips, len(removed))
+        return len(removed)
 
     def set_notify(self, alarm_id: str, status: str) -> None:
         self._update(alarm_id, notify=status)
