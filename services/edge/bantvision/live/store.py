@@ -29,6 +29,8 @@ CATALOG: list[dict[str, Any]] = [
          {"key": "box", "name": "Koli / kutu"}, {"key": "generic", "name": "Genel ürün"}]},
     {"id": "people", "title": "Kişi sayımı", "subtitle": "Mağaza girişi: giren ve çıkan kişi sayısı",
      "available": True, "presets": [{"key": "people", "name": "Mağaza girişi"}]},
+    {"id": "safety", "title": "Güvenlik", "subtitle": "Eller yukarı ve yerde yatan kişi alarmı",
+     "available": True, "presets": [{"key": "jeweler", "name": "Kuyumcu güvenliği"}]},
     {"id": "vehicle", "title": "Araç sayımı", "subtitle": "Giriş/çıkış ve otopark doluluğu", "available": False,
      "presets": []},
     {"id": "animal", "title": "Hayvan sayımı", "subtitle": "Koridor geçişi ve ağıl doluluğu", "available": False,
@@ -40,7 +42,7 @@ CATALOG: list[dict[str, Any]] = [
 
 def make_preset(key: str) -> Profile:
     makers = {"egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box, "generic": Profile,
-              "people": Profile.people}
+              "people": Profile.people, "jeweler": Profile.jeweler}
     if key not in makers:
         raise KeyError(key)
     p = makers[key]()

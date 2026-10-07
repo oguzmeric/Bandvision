@@ -56,6 +56,20 @@ class QCConfig:
 
 
 @dataclass
+class SafetyRule:
+    enabled: bool = True
+    seconds: float = 3.0
+
+
+@dataclass
+class SafetyConfig:
+    """Poz güvenlik alarmı (countMode = "safety"): eller yukarı 3–5 sn, yerde yatma 5–30 sn, olay resmi gönderimi."""
+    handsUp: SafetyRule = field(default_factory=lambda: SafetyRule(True, 3.0))
+    lying: SafetyRule = field(default_factory=lambda: SafetyRule(True, 10.0))
+    sendImage: bool = False
+
+
+@dataclass
 class Profile:
     name: str = "Genel ürün"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -89,6 +103,8 @@ class Profile:
     countAnchor: str = "center"
     # Personel üniforma renkleri (CIE Lab; §4.10 eki): bu renkteki kişinin geçişi müşteri sayılmaz. Boş = kapalı
     staffColors: list[tuple[float, float, float]] = field(default_factory=list)
+    # safety: poz güvenlik alarmı ayarları (yalnızca countMode = "safety" iken yazılır)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     rotation: int = 0            # source.rotation (saat yönünde derece)
     referenceFps: float = 60.0   # source.referenceFps
     mmPerPixel: float | None = None  # scale.mmPerPixel (tam çözünürlük)
@@ -123,6 +139,14 @@ class Profile:
             p.roiPolygon = [(float(pt["x"]), float(pt["y"])) for pt in d["roiPolygon"]]
         if d.get("staffColors"):
             p.staffColors = [(float(c["L"]), float(c["a"]), float(c["b"])) for c in d["staffColors"]]
+        if d.get("safety"):
+            sf = d["safety"]
+            p.safety = SafetyConfig(
+                SafetyRule(bool(sf.get("handsUp", {}).get("enabled", True)),
+                           float(sf.get("handsUp", {}).get("seconds", 3.0))),
+                SafetyRule(bool(sf.get("lying", {}).get("enabled", True)),
+                           float(sf.get("lying", {}).get("seconds", 10.0))),
+                bool(sf.get("sendImage", False)))
         if d.get("countLine"):
             cl = d["countLine"]
             p.countLine = ((float(cl["a"]["x"]), float(cl["a"]["y"])), (float(cl["b"]["x"]), float(cl["b"]["y"])))
@@ -157,7 +181,7 @@ class Profile:
             "countMode": self.countMode, "productLength": float(self.productLength),
             **({"detectClasses": list(self.detectClasses), "detectConfidence": float(self.detectConfidence),
                 "countAnchor": self.countAnchor}
-               if self.countMode == "detect" else {}),
+               if self.countMode in ("detect", "safety") else {}),
             "source": {"rotation": self.rotation, "referenceFps": self.referenceFps},
             "scale": {"mmPerPixel": self.mmPerPixel},
             "qc": asdict(self.qc),
@@ -165,6 +189,8 @@ class Profile:
         }
         if self.staffColors:
             d["staffColors"] = [{"L": L, "a": a, "b": b} for L, a, b in self.staffColors]
+        if self.countMode == "safety":
+            d["safety"] = asdict(self.safety)
         if self.roiPolygon:
             d["roiPolygon"] = [{"x": x, "y": y} for x, y in self.roiPolygon]
         if self.countLine:
@@ -243,6 +269,12 @@ class Profile:
         """Kişi sayımı (kapı/giriş): iki yönlü geçiş; sayım yönü = giriş."""
         return cls(name="Kişi sayımı", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="detect", detectClasses=["person"],
                    linePosition=0.55, direction="down", minHits=3, maxMatchDistance=0.15, processingWidth=640)
+
+    @classmethod
+    def jeweler(cls) -> Profile:
+        """Kuyumcu güvenliği: eller yukarı (3 sn) ve yerde yatan kişi (10 sn) alarmı; eğik bullet/dome kamera."""
+        return cls(name="Kuyumcu güvenliği", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="safety", detectClasses=["person"],
+                   detectConfidence=0.35, countAnchor="bottom", minHits=3, processingWidth=640)
 
     @classmethod
     def vehicles(cls) -> Profile:

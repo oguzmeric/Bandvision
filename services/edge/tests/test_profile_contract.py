@@ -58,3 +58,19 @@ def test_staff_colors_round_trip_and_validate(validator: Draft202012Validator) -
     assert Profile.from_dict(d).staffColors == p.staffColors
     d["staffColors"] = d["staffColors"] * 2                         # 4 renk: şema reddeder
     assert list(validator.iter_errors(d))
+
+
+def test_safety_profile_round_trip_and_validate(validator: Draft202012Validator) -> None:
+    p = Profile.jeweler()
+    d = p.to_dict()
+    assert d["countMode"] == "safety" and d["safety"] == {
+        "handsUp": {"enabled": True, "seconds": 3.0}, "lying": {"enabled": True, "seconds": 10.0}, "sendImage": False}
+    assert d["detectClasses"] == ["person"] and d["countAnchor"] == "bottom"
+    assert_valid(validator, d)
+    q = Profile.from_dict({**d, "safety": {"handsUp": {"enabled": False, "seconds": 5}, "lying": {"enabled": True,
+                                                                                               "seconds": 30},
+                                          "sendImage": True}})
+    assert (q.safety.handsUp.enabled, q.safety.handsUp.seconds, q.safety.lying.seconds, q.safety.sendImage) == \
+        (False, 5.0, 30.0, True)
+    bad = {**d, "safety": {**d["safety"], "handsUp": {"enabled": True, "seconds": 6}}}
+    assert list(validator.iter_errors(bad))

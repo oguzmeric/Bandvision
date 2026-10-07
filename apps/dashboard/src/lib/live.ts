@@ -36,6 +36,13 @@ export interface Channel {
 /** Personel üniforma rengi (CIE Lab, D65; sözleşme `staffColors`) */
 export interface LabColor { L: number; a: number; b: number }
 
+/** Poz güvenlik alarmı ayarları (sözleşme `safety`) */
+export interface SafetyConfig {
+  handsUp: { enabled: boolean; seconds: number };
+  lying: { enabled: boolean; seconds: number };
+  sendImage: boolean;
+}
+
 /** Profil (sözleşme `product-profile.schema.json`); panelin kullandığı alanlar, gerisi olduğu gibi taşınır */
 export interface Profile {
   id: string;
@@ -53,6 +60,8 @@ export interface Profile {
   countAnchor?: CountAnchor;
   /** Kişi sayımı: personel renkleri (en çok 3); yoksa kapalı */
   staffColors?: LabColor[];
+  /** Güvenlik (`countMode = "safety"`): poz alarmı ayarları; yoksa varsayılanlar */
+  safety?: SafetyConfig;
   [key: string]: unknown;
 }
 

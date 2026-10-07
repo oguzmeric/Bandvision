@@ -6,10 +6,12 @@ import { api, type CatalogCategory, type LiveSession, type Profile } from "@/lib
 
 /** Profil hangi sayım türünde (telefondaki ProductCatalog.contains ile aynı) */
 export function categoryOf(p: Profile): string {
+  if (p.countMode === "safety") return "safety";
   return p.countMode === "detect" ? "people" : "belt";
 }
 
 export function profileStatus(p: Profile): string {
+  if (p.countMode === "safety") return "Eller yukarı / yerde yatan kişi";
   if (p.countMode === "detect") return "Giriş / çıkış sayımı";
   if (p.countMode === "linescan") return "Bitişik / hacimli ürün";
   return p.expectedArea > 0 ? "Kalibre edildi" : "Kalibre edilmedi";

@@ -3,7 +3,7 @@
 export type JobStatus = "queued" | "running" | "done" | "failed" | "expired";
 export type JobStage = "calibrating" | "counting" | "encoding";
 export type Preset = "generic" | "egg" | "flour" | "box" | "people";
-export type CountMode = "blob" | "linescan" | "detect";
+export type CountMode = "blob" | "linescan" | "detect" | "safety";
 /** Kişi sayımı: kamera tepeden (center) ya da yandan/eğik (bottom, çizgi zeminde) */
 export type CountAnchor = "center" | "bottom";
 export type Direction = "down" | "up" | "right" | "left";
@@ -81,6 +81,7 @@ export const MODE_LABELS: Record<CountMode, string> = {
   blob: "Ayrık ürün (arka plan farkı)",
   linescan: "Bitişik / hacimli (şerit tarama)",
   detect: "Kişi tanıma (giriş / çıkış)",
+  safety: "Güvenlik",
 };
 
 /** Bant üstü ürün yöntemleri (yöntem seçicisi); kişi tanıma hazır profille gelir */

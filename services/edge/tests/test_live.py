@@ -48,7 +48,7 @@ def test_store_seeds_profiles_like_phone_catalog(tmp_path: pathlib.Path) -> None
     people = next(p for p in store.profiles() if p["name"] == "Mağaza girişi")
     assert people["countMode"] == "detect"
     presets = {k["key"] for c in CATALOG for k in c["presets"]}
-    assert presets == {"egg", "flour", "box", "generic", "people"}
+    assert presets == {"egg", "flour", "box", "generic", "people", "jeweler"}   # jeweler: tohumlanmaz, "+ ekle" ile
 
 
 def test_store_keeps_password_out_of_sources(tmp_path: pathlib.Path) -> None:
@@ -562,3 +562,10 @@ def test_staff_events_reach_status_csv_and_labels() -> None:
         assert (st["staffIn"], st["staffOut"]) == (0, 0)
     finally:
         s.stop()
+
+
+def test_catalog_has_safety_preset(client: TestClient) -> None:
+    cat = {c["id"]: c for c in client.get("/api/v1/live/catalog").json()}
+    assert cat["safety"]["available"] and cat["safety"]["presets"] == [{"key": "jeweler", "name": "Kuyumcu güvenliği"}]
+    p = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    assert p["countMode"] == "safety" and p["name"] == "Kuyumcu güvenliği"
