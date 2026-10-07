@@ -253,3 +253,17 @@ def test_end_all_reports_open_alarmed_episodes_and_pending_reset_ends() -> None:
     an3, _det3, _pose3, p3 = make([BOX])
     feed(an3, p3, 0, 20)                                               # alarm vermemiş bölüm bildirilmez
     assert an3.episodes.active() and an3.end_all() == []
+
+
+def test_pose_is_skipped_when_both_rules_are_disabled() -> None:
+    """İki kural da kapalıysa poz modeli hiç çalışmaz (işlemci boşa harcanmaz); kişi izlenmeye devam eder."""
+    p = Profile.jeweler()
+    p.safety.handsUp.enabled = False
+    p.safety.lying.enabled = False
+    an, _, pose, p = make([BOX], p)
+    res = feed(an, p, 0, 50)
+    assert pose.calls == 0 and any(r.tracks for r in res)
+    assert not any(r.fired or r.poses or r.active for r in res)
+    p.safety.lying.enabled = True                                      # biri açılınca poz yine çalışır
+    feed(an, p, 50, 60)
+    assert pose.calls > 0

@@ -88,8 +88,9 @@ class SafetyAnalyzer:
         res = SafetyResult(tracks=r.tracks)
         grace = grace_for(fps)
         sf = profile.safety
-        rules = [("hands_up", hands_up, sf.handsUp), ("lying", lying, sf.lying)]
-        for t in r.tracks:
+        rules = [(k, fn, rule) for k, fn, rule in (("hands_up", hands_up, sf.handsUp), ("lying", lying, sf.lying))
+                 if rule.enabled]
+        for t in r.tracks if rules else []:                         # iki kural da kapalı: poz hiç çalışmaz
             x1, y1, x2, y2 = (float(v) for v in t.box)
             box = (x1, y1, x2, y2)
             self._last_box[t.id] = box
@@ -98,8 +99,6 @@ class SafetyAnalyzer:
                 continue
             res.poses[t.id] = kp
             for kind, fn, rule in rules:
-                if not rule.enabled:
-                    continue
                 if self.episodes.update((t.id, kind), fn(kp), ts, rule.seconds, grace_s=grace):
                     # update bölümü az önce yeniledi: etkin listedeki süre = ts − başlangıç
                     dur = next(a[2] for a in self.episodes.active() if a[0] == t.id and a[1] == kind)

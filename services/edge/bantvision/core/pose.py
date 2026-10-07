@@ -24,15 +24,18 @@ def square_crop(box_px: tuple[float, float, float, float], pad: float = 1.25) ->
 
 
 def make_input(bgr: np.ndarray, crop: Crop) -> np.ndarray:
+    """Kare kırpma → 256×256 RGB int32. Görüntü içindeki kısım dilimlenir, yalnızca dışarı taşan kenarlar siyahla
+    doldurulur (ayrı siyah tuval ayırıp kopyalamak yok); sonuç tam tuvalli eski yöntemle bire bir aynı."""
     x0, y0, side = crop
     s = max(1, round(side))
-    canvas = np.zeros((s, s, 3), np.uint8)
     h, w = bgr.shape[:2]
     ix0, iy0 = round(x0), round(y0)
     sx0, sy0, sx1, sy1 = max(0, ix0), max(0, iy0), min(w, ix0 + s), min(h, iy0 + s)
-    if sx1 > sx0 and sy1 > sy0:
-        canvas[sy0 - iy0:sy1 - iy0, sx0 - ix0:sx1 - ix0] = bgr[sy0:sy1, sx0:sx1]
-    img = cv2.resize(canvas, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
+    if sx1 <= sx0 or sy1 <= sy0:                                  # kırpma tamamen görüntü dışında: siyah
+        return np.zeros((1, INPUT_SIZE, INPUT_SIZE, 3), np.int32)
+    sq = cv2.copyMakeBorder(bgr[sy0:sy1, sx0:sx1], sy0 - iy0, iy0 + s - sy1, sx0 - ix0, ix0 + s - sx1,
+                            cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    img = cv2.resize(sq, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
     return img[:, :, ::-1].astype(np.int32)[None]
 
 

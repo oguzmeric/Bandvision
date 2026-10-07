@@ -99,3 +99,25 @@ def test_ensure_pose_model_removes_part_on_checksum_mismatch_and_on_deadline(
     with pytest.raises(TimeoutError):                                  # genel süre sınırı aşıldı (damlayan bağlantı)
         pose.ensure_pose_model(deadline_s=-1.0)
     assert not list(tmp_path.glob("*.part")) and not target.exists()
+
+
+# ---------------------------------------------------------------------- GERÇEK MODEL (yalnızca dosya zaten varsa)
+
+_CACHED = pose.pose_model_path()
+
+
+@pytest.mark.skipif(not _CACHED.is_file(), reason=f"GERÇEK MODEL testi: {_CACHED} yok (testte asla indirilmez)")
+def test_real_movenet_model_smoke() -> None:
+    """GERÇEK MODEL: önbellekteki movenet_thunder.onnx (BANTVISION_MODEL_DIR ya da ~/.cache/bantvision) yüklenir;
+    girdi/çıktı adları, şekilleri ve türleri sözleşmeye (core/pose_model.py) uyar, sentetik görüntüde çıkarım çalışır.
+    Dosya yoksa atlanır; indirme yapılmaz (PoseEstimator'a yol verilir, ensure_pose_model çağrılmaz)."""
+    import numpy as np
+
+    est = pose.PoseEstimator(_CACHED)
+    inp, (out,) = est._session.get_inputs()[0], est._session.get_outputs()
+    assert inp.name == "input" and inp.type == "tensor(int32)" and list(inp.shape)[1:] == [256, 256, 3]
+    assert out.name == "output_0" and out.type == "tensor(float)" and list(out.shape)[-2:] == [17, 3]
+    img = np.zeros((480, 640, 3), np.uint8)
+    img[100:400, 280:360] = 200                                        # kişi boyunda açık renkli dikdörtgen
+    kp = est.estimate(img, (280, 100, 360, 400))
+    assert kp.shape == (17, 3) and np.isfinite(kp).all() and ((kp[:, 2] >= 0) & (kp[:, 2] <= 1)).all()
