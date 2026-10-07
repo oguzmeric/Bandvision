@@ -135,7 +135,7 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
 
 ## 5f. Poz güvenlik alarmı: eller yukarı, yerde yatan kişi (web + Telegram) (2026-10-07)
 
-Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safety` nesnesi (`02-contracts.md`); web tarafı `13-web-platform.md` "Güvenlik alarmı ve Bildirimler". Tasarım: `docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md`. Kuyumcu gibi mağazalarda sessiz alarm: soygun sırasında "eller yukarı" ve düşme/bayılma sonrası yerde yatan kişi. Kod `poz-guvenlik` dalında; main'e birleştirilene kadar yayında değil.
+Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safety` nesnesi (`02-contracts.md`); web tarafı `13-web-platform.md` "Güvenlik alarmı ve Bildirimler". Tasarım: `docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md`. Kuyumcu gibi mağazalarda sessiz alarm: soygun sırasında "eller yukarı" ve düşme/bayılma sonrası yerde yatan kişi.
 
 - **Ne var:**
   - Analiz sunucusu (yalnızca bilgisayar): kişi tanıma (YOLOX) + izleyici + poz (MoveNet SinglePose Thunder, Apache-2.0; ONNX'e GitHub Actions'ta çevrilir, GitHub sürümü `models-v1`den indirilir, SHA-256 doğrulanır) + kural durum makinesi. Eller yukarı varsayılan 3 sn (ayar 3–5), yerde yatma 10 sn (ayar 5–30).

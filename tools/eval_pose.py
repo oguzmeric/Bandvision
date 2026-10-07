@@ -148,7 +148,7 @@ def report(r: dict) -> bool:
         print(f"Yanlış alarm: {r['false']} ({per8:.2f} / 8 saat)")
         ok &= per8 <= MAX_FALSE_PER_8H
     else:
-        print(f"Yanlış alarm: {r['false']} — yetersiz süre: video {hours * 60:.0f} dk, "
+        print(f"Yanlış alarm: {r['false']} — yetersiz süre: video {math.floor(hours * 60)} dk, "
               f"en az {MIN_HOURS:.0f} saat normal hareket gerekli")
         ok = False
     print("GEÇTİ" if ok else "KALDI")

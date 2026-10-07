@@ -165,7 +165,7 @@ Kuyumcu gibi mağazalarda **sessiz alarm**: soygun sırasında "eller yukarı" d
 
 **Akış** (her işlenen karede):
 1. Kişi tanıma (YOLOX-S, §4.10 ile aynı ortak model) ve izleyici (§4.10 `MotTracker`) **tam karede** çalışır; alan kırpması, sayım çizgisi ve kutu merkezi süzgeci yoktur.
-2. **Alan:** profilde alan (ROI / çokgen) varsa kişi yalnızca **konum noktası** alan içindeyse değerlendirilir. Konum noktası `countAnchor = bottom`: kutunun alt ortası (tanıma kutuları kareye kırpıldığından, kareye değen kişi dışarıda sayılmasın diye kare içine çekilir). Varsayılan alan tüm görüntü; zemine çizilmiş alanın içindeki kişinin gövde merkezi alanın üstünde kalabileceğinden kutu merkezi kullanılmaz.
+2. **Alan:** profilde alan (ROI / çokgen) varsa kişi yalnızca **konum noktası** alan içindeyse değerlendirilir. Konum noktası güvenlikte **her zaman kutunun alt ortasıdır** (`countAnchor` yok sayılır; tanıma kutuları kareye kırpıldığından, kareye değen kişi dışarıda sayılmasın diye kare içine çekilir). Varsayılan alan tüm görüntü; zemine çizilmiş alanın içindeki kişinin gövde merkezi alanın üstünde kalabileceğinden kutu merkezi kullanılmaz.
 3. Poz yalnızca **onaylı ve bu karede tanımayla gözlenen** izlere uygulanır; boş sahnede (tanıma atlandığında) ve tahminle sürdürülen karede poz yoktur.
 4. Eklemlerden kare kararı → kare kararlarından bölüm durum makinesi → bölümden alarm.
 
@@ -179,8 +179,8 @@ Kuyumcu gibi mağazalarda **sessiz alarm**: soygun sırasında "eller yukarı" d
 **Ölçek `s`:** iki omuz da görünmezse karar yok. İki kalça da görünürse `s = |omuz_orta − kalça_orta|` (gövde boyu); değilse baş varsa `s = 2,5 · |baş − omuz_orta|`; ikisi de yoksa ya da `s = 0` ise karar yok.
 
 **Kare kararı** (`True` / `False` / `None` = yetersiz eklem, karar yok):
-- **Eller yukarı** (`hands_up`): iki omuz ve iki bilek görünür ve `s` tanımlı değilse `None`. Her iki taraf (sol: omuz 5, dirsek 7, bilek 9; sağ: 6, 8, 10) için `bilek.y ≤ omuz.y − 0,35 · s` **ve**, dirsek görünürse, `dirsek.y ≤ omuz.y + 0,15 · s` (görünmezse dirsek koşulu aranmaz; kol aşağıda sarkmıyor). Bir taraf tutmazsa `False`; ikisi de tutarsa `True`. Tek el kalkıksa `False`.
-- **Yerde yatma** (`lying`): iki omuz **ve** iki kalça görünür değilse `None` (tezgâh arkasında, kalçası görünmeyen ayaktaki kişi böyle kalır: alarm olmaz). `v = omuz_orta − kalça_orta`, `s = |v|` (`s = 0` ise `None`), `θ = atan2(|v.x|, −v.y)` (0°: omuz kalçanın tam üstünde, 90°: yatay, 180°: omuz kalçanın altında). `True` ⇔ `θ ≥ 60°` **ya da** (baş var ve `baş.y ≥ kalça_orta.y − 0,1 · s`; baş–ayak doğrultusu kameraya dönük yatmayı yakalar). Aksi `False`. Eğilme, çömelme ve oturma `False` olmalıdır (testli).
+- **Eller yukarı** (`hands_up`): dört eklemden (iki omuz, iki bilek) biri görünür değilse ya da `s` tanımsızsa `None`. Her iki taraf (sol: omuz 5, dirsek 7, bilek 9; sağ: 6, 8, 10) için `bilek.y ≤ omuz.y − 0,35 · s` **ve**, dirsek görünürse, `dirsek.y ≤ omuz.y + 0,15 · s` (görünmezse dirsek koşulu aranmaz; kol aşağıda sarkmıyor). Bir taraf tutmazsa `False`; ikisi de tutarsa `True`. Tek el kalkıksa `False`.
+- **Yerde yatma** (`lying`): dört eklemden (iki omuz, iki kalça) biri görünür değilse `None` (tezgâh arkasında, kalçası görünmeyen ayaktaki kişi böyle kalır: alarm olmaz). `v = omuz_orta − kalça_orta`, `s = |v|` (`s = 0` ise `None`), `θ = atan2(|v.x|, −v.y)` (0°: omuz kalçanın tam üstünde, 90°: yatay, 180°: omuz kalçanın altında). `True` ⇔ `θ ≥ 60°` **ya da** (baş var ve `baş.y ≥ kalça_orta.y − 0,1 · s`; baş–ayak doğrultusu kameraya dönük yatmayı yakalar). Aksi `False`. Eğilme, çömelme ve oturma `False` olmalıdır (testli).
 
 **Bölüm durum makinesi** (`EpisodeTracker`; iz ve tür başına; zaman = kare zaman damgası):
 - `True` kare bir **bölüm** başlatır ya da sürdürür. `False`, `None` ve tanımayla gözlenmeyen kareler bölümü en çok **`grace`** süre sürdürür; son `True`'dan beri `grace`'ten uzun geçerse (ya da zaman geriye giderse) bölüm biter, sonraki `True` yeni bölüm başlatır.
@@ -190,7 +190,7 @@ Kuyumcu gibi mağazalarda **sessiz alarm**: soygun sırasında "eller yukarı" d
 - Bölüm bitince alarmın `endedAt` değeri yazılır; panelde "devam ediyor" kalkar.
 - Varsayılan `T` (profil `safety`, sözleşme `02-contracts.md`): eller yukarı **3 sn** (ayar 3–5), yerde yatma **10 sn** (ayar 5–30). Aralıklar API'de denetlenir.
 
-**Tekrar önleme:** aynı kamerada aynı tür için son **gönderilen** bildirimden itibaren `COOLDOWN_S = 60 sn` içinde doğan alarmlar günlüğe ve panele yazılır, Telegram'a gitmez (`notify: "suppressed"`). Deneme alarmı tekrar önlemeye tabi değildir ve süreyi başlatmaz.
+**Tekrar önleme:** aynı kamerada aynı tür için son **kuyruğa alınan** bildirimden itibaren (Telegram yapılandırılmışsa) `COOLDOWN_S = 60 sn` içinde doğan alarmlar günlüğe ve panele yazılır, Telegram'a gitmez (`notify: "suppressed"`). Deneme alarmı tekrar önlemeye tabi değildir ve süreyi başlatmaz.
 
 **Sabitler** (`pose_rules.py`, `safety.py`): `KP_CONF = 0,3`, `GRACE_S = 0,5`, `COOLDOWN_S = 60`; eller yukarı bilek eşiği `0,35 · s`, dirsek payı `0,15 · s`; yerde yatma `θ ≥ 60°`, baş payı `0,1 · s`; baş tabanlı ölçek çarpanı `2,5`; `grace` en az `2,5 / fps`. Hazır profil "Kuyumcu güvenliği": `countMode = "safety"`, `detectClasses = ["person"]`, `detectConfidence = 0,35`, `countAnchor = "bottom"`, `minHits = 3`, `processingWidth = 640`, alan tüm görüntü.
 
