@@ -67,8 +67,7 @@ class SafetyAnalyzer:
     def reset(self) -> None:
         """İzleyici ve bölümler sıfırlanır; alarm vermiş bölümler bir SONRAKİ `process()` sonucunda `ended` olarak
         bildirilir (alarm günlüğü kapanabilsin)."""
-        # sweep(alive=∅) ertelenmiş sonları ve tüm etkin bölümleri verip temizler (EpisodeTracker'ın açık arayüzü)
-        self._reset_ended += [(k[0], k[1], fired) for k, fired in self.episodes.sweep(0.0, set()) if fired]
+        self._reset_ended += [(k[0], k[1], fired) for k, fired in self.episodes.close_all() if fired]
         self.dc.reset()
         self.episodes = EpisodeTracker()
         self._last_box.clear()
@@ -76,7 +75,7 @@ class SafetyAnalyzer:
     def end_all(self) -> list[tuple[int, str, bool]]:
         """Kapanış (oturum durdu): alarm vermiş her açık bölüm bitirilip döndürülür; `reset()` ile kesilip henüz
         bildirilmemiş olanlar ve ertelenmiş sonlar dahil. Sonrasında analizörün bölümü kalmaz."""
-        ends = self._reset_ended + [(k[0], k[1], fired) for k, fired in self.episodes.sweep(0.0, set()) if fired]
+        ends = self._reset_ended + [(k[0], k[1], fired) for k, fired in self.episodes.close_all() if fired]
         self._reset_ended = []
         self._last_box.clear()
         return ends

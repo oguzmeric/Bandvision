@@ -2,7 +2,11 @@
 
 Eklemler COCO-17, piksel (x, y aşağı), güven. Kare kararları True / False / None (yetersiz eklem: karar yok).
 `EpisodeTracker` iz ve tür başına bölüm tutar: True kareler sürdürür, `GRACE_S`'ten uzun kopma ya da iz kaybı bitirir,
-süre eşiği aşılınca bölüm başına bir kez alarm.
+süre eşiği aşılınca bölüm başına bir kez alarm. Alarm vermiş bölüm daha uzun (`FIRED_GRACE_S`) affedilir: tek olay
+kısa bir kopmayla ikinci alarm kaydı üretmesin.
+
+Eller yukarı eşikleri (`WRIST_UP`, `ELBOW_DOWN`) ofis NVR kamerasının gerçek kareleriyle ölçüldü (2026-10-07): yüksekten
+eğik bakan kamerada teslim duruşunda bilek omzun ancak 0,19–0,37·s üstünde, dirsek omzun 0,14·s altına kadar görünüyor.
 """
 from __future__ import annotations
 
@@ -13,7 +17,10 @@ import numpy as np
 
 KP_CONF = 0.3
 GRACE_S = 0.5
+FIRED_GRACE_S = 3.0                 # alarm vermiş bölümün kopma toleransı (iz kaybı dahil)
 COOLDOWN_S = 60.0
+WRIST_UP = 0.20                     # eller yukarı: bilek, aynı taraftaki omzun en az bu kadar (× s) üstünde
+ELBOW_DOWN = 0.30                   # eller yukarı: dirsek görünürse omzun en çok bu kadar (× s) altında
 
 NOSE, L_SH, R_SH, L_EL, R_EL, L_WR, R_WR, L_HIP, R_HIP = 0, 5, 6, 7, 8, 9, 10, 11, 12
 HEAD_ALT = (1, 2, 3, 4)
@@ -50,13 +57,15 @@ def scale(kp: np.ndarray) -> float | None:
 
 
 def hands_up(kp: np.ndarray) -> bool | None:
+    """Her iki tarafta: bilek.y ≤ omuz.y − WRIST_UP·s ve (dirsek görünürse) dirsek.y ≤ omuz.y + ELBOW_DOWN·s. İki omuz,
+    iki bilek ve ölçek gerekli; yoksa None. Eller göğüs hizasında ya da aşağıda: False."""
     s = scale(kp)
     if s is None or not (_vis(kp, L_WR) and _vis(kp, R_WR)):
         return None
     for sh, el, wr in ((L_SH, L_EL, L_WR), (R_SH, R_EL, R_WR)):
-        if not (kp[wr, 1] <= kp[sh, 1] - 0.35 * s):
+        if not (kp[wr, 1] <= kp[sh, 1] - WRIST_UP * s):
             return False
-        if _vis(kp, el) and not (kp[el, 1] <= kp[sh, 1] + 0.15 * s):
+        if _vis(kp, el) and not (kp[el, 1] <= kp[sh, 1] + ELBOW_DOWN * s):
             return False
     return True
 
@@ -86,6 +95,11 @@ class _Episode:
     fired: bool = False
 
 
+def _grace(ep: _Episode, grace_s: float) -> float:
+    """Alarm vermiş bölüm en az FIRED_GRACE_S affedilir (uyarlanmış tolerans daha büyükse o)."""
+    return max(grace_s, FIRED_GRACE_S) if ep.fired else grace_s
+
+
 class EpisodeTracker:
     def __init__(self) -> None:
         self._eps: dict[tuple[int, str], _Episode] = {}
@@ -95,14 +109,14 @@ class EpisodeTracker:
         self, key: tuple[int, str], verdict: bool | None, ts: float, threshold_s: float, grace_s: float = GRACE_S
     ) -> bool:
         """Bu karenin kararı; True dönerse bu karede alarm doğdu (bölüm başına bir kez).
-        Stale episodes (non-monotonic ts, or gap > grace_s) report end via _pending_end and restart.
-        sweep() returns pending ends and removes ended episodes."""
+        Stale episodes (non-monotonic ts, or gap > grace — FIRED_GRACE_S at least once fired) report end via
+        _pending_end and restart. sweep() returns pending ends and removes ended episodes."""
         if verdict is not True:
-            return False                                   # kopma: sweep grace_s'e göre bitirir
+            return False                                   # kopma: sweep toleransa göre bitirir
         ep = self._eps.get(key)
         gap = ts - ep.last_true if ep is not None else float('inf')
-        # Stale episode (non-monotonic ts or gap > grace_s + epsilon): restart and report end
-        if ep is not None and (ts < ep.last_true or gap > grace_s + 1e-9):
+        # Stale episode (non-monotonic ts or gap > grace + epsilon): restart and report end
+        if ep is not None and (ts < ep.last_true or gap > _grace(ep, grace_s) + 1e-9):
             self._pending_end.append((key, ep.fired))
             self._eps[key] = _Episode(ts, ts)
             return False
@@ -116,18 +130,25 @@ class EpisodeTracker:
         return False
 
     def sweep(self, ts: float, alive: set[int], grace_s: float = GRACE_S) -> list[tuple[tuple[int, str], bool]]:
-        """Biten bölümler (iz yok ya da son True'dan beri > grace_s + epsilon): (anahtar, alarm vermiş mi).
+        """Biten bölümler: (anahtar, alarm vermiş mi). Son True'dan beri > tolerans (alarm vermişte en az FIRED_GRACE_S)
+        ya da iz yok — iz kaybı alarmsız bölümü hemen, alarm vermiş bölümü tolerans dolunca bitirir.
         Returns pending ends (from update's stale restarts) plus newly dead episodes. Only deletes actually dead keys."""
         ended = self._pending_end.copy()
         self._pending_end.clear()
         dead = [
             (k, e.fired)
             for k, e in self._eps.items()
-            if k[0] not in alive or ts - e.last_true > grace_s + 1e-9 or ts < e.last_true
+            if (k[0] not in alive and not e.fired) or ts - e.last_true > _grace(e, grace_s) + 1e-9 or ts < e.last_true
         ]
         ended.extend(dead)
         for k, _ in dead:
             self._eps.pop(k, None)
+        return ended
+
+    def close_all(self) -> list[tuple[tuple[int, str], bool]]:
+        """Hepsini bitirir (sıfırlama/kapanış): ertelenmiş sonlar ve tüm bölümler (anahtar, alarm vermiş mi)."""
+        ended = self._pending_end + [(k, e.fired) for k, e in self._eps.items()]
+        self._pending_end, self._eps = [], {}
         return ended
 
     def active(self) -> list[tuple[int, str, float, bool]]:
