@@ -224,6 +224,10 @@ final class FrameProcessor: @unchecked Sendable {
 
     /// ts: kaynağın sunum zamanı (sn). Kamera ve video aynı yoldan gelir.
     func process(_ pixelBuffer: CVPixelBuffer, ts: Double) {
+        if profile.mode == .safety {                   // güvenlik alarmı yalnızca bilgisayarda (web analiz sunucusu)
+            displaySafetyFrame(pixelBuffer)
+            return
+        }
         if profile.mode == .detect {
             processPeople(pixelBuffer, ts: ts)
             return
@@ -446,6 +450,25 @@ final class FrameProcessor: @unchecked Sendable {
     static func numberLabel(_ nums: [Int]) -> String {
         guard let first = nums.first, let last = nums.last else { return "" }
         return nums.count <= 3 ? nums.map(String.init).joined(separator: "·") : "\(first)…\(last)"
+    }
+
+    // MARK: - Güvenlik alarmı (yalnızca bilgisayar)
+
+    /// Poz güvenlik alarmı bu cihazda çalışmaz: kare yalnızca gösterilir, sayım ve izleme yapılmaz. Bekleyen
+    /// kalibrasyon isteği takılı kalmasın diye bırakılır. Kare boyutu yayınlanır; yatay kaynakta (ağ kamerası,
+    /// video) görüntü bozulmadan yerleşir.
+    private func displaySafetyFrame(_ pb: CVPixelBuffer) {
+        tickFPS()
+        calib = .none
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        lastFrameSize = (w, h)
+        let now = CACurrentMediaTime()
+        if now - lastPublish >= 1.0 / 12.0 {
+            lastPublish = now
+            let snap = EngineSnapshot(frameSize: CGSize(width: w, height: h), blobs: [], tracks: [], fps: fps, mask: nil)
+            DispatchQueue.main.async { [weak self] in self?.onSnapshot?(snap) }
+        }
+        emitDisplayImage(pb, sourceWidth: w)
     }
 
     // MARK: - Kişi sayımı (§4.10)

@@ -38,7 +38,9 @@ struct CalibrationPanel: View {
                 .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if vm.profile.isTwoWay {
+            if vm.profile.mode == .safety {
+                EmptyView()                 // güvenlik alarmı bu cihazda yok: ayar gösterilmez, açıklama yukarıdaki mesajda
+            } else if vm.profile.isTwoWay {
                 cameraPicker
                 areaShapePicker
                 lineModePicker

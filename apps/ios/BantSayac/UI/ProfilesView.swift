@@ -78,6 +78,7 @@ struct ProfilesView: View {
         case .detect: return "Giriş / çıkış sayımı"
         case .linescan: return "Bitişik / hacimli ürün"
         case .blob: return p.expectedArea > 0 ? "Kalibre edildi" : "Kalibre edilmedi"
+        case .safety: return "Yalnızca bilgisayarda"
         }
     }
 

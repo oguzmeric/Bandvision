@@ -244,6 +244,8 @@ final class CountingViewModel: ObservableObject {
             calibrationMessage = "Turuncu çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy (kapı eşiğine değil). Ok giriş yönünü gösterir."
         case .blob:
             calibrationMessage = "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
+        case .safety:
+            calibrationMessage = "Bu yöntem (güvenlik alarmı) bu cihazda desteklenmiyor; bilgisayardaki web panelinde çalışır."
         }
         processor.setShowMask(profile.mode == .blob)
     }

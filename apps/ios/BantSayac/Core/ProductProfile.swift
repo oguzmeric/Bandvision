@@ -98,6 +98,17 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     var countAnchor: CountAnchor? = nil
     /// Tanıma (kişi): personel üniforma renkleri (en çok 3). nil/boş = kapalı; bu renkteki kişinin geçişi müşteri sayılmaz
     var staffColors: [LabColor]? = nil
+    /// Güvenlik (poz alarmı, `countMode == .safety`): yalnızca bilgisayardaki analiz sunucusunda çalışır. iPhone alanı
+    /// yalnızca taşır (kaydedilince kaybolmasın); bu cihazda işlenmez.
+    var safety: SafetyConfig? = nil
+}
+
+/// Poz güvenlik alarmı ayarları (sözleşme `safety`; yalnızca bilgisayardaki analiz sunucusunda çalışır)
+struct SafetyConfig: Codable, Equatable, Sendable {
+    struct Rule: Codable, Equatable, Sendable { var enabled: Bool; var seconds: Double }
+    var handsUp: Rule
+    var lying: Rule
+    var sendImage: Bool
 }
 
 /// Sayım yöntemi (sözleşme `countMode`).
@@ -108,6 +119,8 @@ enum CountMode: String, Codable, CaseIterable, Identifiable {
     case linescan
     /// Nesne tanıma + iki yönlü geçiş (kişi): giriş ve çıkış ayrı sayılır
     case detect
+    /// Poz güvenlik alarmı (eller yukarı, yerde yatan kişi): yalnızca bilgisayarda; iPhone yalnızca görüntüler
+    case safety
 
     var id: String { rawValue }
     var title: String {
@@ -115,6 +128,7 @@ enum CountMode: String, Codable, CaseIterable, Identifiable {
         case .blob: return "Ayrık ürün"
         case .linescan: return "Bitişik / hacimli"
         case .detect: return "Kişi (giriş/çıkış)"
+        case .safety: return "Güvenlik (yalnızca bilgisayar)"
         }
     }
 
