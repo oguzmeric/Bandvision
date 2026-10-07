@@ -613,13 +613,27 @@ def _fake_safety_session(**over: Any) -> Any:
 
 
 def test_safety_alarm_reaches_store_status_and_queue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    _mock_telegram(client)
+    """Olay resmi her zaman bu bilgisayarda saklanır (Ruling 17); sendImage kapalıyken Telegram'a yalnızca metin gider."""
+    import httpx
+
+    paths: list[str] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"ok": True})
+
+    mgr = client.app.state.live
+    mgr.notifier._client = httpx.Client(transport=httpx.MockTransport(telegram))
     client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1001", "token": "123:GIZLI"})
     _sess, sid = _safety_session_with_fake(client, monkeypatch)
     alarms = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)
     a = alarms[0]
     assert a["type"] == "hands_up" and a["camera"].startswith("Tezgah") and a["sessionId"] == sid
-    assert a["notify"] in ("queued", "sent") and not a["image"]             # sendImage varsayılan kapalı
+    assert a["notify"] in ("queued", "sent") and a["image"] is True        # sendImage kapalı: resim yine yerelde
+    img = client.get(f"/api/v1/live/alarms/{a['id']}/image.jpg")
+    assert img.status_code == 200 and img.content[:2] == b"\xff\xd8"
+    mgr.notifier.flush()
+    assert paths and set(paths) == {"sendMessage"} and mgr.alarms.get(a["id"])["notify"] == "sent"
     st = client.get(f"/api/v1/live/sessions/{sid}").json()
     assert st["safety"]["lastAlarmAt"] is not None
     assert client.post(f"/api/v1/live/alarms/{a['id']}/ack").status_code == 200
@@ -669,7 +683,8 @@ def test_test_alarm_and_notify_endpoints(client: TestClient) -> None:
     r = client.post("/api/v1/live/alarms/test", json={})
     assert r.status_code == 200 and r.json()["type"] == "test" and r.json()["notify"] == "disabled"
     assert client.get("/api/v1/live/alarms?active=1").json()[0]["type"] == "test"
-    assert client.get(f"/api/v1/live/alarms/{r.json()['id']}/image.jpg").status_code == 404
+    img = client.get(f"/api/v1/live/alarms/{r.json()['id']}/image.jpg")
+    assert img.status_code == 404 and img.json()["detail"] == "Olay resmi yok (7 günü geçti ya da alınamadı)."
     r = client.post("/api/v1/live/notify/test")
     assert r.status_code == 422 and "eksik" in r.json()["detail"]
     cfg = client.put("/api/v1/live/notify", json={"enabled": False, "chatId": " -100 ", "token": "9:Z"}).json()
@@ -1640,3 +1655,34 @@ def test_stale_open_alarms_are_closed_at_start(tmp_path: pathlib.Path) -> None:
     assert got[open_["id"]]["endedAt"] >= before and got[done["id"]]["endedAt"] == 5.0
     assert got[test["id"]]["endedAt"] is None                                         # deneme alarmının sonu yok
     assert AlarmStore(tmp_path).get(open_["id"])["endedAt"] >= before                # diske de yazıldı
+
+
+# ---------------------------------------------------------------------- son düzeltme dalgası A: olay resmi her zaman yerelde (I5)
+
+@pytest.mark.parametrize("send_image", [False, True])
+def test_test_alarm_stores_camera_frame_and_sends_photo_only_when_enabled(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch, send_image: bool) -> None:
+    """Kameranın yan panelindeki "Deneme alarmı": o kameranın karesi her zaman saklanır; Telegram'a resim yalnızca o
+    kamerada "Olay resmini Telegram'a gönder" açıksa gider."""
+    import httpx
+    from fakes_safety import FakePose
+
+    paths: list[str] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"ok": True})
+
+    mgr = client.app.state.live
+    mgr.notifier._client = httpx.Client(transport=httpx.MockTransport(telegram))
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    # poz yok: oturum kendisi alarm vermez, Telegram'a giden tek istek deneme alarmı
+    sess, sid = _safety_session_with_fake(client, monkeypatch, send_image=send_image, pose=FakePose(None))
+    wait_for(lambda: sess.raw_jpeg() is not None)
+    rec = client.post("/api/v1/live/alarms/test", json={"sessionId": sid}).json()
+    assert rec["type"] == "test" and rec["sessionId"] == sid and rec["image"] is True
+    assert client.get(f"/api/v1/live/alarms/{rec['id']}/image.jpg").content[:2] == b"\xff\xd8"
+    assert rec["id"] in [a["id"] for a in client.get("/api/v1/live/alarms", params={"sessionId": sid}).json()]
+    mgr.notifier.flush()                                    # arka plan iş parçacığı da göndermiş olabilir
+    assert paths == ["sendPhoto" if send_image else "sendMessage"]
+    assert mgr.alarms.get(rec["id"])["notify"] == "sent"

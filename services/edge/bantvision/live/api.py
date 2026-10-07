@@ -264,7 +264,9 @@ class LiveManager:
         aynı (iz, tür) için eski bölümün sonu ile yeni alarm gelirse eski kapanır, yeni açık kalır; yeni alarm aynı
         anahtarda hâlâ açık eski bir alarmın üstüne yazmaz (önce onu kapatır). Tekrar önleme (kamera ve tür başına
         `COOLDOWN_S`, tekdüze saatle) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez.
-        Oturum bu sırada güvenlikten çıkmışsa (uçuştaki alarm) kayıt tutulur ve hemen kapatılır; açık kalmaz."""
+        Oturum bu sırada güvenlikten çıkmışsa (uçuştaki alarm) kayıt tutulur ve hemen kapatılır; açık kalmaz.
+        Olay resmi HER ZAMAN bu bilgisayarda saklanır (7 gün); Telegram'a resim yalnızca kamerada `sendImage` açıksa
+        gider (kuyruk kaydının resim bayrağı alarm anındaki `sendImage`'a eşittir)."""
         now = time.time()                                   # alarm zamanları duvar saati
         mono = time.monotonic()                             # yalnız tekrar önleme süresi
         camera = getattr(s, "name", "Kamera")
@@ -281,8 +283,7 @@ class LiveManager:
                 if self.notifier.configured():
                     last = self._last_sent.get((cam_key, a.kind))
                     notify = "suppressed" if last is not None and mono - last < COOLDOWN_S else "queued"
-                rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now,
-                                       jpeg if send_image else None, notify)
+                rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify)
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
                     self.alarms.end(old, now)
@@ -823,15 +824,19 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.post("/alarms/test")
     def test_alarm(body: TestAlarmIn) -> dict[str, Any]:
-        """Deneme alarmı: panel şeridi ve (yapılandırılmışsa) Telegram; tekrar önlemeye tabi değil."""
+        """Deneme alarmı: panel şeridi ve (yapılandırılmışsa) Telegram; tekrar önlemeye tabi değil. `sessionId` bir
+        güvenlik oturumuysa o kameranın son karesi olay resmi olarak saklanır (o kameranın "Son alarmlar"ında görünür);
+        Telegram'a resim yalnızca o kamerada `sendImage` açıksa gider."""
         s = manager.sessions.get(body.sessionId) if body.sessionId else None
         camera = s.name if s else "Deneme"
-        jpeg = s.raw_jpeg() if s and s.profile.countMode == "safety" and s.profile.safety.sendImage else None
+        safety = s is not None and s.profile.countMode == "safety"
+        jpeg = s.raw_jpeg() if s is not None and safety else None
+        send_image = bool(s is not None and safety and s.profile.safety.sendImage)
         now = time.time()
         notify = "queued" if manager.notifier.configured() else "disabled"
         rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify)
         if notify == "queued":
-            manager.notifier.enqueue(rec_["id"], manager._text("test", camera, now), jpeg)
+            manager.notifier.enqueue(rec_["id"], manager._text("test", camera, now), jpeg if send_image else None)
         return rec_
 
     @r.post("/alarms/{alarm_id}/ack")
@@ -844,7 +849,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def alarm_image(alarm_id: str) -> Response:
         jpeg = manager.alarms.image_bytes(alarm_id)
         if jpeg is None:
-            raise HTTPException(404, "Olay resmi yok (gönderim kapalı ya da 7 günü geçti).")
+            raise HTTPException(404, "Olay resmi yok (7 günü geçti ya da alınamadı).")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @r.get("/notify")
