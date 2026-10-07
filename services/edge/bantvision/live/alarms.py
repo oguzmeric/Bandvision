@@ -89,6 +89,17 @@ class AlarmStore:
     def end(self, alarm_id: str, ts: float) -> None:
         self._update(alarm_id, endedAt=ts)
 
+    def close_stale(self, now: float) -> int:
+        """Açılışta: önceki çalışmadan sonu yazılmamış (temiz kapanış olmadı) alarmların sonu `now` olur; panelde
+        sonsuza dek "devam ediyor" kalmasın. Deneme alarmının sonu yoktur, dokunulmaz. Kapatılan sayısı döner."""
+        with self._lock:
+            stale = [a for a in self._items if a["endedAt"] is None and a["type"] != "test"]
+            for a in stale:
+                a["endedAt"] = now
+            if stale:
+                self._save()
+        return len(stale)
+
     def set_notify(self, alarm_id: str, status: str) -> None:
         self._update(alarm_id, notify=status)
 

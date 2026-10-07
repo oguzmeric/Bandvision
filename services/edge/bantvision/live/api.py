@@ -24,6 +24,7 @@ from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .alarms import AlarmStore
+from .jsonfile import quarantine, read_json, write_json_atomic
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
@@ -220,7 +221,9 @@ def _err(e: Exception) -> HTTPException:
 
 
 class LiveManager:
-    """Kaynak bağlantıları ve çalışan oturumlar (süreç ömrü boyunca bellekte)."""
+    """Kaynak bağlantıları ve çalışan oturumlar (süreç ömrü boyunca bellekte). Güvenlik oturumları ayrıca
+    `<data>/live/watch.json`'da tutulur: analiz sunucusu yeniden başlayınca `restore_watched()` onları yeniden açar
+    (kuyumcu, bilgisayar yeniden başlayınca alarmın sürmesini bekler). Diğer oturumlar saklanmaz."""
 
     def __init__(self, store: LiveStore, data_dir: pathlib.Path | None = None) -> None:
         self.store = store
@@ -238,6 +241,14 @@ class LiveManager:
         self._alarm_lock = threading.Lock()
         self._last_sent: dict[tuple[str, str], float] = {}         # (kamera, tür) → son bildirim (time.monotonic)
         self._alarm_of: dict[tuple[str, int, str], str] = {}      # (oturum, iz, tür) → açık alarm kimliği
+        # Açılışta hiçbir oturum yok: önceki çalışmadan "devam ediyor" kalmış alarmlar (temiz kapanış olmadı) kapanır;
+        # geri yüklenen oturumlar yeni bölüm/alarm üretir.
+        closed = self.alarms.close_stale(time.time())
+        if closed:
+            _LOG.info("Önceki çalışmadan açık kalan %d alarm kapatıldı", closed)
+        self._watch_file = root / "live" / "watch.json"
+        self._watch_lock = threading.Lock()
+        self._watch: list[dict[str, Any]] = self._load_watch()
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
     # ------------------------------------------------------------------ poz güvenlik alarmları
@@ -292,10 +303,133 @@ class LiveManager:
                 self.alarms.end(self._alarm_of.pop(k), ts)
 
     def remove_session(self, s: LiveSession) -> None:
-        """Oturumu durdurur, listeden çıkarır ve açık alarmlarını kapatır."""
+        """Oturumu durdurur, listeden çıkarır, açık alarmlarını kapatır; güvenlik oturumuysa izleme listesinden çıkar
+        (kullanıcı kapattı: yeniden başlatmada açılmaz). Sunucu kapanışı bunu çağırmaz: liste korunur."""
         s.stop()
         self.sessions.pop(s.id, None)
         self.close_alarms(s.id)
+        self.unwatch(getattr(s, "source_id", ""), getattr(s, "channel_id", None))
+
+    # ------------------------------------------------------------------ oturum açma ve yeniden başlatmada geri yükleme
+
+    def open_session(self, source_id: str, channel_id: str | None, profile_id: str, substream: bool | None = None,
+                     *, name: str | None = None, fallback: Profile | None = None, lazy: bool = False,
+                     safety_only: bool = False) -> LiveSession:
+        """Kameranın canlı oturumunu açar (`POST /sessions` ve geri yükleme aynı yoldan). Profil: bu kameraya
+        kaydedilmiş ayar ya da şablon. Aynı kamerada açık oturum kapanır (kamera iki kez okunmaz).
+
+        Geri yükleme için: `name` kayıttaki ad (kayıt cihazına sorulmaz); `fallback` kayıttaki güvenlik profili
+        (kaydedilmeden güvenliğe geçilmişse); `lazy` kanal bilgisi açılışta istenmez, okuyucu bağlanırken ister ve
+        olmazsa yeniden dener (kayıt cihazı bilgisayardan geç açılabilir; açılış beklemez); `safety_only` çözülen profil
+        güvenlik değilse LookupError."""
+        src = self.source_or_404(source_id)
+        template = self.store.profile(profile_id)
+        profile = self.store.camera_profile(source_id, channel_id, profile_id) or template  # kamera ayarı ya da şablon
+        if fallback is not None and fallback.countMode == "safety" and (profile is None or profile.countMode != "safety"):
+            profile = fallback
+        if profile is None or (template is None and fallback is None):
+            raise HTTPException(404, "Profil bulunamadı.")
+        if safety_only and profile.countMode != "safety":
+            raise LookupError("profil güvenlik değil")
+        if template is not None:
+            profile.name = template.name                     # yeniden adlandırma kamera ayarlarına da yansısın
+        for s in list(self.sessions.values()):              # aynı kamera iki kez açılmasın
+            if getattr(s, "source_id", None) == source_id and getattr(s, "channel_id", None) == channel_id:
+                self.remove_session(s)
+        try:
+            open_url, keep_alive = self.opener(src, channel_id, substream, lazy=lazy)
+            if name is None:
+                name = str(src.get("name") or "").strip() or "Kamera"
+                if channel_id:
+                    name = f"{name} · {self.channel(src, channel_id).title.strip()}"
+        except rec.RecorderError as e:
+            raise _err(e) from e
+        s = LiveSession(name, open_url, profile, keep_alive, detector=self.detector, pose=self.pose,
+                        alarm_sink=self.on_safety)
+        s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
+        s.source_id, s.channel_id, s.profile_id = source_id, channel_id, profile_id  # type: ignore[attr-defined]
+        fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok
+        sub = bool(src.get("substream", True)) if substream is None else substream
+        s.substream = None if fixed_url else sub  # type: ignore[attr-defined]
+        self.sessions[s.id] = s
+        if profile.countMode == "safety":
+            self.watch(s)
+        return s
+
+    def _load_watch(self) -> list[dict[str, Any]]:
+        res = read_json(self._watch_file)
+        if res.status == "unreadable":
+            _LOG.error("watch.json okunamadı (dosya kilitli olabilir); güvenlik kameraları bu açılışta geri yüklenmeyecek")
+            return []
+        if res.status == "corrupt" or (res.status == "ok" and not isinstance(res.data, list)):
+            _LOG.warning("watch.json bozuk; kenara alındı (watch.json.corrupt), izlenen kamera listesi boş başlıyor")
+            quarantine(self._watch_file)
+            return []
+        return [r for r in (res.data or []) if isinstance(r, dict) and isinstance(r.get("sourceId"), str)
+                and isinstance(r.get("profileId"), str) and (r.get("channelId") is None or isinstance(r["channelId"], str))]
+
+    def _save_watch(self) -> None:
+        """Kilit altında çağrılır; yazma hatası günlüğe yazılır (liste bellekte sürer)."""
+        try:
+            write_json_atomic(self._watch_file, self._watch, indent=2)
+        except OSError as e:
+            _LOG.warning("watch.json yazılamadı: %s", e)
+
+    def watch(self, s: LiveSession) -> None:
+        """Güvenlik oturumunu izleme listesine yazar ya da günceller (yeniden başlatmada açılsın)."""
+        sid, ch = getattr(s, "source_id", None), getattr(s, "channel_id", None)
+        if not sid:
+            return
+        rec_ = {"sourceId": sid, "channelId": ch, "profileId": getattr(s, "profile_id", None) or s.profile.id,
+                "substream": getattr(s, "substream", None), "name": s.name, "profile": s.profile.to_dict()}
+        with self._watch_lock:
+            self._watch = [r for r in self._watch if (r["sourceId"], r.get("channelId")) != (sid, ch)] + [rec_]
+            self._save_watch()
+
+    def unwatch(self, source_id: str, channel_id: str | None) -> None:
+        with self._watch_lock:
+            keep = [r for r in self._watch if (r["sourceId"], r.get("channelId")) != (source_id, channel_id)]
+            if len(keep) != len(self._watch):
+                self._watch = keep
+                self._save_watch()
+
+    def unwatch_source(self, source_id: str) -> None:
+        with self._watch_lock:
+            keep = [r for r in self._watch if r["sourceId"] != source_id]
+            if len(keep) != len(self._watch):
+                self._watch = keep
+                self._save_watch()
+
+    def restore_watched(self) -> int:
+        """Açılışta (lifespan) izlenen güvenlik kameralarını yeniden açar; açılan sayısını döndürür. Hiçbir koşulda
+        hata fırlatmaz: bir kaydın hatası (kaynak/profil yok, beklenmeyen hata) Türkçe günlüğe yazılır, diğerleri ve
+        sunucunun açılışı sürer. Kaynağı silinmiş kayıt listeden çıkar."""
+        with self._watch_lock:
+            records = list(self._watch)
+        restored = 0
+        for r in records:
+            label = str(r.get("name") or r.get("sourceId"))
+            try:
+                if self.store.source(r["sourceId"]) is None:
+                    _LOG.warning("İzlenen güvenlik kamerasının kaynağı silinmiş; listeden çıkarıldı: %s", label)
+                    self.unwatch(r["sourceId"], r.get("channelId"))
+                    continue
+                fallback = Profile.from_dict(r["profile"]) if isinstance(r.get("profile"), dict) else None
+                sub = r.get("substream")
+                self.open_session(r["sourceId"], r.get("channelId"), r["profileId"],
+                                  sub if isinstance(sub, bool) else None, name=str(r.get("name") or "") or None,
+                                  fallback=fallback, lazy=True, safety_only=True)
+                restored += 1
+            except LookupError:
+                _LOG.warning("İzlenen kameranın profili artık güvenlik değil; listeden çıkarıldı: %s", label)
+                self.unwatch(r["sourceId"], r.get("channelId"))
+            except HTTPException as e:
+                _LOG.error("Güvenlik kamerası yeniden açılamadı (%s): %s", label, e.detail)
+            except Exception:  # noqa: BLE001 — bir kaydın hatası diğerlerini ve açılışı durdurmaz
+                _LOG.exception("Güvenlik kamerası yeniden açılamadı (%s)", label)
+        if restored:
+            _LOG.info("%d güvenlik kamerası yeniden izlemeye alındı", restored)
+        return restored
 
     def source_or_404(self, source_id: str) -> dict[str, Any]:
         src = self.store.source(source_id)
@@ -360,10 +494,11 @@ class LiveManager:
         password = self.store.password(src["id"])
         return rec.with_credentials(url, src.get("username", ""), password) if src.get("username") else url
 
-    def opener(self, src: dict[str, Any], channel_id: str | None, substream: bool | None = None
-               ) -> tuple[Any, Any]:
+    def opener(self, src: dict[str, Any], channel_id: str | None, substream: bool | None = None,
+               lazy: bool = False) -> tuple[Any, Any]:
         """(adres üretici, canlı tutma). Kayıt cihazında adres her bağlanışta yeniden alınır (TRASSIR jetonu).
-        `substream` verilirse kaynağın alt/ana akış ayarı yerine o kullanılır (oturum başına seçim)."""
+        `substream` verilirse kaynağın alt/ana akış ayarı yerine o kullanılır (oturum başına seçim). `lazy`: kanal
+        bilgisi şimdi değil ilk bağlanışta istenir (alınamazsa okuyucu yeniden dener)."""
         if substream is not None:
             src = {**src, "substream": substream}
         if src["kind"] == "camera":
@@ -372,13 +507,15 @@ class LiveManager:
         if not channel_id:
             raise HTTPException(400, "Kayıt cihazından bir kamera seçin.")
         client = self.recorder(src)
-        ch = self.channel(src, channel_id)
+        found: list[rec.RecorderChannel] = [] if lazy else [self.channel(src, channel_id)]
         substream = bool(src.get("substream", True))
         brand = rec.RecorderBrand(src.get("recorderBrand", "trassir"))
         username, password = src.get("username", ""), self.store.password(src["id"])
 
         def open_url() -> str:
-            url = client.stream_url(ch, substream)
+            if not found:
+                found.append(self.channel(src, channel_id))
+            url = client.stream_url(found[0], substream)
             if brand != rec.RecorderBrand.TRASSIR and username:
                 url = rec.with_credentials(url, username, password)
             return url
@@ -534,6 +671,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def delete_source(source_id: str) -> Response:
         for s in [s for s in manager.sessions.values() if getattr(s, "source_id", None) == source_id]:
             manager.remove_session(s)
+        manager.unwatch_source(source_id)                    # geri yüklenemeyen kayıtlar da
         manager.forget(source_id)
         if not store.delete_source(source_id):
             raise HTTPException(404, "Kaynak bulunamadı.")
@@ -566,31 +704,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.post("/sessions", status_code=201)
     def create_session(body: SessionIn) -> dict[str, Any]:
-        src = manager.source_or_404(body.sourceId)
-        template = store.profile(body.profileId)
-        profile = store.camera_profile(body.sourceId, body.channelId, body.profileId) or template  # kamera ayarı ya da şablon
-        if profile is None or template is None:
-            raise HTTPException(404, "Profil bulunamadı.")
-        profile.name = template.name                         # yeniden adlandırma kamera ayarlarına da yansısın
-        for s in list(manager.sessions.values()):           # aynı kamera iki kez açılmasın
-            if getattr(s, "source_id", None) == body.sourceId and getattr(s, "channel_id", None) == body.channelId:
-                manager.remove_session(s)
-        try:
-            open_url, keep_alive = manager.opener(src, body.channelId, body.substream)
-            name = str(src.get("name") or "").strip() or "Kamera"
-            if body.channelId:
-                name = f"{name} · {manager.channel(src, body.channelId).title.strip()}"
-        except rec.RecorderError as e:
-            raise _err(e) from e
-        s = LiveSession(name, open_url, profile, keep_alive, detector=manager.detector, pose=manager.pose,
-                        alarm_sink=manager.on_safety)
-        s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
-        s.source_id, s.channel_id, s.profile_id = body.sourceId, body.channelId, body.profileId  # type: ignore[attr-defined]
-        fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok
-        sub = bool(src.get("substream", True)) if body.substream is None else body.substream
-        s.substream = None if fixed_url else sub  # type: ignore[attr-defined]
-        manager.sessions[s.id] = s
-        return _session_view(s)
+        """Güvenlik oturumu ayrıca izleme listesine yazılır: analiz sunucusu yeniden başlayınca yeniden açılır."""
+        return _session_view(manager.open_session(body.sourceId, body.channelId, body.profileId, body.substream))
 
     def session_or_404(session_id: str) -> LiveSession:
         s = manager.sessions.get(session_id)
@@ -629,6 +744,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if body.substream != s.substream:  # type: ignore[attr-defined]
             s.switch_source(open_url, keep_alive)
             s.substream = body.substream  # type: ignore[attr-defined]
+            if s.profile.countMode == "safety":
+                manager.watch(s)                            # yeniden başlatmada aynı akış
         return _session_view(s)
 
     @r.post("/sessions/{session_id}/staff-color")
@@ -654,6 +771,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         s.set_profile(p)
         if was_safety and p.countMode != "safety":          # güvenlikten çıkış: bölümlerin sonu artık gelmez
             manager.close_alarms(s.id)
+            manager.unwatch(getattr(s, "source_id", ""), getattr(s, "channel_id", None))
+        elif p.countMode == "safety":                       # güvenliğe geçiş ya da ayar değişti: izleme kaydı güncel
+            manager.watch(s)
         if save:
             store.save_camera_profile(getattr(s, "source_id", ""), getattr(s, "channel_id", None), p)
         return _session_view(s)

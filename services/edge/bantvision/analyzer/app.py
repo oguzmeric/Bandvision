@@ -86,14 +86,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         store.expire()
+        try:                                                 # 7 günden eski alarm ve resimler açılışta da silinir
+            live.alarms.expire(time.time())
+        except Exception:  # noqa: BLE001 — temizlik hatası açılışı durdurmaz
+            _LOG.exception("Açılışta alarm günlüğü temizlenemedi")
         worker.start()
         live.notifier.start()                                # Telegram çevrimdışı kuyruğu
+        live.restore_watched()                               # güvenlik kameraları yeniden izlemede (hata fırlatmaz)
         t = threading.Thread(target=cleanup_loop, name="analiz-temizlik", daemon=True)
         t.start()
         yield
         stop_cleanup.set()
         worker.stop()
         sessions = list(live.sessions.values())
+        # İzlenen güvenlik kameraları listesi (watch.json) korunur: sonraki açılışta yeniden açılırlar
         for s in sessions:                                   # canlı oturumlar kapanırken kamerayı bırak
             s.stop()
         for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)

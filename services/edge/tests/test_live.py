@@ -1489,3 +1489,154 @@ def test_safety_status_reports_model_and_detector_errors() -> None:
         assert s.snapshot_status()["safety"]["healthy"] is True
     finally:
         s.stop()
+
+
+# ---------------------------------------------------------------------- son düzeltme dalgası A: yeniden başlatma (I1, I3)
+
+def _app_with_fakes(tmp_path: pathlib.Path) -> Any:
+    """Analiz sunucusu (aynı veri klasörü = yeniden başlatma); sahte modeller ömür başlamadan (geri yüklemeden) önce."""
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    app = create_app(Settings(data_dir=tmp_path))
+    app.state.live.detector = FakeDetector([(280, 80, 360, 440)])
+    app.state.live.pose = FakePose(hands_up_kp())
+    return app
+
+
+def _watch(tmp_path: pathlib.Path) -> list[dict[str, Any]]:
+    p = tmp_path / "live" / "watch.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+
+
+def test_safety_session_is_restored_after_analyzer_restart(tmp_path: pathlib.Path,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        sess, sid = _safety_session_with_fake(c, monkeypatch)
+        src_id, prof_id = sess.source_id, sess.profile_id
+        prof = c.get(f"/api/v1/live/sessions/{sid}").json()["profile"]
+        prof["safety"]["handsUp"]["seconds"] = 5                    # bu kamera için kaydedilen ayar da geri gelir
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile", params={"save": "true"}, json=prof).status_code == 200
+        (w,) = _watch(tmp_path)
+        assert (w["sourceId"], w["channelId"], w["profileId"], w["name"]) == (src_id, None, prof_id, "Tezgah")
+        other = c.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="")).json()
+        egg = next(p for p in c.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
+        assert c.post("/api/v1/live/sessions", json={"sourceId": other["id"], "profileId": egg["id"]}).status_code == 201
+        assert len(_watch(tmp_path)) == 1                           # güvenlik dışı oturum saklanmaz
+    assert len(_watch(tmp_path)) == 1                               # kapanış kaydı silmez: sonraki açılışta geri gelir
+
+    app = _app_with_fakes(tmp_path)
+    with TestClient(app) as c:
+        (v,) = c.get("/api/v1/live/sessions").json()                # yalnızca güvenlik oturumu geri geldi
+        assert (v["sourceId"], v["channelId"], v["profileId"], v["name"]) == (src_id, None, prof_id, "Tezgah")
+        assert v["profile"]["countMode"] == "safety" and v["profile"]["safety"]["handsUp"]["seconds"] == 5
+        s = app.state.live.sessions[v["id"]]
+        assert s._pipe.safety.dc._detector is app.state.live.detector and s._pipe.safety._pose is app.state.live.pose
+        a = wait_for(lambda: c.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+        assert a["sessionId"] == v["id"] and a["type"] == "hands_up"           # yeniden izliyor: alarm verir
+
+
+def test_deleted_or_switched_away_safety_sessions_are_not_restored(tmp_path: pathlib.Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core import Profile
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        _s1, sid1 = _safety_session_with_fake(c, monkeypatch)
+        _s2, sid2 = _safety_session_with_fake(c, monkeypatch)
+        assert len(_watch(tmp_path)) == 2
+        assert c.delete(f"/api/v1/live/sessions/{sid1}").status_code == 204          # kapatıldı
+        assert c.put(f"/api/v1/live/sessions/{sid2}/profile", json=Profile.people().to_dict()).status_code == 200
+        assert _watch(tmp_path) == []                                                 # güvenlikten çıktı
+        r = c.put(f"/api/v1/live/sessions/{sid2}/profile", json=Profile.jeweler().to_dict())
+        assert r.status_code == 200 and len(_watch(tmp_path)) == 1                    # güvenliğe geri döndü
+        c.put(f"/api/v1/live/sessions/{sid2}/profile", json=Profile.people().to_dict())
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        assert c.get("/api/v1/live/sessions").json() == []
+
+
+def test_switched_into_safety_without_saving_is_restored_as_safety(tmp_path: pathlib.Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Şablonu güvenlik olmayan oturum (kaydetmeden) güvenliğe geçirildiyse geri yüklemede kayıttaki profil kullanılır."""
+    from bantvision.core import Profile
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        src = c.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                          name="Kasa")).json()
+        egg = next(p for p in c.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
+        sid = c.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": egg["id"]}).json()["id"]
+        assert _watch(tmp_path) == []
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile", json=Profile.jeweler().to_dict()).status_code == 200
+        assert len(_watch(tmp_path)) == 1
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        (v,) = c.get("/api/v1/live/sessions").json()
+        assert v["profile"]["countMode"] == "safety" and v["profileId"] == egg["id"] and v["name"] == "Kasa"
+
+
+def test_watched_camera_whose_source_was_deleted_is_dropped_and_app_starts(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        _safety_session_with_fake(c, monkeypatch)
+    good = _watch(tmp_path)[0]
+    gone = {**good, "sourceId": "silinmis-kaynak", "name": "Eski kamera"}
+    broken = {**good, "channelId": "9", "profileId": "yok", "profile": None, "name": "Profilsiz"}   # profil yok
+    (tmp_path / "live" / "watch.json").write_text(json.dumps([gone, broken, good]), encoding="utf-8")
+    with caplog.at_level(logging.WARNING), TestClient(_app_with_fakes(tmp_path)) as c:
+        (v,) = c.get("/api/v1/live/sessions").json()                  # diğer kayıtlar engel olmadı
+        assert v["sourceId"] == good["sourceId"] and v["profile"]["countMode"] == "safety"
+        assert c.get("/healthz").json()["ok"]
+    assert [w["name"] for w in _watch(tmp_path)] == ["Profilsiz", "Tezgah"]          # silinen kaynak listeden çıktı
+    text = caplog.text
+    assert "Eski kamera" in text and "Profilsiz" in text
+
+
+def test_restored_recorder_camera_connects_lazily_without_blocking_start(tmp_path: pathlib.Path) -> None:
+    """Kayıt cihazı kamerası geri yüklenirken kanal listesi açılışta istenmez (cihaz geç açılabilir): oturum hemen
+    oluşur, bağlantıyı okuyucu yeniden dener; durum panelde görünür."""
+    from bantvision.core import Profile
+    from bantvision.live import recorders as rec
+    from bantvision.live.api import LiveManager
+    from bantvision.live.store import LiveStore
+
+    store = LiveStore(tmp_path)
+    src = store.save_source({"kind": "recorder", "recorderBrand": "hikvision", "host": "127.0.0.1", "httpPort": 9,
+                             "username": "admin", "name": "NVR"}, "x")
+    prof = store.save_profile(Profile.jeweler())
+    mgr = LiveManager(store, tmp_path)
+    calls: list[str] = []
+
+    def unreachable(_src: dict[str, Any], channel_id: str) -> Any:
+        calls.append(channel_id)
+        raise rec.RecorderError.unreachable("127.0.0.1:9 yanıt vermedi")
+
+    mgr.channel = unreachable                                                          # type: ignore[method-assign]
+    s = mgr.open_session(src["id"], "101", prof["id"], None, name="NVR · Kasa", lazy=True)
+    try:
+        assert s.name == "NVR · Kasa" and mgr.sessions[s.id] is s
+        st = wait_for(lambda: (v := s.snapshot_status())["state"] == "reconnecting" and v, timeout=10)
+        assert "Kaynağa ulaşılamadı" in st["message"] and calls
+        assert st["safety"]["healthy"] is False and st["safety"]["reason"] == "Kamera bağlantısı yok"
+    finally:
+        s.stop()
+
+
+def test_stale_open_alarms_are_closed_at_start(tmp_path: pathlib.Path) -> None:
+    from bantvision.live.alarms import AlarmStore
+    from bantvision.live.api import LiveManager
+    from bantvision.live.store import LiveStore
+
+    st = AlarmStore(tmp_path)
+    open_ = st.add("eski", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")        # temiz kapanış olmadı (çökme)
+    done = st.add("eski", "Tezgah", "lying", 1.0, 2.0, None, "disabled")
+    st.end(done["id"], 5.0)
+    test = st.add(None, "Deneme", "test", 3.0, 3.0, None, "disabled")
+    before = time.time()
+    mgr = LiveManager(LiveStore(tmp_path), tmp_path)
+    got = {a["id"]: a for a in mgr.alarms.list()}
+    assert got[open_["id"]]["endedAt"] >= before and got[done["id"]]["endedAt"] == 5.0
+    assert got[test["id"]]["endedAt"] is None                                         # deneme alarmının sonu yok
+    assert AlarmStore(tmp_path).get(open_["id"])["endedAt"] >= before                # diske de yazıldı
