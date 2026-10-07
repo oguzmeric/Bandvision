@@ -8,6 +8,8 @@ name: models
 #            sessizce ayrışmasın): fark step summary'ye yazılır (iş düşmez); yalnızca workflow_dispatch + force=true ile yazılır.
 on:
   push:
+    # Yalnızca `tags-ignore` verilirse iş akışı dal itmelerinde HİÇ çalışmaz (tanımsız ref türü tetiklemez); dallar açıkça verilir.
+    branches: ["**"]
     tags-ignore: ["**"]
     paths:
       - tools/convert_movenet.py
