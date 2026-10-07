@@ -1235,3 +1235,168 @@ def test_safety_session_keeps_streaming_while_pose_model_loads(
     gate.set()
     a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
     assert a["type"] == "hands_up" and client.get(base).json()["safety"]["model"] == "ready"
+
+
+# ---------------------------------------------------------------------- son düzeltme dalgası A: ortak tanıma modeli (I6)
+
+def test_shared_detector_loads_in_background_and_returns_no_detections_meanwhile() -> None:
+    """YOLOX (indirme dahil) arka planda yüklenir: o sürece `detect` engellemeden "kişi yok" döner; çıkarım kilidi
+    yükleme sırasında tutulmaz (eskiden ilk kare indirme bitene dek tüm kameraları bekletiyordu)."""
+    import threading
+
+    from bantvision.live.api import SharedDetector
+
+    gate, started, calls = threading.Event(), threading.Event(), []
+
+    class Model:
+        def detect(self, *_a: Any, **_k: Any) -> list[str]:
+            return ["kişi"]
+
+    def loader() -> Model:
+        calls.append(1)
+        started.set()
+        assert gate.wait(30)
+        return Model()
+
+    det = SharedDetector(loader=loader)
+    assert det.state == "loading" and det.error == ""
+    t0 = time.monotonic()
+    assert det.detect("bgr", ["person"]) == []
+    assert time.monotonic() - t0 < 1.0 and started.wait(5) and det.state == "loading"
+    out = det.detect("bgr", ["person"])
+    assert out == [] and len(calls) == 1
+    out.append("x")                                                                 # her çağrı yeni boş liste
+    assert det.detect("bgr", ["person"]) == []
+    gate.set()
+    wait_for(lambda: det.state == "ready", timeout=10)
+    assert det.detect("bgr", ["person"]) == ["kişi"] and det.error == "" and len(calls) == 1
+
+
+def test_shared_detector_failure_is_turkish_logged_and_retried_after_60_seconds(
+        caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+    import urllib.error
+
+    from bantvision.live.api import SharedDetector
+
+    now, calls = [1000.0], []
+
+    class Model:
+        def detect(self, *_a: Any, **_k: Any) -> list[str]:
+            return ["kişi"]
+
+    def loader() -> Model:
+        calls.append(1)
+        if len(calls) == 1:
+            raise urllib.error.URLError("getaddrinfo failed")
+        return Model()
+
+    det = SharedDetector(loader=loader, clock=lambda: now[0])
+    with caplog.at_level(logging.ERROR):
+        det.warm()
+        wait_for(lambda: det.state == "error", timeout=10)
+    assert det.error == "Kişi tanıma modeli yüklenemedi: internete ulaşılamadı (bağlantıyı kontrol edin)"
+    assert any("getaddrinfo" in r.getMessage() for r in caplog.records)             # asıl ileti günlükte
+    for _ in range(5):
+        assert det.detect("bgr", ["person"]) == []
+    now[0] += 59.0
+    det.warm()
+    time.sleep(0.3)
+    assert len(calls) == 1 and det.state == "error"
+    now[0] += 2.0
+    assert det.detect("bgr", ["person"]) == []
+    wait_for(lambda: det.state == "ready", timeout=10)
+    assert len(calls) == 2 and det.error == "" and det.detect("bgr", ["person"]) == ["kişi"]
+
+
+def test_shared_detector_serialises_inference_and_never_reloads_ready_model() -> None:
+    import threading
+
+    from bantvision.live.api import SharedDetector
+
+    calls: list[int] = []
+    inside, peak = [0], [0]
+    lock = threading.Lock()
+
+    class Model:
+        def detect(self, *_a: Any, **_k: Any) -> list[str]:
+            with lock:
+                inside[0] += 1
+                peak[0] = max(peak[0], inside[0])
+            time.sleep(0.02)
+            with lock:
+                inside[0] -= 1
+            return []
+
+    def loader() -> Model:
+        calls.append(1)
+        return Model()
+
+    det = SharedDetector(loader=loader)
+    det.warm()
+    wait_for(lambda: det.state == "ready", timeout=10)
+    det._start_loading()                                       # hazır modeli yeniden yüklemez
+    threads = [threading.Thread(target=det.detect, args=("bgr", ["person"])) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls == [1] and peak[0] == 1                       # kareler sırayla
+
+
+def test_detect_counting_does_not_count_while_detector_loads() -> None:
+    """Kişi sayımı model yüklenirken saymaz ve çökmez (tanıma "kişi yok" döner)."""
+    import threading
+
+    import numpy as np
+
+    from bantvision.core import Pipeline, Profile
+    from bantvision.live.api import SharedDetector
+
+    gate = threading.Event()
+    det = SharedDetector(loader=lambda: gate.wait(30) and None)
+    pipe = Pipeline(Profile.people())
+    pipe.detect._detector = det
+    pipe.counting = True
+    still = np.full((288, 352, 3), 90, np.uint8)
+    try:
+        for k in range(40):                                    # alanda hareket eden koyu leke (kişi gibi)
+            f = still.copy()
+            f[60 + k * 5:180 + k * 5, 150:190] = 20
+            r = pipe.process(f, k / 10)
+        assert pipe.total == 0 and pipe.total_out == 0 and r.detect is not None and r.detect.tracks == []
+    finally:
+        gate.set()
+
+
+def test_detect_and_safety_sessions_warm_the_shared_detector() -> None:
+    """Kişi sayımı ve güvenlik oturumu açılınca (ya da o yönteme geçilince) tanıma modeli ilk kareyi beklemeden yüklenir;
+    bant sayımı (blob/linescan) yüklemez."""
+    import threading
+
+    from bantvision.core import Profile
+    from bantvision.live.api import SharedDetector
+    from bantvision.live.session import LiveSession
+
+    gate, started = threading.Event(), threading.Event()
+
+    def loader() -> Any:
+        started.set()
+        assert gate.wait(30)
+        return object()
+
+    det = SharedDetector(loader=loader)
+    egg = LiveSession("bant", lambda: "yok.mp4", Profile.egg(), detector=det)
+    sessions = [egg]
+    try:
+        time.sleep(0.3)
+        assert not started.is_set()
+        egg.set_profile(Profile.people())                     # kişi sayımına geçiş ısıtır
+        assert started.wait(5)
+        det2, started2 = SharedDetector(loader=lambda: started2.set() or gate.wait(30)), threading.Event()
+        sessions.append(LiveSession("kuyumcu", lambda: "yok.mp4", Profile.jeweler(), detector=det2))
+        assert started2.wait(5)
+    finally:
+        gate.set()
+        for s in sessions:
+            s.stop()

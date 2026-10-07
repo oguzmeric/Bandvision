@@ -6,14 +6,14 @@ Model depoda tutulmaz: ilk kullanımda resmi sürümden indirilir ve SHA-256 ile
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import pathlib
-import urllib.request
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
+
+from .model_download import download_verified
 
 MODEL_NAME = "yolox_s.onnx"
 MODEL_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
@@ -49,26 +49,9 @@ def model_path() -> pathlib.Path:
 
 
 def ensure_model() -> pathlib.Path:
-    """Modeli yoksa indirir; parmak izi tutmazsa siler ve hata verir."""
-    p = model_path()
-    if p.exists() and _sha256(p) == MODEL_SHA256:
-        return p
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".part")
-    urllib.request.urlretrieve(MODEL_URL, tmp)
-    if _sha256(tmp) != MODEL_SHA256:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError("Model dosyası doğrulanamadı (SHA-256 tutmuyor).")
-    tmp.replace(p)
-    return p
-
-
-def _sha256(p: pathlib.Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    """Modeli yoksa indirir (core/model_download.py: akış halinde, zaman aşımlı, SHA-256 doğrulamalı); herhangi bir
+    hatada yarım dosya (.part) silinir ve hata fırlatılır."""
+    return download_verified(MODEL_URL, model_path(), MODEL_SHA256, label="Kişi tanıma modeli")
 
 
 class ObjectDetector:

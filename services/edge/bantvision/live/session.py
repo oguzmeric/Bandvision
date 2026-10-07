@@ -113,6 +113,7 @@ class LiveSession:
             self._pipe.detect._detector = detector
         if profile.countMode == "safety":
             self._setup_safety()
+        self._warm(profile)
         self.counting = False
         self.status = SessionStatus()
         self.calibrating: str | None = None         # "background" | "sample" | None
@@ -179,6 +180,7 @@ class LiveSession:
             self._pipe.set_profile(profile, reset_background=mode_changed)
             if profile.countMode == "safety" and (mode_changed or self._pipe.safety is None):
                 self._setup_safety()                        # güvenliğe geçiş: ortak modellerle taze analizör
+            self._warm(profile)
             self._numbers.clear()
             self._labels.clear()
         if mode_changed:                                    # kutular eski yöntemle bulundu: öğretmede kullanılmasın
@@ -191,9 +193,19 @@ class LiveSession:
 
         self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
         self._pipe.safety.enable_gate()
-        warm = getattr(self._pose, "warm", None)            # ortak poz modeli ilk kişiyi beklemeden yüklenmeye başlar
-        if callable(warm):
-            warm()
+
+    def _warm(self, profile: Profile) -> None:
+        """Ortak modeller ilk kişiyi/kareyi beklemeden arka planda yüklenmeye başlar: kişi sayımı ve güvenlik tanıma
+        modelini, güvenlik ayrıca poz modelini kullanır (bant sayımı hiçbirini). Model hazırsa bir şey yapılmaz."""
+        models = []
+        if profile.countMode in ("detect", "safety"):
+            models.append(self._detector)
+        if profile.countMode == "safety":
+            models.append(self._pose)
+        for m in models:
+            warm = getattr(m, "warm", None)
+            if callable(warm):
+                warm()
 
     def learn_background(self) -> None:
         with self._lock:

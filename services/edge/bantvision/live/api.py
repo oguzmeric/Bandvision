@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core import Profile
+from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
@@ -81,21 +82,10 @@ class TestAlarmIn(_Strict):
     sessionId: str | None = None
 
 
-class SharedDetector:
-    """Tüm canlı kameralarda tek tanıma modeli: bellek bir kez, kareler sırayla işlenir (işlemci aşırı yüklenmez;
-    N kamera varsa her biri toplam hızın yaklaşık 1/N'ini alır)."""
+def _load_detector() -> Any:
+    from ..core.detector import ObjectDetector
 
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._inner: Any = None
-
-    def detect(self, *args: Any, **kwargs: Any) -> Any:
-        with self._lock:
-            if self._inner is None:
-                from ..core.detector import ObjectDetector
-
-                self._inner = ObjectDetector()
-            return self._inner.detect(*args, **kwargs)
+    return ObjectDetector()
 
 
 def _load_pose_estimator() -> Any:
@@ -104,17 +94,20 @@ def _load_pose_estimator() -> Any:
     return PoseEstimator()
 
 
-class SharedPose:
-    """Tüm güvenlik kameralarında tek poz modeli; kareler sırayla.
+class SharedModel:
+    """Tüm canlı kameralarda tek model (bellek bir kez); kareler sırayla işlenir (işlemci aşırı yüklenmez; N kamera varsa
+    her biri toplam hızın yaklaşık 1/N'ini alır).
 
-    Model (indirme dahil) ilk kullanımda ARKA PLAN iş parçacığında yüklenir: o sürece `estimate` engellemeden None
-    döner (oturumların görüntüsü ve durdurma/silme takılmaz; analizör o karede poza bakmaz). Yükleme hatasında
-    Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state`: "loading" | "ready" | "error"."""
+    Model (indirme dahil) ARKA PLAN iş parçacığında yüklenir (`warm()` ya da ilk kullanım): o sürece çağrılar engellemeden
+    "sonuç yok" döner (oturumların görüntüsü ve durdurma/silme takılmaz). Çıkarım kilidi yükleme sırasında tutulmaz.
+    Yükleme hatasında Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state`: "loading" | "ready" |
+    "error"; `error`: son yükleme hatası (Türkçe, kullanıcıya gösterilir)."""
 
     RETRY_S = 60.0
+    LABEL = "Model"                                     # hata iletisinde: "<LABEL> yüklenemedi: <neden>"
+    THREAD = "model"
 
-    def __init__(self, loader: Callable[[], Any] = _load_pose_estimator,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, loader: Callable[[], Any], clock: Callable[[], float] = time.monotonic) -> None:
         self._loader, self._clock = loader, clock
         self._lock = threading.Lock()                   # durum ve yükleme iş parçacığı
         self._infer = threading.Lock()                  # kareler sırayla işlenir
@@ -135,18 +128,17 @@ class SharedPose:
         with self._lock:
             return self._error
 
-    def estimate(self, *args: Any, **kwargs: Any) -> Any:
+    def warm(self) -> None:
+        """Modeli şimdiden yüklemeye başlar (oturum açılınca; ilk kişiyi/kareyi beklemeden). Engellemez; model hazırsa,
+        yükleniyorsa ya da hata sonrası bekleme süresindeyse bir şey yapmaz."""
+        self._start_loading()
+
+    def _ready(self) -> Any:
+        """Hazır model ya da None (o zaman yükleme başlatılır)."""
         inner = self._inner
         if inner is None:
             self._start_loading()
-            return None
-        with self._infer:
-            return inner.estimate(*args, **kwargs)
-
-    def warm(self) -> None:
-        """Modeli şimdiden yüklemeye başlar (oturum güvenliğe geçince; ilk kişi gelmesini beklemeden). Engellemez;
-        model hazırsa, yükleniyorsa ya da hata sonrası bekleme süresindeyse bir şey yapmaz."""
-        self._start_loading()
+        return inner
 
     def _start_loading(self) -> None:
         with self._lock:
@@ -157,20 +149,57 @@ class SharedPose:
             if self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
                 return
             self._state = "loading"
-            self._thread = threading.Thread(target=self._load, name="poz-modeli", daemon=True)
+            self._thread = threading.Thread(target=self._load, name=self.THREAD, daemon=True)
             self._thread.start()
 
     def _load(self) -> None:
         try:
             inner = self._loader()
         except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
-            msg = f"Poz modeli yüklenemedi: {e}"
-            _LOG.error(msg)                             # önce günlük, sonra durum: "error" görenin günlüğü de vardır
+            msg = f"{self.LABEL} yüklenemedi: {failure_reason(e)}"
+            _LOG.error("%s [%s: %s]", msg, type(e).__name__, e)   # önce günlük, sonra durum: "error" görenin günlüğü de vardır
             with self._lock:
                 self._state, self._error, self._failed_at = "error", msg, self._clock()
             return
         with self._lock:
             self._inner, self._state, self._error = inner, "ready", ""
+
+
+class SharedDetector(SharedModel):
+    """Ortak kişi tanıma modeli (YOLOX). Hazır değilken `detect` boş liste döner: kişi sayımı saymaz, güvenlik poz
+    bakmaz (ikisi de çökmez)."""
+
+    LABEL = "Kişi tanıma modeli"
+    THREAD = "tanima-modeli"
+
+    def __init__(self, loader: Callable[[], Any] = _load_detector, clock: Callable[[], float] = time.monotonic) -> None:
+        super().__init__(loader, clock)
+
+    def detect(self, *args: Any, **kwargs: Any) -> Any:
+        inner = self._ready()
+        if inner is None:
+            return []
+        with self._infer:
+            return inner.detect(*args, **kwargs)
+
+
+class SharedPose(SharedModel):
+    """Tüm güvenlik kameralarında tek poz modeli (MoveNet). Hazır değilken `estimate` None döner (analizör o karede poza
+    bakmaz)."""
+
+    LABEL = "Poz modeli"
+    THREAD = "poz-modeli"
+
+    def __init__(self, loader: Callable[[], Any] = _load_pose_estimator,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        super().__init__(loader, clock)
+
+    def estimate(self, *args: Any, **kwargs: Any) -> Any:
+        inner = self._ready()
+        if inner is None:
+            return None
+        with self._infer:
+            return inner.estimate(*args, **kwargs)
 
 
 class SessionIn(_Strict):
