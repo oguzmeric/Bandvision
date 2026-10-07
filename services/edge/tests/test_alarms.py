@@ -23,6 +23,19 @@ def test_add_list_ack_end_and_image(tmp_path: pathlib.Path) -> None:
     assert [x["id"] for x in st.list(since=150.0)] == [b["id"]]
 
 
+def test_list_filters_by_session_before_limit(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    mine = st.add("s1", "Tezgah", "hands_up", 1.0, 1.0, None, "disabled")
+    for i in range(60):                                      # başka kameranın daha yeni alarmları 50 sınırını doldurur
+        st.add("s2", "Depo", "lying", 10.0 + i, 10.0 + i, None, "disabled")
+    assert mine["id"] not in [x["id"] for x in st.list()]
+    assert [x["id"] for x in st.list(session_id="s1")] == [mine["id"]]
+    assert len(st.list(session_id="s2")) == 50 and st.list(session_id="yok") == []
+    assert [x["id"] for x in st.list(active_only=True, session_id="s1")] == [mine["id"]]
+    st.ack(mine["id"])
+    assert st.list(active_only=True, session_id="s1") == []
+
+
 def test_expire_removes_old_records_and_images(tmp_path: pathlib.Path) -> None:
     st = AlarmStore(tmp_path)
     old = st.add(None, "Deneme", "test", 0.0, 0.0, b"x", "disabled")

@@ -1,25 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ALARM_LABELS, NOTIFY_LABELS, api, type Alarm, type LiveSession, type SafetyConfig } from "@/lib/live";
+import { ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, api, stateDot, type Alarm, type LiveSession, type SafetyConfig } from "@/lib/live";
 
 export const SAFETY_DEFAULTS: SafetyConfig = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false };
 
 /** Güvenlik oturumunun yan paneli: izleniyor, süren durumlar, son alarmlar */
 export function SafetyPanel({ session }: { session: LiveSession }) {
-  const [alarms, setAlarms] = useState<Alarm[]>([]);
+  // liste hangi oturuma ait olduğunu taşır: kamera değişince önceki kameranın alarmları bir an bile görünmez
+  const [loaded, setLoaded] = useState<{ id: string; list: Alarm[] }>({ id: session.id, list: [] });
   useEffect(() => {
     let alive = true;
-    const load = () => api<Alarm[]>("alarms").then((a) => alive && setAlarms(a.filter((x) => x.sessionId === session.id).slice(0, 10))).catch(() => undefined);
+    // sunucu `sessionId` ile süzer (genel 50 sınırı başka kameralar yüzünden bu kameranın alarmlarını kesmesin);
+    // eski analiz sunucusu parametreyi yok sayarsa istemci de süzer
+    const load = () => api<Alarm[]>(`alarms?sessionId=${encodeURIComponent(session.id)}`)
+      .then((a) => alive && setLoaded({ id: session.id, list: a.filter((x) => x.sessionId === session.id).slice(0, 10) }))
+      .catch(() => undefined);
     load();
     const t = setInterval(load, 3000);
     return () => { alive = false; clearInterval(t); };
   }, [session.id]);
+  const alarms = loaded.id === session.id ? loaded.list : [];
   const active = session.safety?.active ?? [];
   const model = session.safety?.model;
   return (
     <section className="card p-4" aria-label="Güvenlik">
-      <p className="flex items-center gap-2 font-semibold"><span className="h-2 w-2 rounded-full bg-ok-600" aria-hidden="true" />İzleniyor</p>
+      <p className="flex items-center gap-2 font-semibold"><span className={`h-2 w-2 rounded-full ${stateDot(session.state)}`} aria-hidden="true" />İzleniyor</p>
+      {session.state !== "live" && (
+        <p className={`mt-1 text-[12.5px] ${session.state === "error" ? "text-nok-600" : "text-muted"}`} data-testid="safety-state">
+          Kamera: {STATE_LABELS[session.state]}{session.message ? ` — ${session.message}` : ""}
+        </p>
+      )}
       {model === "loading" && <p className="mt-1 text-[12.5px] text-muted">Poz modeli yükleniyor…</p>}
       {model === "error" && (
         <p className="mt-1 text-[12.5px] text-nok-600">Poz modeli yüklenemedi — internet bağlantısını kontrol edin; 1 dakika sonra yeniden denenir.</p>

@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator
 from typing import Any, ClassVar, Literal
 
 import cv2
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -666,8 +666,11 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     # ---------------------------------------------------------------- poz güvenlik: alarm günlüğü ve Telegram
 
     @r.get("/alarms")
-    def alarms(active: bool = False, since: float | None = None) -> list[dict[str, Any]]:
-        return manager.alarms.list(active_only=active, since=since)
+    def alarms(active: bool = False, since: float | None = None,
+               session_id: str | None = Query(None, alias="sessionId")) -> list[dict[str, Any]]:
+        """Alarm günlüğü (en yeni önce, en çok 50). `sessionId`: yalnızca o kameranın alarmları — yan panel, başka
+        kameraların alarmları yüzünden kendi alarmlarını kaçırmasın."""
+        return manager.alarms.list(active_only=active, since=since, session_id=session_id)
 
     @r.post("/alarms/test")
     def test_alarm(body: TestAlarmIn) -> dict[str, Any]:

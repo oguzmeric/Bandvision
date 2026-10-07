@@ -11,7 +11,7 @@ import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
 import { SafetyPanel, SafetySettings } from "./SafetyPanel";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
-import { api, STATE_LABELS, type LabColor, type LiveSession, type Profile } from "@/lib/live";
+import { api, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "brand" | "in" | "out"; hint?: string; testId: string }) {
@@ -31,7 +31,6 @@ function Counter({ label, value, tone, hint, testId }: { label: string; value: n
 
 /** Açık canlı sayımların özeti: her kamerada giriş/çıkış (ya da adet) bir bakışta; tıklayınca o kamera açılır */
 function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: boolean; onSelect: () => void }) {
-  const ok = s.state === "live";
   const watch = s.profile.countMode === "safety";
   // güvenlik: son 5 dakikada alarm olduysa kırmızı nokta ve "Alarm" (lastAlarmAt: unix saniye)
   const alarmed = s.safety?.lastAlarmAt != null && Date.now() / 1000 - s.safety.lastAlarmAt < 300;
@@ -39,19 +38,23 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
     <button type="button" role="tab" aria-selected={selected} onClick={onSelect} data-testid="session-card"
             className={`rounded-2xl border px-3.5 py-2.5 text-left transition ${selected ? "border-brand-500 bg-brand-50 shadow-sm" : "border-line bg-white hover:border-brand-100"}`}>
       <span className="flex items-center gap-1.5">
-        <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ok ? "bg-ok-600" : s.state === "error" || s.state === "ended" ? "bg-nok-600" : "bg-[#f08a24]"}`} />
+        <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${stateDot(s.state)}`} />
         <span className="truncate text-[13px] font-semibold">{s.name}</span>
       </span>
       <span className="mt-1 block truncate text-[11.5px] text-faint">{s.profile.name}{s.counting || watch ? "" : " · duruyor"}</span>
       <span className="mt-1.5 flex gap-3 text-sm tabular-nums">
         {watch ? (
-          alarmed ? (
-            <span className="flex items-center gap-1.5 font-semibold text-nok-600">
-              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-nok-600" />Alarm
-            </span>
-          ) : (
-            <span className="text-[13px] text-muted">Nöbette</span>
-          )
+          <>
+            {alarmed && (
+              <span className="flex items-center gap-1.5 font-semibold text-nok-600">
+                <span aria-hidden="true" className="h-2 w-2 rounded-full bg-nok-600" />Alarm
+              </span>
+            )}
+            {s.state !== "live" ? (
+              // kamera ölüyse "Nöbette" denmez: gerçek durum yazılır
+              <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-600" : "text-muted"}`}>{STATE_LABELS[s.state]}</span>
+            ) : !alarmed && <span className="text-[13px] text-muted">Nöbette</span>}
+          </>
         ) : s.twoWay ? (
           <>
             <span><span className="text-[11.5px] font-medium text-ok-600">Giriş</span> <b>{int(s.total)}</b></span>

@@ -30,7 +30,7 @@ export default function NotifySettings() {
       <section className="card grid gap-3 p-5">
         <p className="eyebrow">Telegram</p>
         <label className="block text-sm font-medium">Bot anahtarı
-          <input aria-label="Bot anahtarı" type="password" autoComplete="off" className={`${field} mt-1.5`} value={token}
+          <input aria-label="Bot anahtarı" type="password" autoComplete="new-password" className={`${field} mt-1.5`} value={token}
                  placeholder={cfg?.hasToken ? "Kayıtlı (değiştirmek için yaz)" : "123456:ABC…"} onChange={(e) => setToken(e.target.value)} />
         </label>
         {cfg?.hasToken && <p className="text-[12px] text-ok-600">Anahtar kayıtlı</p>}

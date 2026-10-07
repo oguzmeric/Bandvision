@@ -100,10 +100,13 @@ class AlarmStore:
             a = self._find(alarm_id)
             return dict(a) if a else None
 
-    def list(self, active_only: bool = False, since: float | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def list(self, active_only: bool = False, since: float | None = None, limit: int = 50,
+             session_id: str | None = None) -> list[dict[str, Any]]:
+        """En yeni önce; `limit` süzgeçlerden SONRA uygulanır (`session_id` verilince yalnızca o oturumun alarmları)."""
         with self._lock:
             items = [dict(a) for a in self._items if (not active_only or not a["acked"])
-                     and (since is None or a["firedAt"] >= since)]
+                     and (since is None or a["firedAt"] >= since)
+                     and (session_id is None or a["sessionId"] == session_id)]
         return sorted(items, key=lambda a: a["firedAt"], reverse=True)[:limit]
 
     def image_path(self, alarm_id: str) -> pathlib.Path | None:

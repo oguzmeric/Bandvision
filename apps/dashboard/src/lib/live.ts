@@ -134,10 +134,16 @@ export const STATE_LABELS: Record<LiveSession["state"], string> = {
   stopped: "Kapandı",
 };
 
+/** Oturum durumu noktası: canlı yeşil, hata/bitti kırmızı, bağlanıyor/kapandı turuncu */
+export function stateDot(state: LiveSession["state"]): string {
+  return state === "live" ? "bg-ok-600" : state === "error" || state === "ended" ? "bg-nok-600" : "bg-[#f08a24]";
+}
+
 /** JSON isteği; hata gövdesindeki `detail` Türkçe iletiyle fırlatılır */
 const FIELD_LABELS: Record<string, string> = {
   host: "IP adresi", port: "RTSP portu", channel: "Kanal", httpPort: "Web/SDK portu", rtspPort: "Görüntü portu",
   username: "Kullanıcı adı", password: "Şifre", name: "Ad", customUrl: "RTSP adresi",
+  chatId: "Sohbet / grup kimliği", token: "Bot anahtarı",
 };
 
 /** Sunucunun alan doğrulama hataları (FastAPI 422) → kullanıcıya Türkçe, tekrarsız ileti */
@@ -154,6 +160,14 @@ function validationMessage(errors: unknown[]): string {
   return [...new Set(msgs)].join(" ");
 }
 
+/** HTTP hatası: `status` ile 401 (oturum süresi doldu) ya da 502 (analiz sunucusu yok) ayırt edilir */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
   const res = await fetch(`/api/live/${path}`, {
@@ -166,8 +180,8 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const d = (body as { detail?: unknown } | null)?.detail;
-    throw new Error(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
-      : `İstek başarısız (HTTP ${res.status}).`);
+    throw new ApiError(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
+      : `İstek başarısız (HTTP ${res.status}).`, res.status);
   }
   return body as T;
 }

@@ -689,6 +689,20 @@ def test_test_alarm_is_queued_and_sent_when_configured(client: TestClient) -> No
     assert client.post("/api/v1/live/alarms/yok/ack").status_code == 404
 
 
+def test_alarms_endpoint_filters_by_session_id(client: TestClient) -> None:
+    mgr = client.app.state.live
+    mine = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 1.0, None, "disabled")
+    for i in range(55):                                      # başka kameranın daha yeni alarmları genel 50 sınırını aşar
+        mgr.alarms.add("s2", "Depo", "lying", 10.0 + i, 10.0 + i, None, "disabled")
+    assert mine["id"] not in [a["id"] for a in client.get("/api/v1/live/alarms").json()]
+    got = client.get("/api/v1/live/alarms", params={"sessionId": "s1"}).json()
+    assert [a["id"] for a in got] == [mine["id"]]
+    assert client.get("/api/v1/live/alarms", params={"sessionId": "s1", "active": 1}).json() == got
+    assert client.get("/api/v1/live/alarms", params={"sessionId": "yok"}).json() == []
+    assert client.post(f"/api/v1/live/alarms/{mine['id']}/ack").status_code == 200
+    assert client.get("/api/v1/live/alarms", params={"sessionId": "s1", "active": 1}).json() == []
+
+
 def test_notify_rejects_malformed_token_without_echo(client: TestClient) -> None:
     secret = "BIÇİMSİZANAHTAR"
     r = client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": secret})

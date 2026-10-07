@@ -49,6 +49,8 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await expect(page.getByLabel("Eller yukarı süresi")).toHaveValue("3");
   await page.getByRole("button", { name: "İptal" }).click();
   await page.getByRole("button", { name: "Canlı sayımı kapat" }).click();
+  await expect(page.getByText("Açık canlı sayım yok")).toBeVisible();
   await page.goto("/cameras");
   await page.getByTestId("source-card").filter({ hasText: "Tezgah kamerası" }).getByRole("button", { name: "Sil" }).click();
+  await expect(page.getByTestId("source-card").filter({ hasText: "Tezgah kamerası" })).toHaveCount(0);
 });
