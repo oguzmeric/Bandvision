@@ -3,7 +3,8 @@
 Anahtar yalnızca secrets.json'da; hata iletilerinde, günlükte ve kuyruk dosyasında geçmez (Telegram API
 adresinde bulunur, bu yüzden maskelenir). Kuyruk <data>/live/outbox.json: başarısız deneme sonrası bekleme
 5 sn → 5 dk (iki katı), 24 saatte "failed". `flush()` hiçbir koşulda hata fırlatmaz (arka plan iş parçacığı
-her saniye çağırır).
+her saniye çağırır). Bildirim kapalı ya da ayarsızken kuyruk gönderilmez (deneme sayılmaz, kayıtlar
+bekler); 24 saat dolan kayıtlar yine "failed" olur.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ _LOG = logging.getLogger(__name__)
 MAX_AGE_S = 24 * 3600
 BACKOFF_MIN_S, BACKOFF_MAX_S = 5.0, 300.0
 CAPTION_MAX = 1024                                # Telegram resim açıklaması sınırı
+MESSAGE_MAX = 4096                                # Telegram ileti metni sınırı
 
 _BOT_URL = re.compile(r"(api\.telegram\.org/bot)[^/\s\"']+")
 
@@ -68,12 +70,16 @@ class TelegramNotifier:
                  transport: httpx.BaseTransport | None = None, clock: Callable[[], float] = time.time) -> None:
         self.store, self.alarms, self.clock = store, alarms, clock
         self._file = root / "live" / "outbox.json"
-        self._client = httpx.Client(timeout=15.0, transport=transport, trust_env=False)
+        self._transport = transport
+        self._client = self._new_client()
         self._lock = threading.Lock()                   # kuyruk listesi ve dosya
         self._flush_lock = threading.Lock()             # aynı anda tek flush (çift gönderimi önler)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._queue: list[dict[str, Any]] = self._load()
+
+    def _new_client(self) -> httpx.Client:
+        return httpx.Client(timeout=15.0, transport=self._transport, trust_env=False)
 
     # ------------------------------------------------------------------ kuyruk dosyası
 
@@ -122,7 +128,7 @@ class TelegramNotifier:
                 r = self._client.post(f"{base}/sendPhoto", data={"chat_id": chat, "caption": text[:CAPTION_MAX]},
                                       files={"photo": ("olay.jpg", jpeg, "image/jpeg")})
             else:
-                r = self._client.post(f"{base}/sendMessage", json={"chat_id": chat, "text": text})
+                r = self._client.post(f"{base}/sendMessage", json={"chat_id": chat, "text": text[:MESSAGE_MAX]})
         except Exception as e:                            # noqa: BLE001 - ağ/URL/kapalı istemci: hepsi gönderilemedi
             raise NotifyError(f"Telegram'a ulaşılamadı: {_mask(str(e), token)}") from None
         if r.status_code != 200:
@@ -146,16 +152,21 @@ class TelegramNotifier:
             with self._flush_lock:
                 self._flush()
         except Exception as e:                            # noqa: BLE001 - arka plan iş parçacığı ölmemeli
-            _LOG.warning("Telegram kuyruğu işlenemedi: %s", type(e).__name__)
+            # exc_info anahtar sızdırmaz: send() yalnız `from None` ile NotifyError (maskeli) fırlatır
+            _LOG.warning("Telegram kuyruğu işlenemedi: %s", type(e).__name__, exc_info=True)
 
     def _flush(self) -> None:
         with self._lock:
             now = self.clock()
             due = [q for q in self._queue if q["nextAt"] <= now]
+        active = bool(due) and self.configured()          # kapalı/ayarsız: gönderme, ama süre dolumu işlenir
+        changed = False
         for q in due:
             done, status = False, "queued"
             if now - q["createdAt"] > MAX_AGE_S:
                 done, status = True, "failed"
+            elif not active:
+                continue                                  # deneme sayılmaz; açılınca hemen gider
             else:
                 jpeg = self.alarms.image_bytes(q["alarmId"]) if q["image"] else None   # resim yoksa yalnız metin
                 try:
@@ -167,11 +178,12 @@ class TelegramNotifier:
                         step = min(q["attempts"] - 1, 20)         # üs sınırı: bozuk dosyada taşma olmasın
                         q["nextAt"] = self.clock() + min(BACKOFF_MAX_S, BACKOFF_MIN_S * 2 ** step)
                     _LOG.warning("Telegram gönderilemedi (deneme %d): %s", q["attempts"], e)
+            changed = True
             self.alarms.set_notify(q["alarmId"], status)
             if done:
                 with self._lock:
                     self._queue = [x for x in self._queue if x is not q]
-        if due:
+        if changed:
             with self._lock:
                 self._save()
 
@@ -182,9 +194,20 @@ class TelegramNotifier:
             self.flush()
 
     def start(self) -> None:
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._run, name="telegram-kuyruk", daemon=True)
-            self._thread.start()
+        """Arka plan iş parçacığını başlatır; `stop()` sonrası yeniden başlatılabilir."""
+        t = self._thread
+        if t is not None and t.is_alive():
+            if not self._stop.is_set():
+                return                                    # zaten çalışıyor
+            t.join(timeout=2.0)                           # durdurulmuş ama henüz çıkmadı
+            if t.is_alive():
+                _LOG.warning("Telegram kuyruk iş parçacığı henüz durmadı; yeniden başlatılamadı")
+                return
+        self._stop.clear()
+        if self._client.is_closed:
+            self._client = self._new_client()
+        self._thread = threading.Thread(target=self._run, name="telegram-kuyruk", daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()

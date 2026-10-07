@@ -14,6 +14,7 @@ import contextlib
 import json
 import os
 import pathlib
+import re
 import threading
 import time
 import uuid
@@ -50,6 +51,8 @@ def make_preset(key: str) -> Profile:
         p.name = "Mağaza girişi"
     return p
 
+
+_TELEGRAM_TOKEN = re.compile(r"[0-9]+:[A-Za-z0-9_-]+")        # Telegram bot anahtarı biçimi: 123456:ABC-def_
 
 SOURCE_FIELDS = {"kind", "name", "brand", "host", "port", "channel", "substream", "username", "customUrl",
                  "recorderBrand", "httpPort", "rtspPort"}
@@ -200,7 +203,12 @@ class LiveStore:
                     "hasToken": bool(self._read("secrets.json", {}).get("telegram"))}
 
     def save_notify(self, enabled: bool, chat_id: str, token: str | None) -> dict[str, Any]:
-        """`token` None: kayıtlı anahtar korunur; "": silinir. Anahtar yalnızca secrets.json'da."""
+        """`token` None: kayıtlı anahtar korunur; "": silinir. Anahtar yalnızca secrets.json'da.
+
+        Biçimi geçersiz anahtar `ValueError` (Türkçe, anahtarsız ileti) verir; hiçbir şey yazılmaz.
+        """
+        if token is not None and token.strip() and not _TELEGRAM_TOKEN.fullmatch(token.strip()):
+            raise ValueError("Telegram bot anahtarı biçimi geçersiz.")
         with self._lock:
             self._write("notify.json", {"enabled": enabled, "chatId": chat_id.strip()})
             if token is not None:

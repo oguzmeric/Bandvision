@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import pathlib
+import re
 import time
+import traceback
 
 import httpx
 import pytest
@@ -77,6 +80,10 @@ def test_outbox_retries_then_sends(tmp_path: pathlib.Path) -> None:
     now[0] += 11
     n.flush()
     assert alarms.get(a["id"])["notify"] == "sent" and len(fake.calls) == 3
+    assert n._queue == [] and (tmp_path / "live" / "outbox.json").read_text(encoding="utf-8") == "[]"
+    now[0] += 10_000
+    n.flush()                                                               # gönderilen kayıt bir daha gitmez
+    assert len(fake.calls) == 3 and alarms.get(a["id"])["notify"] == "sent"
 
 
 def test_outbox_fails_after_24h(tmp_path: pathlib.Path) -> None:
@@ -116,13 +123,27 @@ def test_unreachable_error_masks_token(tmp_path: pathlib.Path) -> None:
 
 
 def test_corrupt_outbox_starts_empty(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "live").mkdir()
-    (tmp_path / "live" / "outbox.json").write_text("{bozuk", encoding="utf-8")
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "outbox.json").write_text("{bozuk", encoding="utf-8")
     _, _, n = setup(tmp_path, Fake(), [0.0])
+    assert n._queue == []                                                   # boş başlar
+    assert not (live / "outbox.json").exists()                              # bozuk dosya kenara alındı
+    assert (live / "outbox.json.corrupt").read_text(encoding="utf-8") == "{bozuk"
     n.flush()                                                               # çökmemeli
-    (tmp_path / "live" / "outbox.json").write_text('{"bu": "liste degil"}', encoding="utf-8")
+    (live / "outbox.json").write_text('{"bu": "liste degil"}', encoding="utf-8")
     _, _, n2 = setup(tmp_path, Fake(), [0.0])
+    assert n2._queue == []
     n2.flush()
+
+
+def test_outbox_load_skips_bad_records(tmp_path: pathlib.Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    good = {"alarmId": "a" * 32, "text": "t", "image": False, "createdAt": 1.0, "attempts": 2, "nextAt": 9.0}
+    (live / "outbox.json").write_text(json.dumps([good, {"alarmId": "x"}, "sacma", 7, None]), encoding="utf-8")
+    _, _, n = setup(tmp_path, Fake(), [0.0])
+    assert n._queue == [good]
 
 
 def test_outbox_survives_restart(tmp_path: pathlib.Path) -> None:
@@ -176,6 +197,7 @@ def test_not_configured_keeps_queue(tmp_path: pathlib.Path) -> None:
     n.enqueue(a["id"], "x", None)
     n.flush()
     assert fake.calls == [] and alarms.get(a["id"])["notify"] == "queued"
+    assert n._queue[0]["attempts"] == 0                                     # deneme sayılmaz
 
 
 def test_httpx_request_log_masks_token(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -207,3 +229,112 @@ def test_background_thread_sends_and_stops(tmp_path: pathlib.Path) -> None:
         time.sleep(0.05)
     n.stop()
     assert alarms.get(a["id"])["notify"] == "sent" and n._thread is not None and not n._thread.is_alive()
+
+
+# ---------------------------------------------------------------- ek: kapalı bildirim, düzeltme turu 1
+
+
+def test_disabled_queue_is_not_delivered_until_reenabled(tmp_path: pathlib.Path) -> None:
+    now = [1000.0]
+    fake = Fake()
+    store, alarms, n = setup(tmp_path, fake, now)
+    store.save_notify(False, "-1001", None)                                 # anahtar korunur, bildirim kapalı
+    assert store.telegram_token() == TOKEN and not n.configured()
+    a = alarms.add("s", "Tezgah", "hands_up", 997.0, 1000.0, b"\xff\xd8", "queued")
+    n.enqueue(a["id"], "🚨 ELLER YUKARI", b"\xff\xd8")
+    for _ in range(3):
+        now[0] += 400
+        n.flush()
+    assert fake.calls == []                                                 # hiç ağ çağrısı yok
+    assert alarms.get(a["id"])["notify"] == "queued" and len(n._queue) == 1
+    assert n._queue[0]["attempts"] == 0 and n._queue[0]["nextAt"] == 1000.0  # deneme/bekleme artmadı
+    store.save_notify(True, "-1001", None)                                  # yeniden aç
+    n.flush()                                                               # hemen gider
+    assert len(fake.calls) == 1 and fake.calls[0].url.path.endswith("/sendPhoto")
+    assert alarms.get(a["id"])["notify"] == "sent" and n._queue == []
+
+
+def test_disabled_queue_still_expires_after_24h(tmp_path: pathlib.Path) -> None:
+    now = [0.0]
+    fake = Fake()
+    store, alarms, n = setup(tmp_path, fake, now)
+    a = alarms.add("s", "Tezgah", "lying", 0.0, 0.0, None, "queued")
+    n.enqueue(a["id"], "🚨 YERDE YATAN KİŞİ", None)
+    store.save_notify(False, "-1001", None)
+    now[0] = 24 * 3600 - 1
+    n.flush()                                                               # henüz dolmadı: bekler
+    assert alarms.get(a["id"])["notify"] == "queued" and len(n._queue) == 1
+    now[0] = 24 * 3600 + 1
+    n.flush()
+    assert alarms.get(a["id"])["notify"] == "failed" and n._queue == []
+    assert fake.calls == []
+
+
+def test_unexpected_error_is_logged_with_traceback_and_token_safe(
+        tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1000.0]
+    _, alarms, n = setup(tmp_path, Fake(), now)
+    a = alarms.add("s", "Tezgah", "hands_up", 997.0, 1000.0, b"\xff\xd8", "queued")
+    n.enqueue(a["id"], "x", b"\xff\xd8")
+
+    def boom(_alarm_id: str) -> bytes | None:
+        raise RuntimeError("beklenmeyen")
+
+    monkeypatch.setattr(alarms, "image_bytes", boom)
+    n.flush()                                                               # fırlatmamalı
+    assert "Traceback" in caplog.text and "beklenmeyen" in caplog.text
+    assert TOKEN not in caplog.text and "GIZLI" not in caplog.text
+
+
+def test_send_error_traceback_has_no_token(tmp_path: pathlib.Path) -> None:
+    def leaky(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"bağlanamadı: {req.url}", request=req)
+
+    _, _, n = setup(tmp_path, leaky, [0.0])                                 # type: ignore[arg-type]
+    with pytest.raises(NotifyError) as e:
+        n.send("x", None)
+    assert e.value.__cause__ is None and e.value.__suppress_context__       # from None: zincir yok
+    text = "".join(traceback.format_exception(e.value))
+    assert TOKEN not in text and "GIZLI" not in text
+
+
+def test_save_notify_rejects_bad_token_format(tmp_path: pathlib.Path) -> None:
+    store = LiveStore(tmp_path)
+    store.save_notify(True, "-1001", TOKEN)
+    for bad in ("bozuk", "123456", "123456:", ":ABC", "abc:DEF", "123:a b", "123:a/b", "123:ş", "123:ab\ncd"):
+        with pytest.raises(ValueError) as e:
+            store.save_notify(False, "-9", bad)
+        assert "Telegram" in str(e.value) and bad not in str(e.value)
+    assert store.telegram_token() == TOKEN                                  # değişmedi
+    assert store.notify_config() == {"enabled": True, "chatId": "-1001", "hasToken": True}   # hiçbir şey yazılmadı
+    assert store.save_notify(True, "-1001", "  987654:Ab-C_d  ")["hasToken"]
+    assert store.telegram_token() == "987654:Ab-C_d"                        # kırpılır, geçerli biçim kabul edilir
+
+
+def test_long_text_is_truncated(tmp_path: pathlib.Path) -> None:
+    fake = Fake()
+    _, _, n = setup(tmp_path, fake, [0.0])
+    n.send("a" * 5000, None)
+    n.send("b" * 2000, b"\xff\xd8")
+    assert max(len(m) for m in re.findall(rb"a+", fake.calls[0].content)) == 4096
+    assert max(len(m) for m in re.findall(rb"b+", fake.calls[1].content)) == 1024
+
+
+def test_restart_after_stop(tmp_path: pathlib.Path) -> None:
+    fake = Fake()
+    _, alarms, n = setup(tmp_path, fake, [1000.0])
+    n.start()
+    n.stop()
+    assert n._thread is not None and not n._thread.is_alive()
+    a = alarms.add("s", "Tezgah", "hands_up", 997.0, 1000.0, None, "queued")
+    n.enqueue(a["id"], "x", None)
+    n.start()                                                               # stop() sonrası yeniden başlar
+    t = n._thread
+    assert t is not None and t.is_alive()
+    deadline = time.time() + 5
+    while alarms.get(a["id"])["notify"] != "sent" and time.time() < deadline:
+        time.sleep(0.05)
+    n.start()                                                               # çalışırken ikinci start: aynı iş parçacığı
+    assert n._thread is t
+    n.stop()
+    assert alarms.get(a["id"])["notify"] == "sent" and not t.is_alive()
