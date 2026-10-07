@@ -190,6 +190,32 @@ class LiveStore:
             self._write("camera_profiles.json", items)
         return d
 
+    # ------------------------------------------------------------------ bildirim (Telegram)
+
+    def notify_config(self) -> dict[str, Any]:
+        """Bildirim ayarı; bot anahtarı hiçbir zaman döndürülmez (yalnızca `hasToken`)."""
+        with self._lock:
+            c = self._read("notify.json", {})
+            return {"enabled": bool(c.get("enabled", False)), "chatId": str(c.get("chatId", "")),
+                    "hasToken": bool(self._read("secrets.json", {}).get("telegram"))}
+
+    def save_notify(self, enabled: bool, chat_id: str, token: str | None) -> dict[str, Any]:
+        """`token` None: kayıtlı anahtar korunur; "": silinir. Anahtar yalnızca secrets.json'da."""
+        with self._lock:
+            self._write("notify.json", {"enabled": enabled, "chatId": chat_id.strip()})
+            if token is not None:
+                secrets = self._read("secrets.json", {})
+                if token.strip():
+                    secrets["telegram"] = token.strip()
+                else:
+                    secrets.pop("telegram", None)
+                self._write("secrets.json", secrets)
+            return self.notify_config()
+
+    def telegram_token(self) -> str:
+        with self._lock:
+            return str(self._read("secrets.json", {}).get("telegram", ""))
+
     def _drop_camera_profiles(self, match: Any) -> None:
         with self._lock:
             items = self._read("camera_profiles.json", {})
