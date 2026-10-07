@@ -37,7 +37,7 @@ Hedefler:
 
 ## Kapsam
 - **Var:**
-  - Python analiz sunucusu (canlı kamera/NVR oturumları): kişi tanıma (mevcut YOLOX) + izleyici (mevcut `MotTracker`) + **RTMPose** poz + kural durum makinesi.
+  - Python analiz sunucusu (canlı kamera/NVR oturumları): kişi tanıma (mevcut YOLOX) + izleyici (mevcut `MotTracker`) + **MoveNet SinglePose Thunder** poz + kural durum makinesi.
   - Alarm günlüğü ve olay resmi (7 gün).
   - Telegram bildirimi ve çevrimdışı kuyruk.
   - Web paneli: güvenlik profili, ayarlar, iskelet çizimi, alarm şeridi, son alarmlar, "Bildirimler" sayfası, deneme alarmı.
@@ -106,19 +106,23 @@ Bir eklem **görünür** sayılır: güven ≥ `KP_CONF = 0,3`.
 - Test alarmı tekrar önlemeye tabi değildir.
 
 ## Poz modeli
-- **RTMPose** (OpenMMLab, Apache-2.0), COCO-17, girdi 256×192 (y×x), SimCC çıkışı. ONNX Runtime CPU ile çalışır.
-- İlk kullanımda resmi sürüm adresinden indirilir, SHA-256 doğrulanır (YOLOX ile aynı düzen: `BANTVISION_MODEL_DIR`).
-- **Geliştirmenin ilk adımı:** kullanılacak tam dosyanın lisansı (kod ve ağırlıklar) ve adresi doğrulanır. Lisans net değilse kullanılmaz, kullanıcıya bildirilip RTMO'ya geçilir.
+**Karar (kullanıcı, 2026-10-07):** **MoveNet SinglePose Thunder** (Google). Açıkça Apache-2.0, ticari kullanım serbest; COCO + Google'ın kendi "Active" veri setiyle eğitilmiş.
+- RTMPose / RTMO elendi: kod Apache-2.0, ancak ağırlıklar için açık lisans beyanı yok; eğitim verisi (Body7) araştırma amaçlı koşullu setler içeriyor (AI Challenger, MPII, PoseTrack18).
+- Kişi kutusu başına çalışır (iki aşamalı tasarım aynen); çıkış COCO-17 eklem (y, x, güven), girdiye göre normalize.
+- **Dağıtım:** Google modeli TFLite/SavedModel olarak yayınlar.
+  - Bir kez `tf2onnx` ile ONNX'e çevrilir; çevirme betiği depoda (`tools/convert_movenet.py`).
+  - Çevrilmiş dosya orijinal modelle aynı çıktıyı verdiği doğrulanarak (sentetik + açık lisanslı örnek görüntülerde eklem farkı < 0,01) projenin GitHub sürüm sayfasına konur: `models-v1`, `movenet_thunder.onnx`, Apache-2.0 lisans metni ve kaynak/değişiklik notu ile.
+  - Sunucu ilk kullanımda oradan indirir, SHA-256 doğrular (YOLOX ile aynı düzen: `BANTVISION_MODEL_DIR`).
 - **Kırpma:**
-  - Kişi kutusu 1,25× genişletilir ve 3:4 (x:y) orana getirilir.
-  - Affine dönüşümle 192×256'ya çevrilir.
-  - RGB, ImageNet ortalama/sapma ile normalize edilir.
-- **Çözme:** SimCC x/y dağılımlarının argmax'ı / bölme oranı (2,0), güven = iki eksenin en büyük değerlerinin küçüğü. Başvuru: rtmlib (Apache-2.0) uygulaması; geliştirmede bununla aynı sonuç doğrulanır.
+  - Kişi kutusu 1,25× genişletilir, kare yapılır (uzun kenar) ve görüntü dışına taşan kısım siyahla doldurulur.
+  - 256×256'ya ölçeklenir; RGB, `int32` (Thunder girdisi).
+  - Eklemler kare koordinatından görüntü pikseline geri çevrilir.
 - **Ne zaman çalışır:**
   - Yalnızca **onaylı ve bu karede tanımayla gözlenen** izlere uygulanır.
   - Boş sahnede (tanıma atlandığında) poz da atlanır.
   - Bütün kameralar tek ortak poz modelini kullanır; kareler sırayla işlenir.
 - **Performans hedefi:** ofis bilgisayarında, sayım yapan kameralarla birlikte bir güvenlik kamerası ≥ 5 kare/sn.
+- **Bilinen risk:** MoveNet ağırlıklı olarak fitness/dans/yoga videolarıyla eğitildi; eğik/uzak güvenlik kamerasında doğruluk kabul ölçümüyle sınanır. Yetmezse model seçimi yeniden değerlendirilir.
 
 ## Sözleşme
 `contracts/product-profile.schema.json` değişiklikleri:
@@ -147,7 +151,7 @@ Bir eklem **görünür** sayılır: güven ≥ `KP_CONF = 0,3`.
 
 ## Analiz sunucusu (Python)
 **Modüller:**
-- `core/pose.py`: `PoseEstimator`. Model indirme ve SHA doğrulama, kırpma, çıkarım, çözme → `Pose(keypoints: (17,3))`, piksel. Ayrıca paylaşılan kilitli sarmalayıcı.
+- `core/pose.py`: `PoseEstimator` (MoveNet Thunder). Model indirme ve SHA doğrulama, kare kırpma, çıkarım, görüntüye geri çevirme → `Pose(keypoints: (17,3))`, piksel (x, y, güven). Ayrıca paylaşılan kilitli sarmalayıcı.
 - `core/pose_rules.py`: saf fonksiyonlar `scale`, `hands_up`, `lying` (kare kararları) ve `EpisodeTracker` (iz/tür bölüm durum makinesi, GRACE, T). Saf olduğu için birim testli.
 - `core/safety.py`: `SafetyAnalyzer.process(frame, profile, ts)`. YOLOX + `MotTracker` + poz + kurallar → `SafetyResult` içinde izler, pozlar, aktif bölümler ve bu karede doğan alarmlar.
 - `core/pipeline.py`: `countMode == "safety"` için `_process_safety`. Sayım yok; `FrameResult.safety` dolar.
@@ -217,7 +221,7 @@ Durum (`/sessions`): güvenlik oturumunda `safety: {active: [{type, trackId, sec
   - anahtar hiçbir API yanıtında yok, hata metninde maskeli;
   - tekrar önleme 60 sn;
   - 7 gün temizliği.
-- `pose`: kırpma/affine ve SimCC çözme saf birim testleri (sentetik çıktı dizisi).
+- `pose`: kare kırpma ve geri çevirme saf birim testleri (sentetik çıktı dizisi); ONNX çevirisinin orijinal modelle eşleştiği `tools/convert_movenet.py` doğrulamasıyla.
   - Model dosyası CI'da indirilebiliyorsa bir uçtan uca çıkarım testi.
   - Lisansı uygun, depoya konabilir küçük bir kişi görüntüsü yoksa bu test modeli yalnızca yükler ve çıktı şeklini doğrular.
 - API: uç noktalar, deneme alarmı, `PUT notify` anahtar koruma/silme.
