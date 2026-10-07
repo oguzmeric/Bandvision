@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import dataclasses
 import io
+import logging
 import threading
 import time
 import uuid
@@ -26,8 +28,10 @@ import numpy as np
 from ..core import Pipeline, Profile
 from ..core.pipeline import FrameResult
 from ..core.staff_color import teach_bgr
-from ..overlay import draw_detect
+from ..overlay import draw_detect, draw_safety
 from ..video import draw, number_label, split_numbers
+
+_LOG = logging.getLogger(__name__)
 
 # Canlı akışta FFmpeg'e RTSP üzerinden TCP (kayıpsız, NVR'larla uyumlu) ve kısa zaman aşımı
 # FFmpeg 5+ (OpenCV 4.6+): `timeout` = bağlanma ve okuma zaman aşımı (µs). Eski `stimeout` artık yok sayılıyor;
@@ -76,8 +80,12 @@ class LiveSession:
 
     def __init__(self, name: str, open_url: Callable[[], str], profile: Profile,
                  keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True,
-                 detector: Any | None = None) -> None:
-        """`detector`: kişi tanıma modeli (birden çok kamerada ortak; yoksa ilk karede yüklenir)."""
+                 detector: Any | None = None, pose: Any | None = None,
+                 alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None], None]
+                 | None = None) -> None:
+        """`detector`: kişi tanıma modeli, `pose`: poz modeli (ikisi de birden çok kamerada ortak; yoksa ilk karede
+        yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik alarmları (çalışma
+        iş parçacığından, sayım kilidi dışında çağrılır); çalışma döngüsü biterken açık alarmların sonu da buradan gelir."""
         self.id = str(uuid.uuid4())
         self.name = name
         self.created = time.time()
@@ -90,8 +98,14 @@ class LiveSession:
         self.profile = profile
         self._pipe = Pipeline(profile)
         self._pipe.detect.enable_gate()                     # boş sahnede tanıma atlanır: çok kamerada işlemci paylaşımı
+        self._detector = detector
+        self._pose = pose
+        self._alarm_sink = alarm_sink
+        self._last_alarm_at: float | None = None
         if detector is not None:
             self._pipe.detect._detector = detector
+        if profile.countMode == "safety":
+            self._setup_safety()
         self.counting = False
         self.status = SessionStatus()
         self.calibrating: str | None = None         # "background" | "sample" | None
@@ -156,11 +170,20 @@ class LiveSession:
             mode_changed = profile.countMode != self.profile.countMode
             self.profile = profile
             self._pipe.set_profile(profile, reset_background=mode_changed)
+            if profile.countMode == "safety" and (mode_changed or self._pipe.safety is None):
+                self._setup_safety()                        # güvenliğe geçiş: ortak modellerle taze analizör
             self._numbers.clear()
             self._labels.clear()
         if mode_changed:                                    # kutular eski yöntemle bulundu: öğretmede kullanılmasın
             with self._frame_cv:
                 self._processed = self._teach_snapshot = None
+
+    def _setup_safety(self) -> None:
+        """Poz güvenlik analizörü: oturumun (ortak) tanıma ve poz modelleriyle; boş sahnede tanıma atlanır."""
+        from ..core.safety import SafetyAnalyzer
+
+        self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
+        self._pipe.safety.enable_gate()
 
     def learn_background(self) -> None:
         with self._lock:
@@ -206,6 +229,11 @@ class LiveSession:
                 "counting": self.counting, "total": c.total, "totalOut": c.total_out,
                 "staffIn": c.staff_in, "staffOut": c.staff_out,
                 "twoWay": self.profile.countMode == "detect",
+                "safety": ({"active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
+                                       for tid, k, sec, _f in (self._pipe.safety.episodes.active()
+                                                               if self._pipe.safety else [])],
+                            "lastAlarmAt": self._last_alarm_at}
+                           if self.profile.countMode == "safety" else None),
                 "ratePerMinute": rate // 2 if rate else 0,
                 "calibrating": self.calibrating, "calibrationMessage": self.calibration_message,
                 "profile": self.profile.to_dict(),
@@ -328,6 +356,46 @@ class LiveSession:
             self.status.message = message
 
     def _work_loop(self) -> None:
+        try:
+            self._work()
+        finally:
+            self._end_safety()
+
+    def _end_safety(self) -> None:
+        """Çalışma döngüsü bitti (oturum durduruldu ya da döngü çöktü): alarm vermiş açık bölümler sona erer; alarm
+        günlüğünde sonsuza dek "açık" kalmasın."""
+        if self._alarm_sink is None:
+            return
+        with self._lock:
+            an = self._pipe.safety
+            ended = [(tid, kind, True) for tid, kind, _sec, fired in an.episodes.active() if fired] if an else []
+        if ended:
+            try:
+                self._alarm_sink(self, [], ended, None)
+            except Exception:  # noqa: BLE001 — kapanışta alıcı hatası yutulur (günlüğe yazılır)
+                _LOG.exception("Alarm alıcısı kapanışta hata verdi (oturum %s)", self.id[:8])
+
+    def _notify_safety(self, r: FrameResult, frame: np.ndarray, profile: Profile) -> None:
+        """Doğan alarmlar ve biten bölümler alarm alıcısına (sayım kilidi dışında). Resim ya da alıcı hatası oturumu
+        düşürmez: resim alınamazsa alarm resimsiz iletilir."""
+        sr = r.safety
+        if sr is None or not (sr.fired or sr.ended) or self._alarm_sink is None:
+            return
+        jpeg: bytes | None = None
+        if sr.fired:
+            with self._lock:
+                self._last_alarm_at = time.time()
+            try:
+                ok, buf = cv2.imencode(".jpg", self._render(frame.copy(), profile, r), [cv2.IMWRITE_JPEG_QUALITY, 85])
+                jpeg = buf.tobytes() if ok else None
+            except Exception:  # noqa: BLE001
+                _LOG.exception("Alarm resmi hazırlanamadı (oturum %s)", self.id[:8])
+        try:
+            self._alarm_sink(self, sr.fired, sr.ended, jpeg)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Alarm alıcısı hata verdi (oturum %s)", self.id[:8])
+
+    def _work(self) -> None:
         done = 0
         last_render = 0.0
         shape: tuple[int, ...] | None = None
@@ -352,10 +420,14 @@ class LiveSession:
                     self.status.message = f"İşleme hatası: {e}"
                     continue
                 self._after_frame(r, frame)
+            self._notify_safety(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
             with self._lock:
-                self.status.fps = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 2 else 0.0
+                # Windows saati kaba (~15 ms): hızlı işleme (sahte tanıyıcı, boş sahne) aynı damgayı üretebilir; sıfıra
+                # bölme çalışma iş parçacığını öldürürdü
+                span = stamps[-1] - stamps[0]
+                self.status.fps = (len(stamps) - 1) / span if len(stamps) > 2 and span > 0 else 0.0
                 self.status.height, self.status.width = frame.shape[:2]
             if now - last_render >= 1 / 12:
                 last_render = now
@@ -447,10 +519,17 @@ class LiveSession:
             labels = dict(self._labels)
             flash, flash_in = self._flash, self._flash_in
             total, total_out = self._pipe.total, self._pipe.total_out
+        scale = np.ones(3)                                    # poz eklemleri piksel: büyütmeyle birlikte ölçeklenir
         if frame.shape[1] < 720:                              # alt akış (352–640 px): çizim tarayıcıda net görünsün
-            frame = cv2.resize(frame, (720, round(frame.shape[0] * 720 / frame.shape[1])),
-                               interpolation=cv2.INTER_LINEAR)
-        if profile.countMode == "detect":
+            h0, w0 = frame.shape[:2]
+            frame = cv2.resize(frame, (720, round(h0 * 720 / w0)), interpolation=cv2.INTER_LINEAR)
+            scale = np.array([frame.shape[1] / w0, frame.shape[0] / h0, 1.0])
+        if profile.countMode == "safety":
+            sr = r.safety
+            if sr is not None and not np.all(scale == 1.0):
+                sr = dataclasses.replace(sr, poses={tid: kp * scale for tid, kp in sr.poses.items()})
+            img = draw_safety(frame, profile, sr)
+        elif profile.countMode == "detect":
             img = draw_detect(frame, profile, r.detect, total, total_out, 0.0, flash, flash_in, labels, panel=False)
         else:
             img = draw(frame, profile, r, flash, labels, panel=False)   # sayılar panelin yan tarafında

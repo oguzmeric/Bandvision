@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import pathlib
 import secrets
 import threading
+import time
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
@@ -21,7 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
 
+_LOG = logging.getLogger(__name__)
 CHUNK = 1024 * 1024
+CLEANUP_INTERVAL_S = 3600.0                     # saatte bir: saklama süresi dolan iş ve alarm kayıtları
 MEDIA_TYPES = {"annotated.mp4": "video/mp4", "counts.csv": "text/csv; charset=utf-8",
                "profile.json": "application/json", "background.png": "image/png"}
 
@@ -69,20 +73,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     stop_cleanup = threading.Event()
 
     def cleanup_loop() -> None:
-        while not stop_cleanup.wait(3600):          # saatte bir: saklama süresi dolanlar
-            store.expire()
+        while not stop_cleanup.wait(CLEANUP_INTERVAL_S):
+            # iki iş ayrı korunur: biri patlarsa diğeri yine denenir ve döngü (iş parçacığı) ölmez
+            for name, task in (("iş kayıtları", store.expire),
+                               ("alarm günlüğü", lambda: live.alarms.expire(time.time()))):
+                try:
+                    task()
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("Saatlik temizlik başarısız: %s", name)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         store.expire()
         worker.start()
+        live.notifier.start()                                # Telegram çevrimdışı kuyruğu
         t = threading.Thread(target=cleanup_loop, name="analiz-temizlik", daemon=True)
         t.start()
         yield
         stop_cleanup.set()
         worker.stop()
-        for s in list(app.state.live.sessions.values()):     # canlı oturumlar kapanırken kamerayı bırak
+        sessions = list(live.sessions.values())
+        for s in sessions:                                   # canlı oturumlar kapanırken kamerayı bırak
             s.stop()
+        for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)
+            live.close_alarms(s.id)
+        live.notifier.stop()
 
     app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
@@ -103,7 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from ..live.api import LiveManager, make_router
     from ..live.store import LiveStore
 
-    live = LiveManager(LiveStore(settings.data_dir))
+    live = LiveManager(LiveStore(settings.data_dir), settings.data_dir)
     app.state.live = live
     app.include_router(make_router(live, Auth))
 

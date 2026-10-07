@@ -10,7 +10,7 @@ import pathlib
 import threading
 import time
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import cv2
 from fastapi import APIRouter, HTTPException, Response
@@ -18,8 +18,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core import Profile
+from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
+from .alarms import AlarmStore
+from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
@@ -65,6 +68,16 @@ class StreamIn(_Strict):
     substream: bool
 
 
+class NotifyIn(_Strict):
+    enabled: bool = False
+    chatId: str = Field(default="", max_length=64)
+    token: str | None = Field(default=None, max_length=256)     # None: kayıtlı anahtar korunur, "": silinir
+
+
+class TestAlarmIn(_Strict):
+    sessionId: str | None = None
+
+
 class SharedDetector:
     """Tüm canlı kameralarda tek tanıma modeli: bellek bir kez, kareler sırayla işlenir (işlemci aşırı yüklenmez;
     N kamera varsa her biri toplam hızın yaklaşık 1/N'ini alır)."""
@@ -80,6 +93,22 @@ class SharedDetector:
 
                 self._inner = ObjectDetector()
             return self._inner.detect(*args, **kwargs)
+
+
+class SharedPose:
+    """Tüm güvenlik kameralarında tek poz modeli; kareler sırayla."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._inner: Any = None
+
+    def estimate(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            if self._inner is None:
+                from ..core.pose import PoseEstimator
+
+                self._inner = PoseEstimator()
+            return self._inner.estimate(*args, **kwargs)
 
 
 class SessionIn(_Strict):
@@ -102,7 +131,7 @@ def _err(e: Exception) -> HTTPException:
 class LiveManager:
     """Kaynak bağlantıları ve çalışan oturumlar (süreç ömrü boyunca bellekte)."""
 
-    def __init__(self, store: LiveStore) -> None:
+    def __init__(self, store: LiveStore, data_dir: pathlib.Path | None = None) -> None:
         self.store = store
         self.sessions: dict[str, LiveSession] = {}
         self._clients: dict[str, tuple[str, rec.RecorderClient]] = {}   # kaynak → (ayar imzası, istemci)
@@ -110,7 +139,62 @@ class LiveManager:
         self._lock = threading.Lock()
         self.detector = SharedDetector()
         self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
+        root = data_dir or store.root.parent
+        self.alarms = AlarmStore(root)
+        self.notifier = TelegramNotifier(store, self.alarms, root)
+        self.pose = SharedPose()
+        # Güvenlik alarmı: `on_safety` birden çok oturum iş parçacığından gelir; iki tablo bu kilitle korunur
+        self._alarm_lock = threading.Lock()
+        self._last_sent: dict[tuple[str, str], float] = {}         # (kamera, tür) → son bildirim zamanı
+        self._alarm_of: dict[tuple[str, int, str], str] = {}      # (oturum, iz, tür) → açık alarm kimliği
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
+
+    # ------------------------------------------------------------------ poz güvenlik alarmları
+
+    _TITLES: ClassVar[dict[str, str]] = {
+        "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "test": "🧪 DENEME ALARMI"}
+
+    def _text(self, kind: str, camera: str, ts: float) -> str:
+        return f"{self._TITLES[kind]} — {camera} · {time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(ts))}"
+
+    def on_safety(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None) -> None:
+        """Oturumdan: biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim). Biten önce işlenir: aynı karede
+        aynı (iz, tür) için eski bölümün sonu ile yeni alarm gelirse eski kapanır, yeni açık kalır. Tekrar önleme
+        (kamera ve tür başına `COOLDOWN_S`) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez."""
+        now = time.time()
+        camera = getattr(s, "name", "Kamera")
+        send_image = bool(getattr(s.profile, "safety", None) and s.profile.safety.sendImage)
+        cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
+        with self._alarm_lock:
+            for tid, kind, was_fired in ended:
+                aid = self._alarm_of.pop((s.id, tid, kind), None)
+                if was_fired and aid:
+                    self.alarms.end(aid, now)
+            for a in fired:
+                notify = "disabled"
+                if self.notifier.configured():
+                    last = self._last_sent.get((cam_key, a.kind))
+                    notify = "suppressed" if last is not None and now - last < COOLDOWN_S else "queued"
+                rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now,
+                                       jpeg if send_image else None, notify)
+                self._alarm_of[(s.id, a.track_id, a.kind)] = rec_["id"]
+                if notify == "queued":
+                    self._last_sent[(cam_key, a.kind)] = now
+                    self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now), jpeg if send_image else None)
+
+    def close_alarms(self, session_id: str, now: float | None = None) -> None:
+        """Oturumun açık alarmlarının sonunu yazar (oturum silindi/durdu, yöntem değişti, sunucu kapanıyor)."""
+        ts = time.time() if now is None else now
+        with self._alarm_lock:
+            mine = [k for k in self._alarm_of if k[0] == session_id]
+            for k in mine:
+                self.alarms.end(self._alarm_of.pop(k), ts)
+
+    def remove_session(self, s: LiveSession) -> None:
+        """Oturumu durdurur, listeden çıkarır ve açık alarmlarını kapatır."""
+        s.stop()
+        self.sessions.pop(s.id, None)
+        self.close_alarms(s.id)
 
     def source_or_404(self, source_id: str) -> dict[str, Any]:
         src = self.store.source(source_id)
@@ -348,8 +432,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.delete("/sources/{source_id}", status_code=204)
     def delete_source(source_id: str) -> Response:
         for s in [s for s in manager.sessions.values() if getattr(s, "source_id", None) == source_id]:
-            s.stop()
-            manager.sessions.pop(s.id, None)
+            manager.remove_session(s)
         manager.forget(source_id)
         if not store.delete_source(source_id):
             raise HTTPException(404, "Kaynak bulunamadı.")
@@ -390,8 +473,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         profile.name = template.name                         # yeniden adlandırma kamera ayarlarına da yansısın
         for s in list(manager.sessions.values()):           # aynı kamera iki kez açılmasın
             if getattr(s, "source_id", None) == body.sourceId and getattr(s, "channel_id", None) == body.channelId:
-                s.stop()
-                manager.sessions.pop(s.id, None)
+                manager.remove_session(s)
         try:
             open_url, keep_alive = manager.opener(src, body.channelId, body.substream)
             name = str(src.get("name") or "").strip() or "Kamera"
@@ -399,7 +481,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
                 name = f"{name} · {manager.channel(src, body.channelId).title.strip()}"
         except rec.RecorderError as e:
             raise _err(e) from e
-        s = LiveSession(name, open_url, profile, keep_alive, detector=manager.detector)
+        s = LiveSession(name, open_url, profile, keep_alive, detector=manager.detector, pose=manager.pose,
+                        alarm_sink=manager.on_safety)
         s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
         s.source_id, s.channel_id, s.profile_id = body.sourceId, body.channelId, body.profileId  # type: ignore[attr-defined]
         fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok
@@ -420,9 +503,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.delete("/sessions/{session_id}", status_code=204)
     def delete_session(session_id: str) -> Response:
-        s = session_or_404(session_id)
-        s.stop()
-        manager.sessions.pop(session_id, None)
+        manager.remove_session(session_or_404(session_id))
         return Response(status_code=204)
 
     @r.post("/sessions/{session_id}/actions")
@@ -468,7 +549,10 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         s = session_or_404(session_id)
         p = _profile_from(body)
         p.id = getattr(s, "profile_id", p.id)
+        was_safety = s.profile.countMode == "safety"
         s.set_profile(p)
+        if was_safety and p.countMode != "safety":          # güvenlikten çıkış: bölümlerin sonu artık gelmez
+            manager.close_alarms(s.id)
         if save:
             store.save_camera_profile(getattr(s, "source_id", ""), getattr(s, "channel_id", None), p)
         return _session_view(s)
@@ -507,10 +591,91 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         return Response(s.counts_csv(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": 'attachment; filename="sayimlar.csv"'})
 
+    # ---------------------------------------------------------------- poz güvenlik: alarm günlüğü ve Telegram
+
+    @r.get("/alarms")
+    def alarms(active: bool = False, since: float | None = None) -> list[dict[str, Any]]:
+        return manager.alarms.list(active_only=active, since=since)
+
+    @r.post("/alarms/test")
+    def test_alarm(body: TestAlarmIn) -> dict[str, Any]:
+        """Deneme alarmı: panel şeridi ve (yapılandırılmışsa) Telegram; tekrar önlemeye tabi değil."""
+        s = manager.sessions.get(body.sessionId) if body.sessionId else None
+        camera = s.name if s else "Deneme"
+        jpeg = s.raw_jpeg() if s and s.profile.countMode == "safety" and s.profile.safety.sendImage else None
+        now = time.time()
+        notify = "queued" if manager.notifier.configured() else "disabled"
+        rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify)
+        if notify == "queued":
+            manager.notifier.enqueue(rec_["id"], manager._text("test", camera, now), jpeg)
+        return rec_
+
+    @r.post("/alarms/{alarm_id}/ack")
+    def ack_alarm(alarm_id: str) -> dict[str, Any]:
+        if not manager.alarms.ack(alarm_id):
+            raise HTTPException(404, "Alarm bulunamadı.")
+        return manager.alarms.get(alarm_id) or {}
+
+    @r.get("/alarms/{alarm_id}/image.jpg")
+    def alarm_image(alarm_id: str) -> Response:
+        jpeg = manager.alarms.image_bytes(alarm_id)
+        if jpeg is None:
+            raise HTTPException(404, "Olay resmi yok (gönderim kapalı ya da 7 günü geçti).")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @r.get("/notify")
+    def get_notify() -> dict[str, Any]:
+        return store.notify_config()
+
+    @r.put("/notify")
+    def put_notify(body: NotifyIn) -> dict[str, Any]:
+        try:
+            return store.save_notify(body.enabled, body.chatId, body.token)
+        except ValueError as e:                             # biçimi geçersiz anahtar: ileti anahtarı içermez
+            raise HTTPException(422, str(e)) from e
+
+    @r.post("/notify/test")
+    def notify_test() -> dict[str, Any]:
+        try:
+            manager.notifier.send("🧪 BantVision deneme mesajı — bildirimler çalışıyor.", None)
+        except NotifyError as e:
+            raise HTTPException(422, str(e)) from e
+        return {"ok": True}
+
     return r
 
 
+_SAFETY_RULES = {"handsUp": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0)}   # ad, en az, en çok (sn)
+
+
+def _check_safety(sf: Any) -> None:
+    """`safety` bloğu (sözleşme: handsUp 3–5 sn, lying 5–30 sn, sendImage): yanlış tür ya da aralık dışı 422 olur.
+    Eksik alanlar varsayılana düşer; `bool("false")` gibi sessiz dönüşümlere izin verilmez."""
+    def bad(msg: str) -> HTTPException:
+        return HTTPException(422, f"Güvenlik ayarı geçersiz: {msg}")
+
+    if sf is None:
+        return
+    if not isinstance(sf, dict):
+        raise bad("nesne olmalı.")
+    for key, (title, lo, hi) in _SAFETY_RULES.items():
+        if key not in sf:
+            continue
+        rule = sf[key]
+        if not isinstance(rule, dict):
+            raise bad(f"{title} ayarı nesne olmalı.")
+        if "enabled" in rule and not isinstance(rule["enabled"], bool):
+            raise bad(f"{title} açık/kapalı değeri doğru ya da yanlış olmalı.")
+        sec = rule.get("seconds", lo)
+        # aralık karşılaştırması NaN ve sonsuzu da dışlar (karşılaştırma yanlış çıkar)
+        if isinstance(sec, bool) or not isinstance(sec, (int, float)) or not lo <= sec <= hi:
+            raise bad(f"{title} süresi {lo:g}–{hi:g} sn arasında bir sayı olmalı.")
+    if "sendImage" in sf and not isinstance(sf["sendImage"], bool):
+        raise bad("olay resmi gönderimi doğru ya da yanlış olmalı.")
+
+
 def _profile_from(body: dict[str, Any]) -> Profile:
+    _check_safety(body.get("safety"))
     try:
         p = Profile.from_dict(body)
     except (KeyError, TypeError, ValueError) as e:

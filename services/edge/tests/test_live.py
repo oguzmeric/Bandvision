@@ -569,3 +569,374 @@ def test_catalog_has_safety_preset(client: TestClient) -> None:
     assert cat["safety"]["available"] and cat["safety"]["presets"] == [{"key": "jeweler", "name": "Kuyumcu güvenliği"}]
     p = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
     assert p["countMode"] == "safety" and p["name"] == "Kuyumcu güvenliği"
+
+
+# ---------------------------------------------------------------------- poz güvenlik: oturum, alarm günlüğü, Telegram
+
+def _safety_session_with_fake(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                              send_image: bool = False) -> tuple[Any, str]:
+    """Kuyumcu profiliyle dosya kaynağı; analizör sahte tanıyıcı + sahte pozla (eller yukarı) çalışır.
+
+    Sahteler oturum açılmadan ÖNCE yöneticiye konur: oturum analizörünü onlardan kurar (çalışan iş parçacığının
+    altından analizör değiştirilmez, model yüklenmez/indirilmez)."""
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    mgr = client.app.state.live
+    mgr.detector = FakeDetector([(280, 80, 360, 440)])
+    mgr.pose = FakePose(hands_up_kp())
+    src = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                          name="Tezgah")).json()
+    prof = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    if send_image:
+        prof = client.put(f"/api/v1/live/profiles/{prof['id']}",
+                          json={**prof, "safety": {**prof["safety"], "sendImage": True}}).json()
+    s = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": prof["id"]}).json()
+    return mgr.sessions[s["id"]], s["id"]
+
+
+def _mock_telegram(client: TestClient) -> None:
+    """Testte Telegram'a gerçek istek gitmesin: bildirim istemcisi sahte sunucuya bağlanır."""
+    import httpx
+
+    client.app.state.live.notifier._client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True})))
+
+
+def _fake_safety_session(**over: Any) -> Any:
+    from types import SimpleNamespace
+
+    from bantvision.core import Profile
+
+    return SimpleNamespace(**{"id": "x", "name": "Tezgah", "profile": Profile.jeweler(), "source_id": "src",
+                              "channel_id": None, **over})
+
+
+def test_safety_alarm_reaches_store_status_and_queue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1001", "token": "123:GIZLI"})
+    _sess, sid = _safety_session_with_fake(client, monkeypatch)
+    alarms = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)
+    a = alarms[0]
+    assert a["type"] == "hands_up" and a["camera"].startswith("Tezgah") and a["sessionId"] == sid
+    assert a["notify"] in ("queued", "sent") and not a["image"]             # sendImage varsayılan kapalı
+    st = client.get(f"/api/v1/live/sessions/{sid}").json()
+    assert st["safety"]["lastAlarmAt"] is not None
+    assert client.post(f"/api/v1/live/alarms/{a['id']}/ack").status_code == 200
+    assert all(x["id"] != a["id"] for x in client.get("/api/v1/live/alarms?active=1").json())
+    assert "GIZLI" not in client.get("/api/v1/live/notify").text
+
+
+def test_safety_alarm_with_image_is_stored_and_sent_as_photo(client: TestClient,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    paths: list[str] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"ok": True})
+
+    mgr = client.app.state.live
+    mgr.notifier._client = httpx.Client(transport=httpx.MockTransport(telegram))
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1001", "token": "123:GIZLI"})
+    _sess, _sid = _safety_session_with_fake(client, monkeypatch, send_image=True)
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    assert a["image"] is True
+    img = client.get(f"/api/v1/live/alarms/{a['id']}/image.jpg")
+    assert img.status_code == 200 and img.content[:2] == b"\xff\xd8"
+    mgr.notifier.flush()
+    assert paths == ["sendPhoto"] and mgr.alarms.get(a["id"])["notify"] == "sent"
+
+
+def test_safety_notifications_suppressed_within_cooldown(client: TestClient) -> None:
+    from types import SimpleNamespace
+
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr = client.app.state.live
+    _mock_telegram(client)
+    fake_session = SimpleNamespace(id="x", name="Tezgah", profile=Profile.jeweler(), source_id="src", channel_id=None)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    mgr.on_safety(fake_session, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    mgr.on_safety(fake_session, [SafetyAlarm("hands_up", 2, (0, 0, 1, 1), 5.0, 8.0)], [], None)
+    st = [a["notify"] for a in client.get("/api/v1/live/alarms").json()]
+    assert "suppressed" in st and len(st) == 2 and set(st) <= {"queued", "sent", "suppressed"}
+
+
+def test_test_alarm_and_notify_endpoints(client: TestClient) -> None:
+    r = client.post("/api/v1/live/alarms/test", json={})
+    assert r.status_code == 200 and r.json()["type"] == "test" and r.json()["notify"] == "disabled"
+    assert client.get("/api/v1/live/alarms?active=1").json()[0]["type"] == "test"
+    assert client.get(f"/api/v1/live/alarms/{r.json()['id']}/image.jpg").status_code == 404
+    r = client.post("/api/v1/live/notify/test")
+    assert r.status_code == 422 and "eksik" in r.json()["detail"]
+    cfg = client.put("/api/v1/live/notify", json={"enabled": False, "chatId": " -100 ", "token": "9:Z"}).json()
+    assert cfg == {"enabled": False, "chatId": "-100", "hasToken": True}
+
+
+def test_test_alarm_is_queued_and_sent_when_configured(client: TestClient) -> None:
+    mgr = client.app.state.live
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    rec = client.post("/api/v1/live/alarms/test", json={}).json()
+    assert rec["notify"] == "queued"
+    mgr.notifier.flush()
+    assert mgr.alarms.get(rec["id"])["notify"] == "sent"
+    assert client.post("/api/v1/live/notify/test").json() == {"ok": True}
+    assert client.get("/api/v1/live/alarms", params={"since": time.time() + 60}).json() == []
+    assert client.post("/api/v1/live/alarms/yok/ack").status_code == 404
+
+
+def test_notify_rejects_malformed_token_without_echo(client: TestClient) -> None:
+    secret = "BIÇİMSİZANAHTAR"
+    r = client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": secret})
+    assert r.status_code == 422 and "Telegram" in r.json()["detail"]
+    assert secret not in r.text
+    assert client.get("/api/v1/live/notify").json()["hasToken"] is False        # hiçbir şey yazılmadı
+
+
+def test_notify_test_reports_rejection_without_token(client: TestClient) -> None:
+    import httpx
+
+    mgr = client.app.state.live
+    mgr.notifier._client = httpx.Client(
+        transport=httpx.MockTransport(lambda r: httpx.Response(401, json={"ok": False, "description": "Unauthorized"})))
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "123:GIZLI"})
+    r = client.post("/api/v1/live/notify/test")
+    assert r.status_code == 422 and "GIZLI" not in r.text
+
+
+def test_alarm_image_endpoint_serves_stored_image(client: TestClient) -> None:
+    from bantvision.core.safety import SafetyAlarm
+
+    s = _fake_safety_session()
+    s.profile.safety.sendImage = True
+    jpeg = b"\xff\xd8\xff\xe0fake-jpeg"
+    client.app.state.live.on_safety(s, [SafetyAlarm("lying", 3, (0, 0, 1, 1), 0.0, 10.0)], [], jpeg)
+    a = client.get("/api/v1/live/alarms").json()[0]
+    assert a["image"] is True and a["type"] == "lying"
+    r = client.get(f"/api/v1/live/alarms/{a['id']}/image.jpg")
+    assert r.status_code == 200 and r.content == jpeg and r.headers["content-type"] == "image/jpeg"
+    assert r.headers["cache-control"] == "no-store"
+    assert client.get("/api/v1/live/alarms/..%2F..%2Fsecrets/image.jpg").status_code == 404
+
+
+def test_on_safety_ends_old_episode_before_registering_new_one(client: TestClient) -> None:
+    """Aynı karede aynı (iz, tür) için eski bölümün sonu ve yeni alarm gelirse eski kapanır, yeni açık kalır."""
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    old = mgr.alarms.list()[0]["id"]
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 20.0, 23.0)], [(1, "hands_up", True)], None)
+    by_id = {a["id"]: a for a in mgr.alarms.list()}
+    assert len(by_id) == 2 and by_id[old]["endedAt"] is not None
+    assert [a for a in by_id.values() if a["endedAt"] is None] != []
+    mgr.close_alarms("x")
+    assert all(a["endedAt"] is not None for a in mgr.alarms.list())
+
+
+def test_on_safety_cooldown_is_atomic_across_threads(client: TestClient) -> None:
+    """Birden çok oturum iş parçacığı aynı kamera/tür için aynı anda alarm verirse yalnız biri bildirim alır."""
+    import threading
+
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    barrier = threading.Barrier(8)
+
+    def fire(tid: int) -> None:
+        barrier.wait()
+        mgr.on_safety(s, [SafetyAlarm("hands_up", tid, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+
+    threads = [threading.Thread(target=fire, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    states = [a["notify"] for a in mgr.alarms.list()]
+    assert len(states) == 8 and sum(1 for n in states if n != "suppressed") == 1
+
+
+def test_deleting_safety_session_closes_its_alarm(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _sess, sid = _safety_session_with_fake(client, monkeypatch)
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    assert a["endedAt"] is None
+    assert client.delete(f"/api/v1/live/sessions/{sid}").status_code == 204
+    mgr = client.app.state.live
+    assert mgr.alarms.get(a["id"])["endedAt"] is not None
+    assert not mgr._alarm_of
+
+
+def test_stopping_safety_session_closes_its_alarm(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Çalışma döngüsü biterken (stop; kaynak silme / aynı kamerayı yeniden açma dahil) açık alarm kapanır."""
+    sess, _sid = _safety_session_with_fake(client, monkeypatch)
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    sess.stop()
+    assert client.app.state.live.alarms.get(a["id"])["endedAt"] is not None
+
+
+def test_switching_session_away_from_safety_closes_its_alarm(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core import Profile
+
+    _sess, sid = _safety_session_with_fake(client, monkeypatch)
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    r = client.put(f"/api/v1/live/sessions/{sid}/profile", json=Profile.people().to_dict())
+    assert r.status_code == 200 and r.json()["safety"] is None
+    assert client.app.state.live.alarms.get(a["id"])["endedAt"] is not None
+
+
+def test_app_shutdown_closes_open_alarms(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live.alarms import AlarmStore
+
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        _sess, _sid = _safety_session_with_fake(c, monkeypatch)
+        a = wait_for(lambda: c.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    assert AlarmStore(tmp_path).get(a["id"])["endedAt"] is not None
+
+
+def test_session_builds_safety_analyzer_from_shared_models() -> None:
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    det, pose = FakeDetector([]), FakePose(hands_up_kp())
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), detector=det, pose=pose)
+    try:
+        an = s._pipe.safety
+        assert an is not None and an._pose is pose and an.dc._detector is det and an.dc._gate is not None
+        assert s.snapshot_status()["safety"] == {"active": [], "lastAlarmAt": None}
+        s.set_profile(Profile.people())
+        assert s.snapshot_status()["safety"] is None
+        s.set_profile(Profile.jeweler())                       # yeniden güvenliğe: ortak modellerle yeni analizör
+        an2 = s._pipe.safety
+        assert an2 is not None and an2 is not an and an2._pose is pose and an2.dc._detector is det
+        assert an2.dc._gate is not None
+        plain = LiveSession("t2", lambda: "yok.mp4", Profile.people(), detector=det, pose=pose)
+        try:
+            assert plain._pipe.safety is None and plain.snapshot_status()["safety"] is None
+        finally:
+            plain.stop()
+    finally:
+        s.stop()
+
+
+def test_safety_overlay_follows_upscaled_frame() -> None:
+    """Alt akış (<720 px) büyütülerek çizilir: eklemler (piksel) aynı oranda büyür, iskelet yerinde kalır."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyResult
+
+    s = _offline_session(Profile.jeweler())
+    try:
+        kp = np.zeros((17, 3))
+        kp[5], kp[6] = (150, 100, 0.9), (210, 100, 0.9)        # omuz çizgisi 360×288 karede y = 100
+        track = type("T", (), {"id": 1, "box": np.array([0.3, 0.1, 0.7, 0.9])})()
+        r = type("R", (), {"safety": SafetyResult(tracks=[track], poses={1: kp})})()
+        img = s._render(np.zeros((288, 360, 3), np.uint8), s.profile, r)
+        assert img.shape[1] == 720 and img[200, 360].any() and not img[100, 180].any()
+    finally:
+        s.stop()
+
+
+def test_work_loop_survives_identical_clock_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows saati kaba: hızlı işlenen ardışık kareler aynı damgayı alırsa fps hesabı sıfıra bölünmemeli
+    (çalışma iş parçacığı ölürse oturum sessizce durur, alarm da gelmez)."""
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.live import session as session_mod
+
+    s = _offline_session(Profile())
+    try:
+        monkeypatch.setattr(session_mod.time, "monotonic", lambda: 12345.0)
+        frame = np.zeros((288, 352, 3), np.uint8)
+        for n in range(1, 8):
+            with s._frame_cv:
+                s._seq = n
+                s._latest = (n, n * 0.04, frame)
+                s._frame_cv.notify_all()
+            time.sleep(0.15)
+        assert s._worker.is_alive() and s.snapshot_status()["fps"] == 0.0
+    finally:
+        monkeypatch.undo()
+        s.stop()
+
+
+@pytest.mark.parametrize("safety", [
+    5, "x", [], {"handsUp": 5}, {"handsUp": None}, {"lying": []},
+    {"handsUp": {"enabled": "false"}}, {"handsUp": {"enabled": 1}}, {"lying": {"enabled": None}},
+    {"handsUp": {"seconds": "3"}}, {"handsUp": {"seconds": True}}, {"lying": {"seconds": None}},
+    {"handsUp": {"seconds": 2.9}}, {"handsUp": {"seconds": 5.1}}, {"lying": {"seconds": 4.9}},
+    {"lying": {"seconds": 30.1}}, {"handsUp": {"seconds": -3}}, {"sendImage": "evet"}, {"sendImage": 1},
+])
+def test_profile_rejects_malformed_safety_block(client: TestClient, safety: Any) -> None:
+    body = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    body["safety"] = safety
+    r = client.post("/api/v1/live/profiles", json=body)
+    assert r.status_code == 422 and "Güvenlik" in r.json()["detail"], r.text
+
+
+@pytest.mark.parametrize("seconds", ["NaN", "Infinity", "-Infinity", "1e999"])
+def test_profile_rejects_non_finite_safety_seconds(client: TestClient, seconds: str) -> None:
+    body = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    raw = json.dumps({**body, "safety": {"handsUp": {"enabled": True, "seconds": "@"}}}).replace('"@"', seconds)
+    r = client.post("/api/v1/live/profiles", content=raw, headers={"content-type": "application/json"})
+    assert r.status_code == 422 and "Güvenlik" in r.json()["detail"], r.text
+
+
+def test_profile_accepts_valid_safety_block_and_session_put_validates(client: TestClient) -> None:
+    body = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    ok = {"handsUp": {"enabled": False, "seconds": 5}, "lying": {"enabled": True, "seconds": 30}, "sendImage": True}
+    r = client.post("/api/v1/live/profiles", json={**body, "safety": ok, "name": "Yeni kuyumcu"})
+    assert r.status_code == 201 and r.json()["safety"]["lying"]["seconds"] == 30.0 and r.json()["safety"]["sendImage"]
+    assert client.post("/api/v1/live/profiles", json={**body, "safety": {}, "name": "Boş"}).status_code == 201
+    assert client.post("/api/v1/live/profiles", json={**body, "safety": None, "name": "Yok"}).status_code == 201
+    bad = {**body, "safety": {"lying": {"seconds": 99}}}
+    assert client.put(f"/api/v1/live/profiles/{body['id']}", json=bad).status_code == 422
+    sid = client.post("/api/v1/live/sources", json=camera()).json()["id"]
+    sess = client.post("/api/v1/live/sessions", json={"sourceId": sid, "profileId": body["id"]})
+    assert sess.status_code == 201, sess.text
+    s_id = sess.json()["id"]
+    try:
+        r = client.put(f"/api/v1/live/sessions/{s_id}/profile", json=bad)
+        assert r.status_code == 422 and "Güvenlik" in r.json()["detail"]
+    finally:
+        client.delete(f"/api/v1/live/sessions/{s_id}")
+
+
+def test_cleanup_loop_survives_failures(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Saatlik temizlikte bir hata döngüyü öldürmez; sonraki turda iş yine denenir."""
+    import threading
+
+    from bantvision.analyzer import app as app_mod
+    from bantvision.analyzer.jobs import JobStore
+    from bantvision.live.alarms import AlarmStore
+
+    monkeypatch.setattr(app_mod, "CLEANUP_INTERVAL_S", 0.05)
+    calls = {"jobs": 0, "alarms": 0}
+    real_expire = JobStore.expire
+
+    def jobs_expire(self: Any) -> Any:
+        calls["jobs"] += 1
+        if calls["jobs"] > 1:                                  # ilk çağrı açılışta; sonrakiler döngüden
+            raise OSError("disk hatası")
+        return real_expire(self)
+
+    def alarms_expire(self: Any, now: float, days: float = 7) -> int:
+        calls["alarms"] += 1
+        raise RuntimeError("alarm günlüğü bozuk")
+
+    monkeypatch.setattr(JobStore, "expire", jobs_expire)
+    monkeypatch.setattr(AlarmStore, "expire", alarms_expire)
+    with TestClient(create_app(Settings(data_dir=tmp_path))):
+        wait_for(lambda: calls["jobs"] >= 4, timeout=10)
+        assert any(t.name == "analiz-temizlik" and t.is_alive() for t in threading.enumerate())
+        wait_for(lambda: calls["alarms"] >= 2, timeout=10)           # iş hatasına rağmen alarm temizliği de denenir
