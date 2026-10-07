@@ -94,20 +94,19 @@ class EpisodeTracker:
     def update(
         self, key: tuple[int, str], verdict: bool | None, ts: float, threshold_s: float, grace_s: float = GRACE_S
     ) -> bool:
-        """Bu karenin kararı; True dönerse bu karede alarm doğdu (bölüm başına bir kez)."""
+        """Bu karenin kararı; True dönerse bu karede alarm doğdu (bölüm başına bir kez).
+        Stale episodes (non-monotonic ts, or gap > grace_s) report end via _pending_end and restart.
+        sweep() returns pending ends and removes ended episodes."""
         if verdict is not True:
             return False                                   # kopma: sweep grace_s'e göre bitirir
         ep = self._eps.get(key)
         gap = ts - ep.last_true if ep is not None else float('inf')
-        # Non-monotonic ts (looped clip): treat as stale episode, report end
-        if ep is not None and ts < ep.last_true:
+        # Stale episode (non-monotonic ts or gap > grace_s + epsilon): restart and report end
+        if ep is not None and (ts < ep.last_true or gap > grace_s + 1e-9):
             self._pending_end.append((key, ep.fired))
             self._eps[key] = _Episode(ts, ts)
             return False
-        # Stale episode (gap > grace_s + epsilon): restart and report end
-        if ep is None or gap > grace_s + 1e-9:
-            if ep is not None:
-                self._pending_end.append((key, ep.fired))
+        if ep is None:
             self._eps[key] = _Episode(ts, ts)
             return False
         ep.last_true = ts
@@ -117,15 +116,17 @@ class EpisodeTracker:
         return False
 
     def sweep(self, ts: float, alive: set[int], grace_s: float = GRACE_S) -> list[tuple[tuple[int, str], bool]]:
-        """Biten bölümler (iz yok ya da son True'dan beri > grace_s + epsilon): (anahtar, alarm vermiş mi)."""
+        """Biten bölümler (iz yok ya da son True'dan beri > grace_s + epsilon): (anahtar, alarm vermiş mi).
+        Returns pending ends (from update's stale restarts) plus newly dead episodes. Only deletes actually dead keys."""
         ended = self._pending_end.copy()
         self._pending_end.clear()
-        ended.extend(
+        dead = [
             (k, e.fired)
             for k, e in self._eps.items()
             if k[0] not in alive or ts - e.last_true > grace_s + 1e-9 or ts < e.last_true
-        )
-        for k, _ in ended:
+        ]
+        ended.extend(dead)
+        for k, _ in dead:
             self._eps.pop(k, None)
         return ended
 

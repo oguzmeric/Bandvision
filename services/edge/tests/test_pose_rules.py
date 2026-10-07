@@ -130,3 +130,43 @@ def test_episode_grace_adapts_to_frame_rate() -> None:
     for ts in [0.0, 1.0, 2.0, 3.0]:
         ep_strict.update((1, "test"), True, ts, 3.0)  # default grace_s=0.5
     assert ep_strict.active()[0][3] is False  # never fired
+
+
+def test_stale_restart_reports_end_and_keeps_new_episode() -> None:
+    # Fire episode with 40 frames at 0.1s (threshold 3.0)
+    ep = EpisodeTracker()
+    for t in range(40):
+        ep.update((7, "hands_up"), True, t / 10, 3.0)
+    # Episode fires at t=30 (3.0s)
+    assert ep.active()[0][3] is True
+    # Long gap: update at ts=20.0 treats as stale
+    assert not ep.update((7, "hands_up"), True, 20.0, 3.0)
+    # sweep reports the old fired episode ending, but keeps new episode
+    assert ep.sweep(20.1, {7}) == [((7, "hands_up"), True)]
+    assert ep.active() == [(7, "hands_up", 0.0, False)]
+    # New episode fires when threshold reached (20.0 + 3.0 = 23.0)
+    for ts_frac in range(31):
+        ts = 20.0 + ts_frac * 0.1
+        if ts > 23.0:
+            break
+        fired = ep.update((7, "hands_up"), True, ts, 3.0)
+        if ts >= 23.0:
+            assert fired
+        ep.sweep(ts, {7})
+    # Verify final state
+    assert ep.active()[0][3] is True  # new episode fired
+
+
+def test_backwards_timestamp_restarts() -> None:
+    # Episode with True frames at ts 5.0..6.0 (threshold 0.5)
+    ep = EpisodeTracker()
+    for ts in [5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6]:
+        ep.update((3, "lying"), True, ts, 0.5)
+    # Should have fired (5.5 - 5.0 = 0.5 >= 0.5)
+    assert ep.active()[0][3] is True
+    # Backwards timestamp: ts=1.0
+    assert not ep.update((3, "lying"), True, 1.0, 0.5)
+    # Next sweep reports old fired episode and shows new one
+    result = ep.sweep(1.0, {3})
+    assert result == [((3, "lying"), True)]
+    assert ep.active() == [(3, "lying", 0.0, False)]
