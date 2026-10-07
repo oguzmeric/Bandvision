@@ -234,3 +234,30 @@ def test_reset_does_not_report_episode_that_never_fired() -> None:
     assert r.active and not any(a[3] for a in r.active)                # bölüm var ama eşik dolmadı
     an.reset()
     assert an.process(FRAME, p, 10.0, 1.5).ended == []
+
+
+def test_missing_pose_skips_track_without_verdict_or_episode() -> None:
+    """Poz modeli hazır değil (estimate → None): o karede izin pozu yok, karar ve bölüm güncellemesi yok."""
+    an, _det, pose, p = make([BOX])
+    pose.kp = None
+    res = feed(an, p, 0, 60)                                           # 6 sn model yok
+    assert pose.calls > 0 and all(not r.poses and not r.active and not r.fired and not r.ended for r in res)
+    pose.kp = hands_up_kp()                                            # model geldi: sayım şimdi başlar
+    res = feed(an, p, 60, 120)
+    assert sum(len(r.fired) for r in res) == 1 and res[-1].active
+
+
+def test_end_all_reports_open_alarmed_episodes_and_pending_reset_ends() -> None:
+    an, _det, _pose, p = make([BOX])
+    tid = next(a.track_id for r in feed(an, p, 0, 50) for a in r.fired)
+    assert an.end_all() == [(tid, "hands_up", True)]
+    assert an.end_all() == [] and not an.episodes.active()             # ikinci çağrı boş
+
+    an2, _det2, _pose2, p2 = make([BOX])
+    tid2 = next(a.track_id for r in feed(an2, p2, 0, 50) for a in r.fired)
+    an2.reset()                                                        # sonu henüz bir sonuçta bildirilmedi
+    assert not an2.episodes.active() and an2.end_all() == [(tid2, "hands_up", True)]
+
+    an3, _det3, _pose3, p3 = make([BOX])
+    feed(an3, p3, 0, 20)                                               # alarm vermemiş bölüm bildirilmez
+    assert an3.episodes.active() and an3.end_all() == []

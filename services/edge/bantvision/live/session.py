@@ -66,6 +66,13 @@ class _Snapshot:
     boxes: tuple[tuple[float, float, float, float], ...]
 
 
+def fps_from_stamps(stamps: list[float]) -> float:
+    """İşlenen karelerin (en çok son 2 sn) damgalarından kare hızı. Windows saati kaba (~15 ms): hızlı işleme (sahte
+    tanıyıcı, boş sahne) aynı damgayı üretebilir; sıfıra bölme çalışma iş parçacığını öldürürdü."""
+    span = stamps[-1] - stamps[0] if stamps else 0.0
+    return (len(stamps) - 1) / span if len(stamps) > 2 and span > 0 else 0.0
+
+
 def open_capture(url: str) -> cv2.VideoCapture:
     """RTSP için FFmpeg seçenekleri; dosya/HTTP adresleri olduğu gibi açılır."""
     import os
@@ -232,7 +239,8 @@ class LiveSession:
                 "safety": ({"active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
                                        for tid, k, sec, _f in (self._pipe.safety.episodes.active()
                                                                if self._pipe.safety else [])],
-                            "lastAlarmAt": self._last_alarm_at}
+                            "lastAlarmAt": self._last_alarm_at,
+                            "model": getattr(self._pose, "state", "ready")}      # "loading" | "ready" | "error"
                            if self.profile.countMode == "safety" else None),
                 "ratePerMinute": rate // 2 if rate else 0,
                 "calibrating": self.calibrating, "calibrationMessage": self.calibration_message,
@@ -368,7 +376,7 @@ class LiveSession:
             return
         with self._lock:
             an = self._pipe.safety
-            ended = [(tid, kind, True) for tid, kind, _sec, fired in an.episodes.active() if fired] if an else []
+            ended = an.end_all() if an else []              # açık alarmlı bölümler + reset() ile kesilip bildirilmemişler
         if ended:
             try:
                 self._alarm_sink(self, [], ended, None)
@@ -424,10 +432,7 @@ class LiveSession:
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
             with self._lock:
-                # Windows saati kaba (~15 ms): hızlı işleme (sahte tanıyıcı, boş sahne) aynı damgayı üretebilir; sıfıra
-                # bölme çalışma iş parçacığını öldürürdü
-                span = stamps[-1] - stamps[0]
-                self.status.fps = (len(stamps) - 1) / span if len(stamps) > 2 and span > 0 else 0.0
+                self.status.fps = fps_from_stamps(stamps)
                 self.status.height, self.status.width = frame.shape[:2]
             if now - last_render >= 1 / 12:
                 last_render = now

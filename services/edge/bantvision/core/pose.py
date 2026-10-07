@@ -5,8 +5,10 @@ görüntü pikseline geri çevrilir. Model ilk kullanımda GitHub sürümünden 
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
+import time
 import urllib.request
 
 import cv2
@@ -51,18 +53,37 @@ def pose_model_path() -> pathlib.Path:
     return pathlib.Path(base) / MODEL_NAME
 
 
-def ensure_pose_model() -> pathlib.Path:
-    """Poz modelini yoksa indirir; parmak izi tutmazsa siler ve hata verir."""
+DOWNLOAD_TIMEOUT_S = 30.0               # bağlanma ve her okuma için (takılan ağ sonsuza dek beklemez)
+DOWNLOAD_DEADLINE_S = 300.0             # tüm indirme için üst sınır (yavaş damlayan bağlantı da biter)
+_CHUNK = 1 << 16
+
+
+def _download(url: str, dest: pathlib.Path, deadline_s: float) -> None:
+    end = time.monotonic() + deadline_s
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_S) as resp, dest.open("wb") as fh:
+        while chunk := resp.read(_CHUNK):
+            if time.monotonic() > end:
+                raise TimeoutError(f"Poz modeli {deadline_s:.0f} sn içinde indirilemedi.")
+            fh.write(chunk)
+
+
+def ensure_pose_model(deadline_s: float = DOWNLOAD_DEADLINE_S) -> pathlib.Path:
+    """Poz modelini yoksa indirir (akış halinde, zaman aşımlı); parmak izi tutmazsa ya da herhangi bir hatada yarım
+    dosyayı (.part) siler ve hata verir."""
     p = pose_model_path()
     if p.exists() and _sha256(p) == MODEL_SHA256:
         return p
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".part")
-    urllib.request.urlretrieve(MODEL_URL, tmp)
-    if _sha256(tmp) != MODEL_SHA256:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError("Poz modeli doğrulanamadı (SHA-256 tutmuyor).")
-    tmp.replace(p)
+    try:
+        _download(MODEL_URL, tmp, deadline_s)
+        if _sha256(tmp) != MODEL_SHA256:
+            raise RuntimeError("Poz modeli doğrulanamadı (SHA-256 tutmuyor).")
+        tmp.replace(p)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
     return p
 
 

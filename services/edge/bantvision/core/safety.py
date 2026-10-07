@@ -81,6 +81,14 @@ class SafetyAnalyzer:
         self.episodes = EpisodeTracker()
         self._last_box.clear()
 
+    def end_all(self) -> list[tuple[int, str, bool]]:
+        """Kapanış (oturum durdu): alarm vermiş her açık bölüm bitirilip döndürülür; `reset()` ile kesilip henüz
+        bildirilmemiş olanlar ve ertelenmiş sonlar dahil. Sonrasında analizörün bölümü kalmaz."""
+        ends = self._reset_ended + [(k[0], k[1], fired) for k, fired in self.episodes.sweep(0.0, set()) if fired]
+        self._reset_ended = []
+        self._last_box.clear()
+        return ends
+
     def process(self, bgr: np.ndarray, profile: Profile, fps: float, ts: float) -> SafetyResult:
         h, w = bgr.shape[:2]
         # İzleyici tam karede (alan yok, sayım çizgisi önemsiz): alan kuralı aşağıda yalnızca konum noktasına uygulanır.
@@ -97,6 +105,8 @@ class SafetyAnalyzer:
                 continue
             self._last_box[t.id] = box
             kp = self.pose.estimate(bgr, (x1 * w, y1 * h, x2 * w, y2 * h))
+            if kp is None:                                          # poz modeli hazır değil / yüklenemedi: karar yok
+                continue
             res.poses[t.id] = kp
             for kind, fn, rule in rules:
                 if not rule.enabled:

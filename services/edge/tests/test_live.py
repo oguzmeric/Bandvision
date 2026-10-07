@@ -573,8 +573,8 @@ def test_catalog_has_safety_preset(client: TestClient) -> None:
 
 # ---------------------------------------------------------------------- poz güvenlik: oturum, alarm günlüğü, Telegram
 
-def _safety_session_with_fake(client: TestClient, monkeypatch: pytest.MonkeyPatch,
-                              send_image: bool = False) -> tuple[Any, str]:
+def _safety_session_with_fake(client: TestClient, monkeypatch: pytest.MonkeyPatch, send_image: bool = False,
+                              pose: Any = None) -> tuple[Any, str]:
     """Kuyumcu profiliyle dosya kaynağı; analizör sahte tanıyıcı + sahte pozla (eller yukarı) çalışır.
 
     Sahteler oturum açılmadan ÖNCE yöneticiye konur: oturum analizörünü onlardan kurar (çalışan iş parçacığının
@@ -584,7 +584,7 @@ def _safety_session_with_fake(client: TestClient, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
     mgr = client.app.state.live
     mgr.detector = FakeDetector([(280, 80, 360, 440)])
-    mgr.pose = FakePose(hands_up_kp())
+    mgr.pose = pose or FakePose(hands_up_kp())
     src = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
                                                           name="Tezgah")).json()
     prof = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
@@ -811,7 +811,7 @@ def test_session_builds_safety_analyzer_from_shared_models() -> None:
     try:
         an = s._pipe.safety
         assert an is not None and an._pose is pose and an.dc._detector is det and an.dc._gate is not None
-        assert s.snapshot_status()["safety"] == {"active": [], "lastAlarmAt": None}
+        assert s.snapshot_status()["safety"] == {"active": [], "lastAlarmAt": None, "model": "ready"}   # sahte: durumsuz
         s.set_profile(Profile.people())
         assert s.snapshot_status()["safety"] is None
         s.set_profile(Profile.jeweler())                       # yeniden güvenliğe: ortak modellerle yeni analizör
@@ -846,28 +846,16 @@ def test_safety_overlay_follows_upscaled_frame() -> None:
         s.stop()
 
 
-def test_work_loop_survives_identical_clock_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows saati kaba: hızlı işlenen ardışık kareler aynı damgayı alırsa fps hesabı sıfıra bölünmemeli
-    (çalışma iş parçacığı ölürse oturum sessizce durur, alarm da gelmez)."""
-    import numpy as np
+def test_fps_from_stamps_never_divides_by_zero() -> None:
+    """Windows saati kaba: hızlı işlenen ardışık kareler aynı damgayı alabilir; fps hesabı sıfıra bölünmemeli
+    (bölünürse çalışma iş parçacığı ölür, oturum sessizce durur, alarm da gelmez)."""
+    from bantvision.live.session import fps_from_stamps
 
-    from bantvision.core import Profile
-    from bantvision.live import session as session_mod
-
-    s = _offline_session(Profile())
-    try:
-        monkeypatch.setattr(session_mod.time, "monotonic", lambda: 12345.0)
-        frame = np.zeros((288, 352, 3), np.uint8)
-        for n in range(1, 8):
-            with s._frame_cv:
-                s._seq = n
-                s._latest = (n, n * 0.04, frame)
-                s._frame_cv.notify_all()
-            time.sleep(0.15)
-        assert s._worker.is_alive() and s.snapshot_status()["fps"] == 0.0
-    finally:
-        monkeypatch.undo()
-        s.stop()
+    assert fps_from_stamps([]) == 0.0 and fps_from_stamps([5.0]) == 0.0 and fps_from_stamps([5.0, 5.1]) == 0.0
+    assert fps_from_stamps([7.0, 7.0, 7.0]) == 0.0                                   # aynı damga: bölme yok
+    assert fps_from_stamps([7.0] * 40) == 0.0
+    assert fps_from_stamps([1.0, 1.1, 1.2, 1.3, 1.4, 1.5]) == pytest.approx(10.0)    # 5 aralık / 0,5 sn
+    assert fps_from_stamps([0.0, 0.5, 1.0]) == pytest.approx(2.0)
 
 
 @pytest.mark.parametrize("safety", [
@@ -892,7 +880,8 @@ def test_profile_rejects_non_finite_safety_seconds(client: TestClient, seconds: 
     assert r.status_code == 422 and "Güvenlik" in r.json()["detail"], r.text
 
 
-def test_profile_accepts_valid_safety_block_and_session_put_validates(client: TestClient) -> None:
+def test_profile_accepts_valid_safety_block_and_session_put_validates(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     body = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
     ok = {"handsUp": {"enabled": False, "seconds": 5}, "lying": {"enabled": True, "seconds": 30}, "sendImage": True}
     r = client.post("/api/v1/live/profiles", json={**body, "safety": ok, "name": "Yeni kuyumcu"})
@@ -901,15 +890,13 @@ def test_profile_accepts_valid_safety_block_and_session_put_validates(client: Te
     assert client.post("/api/v1/live/profiles", json={**body, "safety": None, "name": "Yok"}).status_code == 201
     bad = {**body, "safety": {"lying": {"seconds": 99}}}
     assert client.put(f"/api/v1/live/profiles/{body['id']}", json=bad).status_code == 422
-    sid = client.post("/api/v1/live/sources", json=camera()).json()["id"]
-    sess = client.post("/api/v1/live/sessions", json={"sourceId": sid, "profileId": body["id"]})
-    assert sess.status_code == 201, sess.text
-    s_id = sess.json()["id"]
-    try:
-        r = client.put(f"/api/v1/live/sessions/{s_id}/profile", json=bad)
-        assert r.status_code == 422 and "Güvenlik" in r.json()["detail"]
-    finally:
-        client.delete(f"/api/v1/live/sessions/{s_id}")
+    # oturum: yerel video dosyası + sahte tanıyıcı/poz (LAN'daki gerçek cihaza bağlanılmaz, model yüklenmez)
+    _sess, s_id = _safety_session_with_fake(client, monkeypatch)
+    live_profile = client.get(f"/api/v1/live/sessions/{s_id}").json()["profile"]
+    r = client.put(f"/api/v1/live/sessions/{s_id}/profile", json={**live_profile, "safety": bad["safety"]})
+    assert r.status_code == 422 and "Güvenlik" in r.json()["detail"]
+    r = client.put(f"/api/v1/live/sessions/{s_id}/profile", json={**live_profile, "safety": ok})
+    assert r.status_code == 200 and r.json()["profile"]["safety"]["lying"]["seconds"] == 30.0
 
 
 def test_cleanup_loop_survives_failures(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -940,3 +927,202 @@ def test_cleanup_loop_survives_failures(tmp_path: pathlib.Path, monkeypatch: pyt
         wait_for(lambda: calls["jobs"] >= 4, timeout=10)
         assert any(t.name == "analiz-temizlik" and t.is_alive() for t in threading.enumerate())
         wait_for(lambda: calls["alarms"] >= 2, timeout=10)           # iş hatasına rağmen alarm temizliği de denenir
+
+
+# ---------------------------------------------------------------------- düzeltme turu 1
+
+def test_validation_error_does_not_echo_secrets(client: TestClient) -> None:
+    """FastAPI'nin varsayılan 422'si girilen değeri (`input`) yankılar; anahtar/şifre yanıta sızmamalı."""
+    secret = "GIZLIANAHTAR" * 25                                                     # 300 karakter > sınır
+    r = client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": secret})
+    assert r.status_code == 422 and "GIZLIANAHTAR" not in r.text
+    err = r.json()["detail"][0]
+    assert err["type"] == "string_too_long" and err["loc"][-1] == "token"           # panelin okuduğu alanlar korunur
+    assert not {"input", "ctx", "url"} & err.keys()
+    for bad in (123456789012, ["GIZLIDEGER"], {"k": "GIZLIDEGER"}):                  # dize olmayan anahtar
+        r = client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": bad})
+        assert r.status_code == 422 and "GIZLIDEGER" not in r.text and "123456789012" not in r.text, r.text
+        assert r.json()["detail"][0]["type"] == "string_type" and "input" not in r.json()["detail"][0]
+    r = client.post("/api/v1/live/sources", json=camera(password="SIFRE" * 60))     # kamera şifresi de sızmaz
+    assert r.status_code == 422 and "SIFRE" not in r.text
+    r = client.post("/api/v1/live/sources", json={**camera(), "extra": 1})
+    assert r.status_code == 422 and r.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+def test_cooldown_bookkeeping_uses_monotonic_clock(client: TestClient) -> None:
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr = client.app.state.live
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    mgr.on_safety(_fake_safety_session(), [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    (stamp,) = mgr._last_sent.values()
+    assert abs(stamp - time.monotonic()) < 5 and abs(stamp - time.time()) > 1e6      # tekdüze saat, duvar saati değil
+    assert abs(mgr.alarms.list()[0]["firedAt"] - time.time()) < 5                    # alarm zamanı duvar saati
+
+
+def test_on_safety_ends_open_alarm_whenever_an_entry_exists(client: TestClient) -> None:
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    aid = mgr.alarms.list()[0]["id"]
+    mgr.on_safety(s, [], [(1, "hands_up", False)], None)                            # was_fired bayrağı önemsiz
+    assert mgr.alarms.get(aid)["endedAt"] is not None and not mgr._alarm_of
+
+
+def test_on_safety_new_alarm_ends_open_one_with_same_key(client: TestClient) -> None:
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    first = mgr.alarms.list()[0]["id"]
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 20.0, 23.0)], [], None)   # eskisinin sonu bildirilmedi
+    by_id = {a["id"]: a for a in mgr.alarms.list()}
+    second = next(i for i in by_id if i != first)
+    assert by_id[first]["endedAt"] is not None and by_id[second]["endedAt"] is None
+    assert list(mgr._alarm_of.values()) == [second]
+
+
+def test_in_flight_alarm_after_leaving_safety_is_recorded_and_closed(client: TestClient) -> None:
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr = client.app.state.live
+    s = _fake_safety_session(profile=Profile.people())                              # oturum güvenlikten çıkmış
+    mgr.on_safety(s, [SafetyAlarm("lying", 4, (0, 0, 1, 1), 0.0, 10.0)], [], None)
+    (a,) = mgr.alarms.list()
+    assert a["type"] == "lying" and a["endedAt"] is not None and not mgr._alarm_of
+
+
+def test_session_stop_reports_alarms_cut_by_reset() -> None:
+    """Alarmlı bölüm `reset()` ile kesilmiş ama sonu bir sonraki karede bildirilecekken oturum durursa o son da iletilir."""
+    import numpy as np
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyAnalyzer
+    from bantvision.live.session import LiveSession
+
+    calls: list[Any] = []
+    det, pose = FakeDetector([(280, 80, 360, 440)]), FakePose(hands_up_kp())
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), detector=det, pose=pose,
+                    alarm_sink=lambda *a: calls.append(a))
+    try:
+        an = SafetyAnalyzer(detector=det, pose=pose)             # kare akmayan oturumda kapısız analizör: elle sürülür
+        with s._lock:
+            s._pipe.safety = an
+            frame = np.zeros((480, 640, 3), np.uint8)
+            fired = [a for k in range(50) for a in an.process(frame, s.profile, 10.0, k / 10.0).fired]
+            assert len(fired) == 1
+            s._pipe.reset_count()                                # bölüm kesilir; sonu henüz hiçbir sonuçta bildirilmedi
+            assert not an.episodes.active()
+    finally:
+        s.stop()
+    assert [c[2] for c in calls] == [[(fired[0].track_id, "hands_up", True)]] and calls[0][1] == []
+
+
+def test_shared_pose_loads_in_background_and_never_blocks() -> None:
+    import threading
+
+    from bantvision.live.api import SharedPose
+
+    gate, started, calls = threading.Event(), threading.Event(), []
+
+    class Model:
+        def estimate(self, *_a: Any, **_k: Any) -> str:
+            return "kp"
+
+    def loader() -> Model:
+        calls.append(1)
+        started.set()
+        assert gate.wait(30)
+        return Model()
+
+    pose = SharedPose(loader=loader)
+    assert pose.state == "loading" and pose.error == ""
+    t0 = time.monotonic()
+    assert pose.estimate("bgr", (0, 0, 1, 1)) is None                                # engellemez
+    assert time.monotonic() - t0 < 1.0 and started.wait(5) and pose.state == "loading"
+    assert pose.estimate("bgr", (0, 0, 1, 1)) is None and len(calls) == 1            # yükleme sürerken ikinci iş parçacığı yok
+    gate.set()
+    wait_for(lambda: pose.state == "ready", timeout=10)
+    assert pose.estimate("bgr", (0, 0, 1, 1)) == "kp" and pose.error == "" and len(calls) == 1
+
+
+def test_shared_pose_failure_is_logged_and_retried_only_after_60_seconds(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from bantvision.live.api import SharedPose
+
+    now, calls = [1000.0], []
+
+    class Model:
+        def estimate(self, *_a: Any, **_k: Any) -> str:
+            return "kp"
+
+    def loader() -> Model:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("ağ yok")
+        return Model()
+
+    pose = SharedPose(loader=loader, clock=lambda: now[0])
+    with caplog.at_level(logging.ERROR):
+        assert pose.estimate("bgr", (0, 0, 1, 1)) is None
+        wait_for(lambda: pose.state == "error", timeout=10)
+    assert pose.error.startswith("Poz modeli yüklenemedi") and "ağ yok" in pose.error
+    assert any("Poz modeli yüklenemedi" in r.getMessage() for r in caplog.records)
+    for _ in range(5):                                                              # her karede yeniden denenmez
+        assert pose.estimate("bgr", (0, 0, 1, 1)) is None
+    now[0] += 59.0
+    assert pose.estimate("bgr", (0, 0, 1, 1)) is None
+    time.sleep(0.3)
+    assert len(calls) == 1 and pose.state == "error"
+    now[0] += 2.0                                                                    # toplam 61 sn: yeniden denenir
+    assert pose.estimate("bgr", (0, 0, 1, 1)) is None
+    wait_for(lambda: pose.state == "ready", timeout=10)
+    assert len(calls) == 2 and pose.error == "" and pose.estimate("bgr", (0, 0, 1, 1)) == "kp"
+
+
+def test_session_status_reports_pose_model_state() -> None:
+    from bantvision.core import Profile
+    from bantvision.live.api import SharedPose
+    from bantvision.live.session import LiveSession
+
+    def broken() -> Any:
+        raise OSError("ağ yok")
+
+    pose = SharedPose(loader=broken)
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), pose=pose)
+    try:
+        assert s.snapshot_status()["safety"]["model"] == "loading"
+        pose.estimate("bgr", (0, 0, 1, 1))
+        wait_for(lambda: s.snapshot_status()["safety"]["model"] == "error", timeout=10)
+    finally:
+        s.stop()
+
+
+def test_safety_session_keeps_streaming_while_pose_model_loads(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Poz modeli yüklenirken (indirme) görüntü akar ve durum "loading" der; model gelince alarm doğar."""
+    import threading
+
+    from fakes_safety import FakePose, hands_up_kp
+
+    from bantvision.live.api import SharedPose
+
+    gate = threading.Event()
+
+    def loader() -> Any:
+        assert gate.wait(60)
+        return FakePose(hands_up_kp())
+
+    _sess, sid = _safety_session_with_fake(client, monkeypatch, pose=SharedPose(loader=loader))
+    base = f"/api/v1/live/sessions/{sid}"
+    v = wait_for(lambda: (v := client.get(base).json())["state"] == "live" and v["fps"] > 0 and v, timeout=30)
+    assert v["safety"]["model"] == "loading" and client.get("/api/v1/live/alarms").json() == []
+    assert wait_for(lambda: client.get(f"{base}/frame.jpg").status_code == 200, timeout=10)
+    gate.set()
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    assert a["type"] == "hands_up" and client.get(base).json()["safety"]["model"] == "ready"

@@ -16,9 +16,10 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
 import cv2
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
@@ -101,6 +102,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        """FastAPI'nin varsayılan 422'si her hatada girilen değeri (`input`) yankılar: aşırı uzun/yanlış türde bir
+        Telegram anahtarı ya da kamera şifresi yanıt gövdesinde geri dönerdi. Aynı biçim (`detail` listesi: type, loc,
+        msg); `input`, `ctx` ve `url` düşer. Panel yalnızca `type` ve `loc`'u okur."""
+        errors = [{k: v for k, v in e.items() if k not in ("input", "ctx", "url")} for e in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": errors})
+
     if settings.cors_origins:
         app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"],
                            allow_headers=["*"])

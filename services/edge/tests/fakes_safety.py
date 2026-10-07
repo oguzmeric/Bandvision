@@ -18,13 +18,14 @@ class FakeDetector:
 
 
 class FakePose:
-    """Kutudan bağımsız sabit eklemler (17×3 piksel); `kp` testte değiştirilir; `calls` çağrı sayısı."""
+    """Kutudan bağımsız sabit eklemler (17×3 piksel); `kp` testte değiştirilir (None: model hazır değil);
+    `calls` çağrı sayısı."""
 
-    def __init__(self, kp: np.ndarray) -> None:
+    def __init__(self, kp: np.ndarray | None) -> None:
         self.kp = kp
         self.calls = 0
 
-    def estimate(self, _bgr: np.ndarray, _box: object) -> np.ndarray:
+    def estimate(self, _bgr: np.ndarray, _box: object) -> np.ndarray | None:
         self.calls += 1
         return self.kp
 

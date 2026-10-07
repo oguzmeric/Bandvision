@@ -5,11 +5,12 @@ Panel (apps/dashboard) bu uçlara sunucu tarafından, erişim anahtarıyla konu�
 """
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any, ClassVar, Literal
 
 import cv2
@@ -26,6 +27,8 @@ from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
+
+_LOG = logging.getLogger(__name__)
 
 
 class _Strict(BaseModel):
@@ -95,20 +98,72 @@ class SharedDetector:
             return self._inner.detect(*args, **kwargs)
 
 
-class SharedPose:
-    """Tüm güvenlik kameralarında tek poz modeli; kareler sırayla."""
+def _load_pose_estimator() -> Any:
+    from ..core.pose import PoseEstimator
 
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
+    return PoseEstimator()
+
+
+class SharedPose:
+    """Tüm güvenlik kameralarında tek poz modeli; kareler sırayla.
+
+    Model (indirme dahil) ilk kullanımda ARKA PLAN iş parçacığında yüklenir: o sürece `estimate` engellemeden None
+    döner (oturumların görüntüsü ve durdurma/silme takılmaz; analizör o karede poza bakmaz). Yükleme hatasında
+    Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state`: "loading" | "ready" | "error"."""
+
+    RETRY_S = 60.0
+
+    def __init__(self, loader: Callable[[], Any] = _load_pose_estimator,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self._loader, self._clock = loader, clock
+        self._lock = threading.Lock()                   # durum ve yükleme iş parçacığı
+        self._infer = threading.Lock()                  # kareler sırayla işlenir
         self._inner: Any = None
+        self._state = "loading"
+        self._error = ""
+        self._failed_at = 0.0
+        self._thread: threading.Thread | None = None
+
+    @property
+    def state(self) -> str:
+        with self._lock:
+            return self._state
+
+    @property
+    def error(self) -> str:
+        """Son yükleme hatası (Türkçe); hata yoksa boş."""
+        with self._lock:
+            return self._error
 
     def estimate(self, *args: Any, **kwargs: Any) -> Any:
-        with self._lock:
-            if self._inner is None:
-                from ..core.pose import PoseEstimator
+        inner = self._inner
+        if inner is None:
+            self._start_loading()
+            return None
+        with self._infer:
+            return inner.estimate(*args, **kwargs)
 
-                self._inner = PoseEstimator()
-            return self._inner.estimate(*args, **kwargs)
+    def _start_loading(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            if self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
+                return
+            self._state = "loading"
+            self._thread = threading.Thread(target=self._load, name="poz-modeli", daemon=True)
+            self._thread.start()
+
+    def _load(self) -> None:
+        try:
+            inner = self._loader()
+        except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
+            msg = f"Poz modeli yüklenemedi: {e}"
+            with self._lock:
+                self._state, self._error, self._failed_at = "error", msg, self._clock()
+            _LOG.error(msg)
+            return
+        with self._lock:
+            self._inner, self._state, self._error = inner, "ready", ""
 
 
 class SessionIn(_Strict):
@@ -145,7 +200,7 @@ class LiveManager:
         self.pose = SharedPose()
         # Güvenlik alarmı: `on_safety` birden çok oturum iş parçacığından gelir; iki tablo bu kilitle korunur
         self._alarm_lock = threading.Lock()
-        self._last_sent: dict[tuple[str, str], float] = {}         # (kamera, tür) → son bildirim zamanı
+        self._last_sent: dict[tuple[str, str], float] = {}         # (kamera, tür) → son bildirim (time.monotonic)
         self._alarm_of: dict[tuple[str, int, str], str] = {}      # (oturum, iz, tür) → açık alarm kimliği
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
@@ -159,27 +214,37 @@ class LiveManager:
 
     def on_safety(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None) -> None:
         """Oturumdan: biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim). Biten önce işlenir: aynı karede
-        aynı (iz, tür) için eski bölümün sonu ile yeni alarm gelirse eski kapanır, yeni açık kalır. Tekrar önleme
-        (kamera ve tür başına `COOLDOWN_S`) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez."""
-        now = time.time()
+        aynı (iz, tür) için eski bölümün sonu ile yeni alarm gelirse eski kapanır, yeni açık kalır; yeni alarm aynı
+        anahtarda hâlâ açık eski bir alarmın üstüne yazmaz (önce onu kapatır). Tekrar önleme (kamera ve tür başına
+        `COOLDOWN_S`, tekdüze saatle) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez.
+        Oturum bu sırada güvenlikten çıkmışsa (uçuştaki alarm) kayıt tutulur ve hemen kapatılır; açık kalmaz."""
+        now = time.time()                                   # alarm zamanları duvar saati
+        mono = time.monotonic()                             # yalnız tekrar önleme süresi
         camera = getattr(s, "name", "Kamera")
         send_image = bool(getattr(s.profile, "safety", None) and s.profile.safety.sendImage)
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
         with self._alarm_lock:
-            for tid, kind, was_fired in ended:
+            in_safety = getattr(s.profile, "countMode", "safety") == "safety"
+            for tid, kind, _was_fired in ended:
                 aid = self._alarm_of.pop((s.id, tid, kind), None)
-                if was_fired and aid:
+                if aid:
                     self.alarms.end(aid, now)
             for a in fired:
                 notify = "disabled"
                 if self.notifier.configured():
                     last = self._last_sent.get((cam_key, a.kind))
-                    notify = "suppressed" if last is not None and now - last < COOLDOWN_S else "queued"
+                    notify = "suppressed" if last is not None and mono - last < COOLDOWN_S else "queued"
                 rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now,
                                        jpeg if send_image else None, notify)
-                self._alarm_of[(s.id, a.track_id, a.kind)] = rec_["id"]
+                old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
+                if old:
+                    self.alarms.end(old, now)
+                if in_safety:
+                    self._alarm_of[(s.id, a.track_id, a.kind)] = rec_["id"]
+                else:
+                    self.alarms.end(rec_["id"], now)
                 if notify == "queued":
-                    self._last_sent[(cam_key, a.kind)] = now
+                    self._last_sent[(cam_key, a.kind)] = mono
                     self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now), jpeg if send_image else None)
 
     def close_alarms(self, session_id: str, now: float | None = None) -> None:
