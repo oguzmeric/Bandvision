@@ -9,6 +9,7 @@ import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
 import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
+import { SafetyPanel, SafetySettings } from "./SafetyPanel";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, STATE_LABELS, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
@@ -31,6 +32,9 @@ function Counter({ label, value, tone, hint, testId }: { label: string; value: n
 /** Açık canlı sayımların özeti: her kamerada giriş/çıkış (ya da adet) bir bakışta; tıklayınca o kamera açılır */
 function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: boolean; onSelect: () => void }) {
   const ok = s.state === "live";
+  const watch = s.profile.countMode === "safety";
+  // güvenlik: son 5 dakikada alarm olduysa kırmızı nokta ve "Alarm" (lastAlarmAt: unix saniye)
+  const alarmed = s.safety?.lastAlarmAt != null && Date.now() / 1000 - s.safety.lastAlarmAt < 300;
   return (
     <button type="button" role="tab" aria-selected={selected} onClick={onSelect} data-testid="session-card"
             className={`rounded-2xl border px-3.5 py-2.5 text-left transition ${selected ? "border-brand-500 bg-brand-50 shadow-sm" : "border-line bg-white hover:border-brand-100"}`}>
@@ -38,9 +42,17 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
         <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${ok ? "bg-ok-600" : s.state === "error" || s.state === "ended" ? "bg-nok-600" : "bg-[#f08a24]"}`} />
         <span className="truncate text-[13px] font-semibold">{s.name}</span>
       </span>
-      <span className="mt-1 block truncate text-[11.5px] text-faint">{s.profile.name}{s.counting ? "" : " · duruyor"}</span>
+      <span className="mt-1 block truncate text-[11.5px] text-faint">{s.profile.name}{s.counting || watch ? "" : " · duruyor"}</span>
       <span className="mt-1.5 flex gap-3 text-sm tabular-nums">
-        {s.twoWay ? (
+        {watch ? (
+          alarmed ? (
+            <span className="flex items-center gap-1.5 font-semibold text-nok-600">
+              <span aria-hidden="true" className="h-2 w-2 rounded-full bg-nok-600" />Alarm
+            </span>
+          ) : (
+            <span className="text-[13px] text-muted">Nöbette</span>
+          )
+        ) : s.twoWay ? (
           <>
             <span><span className="text-[11.5px] font-medium text-ok-600">Giriş</span> <b>{int(s.total)}</b></span>
             <span><span className="text-[11.5px] font-medium text-warn-700">Çıkış</span> <b>{int(s.totalOut)}</b></span>
@@ -200,7 +212,10 @@ export default function LiveView() {
   }
 
   async function closeSession() {
-    if (!session || !confirm("Canlı sayım kapatılsın mı? Sayılar sıfırlanır.")) return;
+    const text = session?.profile.countMode === "safety"
+      ? "Canlı sayım kapatılsın mı? Bu kamera izlenmez ve alarm vermez."
+      : "Canlı sayım kapatılsın mı? Sayılar sıfırlanır.";
+    if (!session || !confirm(text)) return;
     await api(`sessions/${session.id}`, { method: "DELETE" }).catch(() => undefined);
     router.replace("/live");
     load();
@@ -236,6 +251,7 @@ export default function LiveView() {
   const p = draft ?? session.profile;
   const mode: CountMode = (p.countMode as CountMode | undefined) ?? "blob";
   const twoWay = mode === "detect";
+  const safety = mode === "safety";
   const g = geometryOf(p);
   const live = session.state === "live";
   const stateTone = live ? "bg-ok-50 text-ok-600" : session.state === "ended" ? "bg-canvas-2 text-muted" : "bg-warn-50 text-warn-700";
@@ -267,7 +283,7 @@ export default function LiveView() {
           </div>
           {draft ? (
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
-                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
+                       value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} showLine={!safety} editable={!teaching}>
               {teaching && (
                 <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt} disabled={teachBusy}
                         className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-500" />
@@ -285,52 +301,61 @@ export default function LiveView() {
 
         <aside className="grid gap-4">
           {!draft ? (
-            <section className="card p-4" aria-label="Sayım">
-              {twoWay ? (
-                <div className="grid grid-cols-2 gap-2.5">
-                  <Counter label="Giriş" value={session.total} tone="in" testId="live-in" />
-                  <Counter label="Çıkış" value={session.totalOut} tone="out" testId="live-out" />
+            <>
+              {safety && <SafetyPanel session={session} />}
+              <section className="card p-4" aria-label={safety ? "Kamera" : "Sayım"}>
+                {safety ? null : twoWay ? (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Counter label="Giriş" value={session.total} tone="in" testId="live-in" />
+                    <Counter label="Çıkış" value={session.totalOut} tone="out" testId="live-out" />
+                  </div>
+                ) : (
+                  <Counter label="Sayılan" value={session.total} tone="brand" hint={`${int(session.ratePerMinute)} adet/dk`} testId="live-count" />
+                )}
+                {twoWay && (p.staffColors?.length ?? 0) > 0 && (
+                  <p className="mt-2 text-center text-[12.5px] text-muted" data-testid="live-staff">
+                    Personel geçişi: <b className="tabular-nums text-ink">{int(session.staffIn + session.staffOut)}</b>
+                  </p>
+                )}
+                {twoWay && (
+                  <button type="button" onClick={flipEntry} className={`${btn} mt-3 flex w-full items-center justify-between`}>
+                    <span>Giriş yönü: {p.countLine ? "çizgideki ok yönünde" : DIRECTION_LABELS[p.direction].toLocaleLowerCase("tr")}</span>
+                    <span className="font-semibold text-brand-500">⇅ Çevir</span>
+                  </button>
+                )}
+                {safety ? (
+                  <button type="button" className={`${btn} w-full`} onClick={beginCalibration}>Ayarla</button>
+                ) : (
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <button type="button" onClick={() => act(session.counting ? "stop" : "start")}
+                            className={`h-11 rounded-[11px] text-sm font-semibold text-white ${session.counting ? "bg-[#f08a24] hover:brightness-105" : "bg-ok-600 hover:brightness-105"}`}>
+                      {session.counting ? "Durdur" : "Başlat"}
+                    </button>
+                    <button type="button" className={btn} onClick={() => confirm("Sayaç sıfırlansın mı?") && act("reset")}>Sıfırla</button>
+                    <button type="button" className={btn} onClick={beginCalibration}>{twoWay ? "Ayarla" : "Kalibre"}</button>
+                  </div>
+                )}
+                {session.substream !== null && (
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-xs font-medium text-muted">Görüntü</p>
+                    <StreamChoice value={session.substream} onChange={switchStream} />
+                  </div>
+                )}
+                {!session.counting && !safety && (
+                  <p className="mt-2 text-xs text-faint">Sayım duruyor: görüntü işleniyor ama sayılmıyor. &quot;Başlat&quot; ile sayım başlar.</p>
+                )}
+                <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[13px]">
+                  {safety ? <span /> : (
+                    <a href={`/api/live/sessions/${session.id}/counts.csv`} className="font-medium text-brand-500 hover:underline">CSV indir</a>
+                  )}
+                  <button type="button" onClick={closeSession} className="font-medium text-nok-600 hover:underline">Canlı sayımı kapat</button>
                 </div>
-              ) : (
-                <Counter label="Sayılan" value={session.total} tone="brand" hint={`${int(session.ratePerMinute)} adet/dk`} testId="live-count" />
-              )}
-              {twoWay && (p.staffColors?.length ?? 0) > 0 && (
-                <p className="mt-2 text-center text-[12.5px] text-muted" data-testid="live-staff">
-                  Personel geçişi: <b className="tabular-nums text-ink">{int(session.staffIn + session.staffOut)}</b>
-                </p>
-              )}
-              {twoWay && (
-                <button type="button" onClick={flipEntry} className={`${btn} mt-3 flex w-full items-center justify-between`}>
-                  <span>Giriş yönü: {p.countLine ? "çizgideki ok yönünde" : DIRECTION_LABELS[p.direction].toLocaleLowerCase("tr")}</span>
-                  <span className="font-semibold text-brand-500">⇅ Çevir</span>
-                </button>
-              )}
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                <button type="button" onClick={() => act(session.counting ? "stop" : "start")}
-                        className={`h-11 rounded-[11px] text-sm font-semibold text-white ${session.counting ? "bg-[#f08a24] hover:brightness-105" : "bg-ok-600 hover:brightness-105"}`}>
-                  {session.counting ? "Durdur" : "Başlat"}
-                </button>
-                <button type="button" className={btn} onClick={() => confirm("Sayaç sıfırlansın mı?") && act("reset")}>Sıfırla</button>
-                <button type="button" className={btn} onClick={beginCalibration}>{twoWay ? "Ayarla" : "Kalibre"}</button>
-              </div>
-              {session.substream !== null && (
-                <div className="mt-3">
-                  <p className="mb-1.5 text-xs font-medium text-muted">Görüntü</p>
-                  <StreamChoice value={session.substream} onChange={switchStream} />
-                </div>
-              )}
-              {!session.counting && (
-                <p className="mt-2 text-xs text-faint">Sayım duruyor: görüntü işleniyor ama sayılmıyor. &quot;Başlat&quot; ile sayım başlar.</p>
-              )}
-              <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[13px]">
-                <a href={`/api/live/sessions/${session.id}/counts.csv`} className="font-medium text-brand-500 hover:underline">CSV indir</a>
-                <button type="button" onClick={closeSession} className="font-medium text-nok-600 hover:underline">Canlı sayımı kapat</button>
-              </div>
-            </section>
+              </section>
+            </>
           ) : (
-            <section className="card p-4" aria-label="Kalibrasyon">
-              <p className="font-semibold">{twoWay ? "Ayarlar" : "Kalibrasyon"}</p>
-              {(session.calibrationMessage || !twoWay) && (
+            <section className="card p-4" aria-label={safety ? "Güvenlik ayarları" : "Kalibrasyon"}>
+              <p className="font-semibold">{twoWay || safety ? "Ayarlar" : "Kalibrasyon"}</p>
+              {!safety && (session.calibrationMessage || !twoWay) && (
                 <p className="mt-2 rounded-xl bg-warn-50 px-3 py-2 text-[12.5px] text-warn-700" aria-live="polite">
                   {session.calibrationMessage || (mode === "linescan"
                     ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
@@ -338,7 +363,9 @@ export default function LiveView() {
                 </p>
               )}
               <div className="mt-3 grid gap-3">
-                {twoWay ? (
+                {safety ? (
+                  <SafetySettings value={p.safety} onChange={(sf) => edit({ ...p, safety: sf })} />
+                ) : twoWay ? (
                   <div>
                     <p className="mb-1.5 text-xs font-medium text-muted">Kamera</p>
                     <Seg label="Kamera konumu" value={(p.countAnchor ?? "center") as CountAnchor}
@@ -369,7 +396,12 @@ export default function LiveView() {
                   </div>
                 )}
                 <GeometryControls value={g} onChange={(ng) => edit(withGeometry(p, ng))} aspect={aspect} twoWay={twoWay}
-                                  allowAngled={mode !== "linescan"} compact />
+                                  allowAngled={mode !== "linescan" && !safety} showLine={!safety} compact />
+                {safety && (
+                  <p className="rounded-xl bg-brand-50 px-3 py-2 text-[12px] text-brand-600">
+                    Alan: kural yalnızca alandaki kişilere uygulanır (ör. tezgah arkası).
+                  </p>
+                )}
                 {mode === "blob" && (
                   <>
                     <div className="grid grid-cols-2 gap-2">
@@ -413,7 +445,10 @@ export default function LiveView() {
                 <button type="button" onClick={() => finishCalibration(true)}
                         className="brand-gradient h-10 flex-1 rounded-[10px] text-sm font-semibold text-white">Kaydet</button>
               </div>
-              <p className="mt-2 text-[11.5px] text-faint">Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez.</p>
+              <p className="mt-2 text-[11.5px] text-faint">
+                {safety ? "Alan ve kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."
+                  : "Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."}
+              </p>
             </section>
           )}
         </aside>

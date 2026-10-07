@@ -97,7 +97,25 @@ export interface LiveSession {
   profileId: string | null;
   /** true alt akış (hızlı), false ana akış (net); null: kaynak ayarı bilinmiyor */
   substream: boolean | null;
+  /** Güvenlik oturumunda: süren bölümler, son alarm zamanı ve poz modelinin durumu; diğerlerinde null */
+  safety: {
+    active: Array<{ type: AlarmType; trackId: number; seconds: number }>;
+    lastAlarmAt: number | null;
+    model?: "loading" | "ready" | "error";
+  } | null;
 }
+
+export type AlarmType = "hands_up" | "lying" | "test";
+export interface Alarm {
+  id: string; sessionId: string | null; camera: string; type: AlarmType;
+  startedAt: number; firedAt: number; endedAt: number | null; acked: boolean;
+  notify: "disabled" | "queued" | "sent" | "failed" | "suppressed"; image: boolean;
+}
+export interface NotifyConfig { enabled: boolean; chatId: string; hasToken: boolean }
+export const ALARM_LABELS: Record<AlarmType, string> = { hands_up: "Eller yukarı", lying: "Yerde yatan kişi", test: "Deneme alarmı" };
+export const NOTIFY_LABELS: Record<Alarm["notify"], string> = {
+  disabled: "Telegram kapalı", queued: "Gönderiliyor", sent: "Telegram'a gitti", failed: "Gönderilemedi", suppressed: "Tekrar (gönderilmedi)",
+};
 
 export const CAMERA_BRANDS: Array<[CameraBrand, string]> = [
   ["hikvision", "Hikvision"], ["dahua", "Dahua"], ["axis", "Axis"], ["vivotek", "Vivotek"],
