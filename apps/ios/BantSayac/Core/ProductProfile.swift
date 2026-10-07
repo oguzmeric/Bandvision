@@ -109,6 +109,23 @@ struct SafetyConfig: Codable, Equatable, Sendable {
     var handsUp: Rule
     var lying: Rule
     var sendImage: Bool
+
+    enum CodingKeys: String, CodingKey { case handsUp, lying, sendImage }
+}
+
+extension SafetyConfig {
+    /// Sözleşme varsayılanları: şemada `safety` alanları zorunlu değil, Python da eksikleri bunlarla doldurur
+    static let defaultHandsUp = Rule(enabled: true, seconds: 3)
+    static let defaultLying = Rule(enabled: true, seconds: 10)
+
+    /// Eksik alan varsayılanla dolar (`{}` geçerli): kısmi blok kayıtlı profil listesinin okunmasını bozmasın.
+    /// Uzantıda: eşlenik (memberwise) başlatıcı korunur. `Rule` katı kalır (`enabled` ve `seconds` birlikte gelir).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        handsUp = try c.decodeIfPresent(Rule.self, forKey: .handsUp) ?? Self.defaultHandsUp
+        lying = try c.decodeIfPresent(Rule.self, forKey: .lying) ?? Self.defaultLying
+        sendImage = try c.decodeIfPresent(Bool.self, forKey: .sendImage) ?? false
+    }
 }
 
 /// Sayım yöntemi (sözleşme `countMode`).

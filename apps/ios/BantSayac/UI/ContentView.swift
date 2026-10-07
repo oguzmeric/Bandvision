@@ -57,7 +57,7 @@ struct ContentView: View {
     private var topBar: some View {
         HStack(spacing: 10) {
             Button { showProfiles = true } label: {
-                Label(vm.profile.name, systemImage: vm.profile.isTwoWay ? "person.2" : "shippingbox")
+                Label(vm.profile.name, systemImage: profileIcon)
                     .font(.headline)
                     .lineLimit(1)
             }
@@ -69,6 +69,16 @@ struct ContentView: View {
                     .padding(.horizontal, 6).padding(.vertical, 3)
                     .background(Color.orange.opacity(0.85))
                     .clipShape(Capsule())
+            }
+            if vm.profile.mode == .safety {
+                // Güvenlik alarmı bu cihazda çalışmaz: 0 sayacı "izleniyor" sanılmasın
+                Text("Bu cihazda desteklenmiyor")
+                    .font(.caption2.bold())
+                    .lineLimit(1)
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.85))
+                    .clipShape(Capsule())
+                    .layoutPriority(1)
             }
             Spacer()
             if vm.thermalState == .serious || vm.thermalState == .critical {
@@ -85,6 +95,15 @@ struct ContentView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    /// Üst çubuktaki profil simgesi: sayım türüne göre
+    private var profileIcon: String {
+        switch vm.profile.mode {
+        case .detect: return "person.2"
+        case .safety: return "exclamationmark.shield"
+        case .blob, .linescan: return "shippingbox"
+        }
     }
 
     private var cameraArea: some View {

@@ -6,9 +6,11 @@ struct CalibrationPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(vm.profile.isTwoWay ? "Ayarlar" : "Kalibrasyon").font(.headline)
+                Text(headerTitle).font(.headline)
                 Spacer()
-                if vm.profile.isTwoWay {
+                if vm.profile.mode == .safety {
+                    EmptyView()             // güvenlik alarmı bu cihazda yok: akış yönü/çizgi denetimi gösterilmez
+                } else if vm.profile.isTwoWay {
                     Button { vm.flipEntryDirection() } label: {
                         Label("Girişi çevir", systemImage: "arrow.up.arrow.down")
                     }
@@ -66,6 +68,14 @@ struct CalibrationPanel: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
+    }
+
+    private var headerTitle: String {
+        switch vm.profile.mode {
+        case .safety: return "Güvenlik alarmı"
+        case .detect: return "Ayarlar"
+        case .blob, .linescan: return "Kalibrasyon"
+        }
     }
 
     /// Sayım yöntemi (§4.9): ayrık ürünler (leke) ya da bitişik/hacimli tek sıra ürünler (şerit tarama)

@@ -454,9 +454,10 @@ final class FrameProcessor: @unchecked Sendable {
 
     // MARK: - Güvenlik alarmı (yalnızca bilgisayar)
 
-    /// Poz güvenlik alarmı bu cihazda çalışmaz: kare yalnızca gösterilir, sayım ve izleme yapılmaz. Bekleyen
-    /// kalibrasyon isteği takılı kalmasın diye bırakılır. Kare boyutu yayınlanır; yatay kaynakta (ağ kamerası,
-    /// video) görüntü bozulmadan yerleşir.
+    /// Poz güvenlik alarmı bu cihazda çalışmaz: kare yalnızca gösterilir, sayım ve izleme yapılmaz. Kalan öğrenme
+    /// durumu (ör. başka profilden geçilirken) olay yayınlanmadan sessizce bırakılır: güvenlik profilinde öğrenme
+    /// düğmesi yok ve `backgroundDone` olayı "desteklenmiyor" mesajının yerine "Arka plan hazır" yazardı.
+    /// Kare boyutu yayınlanır; yatay kaynakta (ağ kamerası, video) görüntü bozulmadan yerleşir.
     private func displaySafetyFrame(_ pb: CVPixelBuffer) {
         tickFPS()
         calib = .none
