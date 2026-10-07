@@ -825,7 +825,11 @@ def test_session_builds_safety_analyzer_from_shared_models() -> None:
     try:
         an = s._pipe.safety
         assert an is not None and an._pose is pose and an.dc._detector is det and an.dc._gate is not None
-        assert s.snapshot_status()["safety"] == {"active": [], "lastAlarmAt": None, "model": "ready"}   # sahte: durumsuz
+        sf = s.snapshot_status()["safety"]
+        assert {k: sf[k] for k in ("active", "lastAlarmAt", "model", "modelError", "detector", "detectorError")} == {
+            "active": [], "lastAlarmAt": None, "model": "ready", "modelError": None,                # sahte: durumsuz
+            "detector": "ready", "detectorError": None}
+        assert sf["healthy"] is False and sf["reason"] in ("Kameraya bağlanılıyor", "Kamera bağlantısı yok")
         s.set_profile(Profile.people())
         assert s.snapshot_status()["safety"] is None
         s.set_profile(Profile.jeweler())                       # yeniden güvenliğe: ortak modellerle yeni analizör
@@ -1400,3 +1404,88 @@ def test_detect_and_safety_sessions_warm_the_shared_detector() -> None:
         gate.set()
         for s in sessions:
             s.stop()
+
+
+# ---------------------------------------------------------------------- son düzeltme dalgası A: izleme sağlığı (I2)
+
+def test_safety_health_gives_first_failing_condition_in_turkish() -> None:
+    from bantvision.live.session import safety_health
+
+    ok = {"state": "live", "model": "ready", "model_error": "", "detector": "ready", "detector_error": "",
+          "processing_error": None, "last_ok_at": 100.0, "now": 105.0}
+    assert safety_health(**ok) == (True, None)
+    cases = [
+        ({"state": "connecting"}, "Kameraya bağlanılıyor"),
+        ({"state": "reconnecting"}, "Kamera bağlantısı yok"),
+        ({"state": "error", "model": "error"}, "Kamera bağlantısı yok"),               # ilk tutmayan koşul
+        ({"model": "loading"}, "Poz modeli yükleniyor"),
+        ({"model": "error", "model_error": "Poz modeli yüklenemedi: ağ yok"}, "Poz modeli yüklenemedi: ağ yok"),
+        ({"detector": "loading"}, "Kişi tanıma modeli yükleniyor"),
+        ({"detector": "error", "detector_error": "Kişi tanıma modeli yüklenemedi: x"},
+         "Kişi tanıma modeli yüklenemedi: x"),
+        ({"processing_error": "bozuk kare"}, "Görüntü işlenemiyor: bozuk kare"),
+        ({"last_ok_at": None}, "Görüntü işlenemiyor: henüz kare işlenmedi"),
+        ({"last_ok_at": 94.0}, "Görüntü işlenemiyor: 10 sn'dir yeni kare yok"),     # 11 sn eski
+    ]
+    for over, reason in cases:
+        assert safety_health(**{**ok, **over}) == (False, reason), over
+    assert safety_health(**{**ok, "last_ok_at": 95.5})[0]                           # 9,5 sn: sağlıklı
+
+
+def test_processing_error_is_reported_and_cleared_on_next_good_frame() -> None:
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=FakePose(hands_up_kp()))
+    s.loop_file = True
+    real, fail = s._pipe.process, [True]
+
+    def process(frame: Any, ts: float) -> Any:
+        if fail[0]:
+            raise RuntimeError("bozuk kare")
+        return real(frame, ts)
+
+    s._pipe.process = process                                                        # type: ignore[method-assign]
+    try:
+        st = wait_for(lambda: (v := s.snapshot_status())["safety"]["processingError"] and v)
+        assert st["message"] == "İşleme hatası: bozuk kare" and st["safety"]["lastOkAt"] is None
+        assert st["safety"]["healthy"] is False and st["safety"]["reason"] == "Görüntü işlenemiyor: bozuk kare"
+        fail[0] = False
+        st = wait_for(lambda: (v := s.snapshot_status())["safety"]["processingError"] is None and v)
+        assert st["message"] == "" and abs(st["safety"]["lastOkAt"] - time.time()) < 5
+        st = wait_for(lambda: (v := s.snapshot_status())["safety"]["healthy"] and v)
+        assert st["safety"]["reason"] is None and st["safety"]["unhealthyFor"] is None
+    finally:
+        s.stop()
+
+
+def test_safety_status_reports_model_and_detector_errors() -> None:
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    pose = FakePose(hands_up_kp())
+    pose.state, pose.error = "error", "Poz modeli yüklenemedi: internete ulaşılamadı (bağlantıyı kontrol edin)"  # type: ignore[attr-defined]
+    det = FakeDetector([])
+    det.state, det.error = "loading", ""                                            # type: ignore[attr-defined]
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=det, pose=pose)
+    s.loop_file = True
+    try:
+        st = wait_for(lambda: (v := s.snapshot_status())["state"] == "live" and v["safety"]["lastOkAt"] and v)
+        sf = st["safety"]
+        assert sf["model"] == "error" and sf["modelError"] == pose.error                # type: ignore[attr-defined]
+        assert sf["detector"] == "loading" and sf["detectorError"] is None
+        assert sf["healthy"] is False and sf["reason"] == pose.error                   # type: ignore[attr-defined]
+        assert sf["unhealthyFor"] is not None and sf["unhealthyFor"] >= 0
+        pose.state, pose.error = "ready", ""                                            # type: ignore[attr-defined]
+        assert s.snapshot_status()["safety"]["reason"] == "Kişi tanıma modeli yükleniyor"
+        det.state, det.error = "error", "Kişi tanıma modeli yüklenemedi: x"             # type: ignore[attr-defined]
+        sf = s.snapshot_status()["safety"]
+        assert sf["detectorError"] == "Kişi tanıma modeli yüklenemedi: x" and sf["reason"] == sf["detectorError"]
+        det.state, det.error = "ready", ""                                              # type: ignore[attr-defined]
+        assert s.snapshot_status()["safety"]["healthy"] is True
+    finally:
+        s.stop()

@@ -46,6 +46,33 @@ class SessionStatus:
     fps: float = 0.0
     width: int = 0
     height: int = 0
+    processing_error: str | None = None     # son karenin işleme hatası; sonraki başarılı karede temizlenir
+    last_ok_at: float | None = None         # son başarıyla işlenen karenin zamanı (duvar saati)
+
+
+STALE_S = 10.0                              # bu kadar süredir kare işlenmediyse güvenlik kamerası izlenmiyor sayılır
+_PROCESSING = "İşleme hatası: "
+_LOG_EVERY_S = 60.0                         # aynı işleme hatası günlüğe en çok dakikada bir (her karede değil)
+
+
+def safety_health(state: str, model: str, model_error: str, detector: str, detector_error: str,
+                  processing_error: str | None, last_ok_at: float | None, now: float) -> tuple[bool, str | None]:
+    """Güvenlik kamerası gerçekten izleniyor mu: (sağlıklı, ilk tutmayan koşulun Türkçe nedeni). Sağlıklı = kamera canlı,
+    poz ve tanıma modelleri hazır, işleme hatası yok ve son `STALE_S` (10) sn içinde kare işlendi."""
+    if state != "live":
+        return False, "Kameraya bağlanılıyor" if state == "connecting" else "Kamera bağlantısı yok"
+    for kind, st, err in (("Poz modeli", model, model_error), ("Kişi tanıma modeli", detector, detector_error)):
+        if st == "loading":
+            return False, f"{kind} yükleniyor"
+        if st != "ready":
+            return False, err or f"{kind} yüklenemedi"
+    if processing_error:
+        return False, f"Görüntü işlenemiyor: {processing_error}"
+    if last_ok_at is None:
+        return False, "Görüntü işlenemiyor: henüz kare işlenmedi"
+    if now - last_ok_at > STALE_S:
+        return False, f"Görüntü işlenemiyor: {STALE_S:g} sn'dir yeni kare yok"
+    return True, None
 
 
 @dataclass
@@ -109,6 +136,7 @@ class LiveSession:
         self._pose = pose
         self._alarm_sink = alarm_sink
         self._last_alarm_at: float | None = None
+        self._unhealthy_since: float | None = time.monotonic()   # güvenlik: ne zamandır izlenmiyor (sağlıklıysa None)
         if detector is not None:
             self._pipe.detect._detector = detector
         if profile.countMode == "safety":
@@ -193,6 +221,7 @@ class LiveSession:
 
         self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
         self._pipe.safety.enable_gate()
+        self._unhealthy_since = time.monotonic()            # güvenliğe geçiş: izleme yeniden kanıtlanmalı
 
     def _warm(self, profile: Profile) -> None:
         """Ortak modeller ilk kişiyi/kareyi beklemeden arka planda yüklenmeye başlar: kişi sayımı ve güvenlik tanıma
@@ -251,16 +280,35 @@ class LiveSession:
                 "counting": self.counting, "total": c.total, "totalOut": c.total_out,
                 "staffIn": c.staff_in, "staffOut": c.staff_out,
                 "twoWay": self.profile.countMode == "detect",
-                "safety": ({"active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
-                                       for tid, k, sec, _f in (self._pipe.safety.episodes.active()
-                                                               if self._pipe.safety else [])],
-                            "lastAlarmAt": self._last_alarm_at,
-                            "model": getattr(self._pose, "state", "ready")}      # "loading" | "ready" | "error"
-                           if self.profile.countMode == "safety" else None),
+                "safety": self._safety_status() if self.profile.countMode == "safety" else None,
                 "ratePerMinute": rate // 2 if rate else 0,
                 "calibrating": self.calibrating, "calibrationMessage": self.calibration_message,
                 "profile": self.profile.to_dict(),
             }
+
+    def _safety_status(self) -> dict[str, Any]:
+        """Güvenlik durumu (kilit altında çağrılır): süren bölümler, son alarm, modellerin durumu ve izleme sağlığı.
+        `unhealthyFor`: kaç saniyedir sağlıksız (sağlıklıysa None); panel 60 sn'yi aşınca uyarır."""
+        model, model_error = str(getattr(self._pose, "state", "ready")), str(getattr(self._pose, "error", "") or "")
+        det, det_error = str(getattr(self._detector, "state", "ready")), str(getattr(self._detector, "error", "") or "")
+        st = self.status
+        healthy, reason = safety_health(st.state, model, model_error, det, det_error, st.processing_error,
+                                        st.last_ok_at, time.time())
+        mono = time.monotonic()
+        if healthy:
+            self._unhealthy_since = None
+        elif self._unhealthy_since is None:
+            self._unhealthy_since = mono
+        return {
+            "active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
+                       for tid, k, sec, _f in (self._pipe.safety.episodes.active() if self._pipe.safety else [])],
+            "lastAlarmAt": self._last_alarm_at,
+            "model": model, "modelError": model_error or None,          # "loading" | "ready" | "error"
+            "detector": det, "detectorError": det_error or None,
+            "processingError": st.processing_error, "lastOkAt": st.last_ok_at,
+            "healthy": healthy, "reason": reason,
+            "unhealthyFor": None if healthy else round(mono - (self._unhealthy_since or mono), 1),
+        }
 
     def jpeg(self, after: int = 0, timeout: float = 2.0) -> tuple[int, bytes | None]:
         """`after`'dan yeni işaretli kare (MJPEG akışı); yoksa `timeout` kadar bekler."""
@@ -423,6 +471,7 @@ class LiveSession:
         last_render = 0.0
         shape: tuple[int, ...] | None = None
         stamps: list[float] = []
+        logged: dict[str, float] = {}                       # işleme hatası türü → son günlük (tekdüze saat)
         while not self._stop.is_set():
             with self._frame_cv:
                 while (self._latest is None or self._latest[0] <= done) and not self._stop.is_set():
@@ -440,8 +489,18 @@ class LiveSession:
                 try:
                     r = self._pipe.process(frame, ts)
                 except Exception as e:                       # noqa: BLE001 — tek karelik hata oturumu düşürmesin
-                    self.status.message = f"İşleme hatası: {e}"
+                    self.status.message = f"{_PROCESSING}{e}"
+                    self.status.processing_error = str(e) or type(e).__name__
+                    key, mono = type(e).__name__, time.monotonic()
+                    if mono - logged.get(key, -1e9) >= _LOG_EVERY_S:   # kalıcı arıza her karede iz basmasın
+                        logged[key] = mono
+                        _LOG.warning("Kare işlenemedi (oturum %s)", self.id[:8], exc_info=True)
                     continue
+                self.status.last_ok_at = time.time()
+                if self.status.processing_error is not None:  # hata geçti: durum ve ileti temizlenir
+                    self.status.processing_error = None
+                    if self.status.message.startswith(_PROCESSING):
+                        self.status.message = ""
                 self._after_frame(r, frame)
             self._notify_safety(r, frame, profile)
             now = time.monotonic()
