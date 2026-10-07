@@ -5,8 +5,6 @@ import numpy as np
 
 from bantvision.core.pose_rules import EpisodeTracker, hands_up, lying, scale
 
-HIDDEN = None
-
 
 def person(**pts: tuple[float, float] | None) -> np.ndarray:
     """Ayakta kişi (y aşağı): baş 100, omuzlar 160, dirsekler 230, bilekler 290, kalça 330, diz 430, ayak 520.
@@ -75,6 +73,23 @@ def test_lying_rejects_bending_sitting_and_needs_hips() -> None:
     assert lying(person(l_hip=None, r_hip=None)) is None                     # tezgah arkasında ayakta
 
 
+def test_lying_foreshortened_via_head_condition() -> None:
+    # θ small but head.y >= hip.y - 0.1*s: True via head condition only
+    foreshortenend = person(
+        nose=(200, 440), l_sh=(190, 410), r_sh=(210, 410), l_hip=(190, 420), r_hip=(210, 420)
+    )
+    assert lying(foreshortenend) is True
+    # Same pose with head well above hips: False (head branch fails)
+    head_high = person(nose=(200, 300), l_sh=(190, 410), r_sh=(210, 410), l_hip=(190, 420), r_hip=(210, 420))
+    assert lying(head_high) is False
+
+
+def test_lying_rejects_crouch() -> None:
+    # Crouch: shoulders above hips, head well above hips, θ small → lying False
+    crouch = person(nose=(200, 250), l_sh=(180, 300), r_sh=(220, 300), l_hip=(175, 360), r_hip=(225, 360))
+    assert lying(crouch) is False
+
+
 def test_episode_fires_once_after_threshold() -> None:
     ep = EpisodeTracker()
     fired = [ep.update((1, "hands_up"), True, t / 10, 3.0) for t in range(50)]
@@ -97,4 +112,21 @@ def test_episode_ends_when_track_lost_and_reports_fired() -> None:
     for t in range(40):
         ep.update((7, "hands_up"), True, t / 10, 3.0)
     assert ep.sweep(4.0, set()) == [((7, "hands_up"), True)]
+    assert ep.active() == []
     assert not ep.update((7, "hands_up"), True, 4.1, 3.0)                    # yeni bölüm baştan sayar
+    assert ep.active() == [(7, "hands_up", 0.0, False)]
+    # Episode fires again when threshold is reached (use large grace to keep episode open)
+    assert ep.update((7, "hands_up"), True, 7.1, 3.0, grace_s=10.0)            # 7.1 - 4.1 = 3.0 >= 3.0
+
+
+def test_episode_grace_adapts_to_frame_rate() -> None:
+    # With grace_s=1.25, True frames every 1.0s for 4s fires once (threshold 3)
+    ep_loose = EpisodeTracker()
+    for ts in [0.0, 1.0, 2.0, 3.0]:
+        ep_loose.update((1, "test"), True, ts, 3.0, grace_s=1.25)
+    assert ep_loose.active()[0][3] is True  # fired
+    # With default grace_s=0.5, same sequence never fires (episode restarts at 1.0)
+    ep_strict = EpisodeTracker()
+    for ts in [0.0, 1.0, 2.0, 3.0]:
+        ep_strict.update((1, "test"), True, ts, 3.0)  # default grace_s=0.5
+    assert ep_strict.active()[0][3] is False  # never fired

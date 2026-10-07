@@ -54,14 +54,17 @@ def hands_up(kp: np.ndarray) -> bool | None:
     if s is None or not (_vis(kp, L_WR) and _vis(kp, R_WR)):
         return None
     for sh, el, wr in ((L_SH, L_EL, L_WR), (R_SH, R_EL, R_WR)):
-        if kp[wr, 1] > kp[sh, 1] - 0.35 * s:
+        if not (kp[wr, 1] <= kp[sh, 1] - 0.35 * s):
             return False
-        if _vis(kp, el) and kp[el, 1] > kp[sh, 1] + 0.15 * s:
+        if _vis(kp, el) and not (kp[el, 1] <= kp[sh, 1] + 0.15 * s):
             return False
     return True
 
 
 def lying(kp: np.ndarray) -> bool | None:
+    """Yerde yatan kişi (horizontal orientation or head at/below hips).
+    θ is signed 0–180° (shoulders below hips in image = lying toward camera counts as lying).
+    """
     if not all(_vis(kp, i) for i in (L_SH, R_SH, L_HIP, R_HIP)):
         return None
     sh, hp = _mid(kp, L_SH, R_SH), _mid(kp, L_HIP, R_HIP)
@@ -86,25 +89,44 @@ class _Episode:
 class EpisodeTracker:
     def __init__(self) -> None:
         self._eps: dict[tuple[int, str], _Episode] = {}
+        self._pending_end: list[tuple[tuple[int, str], bool]] = []
 
-    def update(self, key: tuple[int, str], verdict: bool | None, ts: float, threshold_s: float) -> bool:
+    def update(
+        self, key: tuple[int, str], verdict: bool | None, ts: float, threshold_s: float, grace_s: float = GRACE_S
+    ) -> bool:
         """Bu karenin kararı; True dönerse bu karede alarm doğdu (bölüm başına bir kez)."""
         if verdict is not True:
-            return False                                   # kopma: sweep GRACE_S'e göre bitirir
+            return False                                   # kopma: sweep grace_s'e göre bitirir
         ep = self._eps.get(key)
-        if ep is None or ts - ep.last_true > GRACE_S:
-            ep = self._eps[key] = _Episode(ts, ts)
+        gap = ts - ep.last_true if ep is not None else float('inf')
+        # Non-monotonic ts (looped clip): treat as stale episode, report end
+        if ep is not None and ts < ep.last_true:
+            self._pending_end.append((key, ep.fired))
+            self._eps[key] = _Episode(ts, ts)
+            return False
+        # Stale episode (gap > grace_s + epsilon): restart and report end
+        if ep is None or gap > grace_s + 1e-9:
+            if ep is not None:
+                self._pending_end.append((key, ep.fired))
+            self._eps[key] = _Episode(ts, ts)
+            return False
         ep.last_true = ts
         if not ep.fired and ts - ep.start >= threshold_s:
             ep.fired = True
             return True
         return False
 
-    def sweep(self, ts: float, alive: set[int]) -> list[tuple[tuple[int, str], bool]]:
-        """Biten bölümler (iz yok ya da son True'dan beri > GRACE_S): (anahtar, alarm vermiş mi)."""
-        ended = [(k, e.fired) for k, e in self._eps.items() if k[0] not in alive or ts - e.last_true > GRACE_S]
+    def sweep(self, ts: float, alive: set[int], grace_s: float = GRACE_S) -> list[tuple[tuple[int, str], bool]]:
+        """Biten bölümler (iz yok ya da son True'dan beri > grace_s + epsilon): (anahtar, alarm vermiş mi)."""
+        ended = self._pending_end.copy()
+        self._pending_end.clear()
+        ended.extend(
+            (k, e.fired)
+            for k, e in self._eps.items()
+            if k[0] not in alive or ts - e.last_true > grace_s + 1e-9 or ts < e.last_true
+        )
         for k, _ in ended:
-            del self._eps[k]
+            self._eps.pop(k, None)
         return ended
 
     def active(self) -> list[tuple[int, str, float, bool]]:
