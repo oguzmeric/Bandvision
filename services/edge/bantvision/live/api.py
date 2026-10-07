@@ -852,19 +852,28 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Olay resmi yok (7 günü geçti ya da alınamadı).")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
+    def notify_view(cfg: dict[str, Any]) -> dict[str, Any]:
+        """Ayar + son gönderim hatası (`lastError`: {text, at} ya da null; Türkçe, anahtarsız; bellekte tutulur)."""
+        return {**cfg, "lastError": manager.notifier.last_error()}
+
     @r.get("/notify")
     def get_notify() -> dict[str, Any]:
-        return store.notify_config()
+        return notify_view(store.notify_config())
 
     @r.put("/notify")
     def put_notify(body: NotifyIn) -> dict[str, Any]:
+        old_chat = store.notify_config()["chatId"]
         try:
-            return store.save_notify(body.enabled, body.chatId, body.token)
+            cfg = store.save_notify(body.enabled, body.chatId, body.token)
         except ValueError as e:                             # biçimi geçersiz anahtar: ileti anahtarı içermez
             raise HTTPException(422, str(e)) from e
+        if body.token is not None or cfg["chatId"] != old_chat:
+            manager.notifier.clear_last_error()             # anahtar/sohbet değişti: eski hata artık geçerli değil
+        return notify_view(cfg)
 
     @r.post("/notify/test")
     def notify_test() -> dict[str, Any]:
+        """Telegram deneme mesajı; hata 422 ve Türkçe (anahtarsız) iletiyle döner."""
         try:
             manager.notifier.send("🧪 BantVision deneme mesajı — bildirimler çalışıyor.", None)
         except NotifyError as e:

@@ -61,7 +61,7 @@ def test_errors_are_turkish_and_masked(tmp_path: pathlib.Path) -> None:
     _, _, n = setup(tmp_path, Fake(status=401), [0.0])
     with pytest.raises(NotifyError) as e:
         n.send("x", None)
-    assert TOKEN not in str(e.value) and "Telegram" in str(e.value)
+    assert str(e.value) == "Bot anahtarı geçersiz." and e.value.permanent and TOKEN not in e.value.detail
 
 
 def test_outbox_retries_then_sends(tmp_path: pathlib.Path) -> None:
@@ -338,3 +338,117 @@ def test_restart_after_stop(tmp_path: pathlib.Path) -> None:
     assert n._thread is t
     n.stop()
     assert alarms.get(a["id"])["notify"] == "sent" and not t.is_alive()
+
+
+# ---------------------------------------------------------------- son düzeltme dalgası A: kalıcı hatalar (I4)
+
+
+class Reply:
+    """Telegram gibi cevap veren sahte sunucu: (durum, açıklama) sırayla; liste biterse 200."""
+
+    def __init__(self, *replies: tuple[int, str] | Exception) -> None:
+        self.replies, self.calls = list(replies), []
+
+    def __call__(self, req: httpx.Request) -> httpx.Response:
+        self.calls.append(req)
+        r = self.replies.pop(0) if self.replies else (200, "")
+        if isinstance(r, Exception):
+            raise r
+        return httpx.Response(r[0], json={"ok": r[0] == 200, "description": r[1]})
+
+
+@pytest.mark.parametrize(("status", "desc", "text"), [
+    (401, "Unauthorized", "Bot anahtarı geçersiz."),
+    (400, "Bad Request: chat not found", "Sohbet / grup kimliği bulunamadı; botu gruba ekleyin."),
+    (403, "Forbidden: bot was kicked from the supergroup chat", "Bot gruptan çıkarılmış ya da engellenmiş."),
+    (403, "Forbidden: bot was blocked by the user", "Bot gruptan çıkarılmış ya da engellenmiş."),
+    (400, "Bad Request: message text is empty", "Telegram hatası (400)."),
+    (404, "Not Found", "Telegram hatası (404)."),
+])
+def test_permanent_telegram_errors_fail_at_once_in_turkish(
+        tmp_path: pathlib.Path, status: int, desc: str, text: str, caplog: pytest.LogCaptureFixture) -> None:
+    """Yanlış anahtar/sohbet kimliği 24 saat "Gönderiliyor" kalmaz: alarm hemen "failed", kayıt kuyruktan düşer."""
+    now = [1000.0]
+    fake = Reply((status, desc))
+    _, alarms, n = setup(tmp_path, fake, now)                                # type: ignore[arg-type]
+    a = alarms.add("s", "Tezgah", "hands_up", 997.0, 1000.0, None, "queued")
+    n.enqueue(a["id"], "🚨 ELLER YUKARI", None)
+    with caplog.at_level(logging.WARNING):
+        n.flush()
+    assert alarms.get(a["id"])["notify"] == "failed" and n._queue == [] and len(fake.calls) == 1
+    assert n.last_error() == {"text": text, "at": 1000.0}
+    assert json.loads((tmp_path / "live" / "outbox.json").read_text(encoding="utf-8")) == []
+    now[0] += 10_000
+    n.flush()
+    assert len(fake.calls) == 1                                              # bir daha denenmez
+    assert TOKEN not in caplog.text and "GIZLI" not in caplog.text
+
+
+@pytest.mark.parametrize("failure", [(500, "Internal Server Error"), (502, "Bad Gateway"), (429, "Too Many Requests")])
+def test_server_errors_and_rate_limit_are_retried(tmp_path: pathlib.Path, failure: tuple[int, str]) -> None:
+    now = [1000.0]
+    fake = Reply(failure)
+    _, alarms, n = setup(tmp_path, fake, now)                                # type: ignore[arg-type]
+    a = alarms.add("s", "Tezgah", "lying", 997.0, 1000.0, None, "queued")
+    n.enqueue(a["id"], "🚨 YERDE YATAN KİŞİ", None)
+    n.flush()
+    assert alarms.get(a["id"])["notify"] == "queued" and len(n._queue) == 1 and n._queue[0]["attempts"] == 1
+    assert n.last_error() == {"text": f"Telegram hatası ({failure[0]}).", "at": 1000.0}
+    now[0] += 6
+    n.flush()                                                                # bekleme dolunca yeniden: gider
+    assert alarms.get(a["id"])["notify"] == "sent" and n._queue == [] and len(fake.calls) == 2
+    assert n.last_error() is None                                            # başarılı gönderim temizler
+
+
+def test_network_error_text_is_turkish_and_masked(tmp_path: pathlib.Path) -> None:
+    def leaky(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout(f"timed out connecting to {req.url}", request=req)
+
+    _, _, n = setup(tmp_path, leaky, [5.0])                                  # type: ignore[arg-type]
+    with pytest.raises(NotifyError) as e:
+        n.send("x", None)
+    assert str(e.value) == "Telegram'a ulaşılamıyor (internet bağlantısını kontrol edin)."
+    assert e.value.network and not e.value.permanent and TOKEN not in e.value.detail and "GIZLI" not in e.value.detail
+    assert n.last_error() == {"text": str(e.value), "at": 5.0}
+
+
+def test_network_failure_stops_the_round_so_new_alarms_are_not_stuck(tmp_path: pathlib.Path) -> None:
+    """Ağ yokken her istek 15 sn zaman aşımına kadar bekler: bir turda ilk ağ hatasından sonra durulur (kuyruktaki
+    yüz bildirim için 25 dakika beklenmez). Süresi dolanlar yine "failed" olur."""
+    now = [100_000.0]
+    fake = Reply(httpx.ConnectError("ağ yok"), httpx.ConnectError("ağ yok"))
+    _, alarms, n = setup(tmp_path, fake, now)                                # type: ignore[arg-type]
+    old = alarms.add("s", "Tezgah", "hands_up", 0.0, 0.0, None, "queued")
+    ids = [alarms.add("s", "Tezgah", "hands_up", 1.0, 1.0, None, "queued")["id"] for _ in range(3)]
+    n.enqueue(old["id"], "eski", None)
+    n._queue[0]["createdAt"] = now[0] - 25 * 3600                           # 24 saati geçmiş
+    for i in ids:
+        n.enqueue(i, "yeni", None)
+    n.flush()
+    assert len(fake.calls) == 1                                              # yalnızca ilk deneme
+    assert alarms.get(old["id"])["notify"] == "failed"                      # süre dolumu ağ beklemeden işlendi
+    assert [q["attempts"] for q in n._queue] == [1, 0, 0]
+    now[0] += 6
+    n.flush()                                                                # ikinci tur: yine ilk hatada durur
+    assert len(fake.calls) == 2 and [q["attempts"] for q in n._queue] == [2, 0, 0]
+    now[0] += 20
+    n.flush()                                                                # ağ geldi: hepsi gider
+    assert all(alarms.get(i)["notify"] == "sent" for i in ids) and n._queue == []
+
+
+def test_flush_traceback_is_rate_limited(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1000.0]
+    _, alarms, n = setup(tmp_path, Fake(), now)
+    a = alarms.add("s", "Tezgah", "hands_up", 997.0, 1000.0, b"\xff\xd8", "queued")
+    n.enqueue(a["id"], "x", b"\xff\xd8")
+
+    def boom(_alarm_id: str) -> bytes | None:
+        raise RuntimeError("beklenmeyen")
+
+    monkeypatch.setattr(alarms, "image_bytes", boom)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            n.flush()                                                        # kalıcı arıza: her saniye çağrılır
+    assert caplog.text.count("Traceback") == 1
+    assert len([r for r in caplog.records if r.name == "bantvision.live.notify"]) == 5

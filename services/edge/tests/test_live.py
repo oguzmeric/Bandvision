@@ -688,7 +688,7 @@ def test_test_alarm_and_notify_endpoints(client: TestClient) -> None:
     r = client.post("/api/v1/live/notify/test")
     assert r.status_code == 422 and "eksik" in r.json()["detail"]
     cfg = client.put("/api/v1/live/notify", json={"enabled": False, "chatId": " -100 ", "token": "9:Z"}).json()
-    assert cfg == {"enabled": False, "chatId": "-100", "hasToken": True}
+    assert cfg == {"enabled": False, "chatId": "-100", "hasToken": True, "lastError": None}
 
 
 def test_test_alarm_is_queued_and_sent_when_configured(client: TestClient) -> None:
@@ -730,11 +730,23 @@ def test_notify_test_reports_rejection_without_token(client: TestClient) -> None
     import httpx
 
     mgr = client.app.state.live
-    mgr.notifier._client = httpx.Client(
-        transport=httpx.MockTransport(lambda r: httpx.Response(401, json={"ok": False, "description": "Unauthorized"})))
+    replies = [httpx.Response(400, json={"ok": False, "description": "Bad Request: chat not found"})]
+    mgr.notifier._client = httpx.Client(transport=httpx.MockTransport(
+        lambda r: replies.pop(0) if replies else httpx.Response(200, json={"ok": True})))
     client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "123:GIZLI"})
     r = client.post("/api/v1/live/notify/test")
     assert r.status_code == 422 and "GIZLI" not in r.text
+    assert r.json()["detail"] == "Sohbet / grup kimliği bulunamadı; botu gruba ekleyin."
+    got = client.get("/api/v1/live/notify").json()
+    assert got["lastError"]["text"] == r.json()["detail"] and abs(got["lastError"]["at"] - time.time()) < 60
+    assert "GIZLI" not in client.get("/api/v1/live/notify").text
+    assert client.post("/api/v1/live/notify/test").json() == {"ok": True}
+    assert client.get("/api/v1/live/notify").json()["lastError"] is None      # başarılı gönderim temizler
+    replies.append(httpx.Response(401, json={"ok": False, "description": "Unauthorized"}))
+    assert client.post("/api/v1/live/notify/test").status_code == 422
+    assert client.get("/api/v1/live/notify").json()["lastError"]["text"] == "Bot anahtarı geçersiz."
+    r = client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "123:YENI"})
+    assert r.json()["lastError"] is None                                      # yeni anahtar: eski hata silinir
 
 
 def test_alarm_image_endpoint_serves_stored_image(client: TestClient) -> None:

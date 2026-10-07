@@ -5,6 +5,12 @@ adresinde bulunur, bu yüzden maskelenir). Kuyruk <data>/live/outbox.json: başa
 5 sn → 5 dk (iki katı), 24 saatte "failed". `flush()` hiçbir koşulda hata fırlatmaz (arka plan iş parçacığı
 her saniye çağırır). Bildirim kapalı ya da ayarsızken kuyruk gönderilmez (deneme sayılmaz, kayıtlar
 bekler); 24 saat dolan kayıtlar yine "failed" olur.
+
+Hata türleri: Telegram'ın 400/401/403/404 cevabı **kalıcıdır** (yanlış anahtar, sohbet bulunamadı, bot gruptan
+çıkarıldı): alarm hemen "failed" olur, kayıt kuyruktan düşer. Ağ hatası, zaman aşımı, 429 ve 5xx yeniden denenir. Bir
+turda ilk ağ hatasından sonra durulur (her istek 15 sn bekleyebilir; yeni alarmlar uzun kuyruğun arkasında kalmasın).
+Kullanıcıya giden iletiler Türkçe; Telegram'ın (İngilizce, maskeli) açıklaması yalnızca günlüğe yazılır. Son hata
+(`last_error`) bellekte tutulur ve ilk başarılı gönderimde silinir.
 """
 from __future__ import annotations
 
@@ -35,8 +41,31 @@ MESSAGE_MAX = 4096                                # Telegram ileti metni sınır
 _BOT_URL = re.compile(r"(api\.telegram\.org/bot)[^/\s\"']+")
 
 
+PERMANENT_STATUSES = frozenset({400, 401, 403, 404})
+UNREACHABLE = "Telegram'a ulaşılamıyor (internet bağlantısını kontrol edin)."
+TRACEBACK_EVERY_S = 60.0                           # aynı beklenmeyen hata türünün izi günlüğe en çok dakikada bir
+
+
 class NotifyError(Exception):
-    pass
+    """Gönderilemedi. İleti Türkçe ve anahtarsız (kullanıcıya gösterilir); `detail` Telegram'ın maskeli açıklaması
+    (yalnızca günlük). `permanent`: yeniden denemenin anlamı yok; `network`: Telegram'a hiç ulaşılamadı."""
+
+    def __init__(self, text: str, *, permanent: bool = False, network: bool = False, status: int | None = None,
+                 detail: str = "") -> None:
+        super().__init__(text)
+        self.permanent, self.network, self.status, self.detail = permanent, network, status, detail
+
+
+def describe_rejection(status: int, description: str) -> str:
+    """Telegram'ın ret cevabı → Türkçe ileti (İngilizce kuyruk yok)."""
+    d = description.lower()
+    if status == 401:
+        return "Bot anahtarı geçersiz."
+    if status == 400 and "chat not found" in d:
+        return "Sohbet / grup kimliği bulunamadı; botu gruba ekleyin."
+    if status == 403 and ("kicked" in d or "blocked" in d):
+        return "Bot gruptan çıkarılmış ya da engellenmiş."
+    return f"Telegram hatası ({status})."
 
 
 class _RedactTokenFilter(logging.Filter):
@@ -76,6 +105,8 @@ class TelegramNotifier:
         self._flush_lock = threading.Lock()             # aynı anda tek flush (çift gönderimi önler)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_error: dict[str, Any] | None = None  # {text, at}: son gönderim hatası (bellekte)
+        self._traced: dict[str, float] = {}             # beklenmeyen hata türü → son iz (tekdüze saat)
         self._queue: list[dict[str, Any]] = self._load()
 
     def _new_client(self) -> httpx.Client:
@@ -118,7 +149,23 @@ class TelegramNotifier:
         c = self.store.notify_config()
         return c["enabled"] and c["hasToken"] and bool(c["chatId"])
 
+    def last_error(self) -> dict[str, Any] | None:
+        """Son gönderim hatası `{text, at}` (Türkçe, anahtarsız) ya da None."""
+        with self._lock:
+            return dict(self._last_error) if self._last_error else None
+
+    def clear_last_error(self) -> None:
+        """Ayar (anahtar/sohbet) değişti: eski hata artık geçerli değil."""
+        with self._lock:
+            self._last_error = None
+
+    def _note(self, err: NotifyError | None) -> None:
+        with self._lock:
+            self._last_error = None if err is None else {"text": str(err), "at": self.clock()}
+
     def send(self, text: str, jpeg: bytes | None) -> None:
+        """Hemen gönderir; olmazsa `NotifyError` (Türkçe). Telegram'a yapılan her denemenin sonucu `last_error`'a
+        yansır (başarı siler)."""
         token, chat = self.store.telegram_token(), self.store.notify_config()["chatId"]
         if not token or not chat:
             raise NotifyError("Telegram ayarı eksik: bot anahtarı ve sohbet kimliği gerekli.")
@@ -129,15 +176,21 @@ class TelegramNotifier:
                                       files={"photo": ("olay.jpg", jpeg, "image/jpeg")})
             else:
                 r = self._client.post(f"{base}/sendMessage", json={"chat_id": chat, "text": text[:MESSAGE_MAX]})
-        except Exception as e:                            # noqa: BLE001 - ağ/URL/kapalı istemci: hepsi gönderilemedi
-            raise NotifyError(f"Telegram'a ulaşılamadı: {_mask(str(e), token)}") from None
+        except Exception as e:                            # noqa: BLE001 - ağ/zaman aşımı/kapalı istemci: ulaşılamadı
+            err = NotifyError(UNREACHABLE, network=True, detail=_mask(f"{type(e).__name__}: {e}", token))
+            self._note(err)
+            raise err from None
         if r.status_code != 200:
             try:
                 body = r.json()
                 desc = str(body.get("description", "")) if isinstance(body, dict) else ""
             except ValueError:
                 desc = ""
-            raise NotifyError(f"Telegram reddetti ({r.status_code}): {_mask(desc, token)}".strip())
+            err = NotifyError(describe_rejection(r.status_code, desc), status=r.status_code,
+                              permanent=r.status_code in PERMANENT_STATUSES, detail=_mask(desc, token))
+            self._note(err)
+            raise err
+        self._note(None)
 
     def enqueue(self, alarm_id: str, text: str, jpeg: bytes | None) -> None:
         with self._lock:
@@ -152,8 +205,13 @@ class TelegramNotifier:
             with self._flush_lock:
                 self._flush()
         except Exception as e:                            # noqa: BLE001 - arka plan iş parçacığı ölmemeli
-            # exc_info anahtar sızdırmaz: send() yalnız `from None` ile NotifyError (maskeli) fırlatır
-            _LOG.warning("Telegram kuyruğu işlenemedi: %s", type(e).__name__, exc_info=True)
+            # exc_info anahtar sızdırmaz: send() yalnız `from None` ile NotifyError (maskeli) fırlatır. Kalıcı arıza her
+            # saniye iz basmasın: aynı türün izi dakikada bir.
+            key, mono = type(e).__name__, time.monotonic()
+            trace = mono - self._traced.get(key, -1e18) >= TRACEBACK_EVERY_S
+            if trace:
+                self._traced[key] = mono
+            _LOG.warning("Telegram kuyruğu işlenemedi: %s", key, exc_info=trace)
 
     def _flush(self) -> None:
         with self._lock:
@@ -161,23 +219,29 @@ class TelegramNotifier:
             due = [q for q in self._queue if q["nextAt"] <= now]
         active = bool(due) and self.configured()          # kapalı/ayarsız: gönderme, ama süre dolumu işlenir
         changed = False
+        offline = False                                   # bu turda ağ hatası oldu: kalanlar denenmez (süre dolumu sürer)
         for q in due:
             done, status = False, "queued"
             if now - q["createdAt"] > MAX_AGE_S:
                 done, status = True, "failed"
-            elif not active:
-                continue                                  # deneme sayılmaz; açılınca hemen gider
+            elif not active or offline:
+                continue                                  # deneme sayılmaz; açılınca / ağ gelince hemen gider
             else:
                 jpeg = self.alarms.image_bytes(q["alarmId"]) if q["image"] else None   # resim yoksa yalnız metin
                 try:
                     self.send(q["text"], jpeg)
                     done, status = True, "sent"
                 except NotifyError as e:
-                    with self._lock:
-                        q["attempts"] += 1
-                        step = min(q["attempts"] - 1, 20)         # üs sınırı: bozuk dosyada taşma olmasın
-                        q["nextAt"] = self.clock() + min(BACKOFF_MAX_S, BACKOFF_MIN_S * 2 ** step)
-                    _LOG.warning("Telegram gönderilemedi (deneme %d): %s", q["attempts"], e)
+                    if e.permanent:                       # yanlış anahtar/sohbet: 24 saat "Gönderiliyor" kalmaz
+                        done, status = True, "failed"
+                        _LOG.warning("Telegram bildirimi reddetti, yeniden denenmeyecek: %s [%s]", e, e.detail)
+                    else:
+                        with self._lock:
+                            q["attempts"] += 1
+                            step = min(q["attempts"] - 1, 20)         # üs sınırı: bozuk dosyada taşma olmasın
+                            q["nextAt"] = self.clock() + min(BACKOFF_MAX_S, BACKOFF_MIN_S * 2 ** step)
+                        _LOG.warning("Telegram gönderilemedi (deneme %d): %s [%s]", q["attempts"], e, e.detail)
+                        offline = e.network
             changed = True
             self.alarms.set_notify(q["alarmId"], status)
             if done:
