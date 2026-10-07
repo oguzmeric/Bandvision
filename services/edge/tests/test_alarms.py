@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
 import pathlib
 from unittest.mock import patch
+
+import pytest
 
 from bantvision.live.alarms import AlarmStore
 
@@ -12,8 +16,8 @@ def test_add_list_ack_end_and_image(tmp_path: pathlib.Path) -> None:
     a = st.add("s1", "Tezgah", "hands_up", 100.0, 103.0, b"\xff\xd8jpeg", "queued")
     b = st.add("s1", "Tezgah", "lying", 200.0, 210.0, None, "disabled")
     assert [x["id"] for x in st.list()] == [b["id"], a["id"]]
-    assert a["image"] and not b["image"] and st.image_path(a["id"]).read_bytes() == b"\xff\xd8jpeg"
-    assert st.image_path(b["id"]) is None
+    assert a["image"] and not b["image"] and st.image_bytes(a["id"]) == b"\xff\xd8jpeg"
+    assert st.image_bytes(b["id"]) is None
     st.end(a["id"], 105.0)
     st.set_notify(a["id"], "sent")
     assert st.ack(a["id"]) and not st.ack("yok")
@@ -41,16 +45,19 @@ def test_expire_removes_old_records_and_images(tmp_path: pathlib.Path) -> None:
     old = st.add(None, "Deneme", "test", 0.0, 0.0, b"x", "disabled")
     new = st.add(None, "Deneme", "test", 9 * 86400.0, 9 * 86400.0, b"y", "disabled")
     assert st.expire(now=9 * 86400.0 + 1, days=7) == 1
-    assert [x["id"] for x in st.list()] == [new["id"]] and st.image_path(old["id"]) is None
+    assert [x["id"] for x in st.list()] == [new["id"]] and st.image_bytes(old["id"]) is None
+    assert not (st.images / f"{old['id']}.jpg").exists()
 
 
 def test_path_traversal_protection(tmp_path: pathlib.Path) -> None:
     st = AlarmStore(tmp_path)
-    assert st.image_path("..\\x") is None
-    assert st.image_path(str(tmp_path / "other")) is None
-    assert st.image_path("a\x00b") is None
-    assert st.image_path("g" * 32) is None
-    assert st.image_path("a" * 32) is None
+    (tmp_path / "other.jpg").write_bytes(b"gizli")
+    assert st.image_bytes("..\\x") is None
+    assert st.image_bytes(str(tmp_path / "other")) is None
+    assert st.image_bytes("../../other") is None
+    assert st.image_bytes("a\x00b") is None
+    assert st.image_bytes("g" * 32) is None
+    assert st.image_bytes("a" * 32) is None
 
 
 def test_add_resilience_on_image_write_error(tmp_path: pathlib.Path) -> None:
@@ -192,3 +199,94 @@ def test_expire_persists_to_disk(tmp_path: pathlib.Path) -> None:
     st2 = AlarmStore(tmp_path)
     ids = [x["id"] for x in st2.list()]
     assert ids == [new["id"]]
+
+
+# ---------------------------------------------------------------- son düzeltme dalgası A: yükleme dayanıklılığı
+
+
+def _write(tmp_path: pathlib.Path, items: object) -> pathlib.Path:
+    live = tmp_path / "live"
+    live.mkdir(parents=True, exist_ok=True)
+    f = live / "alarms.json"
+    f.write_text(json.dumps(items), encoding="utf-8")
+    return f
+
+
+def _rec(i: str, fired: float = 9 * 86400.0, **over: object) -> dict[str, object]:
+    return {"id": i, "sessionId": None, "camera": "Cam", "type": "hands_up", "startedAt": fired, "firedAt": fired,
+            "endedAt": fired, "acked": False, "notify": "disabled", "image": True, **over}
+
+
+def test_load_keeps_only_records_with_valid_ids(tmp_path: pathlib.Path) -> None:
+    """Elle bozulmuş dosya: kimliği 32 küçük onaltılık olmayan kayıt yüklenmez (temizlik onunla dosya yolu silemez)."""
+    secret = tmp_path / "secrets.jpg"                                         # images/../../secrets.jpg
+    secret.write_bytes(b"gizli")
+    good = "c" * 32
+    _write(tmp_path, [_rec("../../secrets", 0.0), _rec("C" * 32, 0.0), _rec(good, 0.0), _rec("d" * 31, 0.0)])
+    st = AlarmStore(tmp_path)
+    assert [a["id"] for a in st.list()] == [good]
+    assert st.expire(now=9 * 86400.0, days=7) == 1 and secret.exists()
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_fired_at_is_removed_on_next_expire(tmp_path: pathlib.Path, raw: str) -> None:
+    f = _write(tmp_path, [_rec("a" * 32, 0.0), _rec("b" * 32)])
+    f.write_text(f.read_text(encoding="utf-8").replace('"firedAt": 0.0', f'"firedAt": {raw}', 1), encoding="utf-8")
+    st = AlarmStore(tmp_path)
+    assert len(st.list()) == 2
+    assert st.expire(now=9 * 86400.0 + 1, days=7) == 1
+    assert [a["id"] for a in st.list()] == ["b" * 32]
+
+
+def _flaky_read(monkeypatch: pytest.MonkeyPatch, name: str, failures: int) -> list[int]:
+    """`name` dosyasının okunması önce `failures` kez PermissionError verir (Windows: virüs tarayıcı kilidi)."""
+    real = pathlib.Path.read_text
+    calls = [0]
+
+    def read_text(self: pathlib.Path, *a: object, **k: object) -> str:
+        if self.name == name:
+            calls[0] += 1
+            if calls[0] <= failures:
+                raise PermissionError(13, "Erişim engellendi", str(self))
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    return calls
+
+
+def test_locked_file_is_retried_then_loaded(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    f = _write(tmp_path, [_rec("a" * 32)])
+    calls = _flaky_read(monkeypatch, "alarms.json", 2)
+    st = AlarmStore(tmp_path)
+    assert [a["id"] for a in st.list()] == ["a" * 32] and calls[0] == 3
+    assert f.exists() and not f.with_suffix(".json.corrupt").exists()
+
+
+def test_still_locked_file_starts_empty_without_rename_and_is_not_clobbered(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from bantvision.live import jsonfile
+
+    monkeypatch.setattr(jsonfile, "READ_RETRY_DELAYS_S", (0.0,) * 5)
+    f = _write(tmp_path, [_rec("a" * 32, endedAt=None)])
+    before = f.read_text(encoding="utf-8")
+    calls = _flaky_read(monkeypatch, "alarms.json", 10**6)
+    with caplog.at_level(logging.ERROR):
+        st = AlarmStore(tmp_path)
+    assert st.list() == [] and calls[0] == 6                                  # 1 + 5 yeniden deneme
+    assert "okunamadı" in caplog.text and not f.with_suffix(".json.corrupt").exists()
+    new = st.add("s", "Cam", "lying", 1.0, 1.0, None, "disabled")             # hâlâ kilitli: geçmiş ezilmez
+    assert _REAL_READ(f, encoding="utf-8") == before and st.get(new["id"]) is not None
+    monkeypatch.setattr(pathlib.Path, "read_text", _REAL_READ)               # kilit kalktı
+    st.add("s", "Cam", "test", 2.0, 2.0, None, "disabled")
+    got = {a["id"]: a for a in AlarmStore(tmp_path).list()}
+    assert "a" * 32 in got and new["id"] in got and len(got) == 3            # eski geçmiş + yeniler birleşti
+    assert got["a" * 32]["endedAt"] is not None                               # önceki çalışmadan açık kalan kapandı
+
+
+def test_missing_file_is_not_a_warning(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        AlarmStore(tmp_path)
+    assert caplog.text == ""
+
+
+_REAL_READ = pathlib.Path.read_text

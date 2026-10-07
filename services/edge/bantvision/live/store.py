@@ -10,9 +10,7 @@ Tüm yazmalar kilit altında ve atomik (geçici dosya + yeniden adlandırma).
 """
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import pathlib
 import re
 import threading
@@ -21,6 +19,7 @@ import uuid
 from typing import Any
 
 from ..core import Profile
+from .jsonfile import write_json_atomic
 
 # Telefondaki katalogla aynı (apps/ios/BantSayac/Core/ProductCatalog.swift)
 CATALOG: list[dict[str, Any]] = [
@@ -77,13 +76,7 @@ class LiveStore:
             return default
 
     def _write(self, name: str, data: Any) -> None:
-        p = self.root / name
-        tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        if name == "secrets.json":
-            with contextlib.suppress(OSError):                # Windows'ta POSIX izni yok
-                os.chmod(tmp, 0o600)
-        os.replace(tmp, p)
+        write_json_atomic(self.root / name, data, indent=2, private=name == "secrets.json")
 
     # ------------------------------------------------------------------ kaynaklar
 

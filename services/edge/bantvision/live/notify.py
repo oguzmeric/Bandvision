@@ -14,10 +14,7 @@ Kullanıcıya giden iletiler Türkçe; Telegram'ın (İngilizce, maskeli) açık
 """
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
-import os
 import pathlib
 import re
 import threading
@@ -29,6 +26,7 @@ from urllib.parse import quote
 import httpx
 
 from .alarms import AlarmStore
+from .jsonfile import quarantine, read_json, write_json_atomic
 from .store import LiveStore
 
 _LOG = logging.getLogger(__name__)
@@ -107,6 +105,7 @@ class TelegramNotifier:
         self._thread: threading.Thread | None = None
         self._last_error: dict[str, Any] | None = None  # {text, at}: son gönderim hatası (bellekte)
         self._traced: dict[str, float] = {}             # beklenmeyen hata türü → son iz (tekdüze saat)
+        self._load_failed = False                       # açılışta kilitli: ilk kayıtta yeniden okunup birleştirilir
         self._queue: list[dict[str, Any]] = self._load()
 
     def _new_client(self) -> httpx.Client:
@@ -115,17 +114,24 @@ class TelegramNotifier:
     # ------------------------------------------------------------------ kuyruk dosyası
 
     def _load(self) -> list[dict[str, Any]]:
-        try:
-            data = json.loads(self._file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        """Kilitli dosya (Windows) birkaç kez yeniden denenir; yine okunamazsa boş başlanır ama dosya ne bozuk sayılır
+        ne de ezilir (ilk kayıtta yeniden okunup birleştirilir). Yalnızca JSON'u ya da yapısı bozuk dosya kenara alınır."""
+        res = read_json(self._file)
+        if res.status == "unreadable":
+            _LOG.error("outbox.json okunamadı (dosya kilitli olabilir); bildirim kuyruğu boş başlıyor, dosyaya "
+                       "dokunulmadı — ilk kayıtta yeniden okunup birleştirilecek")
+            self._load_failed = True
             return []
-        except (OSError, ValueError) as e:                # bozuk dosya: boş başla, bozuğu sakla
-            _LOG.warning("outbox.json okunamadı (%s); boş kuyrukla başlanıyor", type(e).__name__)
-            with contextlib.suppress(OSError):
-                self._file.replace(self._file.with_suffix(".json.corrupt"))
+        if res.status == "corrupt" or (res.status == "ok" and not isinstance(res.data, list)):
+            _LOG.warning("outbox.json bozuk; kenara alındı (outbox.json.corrupt), boş kuyrukla başlanıyor")
+            quarantine(self._file)
             return []
+        return self._parse(res.data or [])
+
+    @staticmethod
+    def _parse(data: list[Any]) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        for q in data if isinstance(data, list) else []:
+        for q in data:
             try:
                 items.append({"alarmId": str(q["alarmId"]), "text": str(q["text"]), "image": bool(q["image"]),
                               "createdAt": float(q["createdAt"]), "attempts": int(q["attempts"]),
@@ -135,11 +141,19 @@ class TelegramNotifier:
         return items
 
     def _save(self) -> None:
-        """Kilit altında çağrılır. Yazma hatası yutulur (günlüğe yazılır): kuyruk bellekte sürer."""
+        """Kilit altında çağrılır. Yazma hatası yutulur (günlüğe yazılır): kuyruk bellekte sürer. Açılışta okunamayan
+        dosya önce yeniden okunup birleştirilir; hâlâ okunamıyorsa yazılmaz (bekleyen bildirimler ezilmesin)."""
+        if self._load_failed:
+            res = read_json(self._file, delays=())
+            if res.status == "unreadable":
+                _LOG.warning("outbox.json hâlâ okunamıyor; bekleyen bildirimler ezilmesin diye yazma ertelendi")
+                return
+            if res.status == "ok" and isinstance(res.data, list):
+                mine = {q["alarmId"] for q in self._queue}
+                self._queue = [q for q in self._parse(res.data) if q["alarmId"] not in mine] + self._queue
+            self._load_failed = False
         try:
-            tmp = self._file.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._queue, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, self._file)
+            write_json_atomic(self._file, self._queue)
         except OSError as e:
             _LOG.warning("outbox.json yazılamadı: %s", e)
 

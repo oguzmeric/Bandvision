@@ -33,9 +33,11 @@ def write_json_atomic(path: pathlib.Path, data: Any, *, indent: int | None = Non
     os.replace(tmp, path)
 
 
-def read_json(path: pathlib.Path, delays: tuple[float, ...] = READ_RETRY_DELAYS_S) -> JsonRead:
+def read_json(path: pathlib.Path, delays: tuple[float, ...] | None = None) -> JsonRead:
     """Dosyayı okur. "missing": yok; "unreadable": okuma hatası (ör. kilit) tüm denemelerden sonra sürüyor;
-    "corrupt": JSON (ya da UTF-8) çözülemedi."""
+    "corrupt": JSON (ya da UTF-8) çözülemedi. `delays`: yeniden denemeler arası beklemeler (varsayılan
+    READ_RETRY_DELAYS_S; `()` tek deneme)."""
+    delays = READ_RETRY_DELAYS_S if delays is None else delays
     for attempt in range(len(delays) + 1):
         try:
             text = path.read_text(encoding="utf-8")

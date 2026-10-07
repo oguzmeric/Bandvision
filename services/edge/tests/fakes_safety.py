@@ -1,5 +1,6 @@
-"""Poz güvenlik testlerinin ortak sahteleri (model gerektirmez); `tests/` paket değil, pytest dizini yola ekler:
-`from fakes_safety import FakeDetector, FakePose, hands_up_kp`. Şimdilik test_safety.py kullanır."""
+"""Poz güvenlik testlerinin ortak sahteleri (model gerektirmez, ağ yok); `tests/` paket değil, pytest dizini yola ekler:
+`from fakes_safety import FakeDetector, FakePose, hands_up_kp`. test_safety.py ve test_live.py kullanır (canlı oturumda
+sahteler oturum açılmadan önce `manager.detector` / `manager.pose`'a konur)."""
 from __future__ import annotations
 
 from types import SimpleNamespace

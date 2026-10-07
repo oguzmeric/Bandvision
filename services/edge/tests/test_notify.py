@@ -452,3 +452,38 @@ def test_flush_traceback_is_rate_limited(tmp_path: pathlib.Path, caplog: pytest.
             n.flush()                                                        # kalıcı arıza: her saniye çağrılır
     assert caplog.text.count("Traceback") == 1
     assert len([r for r in caplog.records if r.name == "bantvision.live.notify"]) == 5
+
+
+def test_locked_outbox_is_retried_and_never_clobbered(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                      caplog: pytest.LogCaptureFixture) -> None:
+    from bantvision.live import jsonfile
+
+    monkeypatch.setattr(jsonfile, "READ_RETRY_DELAYS_S", (0.0,) * 5)
+    live = tmp_path / "live"
+    live.mkdir()
+    outbox = live / "outbox.json"
+    good = {"alarmId": "a" * 32, "text": "t", "image": False, "createdAt": 1.0, "attempts": 0, "nextAt": 1.0}
+    outbox.write_text(json.dumps([good]), encoding="utf-8")
+    real = pathlib.Path.read_text
+    fail = [2]
+
+    def read_text(self: pathlib.Path, *a: object, **k: object) -> str:
+        if self.name == "outbox.json" and fail[0] > 0:
+            fail[0] -= 1
+            raise PermissionError(13, "Erişim engellendi", str(self))
+        return real(self, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    _, _, n = setup(tmp_path, Fake(), [0.0])
+    assert n._queue == [good] and not (live / "outbox.json.corrupt").exists()   # iki kilit denemesinden sonra okundu
+
+    fail[0] = 10**6                                                           # hep kilitli
+    with caplog.at_level(logging.ERROR):
+        _, _, n2 = setup(tmp_path, Fake(), [0.0])
+    assert n2._queue == [] and "okunamadı" in caplog.text and outbox.exists()
+    assert not (live / "outbox.json.corrupt").exists()                        # kilitli dosya bozuk sayılmaz
+    n2.enqueue("b" * 32, "yeni", None)                                        # hâlâ kilitli: dosya ezilmez
+    assert json.loads(real(outbox, encoding="utf-8")) == [good]
+    fail[0] = 0                                                               # kilit kalktı: birleşir
+    n2.enqueue("c" * 32, "daha yeni", None)
+    assert [q["alarmId"] for q in json.loads(real(outbox, encoding="utf-8"))] == ["a" * 32, "b" * 32, "c" * 32]
