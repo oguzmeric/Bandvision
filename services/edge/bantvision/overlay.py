@@ -16,10 +16,12 @@ import numpy as np
 
 from .core.detect_count import DetectResult, side_function
 from .core.profile import Profile
+from .core.safety import SafetyResult
 
 # BGR
 GREEN, RED, ORANGE, WHITE, DARK = (80, 200, 60), (60, 60, 230), (0, 140, 255), (255, 255, 255), (30, 30, 30)
 GRAY = (170, 170, 170)
+CYAN = (255, 255, 0)                            # poz güvenlik: iskelet çizgileri
 
 _FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -127,4 +129,33 @@ def draw_detect(frame: np.ndarray, profile: Profile, det: DetectResult | None, e
     put_text(frame, f"Giriş {entries}", (int(14 * s), int(8 * s)), int(36 * s), WHITE)
     put_text(frame, f"Çıkış {exits}", (int(200 * s), int(8 * s)), int(36 * s), WHITE)
     put_text(frame, f"{int(ts // 60):02d}:{ts % 60:04.1f}", (int(14 * s), int(56 * s)), int(15 * s), GRAY)
+    return frame
+
+
+_SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14),
+             (14, 16), (0, 5), (0, 6)]
+_SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE"}
+
+
+def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:
+    """Poz güvenlik: iskeletler; alarm vermiş (aktif) izin kutusu kırmızı ve etiketli."""
+    if r is None:
+        return frame
+    h, w = frame.shape[:2]
+    s = max(0.6, w / 960)
+    th = max(1, round(2 * s))
+    alarming = {(tid, kind) for tid, kind, _sec, fired in r.active if fired}
+    for t in r.tracks:
+        kp = r.poses.get(t.id)
+        if kp is not None:
+            for a, b in _SKELETON:
+                if kp[a, 2] >= 0.3 and kp[b, 2] >= 0.3:
+                    cv2.line(frame, (int(kp[a, 0]), int(kp[a, 1])), (int(kp[b, 0]), int(kp[b, 1])), CYAN, th,
+                             cv2.LINE_AA)
+        kinds = sorted(k for (tid, k) in alarming if tid == t.id)
+        if kinds:
+            x1, y1, x2, y2 = (int(t.box[0] * w), int(t.box[1] * h), int(t.box[2] * w), int(t.box[3] * h))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), RED, th * 2, cv2.LINE_AA)
+            put_text(frame, " · ".join(_SAFETY_LABELS[k] for k in kinds), (x1, max(0, y1 - int(26 * s))),
+                     int(20 * s), RED)
     return frame

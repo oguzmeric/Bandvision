@@ -38,6 +38,7 @@ class FrameResult:
     total_out: int = 0
     detect: DetectResult | None = field(default=None, repr=False)   # detect: izler, tespitler, çizgi (çizim)
     staff_events: list[tuple[int, int]] = field(default_factory=list)   # detect: personel (iz, +1 giriş/−1 çıkış)
+    safety: Any = field(default=None, repr=False)   # safety: SafetyResult (iskeletler, etkin/yeni/biten alarmlar)
 
 
 class Pipeline:
@@ -48,6 +49,7 @@ class Pipeline:
         self.tracker = BlobTracker()
         self.linescan = LineScanCounter()       # §4.9 (countMode = "linescan")
         self.detect = DetectCounter()           # §4.10 (countMode = "detect"); model ilk karede yüklenir
+        self.safety: Any = None                 # poz güvenlik (countMode = "safety"): SafetyAnalyzer, tembel oluşur
         self.total_out = 0                      # detect: ters yönde geçenler (çıkış)
         self.total_staff_in = 0                 # detect §4.10 eki: personel geçişleri (giriş/çıkışa eklenmez)
         self.total_staff_out = 0
@@ -70,6 +72,8 @@ class Pipeline:
         self.profile = profile
         self.tracker.reset()
         self.linescan.reset()
+        if self.safety is not None:
+            self.safety.reset()
         if reset_background:
             self.segmenter.reset()
 
@@ -97,6 +101,8 @@ class Pipeline:
         self.tracker.reset()
         self.linescan.reset()
         self.detect.reset()
+        if self.safety is not None:
+            self.safety.reset()
 
     def finish(self, ts: float) -> list[CountEvent]:
         """Video sonu (§4.9): şerit taramada çizgiye yarım binmiş son ürünler merkezlerine göre sayılır."""
@@ -144,6 +150,8 @@ class Pipeline:
         p = self.profile
         if p.rotation in _ROT:
             frame = cv2.rotate(frame, _ROT[p.rotation])
+        if p.countMode == "safety":
+            return self._process_safety(frame, ts)
         if p.countMode == "detect":
             return self._process_detect(frame, ts)
         full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
@@ -305,4 +313,22 @@ class Pipeline:
         res.total_out = self.total_out
         res.staff_events = staff
         res.detect = r
+        return res
+
+    def _process_safety(self, frame: np.ndarray, ts: float) -> FrameResult:
+        """Poz güvenlik alarmı (countMode = "safety"): sayım yok; alarmlar FrameResult.safety'de."""
+        from .safety import SafetyAnalyzer
+
+        p = self.profile
+        bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        fps = self._update_fps(ts)
+        calib: list[tuple[str, Any]] = []
+        if self._calib is not None:                    # boş bant/örnek öğrenme gerekmez: hemen biter
+            calib.append((f"{self._calib}_done", p.diffThreshold if self._calib == "background" else 0.0))
+            self._calib = None
+        if self.safety is None:
+            self.safety = SafetyAnalyzer()
+        r = self.safety.process(bgr, p, fps, ts)
+        res = FrameResult(ts, [], [], [], [], calib, None, fps, 0, (bgr.shape[1], bgr.shape[0]), None)
+        res.safety = r
         return res
