@@ -2,6 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
  * Güvenlik arayüzü, SAHTE API ile (page.route): gerçek poz modeli ya da alarm gerekmez, hızlı ve deterministik.
+ * İzleme sağlığı (Uyarı/Nöbette, neden), izlenmeyen kamera uyarısı, yapışkan şerit, deneme alarmı ve Bildirimler.
  * Gerçek uçtan uca akış e2e/safety.spec.ts'te.
  */
 async function login(page: Page) {
@@ -14,31 +15,40 @@ async function login(page: Page) {
 /** 1x1 saydam GIF: sahte canlı akış (gerçek analiz sunucusuna istek gitmesin) */
 const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
 
-interface Fake { state: string; message: string; model: string | undefined; lastAlarmAt: number | null }
+interface Fake {
+  state: string; message: string; model: string | undefined; lastAlarmAt: number | null;
+  /** Sunucunun izleme sağlığı (I2); verilmezse alan gönderilmez (eski sunucu) */
+  healthy?: boolean; reason?: string | null; modelError?: string | null; unhealthyFor?: number | null;
+}
 
-function fakeSession(f: Fake) {
-  return [{
-    id: "abc123", name: "Tezgah kamerası", state: f.state, message: f.message, fps: 8, width: 1280, height: 720,
+function fakeSession(f: Fake, id = "abc123", name = "Tezgah kamerası") {
+  const health = f.healthy === undefined ? {} : { healthy: f.healthy, reason: f.reason ?? null, unhealthyFor: f.unhealthyFor ?? null };
+  return {
+    id, name, state: f.state, message: f.message, fps: 8, width: 1280, height: 720,
     counting: false, total: 0, totalOut: 0, staffIn: 0, staffOut: 0, twoWay: false, ratePerMinute: 0,
     calibrating: null, calibrationMessage: "", sourceId: null, channelId: null, profileId: null, substream: null,
-    safety: { active: [{ type: "hands_up", trackId: 1, seconds: 1.5 }], lastAlarmAt: f.lastAlarmAt, ...(f.model ? { model: f.model } : {}) },
+    safety: { active: [{ type: "hands_up", trackId: 1, seconds: 1.5 }], lastAlarmAt: f.lastAlarmAt,
+              ...(f.model ? { model: f.model } : {}), modelError: f.modelError ?? null, ...health },
     profile: {
       id: "p", name: "Kuyumcu güvenliği", roi: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, linePosition: 0.5, direction: "down",
       diffThreshold: 30, expectedArea: 0, splitTouching: false, countMode: "safety",
       safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false },
     },
-  }];
+  };
 }
 
-test("güvenlik paneli (sahte API): model satırı, kamera durumu, Başlat/Sıfırla yok", async ({ page }) => {
+const MODEL_ERR = "Poz modeli yüklenemedi: internete ulaşılamadı (bağlantıyı kontrol edin)";
+
+test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera durumu, Başlat/Sıfırla yok", async ({ page }) => {
   await login(page);
   await page.clock.install();                                 // 1 sn'lik oturum yoklaması beklenmez: saat ileri sarılır
-  const f: Fake = { state: "live", message: "", model: "loading", lastAlarmAt: Date.now() / 1000 - 20 };
+  const f: Fake = { state: "live", message: "", model: "loading", lastAlarmAt: Date.now() / 1000 - 20,
+                    healthy: false, reason: "Poz modeli yükleniyor" };
   let polls = 0;
   await page.route("**/api/live/sessions", (route) => {
     if (route.request().method() !== "GET") return route.continue();
     polls += 1;
-    return route.fulfill({ json: fakeSession(f) });
+    return route.fulfill({ json: [fakeSession(f)] });
   });
   /** Değişikliği görmek için bir sonraki oturum yoklamasını tetikler (zamanlayıcı kurulana kadar ileri sarmayı yineler) */
   const nextPoll = async () => {
@@ -54,6 +64,7 @@ test("güvenlik paneli (sahte API): model satırı, kamera durumu, Başlat/Sıf�
 
   const panel = page.getByRole("region", { name: "Güvenlik", exact: true });
   const card = page.getByTestId("session-card");
+  const reason = panel.getByTestId("safety-reason");
   await expect(panel.getByText("İzleniyor")).toBeVisible();
   await expect(panel.getByText("Eller yukarı: 1.5 sn")).toBeVisible();
   // güvenlikte sayaç ve Başlat/Sıfırla yok, "Ayarla" var
@@ -64,33 +75,42 @@ test("güvenlik paneli (sahte API): model satırı, kamera durumu, Başlat/Sıf�
   await expect(card).toContainText("Alarm");                    // son 5 dakikada alarm
   await expect(card).not.toContainText("duruyor");
 
-  // model satırı: yükleniyor → yüklenemedi → hazır (hiçbir şey)
-  const loading = panel.getByText("Poz modeli yükleniyor…");
-  const failed = panel.getByText("Poz modeli yüklenemedi — internet bağlantısını kontrol edin; 1 dakika sonra yeniden denenir.");
-  await expect(loading).toBeVisible();
-  await expect(failed).toHaveCount(0);
-  f.model = "error";
+  // model yükleniyor: panel nedeni yazar, kart "Nöbette" değil "Uyarı" (neden üstüne gelince)
+  await expect(reason).toHaveText("Poz modeli yükleniyor…");
+  await expect(card.getByTestId("watch-state")).toHaveText("Uyarı");
+  await expect(card.getByTestId("watch-state")).toHaveAttribute("title", "Poz modeli yükleniyor");
+  await expect(card).not.toContainText("Nöbette");
+  // model yüklenemedi: sabit "internet" metni değil, sunucunun gerçek nedeni
+  Object.assign(f, { model: "error", modelError: MODEL_ERR, reason: MODEL_ERR });
   await nextPoll();
-  await expect(failed).toBeVisible();
-  await expect(loading).toHaveCount(0);
-  // hazır: model satırı hiç yok. Aynı turda kamera ölür: kart "Nöbette" demez, durumu yazar; panel başlığı kalır, nokta yeşil değildir
-  f.model = "ready"; f.lastAlarmAt = null; f.state = "error"; f.message = "Bağlantı koptu";
+  await expect(reason).toHaveText(`${MODEL_ERR} · 1 dakika sonra yeniden denenir.`);
+  await expect(card.getByTestId("watch-state")).toHaveAttribute("title", MODEL_ERR);
+  // model hazır ama kare işlenemiyor (işleme hatası): yine uyarı
+  Object.assign(f, { model: "ready", modelError: null, reason: "Görüntü işlenemiyor: bozuk kare", lastAlarmAt: null });
+  await nextPoll();
+  await expect(reason).toHaveText("Görüntü işlenemiyor: bozuk kare");
+  await expect(card.getByTestId("watch-state")).toHaveText("Uyarı");
+  await expect(card).not.toContainText("Nöbette");
+  // kamera ölür: kart "Nöbette" demez, durumu yazar; panel başlığı kalır, nokta yeşil değildir
+  Object.assign(f, { state: "error", message: "Bağlantı koptu", reason: "Kamera bağlantısı yok" });
   await nextPoll();
   await expect(card).toContainText("Hata");
   await expect(card).not.toContainText("Nöbette");
-  await expect(failed).toHaveCount(0);
-  await expect(loading).toHaveCount(0);
+  await expect(reason).toHaveCount(0);
   await expect(panel.getByTestId("safety-state")).toHaveText("Kamera: Hata — Bağlantı koptu");
   await expect(panel.getByText("İzleniyor")).toBeVisible();     // başlık her durumda
   await expect(panel.locator("span.bg-ok-600")).toHaveCount(0);
-  f.state = "connecting"; f.message = "";
+  Object.assign(f, { state: "connecting", message: "", reason: "Kameraya bağlanılıyor" });
   await nextPoll();
   await expect(card).toContainText("Bağlanıyor…");
   await expect(panel.getByTestId("safety-state")).toHaveText("Kamera: Bağlanıyor…");
-  f.state = "live";
+  // gerçekten izleniyor: "Nöbette", neden satırı yok
+  Object.assign(f, { state: "live", healthy: true, reason: null });
   await nextPoll();
   await expect(card).toContainText("Nöbette");
+  await expect(card.getByTestId("watch-state")).toHaveCount(0);
   await expect(panel.getByTestId("safety-state")).toHaveCount(0);
+  await expect(reason).toHaveCount(0);
   await expect(panel.locator("span.bg-ok-600")).toHaveCount(1);
 });
 
@@ -201,4 +221,144 @@ test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, 
   await expect(ack1).toHaveCount(0);
   await nextPoll();                                                  // sonraki yoklamalar da getirmez
   await expect(ack1).toHaveCount(0);
+});
+
+test("izlenmeyen güvenlik kamerası (sahte API): 60 sn sonra şeritte uyarı; şerit kaydırınca da görünür", async ({ page }) => {
+  await login(page);
+  await page.clock.install();
+  const dead: Fake = { state: "reconnecting", message: "Görüntü kesildi", model: "ready", lastAlarmAt: null,
+                       healthy: false, reason: "Kamera bağlantısı yok", unhealthyFor: 0 };
+  // ikinci kamera: sunucuya göre 2 dakikadır izlenmiyor (panel yeni açıldı): hemen uyarılır
+  const old: Fake = { state: "live", message: "", model: "error", modelError: MODEL_ERR, lastAlarmAt: null,
+                      healthy: false, reason: MODEL_ERR, unhealthyFor: 120 };
+  let list = [fakeSession(dead), fakeSession(old, "def456", "Kasa kamerası")];
+  let polls = 0;
+  await page.route("**/api/live/sessions", (route) => {
+    polls += 1;
+    return route.fulfill({ json: list });
+  });
+  await page.route(/\/api\/live\/alarms\?active=1$/, (route) => route.fulfill({ json: [] }));
+  /** Saati `ms` ileri alır ve şeridin bir sonraki oturum yoklamasını (5 sn'de bir) bekler */
+  const advance = async (ms: number) => {
+    const n = polls;
+    await page.clock.fastForward(ms);
+    await expect.poll(async () => { if (polls === n) await page.clock.fastForward(1000); return polls; },
+                      { intervals: [50] }).toBeGreaterThan(n);
+  };
+  await page.goto("/notifications");
+  const warnings = page.getByTestId("watch-warning");
+  await expect.poll(() => polls).toBeGreaterThan(0);
+  await expect(warnings).toHaveCount(1);                                   // yalnızca 2 dakikalık olan
+  await expect(warnings.first()).toContainText(`Güvenlik kamerası izlenmiyor: Kasa kamerası — ${MODEL_ERR}`);
+  await expect(warnings.first().getByRole("link", { name: "Kamerayı aç" })).toHaveAttribute("href", "/live?s=def456");
+  await advance(30_000);                                                    // ≈30 sn: tezgah kamerası henüz uyarı değil
+  await expect(warnings).toHaveCount(1);
+  await advance(32_000);                                                    // 60 sn aşıldı
+  await expect(warnings).toHaveCount(2);
+  await expect(page.getByText("Güvenlik kamerası izlenmiyor: Tezgah kamerası")).toBeVisible();
+  await expect(page.getByTestId("alarm-banner")).toContainText("Kamera bağlantısı yok");
+  // uyarı sarı (alarm kırmızısı değil) ve alarm şeridi rolü yok
+  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toHaveCount(0);
+  await expect(warnings.first()).toHaveClass(/bg-warn-50/);
+
+  // şerit yapışkan: kısa pencerede sayfanın en altına inilince de görünür
+  await page.setViewportSize({ width: 1400, height: 420 });
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+  await expect(page.getByTestId("alarm-banner")).toBeInViewport();
+  const top = await page.getByTestId("alarm-banner").evaluate((el) => el.getBoundingClientRect().top);
+  expect(top).toBeLessThanOrEqual(1);
+
+  // kameralar düzelince uyarılar kalkar
+  list = [fakeSession({ ...dead, state: "live", healthy: true, reason: null }), fakeSession({ ...old, healthy: true, reason: null }, "def456", "Kasa kamerası")];
+  await advance(6_000);
+  await expect(warnings).toHaveCount(0);
+  await expect(page.getByTestId("alarm-banner")).toHaveCount(0);
+});
+
+test("alarm şeridi yapışkan: canlı sayfada aşağı kaydırınca alarm görünür kalır", async ({ page }) => {
+  await login(page);
+  await page.setViewportSize({ width: 1400, height: 480 });
+  const f: Fake = { state: "live", message: "", model: "ready", lastAlarmAt: Date.now() / 1000, healthy: true };
+  await page.route("**/api/live/sessions", (route) => route.fulfill({ json: [fakeSession(f)] }));
+  await page.route("**/api/live/sessions/abc123/stream*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  const now = Date.now() / 1000;
+  await page.route(/\/api\/live\/alarms\?active=1$/, (route) => route.fulfill({ json: [{
+    id: "z1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 3, firedAt: now,
+    endedAt: null, acked: false, notify: "disabled", image: false }] }));
+  await page.goto("/live?s=abc123");
+  const banner = page.getByRole("alert", { name: "Güvenlik alarmı" });
+  await expect(banner).toContainText("Eller yukarı — Tezgah kamerası");
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+  await expect(banner).toBeInViewport();
+  await expect(banner.getByRole("button", { name: /^Gördüm/ })).toBeInViewport();
+  // zemin düz: arkadaki içerik görünmez
+  const bg = await page.getByTestId("alarm-banner").evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(bg).not.toBe("rgba(0, 0, 0, 0)");
+});
+
+test("güvenlik paneli: Deneme alarmı bu kameranın karesiyle oluşturulur ve Son alarmlar'da görünür", async ({ page }) => {
+  await login(page);
+  const f: Fake = { state: "live", message: "", model: "ready", lastAlarmAt: null, healthy: true };
+  await page.route("**/api/live/sessions", (route) => route.fulfill({ json: [fakeSession(f)] }));
+  await page.route("**/api/live/sessions/abc123/stream*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  const now = Date.now() / 1000;
+  const made: unknown[] = [];
+  const mine: Array<Record<string, unknown>> = [];
+  await page.route("**/api/live/alarms/test", (route) => {
+    made.push(route.request().postDataJSON());
+    const a = { id: "t1", sessionId: "abc123", camera: "Tezgah kamerası", type: "test", startedAt: now, firedAt: now,
+                endedAt: null, acked: false, notify: "disabled", image: true };
+    mine.push(a);
+    return route.fulfill({ json: a });
+  });
+  await page.route(/\/api\/live\/alarms\?sessionId=abc123$/, (route) => route.fulfill({ json: mine }));
+  await page.route("**/api/live/alarms/t1/image.jpg", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.goto("/live?s=abc123");
+  const panel = page.getByRole("region", { name: "Güvenlik", exact: true });
+  await expect(panel.getByText("Henüz alarm yok.")).toBeVisible();
+  await panel.getByRole("button", { name: "Deneme alarmı", exact: true }).click();
+  await expect(panel.getByRole("status")).toHaveText("Deneme alarmı oluşturuldu.");
+  expect(made).toEqual([{ sessionId: "abc123" }]);
+  const item = panel.getByRole("listitem").filter({ hasText: "Deneme alarmı" });
+  await expect(item).toHaveCount(1);                                        // hemen yeniden yüklendi
+  await expect(item.locator("img")).toHaveAttribute("src", "/api/live/alarms/t1/image.jpg");
+  await expect(panel.getByText("Henüz alarm yok.")).toHaveCount(0);
+});
+
+test("Bildirimler (sahte API): son gönderim hatası görünür; Anahtarı sil onayla anahtarı siler", async ({ page }) => {
+  await login(page);
+  const at = Date.now() / 1000 - 30;
+  let cfg: Record<string, unknown> = { enabled: true, chatId: "-1001", hasToken: true,
+                                       lastError: { text: "Bot anahtarı geçersiz.", at } };
+  const puts: unknown[] = [];
+  await page.route("**/api/live/notify", (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      puts.push(body);
+      cfg = { enabled: body.enabled, chatId: body.chatId, hasToken: body.token === "" ? false : cfg.hasToken, lastError: null };
+    }
+    return route.fulfill({ json: cfg });
+  });
+  await page.goto("/notifications");
+  const lastError = page.getByTestId("notify-last-error");
+  await expect(lastError).toHaveText(/^Son gönderim hatası \(\d{2}:\d{2}:\d{2}\): Bot anahtarı geçersiz\.$/);
+  await page.getByLabel("Sohbet / grup kimliği").fill("-999");                  // kaydedilmemiş değişiklik gönderilmez
+
+  const dialogs: string[] = [];
+  page.once("dialog", (d) => { dialogs.push(d.message()); return d.dismiss(); });
+  await page.getByRole("button", { name: "Anahtarı sil" }).click();
+  await expect.poll(() => dialogs.length).toBe(1);
+  expect(dialogs[0]).toContain("silinsin mi");
+  expect(puts).toEqual([]);                                                   // vazgeçildi: istek yok
+  await expect(page.getByText("Anahtar kayıtlı")).toBeVisible();
+
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Anahtarı sil" }).click();
+  await expect(page.getByText("Anahtar silindi.")).toBeVisible();
+  expect(puts).toEqual([{ enabled: true, chatId: "-1001", token: "" }]);
+  await expect(page.getByText("Anahtar kayıtlı")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Anahtarı sil" })).toHaveCount(0);
+  await expect(lastError).toHaveCount(0);
 });

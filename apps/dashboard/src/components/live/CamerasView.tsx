@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { api, RECORDER_BRANDS, type Channel, type LiveSession, type Source } from "@/lib/live";
+import { api, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
 import SourceForm from "./SourceForm";
 import StartSessionDialog from "./StartSessionDialog";
 
@@ -14,12 +14,19 @@ function describe(s: Source): string {
   return s.brand === "custom" ? "RTSP adresi" : `${s.brand[0].toUpperCase()}${s.brand.slice(1)} · ${s.host} · kanal ${s.channel}`;
 }
 
-/** Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir) */
+/**
+ * Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir).
+ * Güvenlik kamerası "Nöbette" (gerçekten izleniyor) ya da "Uyarı" (izlenmiyor; neden üstüne gelince) gösterir.
+ */
 function CountingLink({ session }: { session: LiveSession }) {
+  const safety = session.profile.countMode === "safety";
+  const health = safety ? safetyHealth(session) : null;
+  const warn = health !== null && !health.healthy;
   return (
-    <Link href={`/live?s=${session.id}`}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[9px] border border-[#bfe8d3] bg-ok-50 px-3 text-[12.5px] font-semibold text-ok-600 hover:brightness-95">
-      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-ok-600" />Sayılıyor
+    <Link href={`/live?s=${session.id}`} title={warn ? health.reason ?? undefined : undefined}
+          className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-[#f7d9b5] bg-warn-50 text-warn-700" : "border-[#bfe8d3] bg-ok-50 text-ok-600"}`}>
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
+      {!safety ? "Sayılıyor" : warn ? "Uyarı" : "Nöbette"}
     </Link>
   );
 }

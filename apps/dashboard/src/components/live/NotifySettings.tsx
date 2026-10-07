@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type NotifyConfig } from "@/lib/live";
+import { api, stamp, type NotifyConfig } from "@/lib/live";
 
 const field = "h-10 w-full rounded-[10px] border border-line bg-white px-3 text-sm outline-none focus:border-brand-500";
 
@@ -24,6 +24,15 @@ export default function NotifySettings() {
   async function run(path: string, ok: string) {
     try { await api(path, { method: "POST", json: {} }); setMsg({ ok: true, text: ok }); }
     catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+    api<NotifyConfig>("notify").then(setCfg).catch(() => undefined);   // son gönderim hatası güncellensin
+  }
+  /** Kayıtlı anahtarı siler (token: ""); kayıtlı sohbet kimliği ve aç/kapa değişmez */
+  async function removeToken() {
+    if (!cfg || !confirm("Kayıtlı bot anahtarı silinsin mi? Yeni anahtar girilene kadar Telegram'a bildirim gitmez.")) return;
+    try {
+      const c = await api<NotifyConfig>("notify", { method: "PUT", json: { enabled: cfg.enabled, chatId: cfg.chatId, token: "" } });
+      setCfg(c); setToken(""); setMsg({ ok: true, text: "Anahtar silindi." });
+    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
   }
   return (
     <div className="grid items-start gap-5 lg:grid-cols-[420px_minmax(0,1fr)]">
@@ -33,7 +42,12 @@ export default function NotifySettings() {
           <input aria-label="Bot anahtarı" type="password" autoComplete="new-password" className={`${field} mt-1.5`} value={token}
                  placeholder={cfg?.hasToken ? "Kayıtlı (değiştirmek için yaz)" : "123456:ABC…"} onChange={(e) => setToken(e.target.value)} />
         </label>
-        {cfg?.hasToken && <p className="text-[12px] text-ok-600">Anahtar kayıtlı</p>}
+        {cfg?.hasToken && (
+          <p className="flex items-center justify-between gap-2 text-[12px] text-ok-600">
+            Anahtar kayıtlı
+            <button type="button" onClick={removeToken} className="font-medium text-nok-600 hover:underline">Anahtarı sil</button>
+          </p>
+        )}
         <label className="block text-sm font-medium">Sohbet / grup kimliği
           <input aria-label="Sohbet / grup kimliği" className={`${field} mt-1.5`} value={chatId} placeholder="-1001234567890" onChange={(e) => setChatId(e.target.value)} />
         </label>
@@ -47,6 +61,11 @@ export default function NotifySettings() {
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="h-10 rounded-[10px] border border-line text-sm font-medium">Deneme alarmı</button>
         </div>
         {msg && <p role="status" className={`rounded-xl px-3 py-2 text-sm ${msg.ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+        {cfg?.lastError && (
+          <p data-testid="notify-last-error" className="rounded-xl border border-nok-50 bg-white px-3 py-2 text-[12.5px] text-nok-600">
+            Son gönderim hatası ({stamp(cfg.lastError.at)}): {cfg.lastError.text}
+          </p>
+        )}
         <p className="text-[11.5px] text-faint">Anahtar yalnızca bu bilgisayarda saklanır; panele geri gösterilmez.</p>
       </section>
       <section className="card p-5 text-sm leading-relaxed">

@@ -11,7 +11,7 @@ import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
 import { SafetyPanel, SafetySettings } from "./SafetyPanel";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
-import { api, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
+import { api, safetyHealth, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "brand" | "in" | "out"; hint?: string; testId: string }) {
@@ -34,6 +34,7 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
   const watch = s.profile.countMode === "safety";
   // güvenlik: son 5 dakikada alarm olduysa kırmızı nokta ve "Alarm" (lastAlarmAt: unix saniye)
   const alarmed = s.safety?.lastAlarmAt != null && Date.now() / 1000 - s.safety.lastAlarmAt < 300;
+  const health = safetyHealth(s);
   return (
     <button type="button" role="tab" aria-selected={selected} onClick={onSelect} data-testid="session-card"
             className={`rounded-2xl border px-3.5 py-2.5 text-left transition ${selected ? "border-brand-500 bg-brand-50 shadow-sm" : "border-line bg-white hover:border-brand-100"}`}>
@@ -53,6 +54,9 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
             {s.state !== "live" ? (
               // kamera ölüyse "Nöbette" denmez: gerçek durum yazılır
               <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-600" : "text-muted"}`}>{STATE_LABELS[s.state]}</span>
+            ) : !health.healthy ? (
+              // canlı ama izlemiyor (model yükleniyor/yüklenemedi, görüntü işlenemiyor…): neden üstüne gelince görünür
+              <span className="text-[13px] font-medium text-warn-700" title={health.reason ?? undefined} data-testid="watch-state">Uyarı</span>
             ) : !alarmed && <span className="text-[13px] text-muted">Nöbette</span>}
           </>
         ) : s.twoWay ? (

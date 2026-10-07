@@ -97,12 +97,45 @@ export interface LiveSession {
   profileId: string | null;
   /** true alt akış (hızlı), false ana akış (net); null: kaynak ayarı bilinmiyor */
   substream: boolean | null;
-  /** Güvenlik oturumunda: süren bölümler, son alarm zamanı ve poz modelinin durumu; diğerlerinde null */
+  /** Güvenlik oturumunda: süren bölümler, son alarm zamanı, modellerin durumu ve izleme sağlığı; diğerlerinde null */
   safety: {
     active: Array<{ type: AlarmType; trackId: number; seconds: number }>;
     lastAlarmAt: number | null;
-    model?: "loading" | "ready" | "error";
+    model?: ModelState;
+    /** Poz modeli yüklenemediyse Türkçe neden */
+    modelError?: string | null;
+    /** Kişi tanıma modeli (YOLOX) */
+    detector?: ModelState;
+    detectorError?: string | null;
+    /** Son karenin işleme hatası (sonraki başarılı karede temizlenir) */
+    processingError?: string | null;
+    /** Son başarıyla işlenen kare (unix saniye) */
+    lastOkAt?: number | null;
+    /** Gerçekten izleniyor mu: canlı, iki model hazır, işleme hatası yok, son 10 sn'de kare işlendi */
+    healthy?: boolean;
+    /** Sağlıklı değilse ilk tutmayan koşul (Türkçe) */
+    reason?: string | null;
+    /** Kaç saniyedir sağlıksız (sağlıklıysa null) */
+    unhealthyFor?: number | null;
   } | null;
+}
+
+export type ModelState = "loading" | "ready" | "error";
+
+/** Güvenlik kamerası bu kadar süredir izlenmiyorsa alarm şeridinde uyarı satırı çıkar */
+export const WATCH_WARN_AFTER_S = 60;
+
+/**
+ * Güvenlik oturumu gerçekten izleniyor mu (analiz sunucusunun `safety.healthy`/`reason`'ı). Sağlık alanı olmayan eski
+ * sunucuda kamera durumu ve poz modelinden çıkarılır.
+ */
+export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string | null } {
+  const sf = s.safety;
+  if (sf && typeof sf.healthy === "boolean") return { healthy: sf.healthy, reason: sf.healthy ? null : sf.reason ?? null };
+  if (s.state !== "live") return { healthy: false, reason: s.state === "connecting" ? "Kameraya bağlanılıyor" : "Kamera bağlantısı yok" };
+  if (sf?.model === "loading") return { healthy: false, reason: "Poz modeli yükleniyor" };
+  if (sf?.model === "error") return { healthy: false, reason: sf.modelError || "Poz modeli yüklenemedi" };
+  return { healthy: true, reason: null };
 }
 
 export type AlarmType = "hands_up" | "lying" | "test";
@@ -111,7 +144,11 @@ export interface Alarm {
   startedAt: number; firedAt: number; endedAt: number | null; acked: boolean;
   notify: "disabled" | "queued" | "sent" | "failed" | "suppressed"; image: boolean;
 }
-export interface NotifyConfig { enabled: boolean; chatId: string; hasToken: boolean }
+export interface NotifyConfig {
+  enabled: boolean; chatId: string; hasToken: boolean;
+  /** Son Telegram gönderim hatası (Türkçe, anahtarsız); başarılı gönderimde silinir */
+  lastError?: { text: string; at: number } | null;
+}
 export const ALARM_LABELS: Record<AlarmType, string> = { hands_up: "Eller yukarı", lying: "Yerde yatan kişi", test: "Deneme alarmı" };
 export const NOTIFY_LABELS: Record<Alarm["notify"], string> = {
   disabled: "Telegram kapalı", queued: "Gönderiliyor", sent: "Telegram'a gitti", failed: "Gönderilemedi", suppressed: "Tekrar (gönderilmedi)",
@@ -133,6 +170,12 @@ export const STATE_LABELS: Record<LiveSession["state"], string> = {
   error: "Hata",
   stopped: "Kapandı",
 };
+
+/** Bugünkü zamanda yalnızca saat, eskisinde tarih de (unix saniye) */
+export function stamp(sec: number): string {
+  const d = new Date(sec * 1000);
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("tr-TR") : d.toLocaleString("tr-TR");
+}
 
 /** Oturum durumu noktası: canlı yeşil, hata/bitti kırmızı, bağlanıyor/kapandı turuncu */
 export function stateDot(state: LiveSession["state"]): string {
