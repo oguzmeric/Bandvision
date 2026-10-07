@@ -1086,21 +1086,116 @@ def test_shared_pose_failure_is_logged_and_retried_only_after_60_seconds(caplog:
 
 
 def test_session_status_reports_pose_model_state() -> None:
+    import threading
+
     from bantvision.core import Profile
     from bantvision.live.api import SharedPose
     from bantvision.live.session import LiveSession
+
+    gate = threading.Event()
+
+    def broken() -> Any:
+        assert gate.wait(30)
+        raise OSError("ağ yok")
+
+    pose = SharedPose(loader=broken)
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), pose=pose)           # ısınma yüklemeyi başlatır
+    try:
+        assert s.snapshot_status()["safety"]["model"] == "loading"
+        gate.set()
+        wait_for(lambda: s.snapshot_status()["safety"]["model"] == "error", timeout=10)
+    finally:
+        gate.set()
+        s.stop()
+
+
+def test_shared_pose_does_not_reload_a_ready_model() -> None:
+    """Okuyucu `_inner`'ı None görüp yükleme biterken kilide gelirse model yeniden yüklenmemeli (durum "ready" kalır)."""
+    from bantvision.live.api import SharedPose
+
+    calls: list[int] = []
+
+    class Model:
+        def estimate(self, *_a: Any, **_k: Any) -> str:
+            return "kp"
+
+    def loader() -> Model:
+        calls.append(1)
+        return Model()
+
+    pose = SharedPose(loader=loader)
+    assert pose.estimate("bgr", (0, 0, 1, 1)) is None
+    wait_for(lambda: pose.state == "ready", timeout=10)
+    pose._start_loading()                                  # gecikmiş okuyucu: yükleme zaten bitti
+    pose.warm()
+    if pose._thread is not None:
+        pose._thread.join(5)
+    assert calls == [1] and pose.state == "ready" and pose.estimate("bgr", (0, 0, 1, 1)) == "kp"
+
+
+def test_shared_pose_logs_failure_before_publishing_error_state(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from bantvision.live.api import SharedPose
 
     def broken() -> Any:
         raise OSError("ağ yok")
 
     pose = SharedPose(loader=broken)
-    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), pose=pose)
+    seen: list[str] = []
+
+    class Spy(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(pose.state)                        # günlük yazılırken durum henüz "error" olmamalı
+
+    logger = logging.getLogger("bantvision.live.api")
+    spy = Spy(level=logging.ERROR)
+    logger.addHandler(spy)
     try:
-        assert s.snapshot_status()["safety"]["model"] == "loading"
-        pose.estimate("bgr", (0, 0, 1, 1))
-        wait_for(lambda: s.snapshot_status()["safety"]["model"] == "error", timeout=10)
+        with caplog.at_level(logging.ERROR):
+            pose.warm()
+            wait_for(lambda: pose.state == "error", timeout=10)
     finally:
-        s.stop()
+        logger.removeHandler(spy)
+    assert seen == ["loading"] and any("Poz modeli yüklenemedi" in r.getMessage() for r in caplog.records)
+
+
+def test_safety_session_warms_up_pose_model_without_any_person_or_frame() -> None:
+    """Model ilk kişi görününce değil, oturum güvenliğe geçer geçmez yüklenmeye başlar (sahte yükleyici, kare yok)."""
+    import threading
+
+    from bantvision.core import Profile
+    from bantvision.live.api import SharedPose
+    from bantvision.live.session import LiveSession
+
+    gate, started = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def loader() -> Any:
+        calls.append(1)
+        started.set()
+        assert gate.wait(30)
+        return object()
+
+    pose = SharedPose(loader=loader)
+    other = LiveSession("d", lambda: "yok.mp4", Profile.people(), pose=pose)         # güvenlik değil: ısınma yok
+    sessions = [other]
+    try:
+        time.sleep(0.3)
+        assert not started.is_set() and pose.state == "loading"
+        other.set_profile(Profile.jeweler())                                          # güvenliğe geçiş ısıtır
+        assert started.wait(5) and calls == [1]
+        sessions.append(LiveSession("s", lambda: "yok.mp4", Profile.jeweler(), pose=pose))   # ikinci oturum: yeniden yok
+        time.sleep(0.3)
+        assert calls == [1]
+        gate.set()
+        wait_for(lambda: pose.state == "ready", timeout=10)
+        sessions.append(LiveSession("s2", lambda: "yok.mp4", Profile.jeweler(), pose=pose))
+        assert calls == [1] and pose.state == "ready"
+    finally:
+        gate.set()
+        for s in sessions:
+            s.stop()
 
 
 def test_safety_session_keeps_streaming_while_pose_model_loads(

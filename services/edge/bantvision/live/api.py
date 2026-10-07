@@ -143,8 +143,15 @@ class SharedPose:
         with self._infer:
             return inner.estimate(*args, **kwargs)
 
+    def warm(self) -> None:
+        """Modeli şimdiden yüklemeye başlar (oturum güvenliğe geçince; ilk kişi gelmesini beklemeden). Engellemez;
+        model hazırsa, yükleniyorsa ya da hata sonrası bekleme süresindeyse bir şey yapmaz."""
+        self._start_loading()
+
     def _start_loading(self) -> None:
         with self._lock:
+            if self._inner is not None:                 # okuyucu `_inner`'ı None görüp kilide gelene dek yükleme bitmiş olabilir
+                return
             if self._thread is not None and self._thread.is_alive():
                 return
             if self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
@@ -158,9 +165,9 @@ class SharedPose:
             inner = self._loader()
         except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
             msg = f"Poz modeli yüklenemedi: {e}"
+            _LOG.error(msg)                             # önce günlük, sonra durum: "error" görenin günlüğü de vardır
             with self._lock:
                 self._state, self._error, self._failed_at = "error", msg, self._clock()
-            _LOG.error(msg)
             return
         with self._lock:
             self._inner, self._state, self._error = inner, "ready", ""

@@ -191,6 +191,9 @@ class LiveSession:
 
         self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
         self._pipe.safety.enable_gate()
+        warm = getattr(self._pose, "warm", None)            # ortak poz modeli ilk kişiyi beklemeden yüklenmeye başlar
+        if callable(warm):
+            warm()
 
     def learn_background(self) -> None:
         with self._lock:
