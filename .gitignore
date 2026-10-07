@@ -15,3 +15,5 @@ node_modules/
 services/edge/analyzer-data/
 # Yerel sunucu günlükleri (tools/panel_baslat.bat)
 .logs/
+# Model ağırlıkları depoya girmez (movenet_thunder.onnx GitHub sürümü models-v1 üzerinden dağıtılır)
+*.onnx

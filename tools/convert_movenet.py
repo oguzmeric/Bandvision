@@ -24,6 +24,7 @@ KAGGLE_HANDLE = "google/movenet/tensorFlow2/singlepose-thunder/4"
 KAGGLE_URL = "https://www.kaggle.com/models/google/movenet/tensorFlow2/singlepose-thunder/4"
 SIGNATURE = "serving_default"
 TOLERANCE = 0.01
+EXPECTED_OUT_SHAPE = (1, 1, 17, 3)
 
 
 def stick_figure() -> np.ndarray:
@@ -41,12 +42,38 @@ def stick_figure() -> np.ndarray:
     return img
 
 
-def frames(video: str | None, n: int = 8) -> list[np.ndarray]:
+def io_error(inputs: list[tuple[str, str, list]], outputs: list[tuple[str, str, list]]) -> str | None:
+    """ONNX girdi/çıkış sözleşmesi (core/pose.py buna güvenir); sapma varsa Türkçe hata metni, yoksa None.
+
+    Her öğe (ad, onnxruntime tür metni, biçim).
+    """
+    if len(inputs) != 1 or tuple(inputs[0][:2]) != ("input", "tensor(int32)") or list(inputs[0][2]) != [1, 256, 256, 3]:
+        return f"ONNX girdisi beklenen 'input' tensor(int32) [1, 256, 256, 3] değil: {inputs}"
+    if len(outputs) != 1 or outputs[0][0] != "output_0":
+        return f"ONNX çıkışı beklenen tek 'output_0' değil: {outputs}"
+    return None
+
+
+def compare(ref: np.ndarray, got: np.ndarray, label: str) -> float:
+    """Bir karede TF ve ONNX çıktıları arasındaki en büyük mutlak fark. Biçim farkı ve NaN/Inf ValueError verir.
+
+    NaN açıkça reddedilir: `max(0.0, nan) == 0.0` olduğundan sonlu olmayan fark eşik denetimini sessizce geçerdi.
+    """
+    if ref.shape != EXPECTED_OUT_SHAPE or got.shape != EXPECTED_OUT_SHAPE:
+        raise ValueError(f"çıkış biçimi beklenen {EXPECTED_OUT_SHAPE} değil (TF {ref.shape}, ONNX {got.shape}); kare: {label}")
+    with np.errstate(invalid="ignore"):             # Inf - Inf = NaN uyarısı gürültü; sonuç aşağıda reddedilir
+        d = float(np.abs(ref - got).max())
+    if not np.isfinite(d):
+        raise ValueError(f"fark sonlu değil (NaN/Inf); kare: {label}")
+    return d
+
+
+def frames(video: str | None, n: int = 8) -> list[tuple[str, np.ndarray]]:
     rng = np.random.default_rng(0)
-    out = [rng.integers(0, 256, (256, 256, 3), dtype=np.uint8) for _ in range(n)]
-    out.append(stick_figure())
-    out.append(np.zeros((256, 256, 3), dtype=np.uint8))
-    out.append(np.full((256, 256, 3), 255, dtype=np.uint8))
+    out = [(f"rastgele{k}", rng.integers(0, 256, (256, 256, 3), dtype=np.uint8)) for k in range(n)]
+    out.append(("çöp adam", stick_figure()))
+    out.append(("siyah", np.zeros((256, 256, 3), dtype=np.uint8)))
+    out.append(("beyaz", np.full((256, 256, 3), 255, dtype=np.uint8)))
     if video:
         import cv2
 
@@ -57,7 +84,7 @@ def frames(video: str | None, n: int = 8) -> list[np.ndarray]:
             ok, f = cap.read()
             if ok:
                 f = cv2.resize(f, (256, 256))[:, :, ::-1]
-                out.append(np.ascontiguousarray(f))
+                out.append((f"video{k}", np.ascontiguousarray(f)))
         cap.release()
     return out
 
@@ -90,14 +117,26 @@ def main() -> int:
         print(f"ONNX girdi: {t.name} {t.type} {t.shape}")
     for t in sess.get_outputs():
         print(f"ONNX çıkış: {t.name} {t.type} {t.shape}")
+    err = io_error([(t.name, t.type, t.shape) for t in sess.get_inputs()],
+                   [(t.name, t.type, t.shape) for t in sess.get_outputs()])
+    if err:
+        print(f"HATA: {err}")
+        return 1
     name = sess.get_inputs()[0].name
     dtype = in_spec.dtype.as_numpy_dtype
     worst = 0.0
-    for f in frames(a.video):
+    for label, f in frames(a.video):
         x = f[None].astype(dtype)
         ref = sig(**{in_key: tf.constant(x)})[out_key].numpy()
         got = sess.run(None, {name: x})[0]
-        worst = max(worst, float(np.abs(ref - got).max()))
+        try:
+            worst = max(worst, compare(ref, got, label))
+        except ValueError as e:
+            print(f"HATA: {e}")
+            return 1
+        if label == "çöp adam":
+            print(f"çöp adam karesi: en yüksek eklem güveni TF {float(ref[0, 0, :, 2].max()):.3f}, "
+                  f"ONNX {float(got[0, 0, :, 2].max()):.3f}")
     print(f"en büyük fark: {worst:.6f}")
     if worst >= TOLERANCE:
         print("HATA: ONNX çıktısı orijinalden farklı")

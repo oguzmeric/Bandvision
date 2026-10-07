@@ -1,10 +1,14 @@
 name: models
 # MoveNet Thunder ONNX çevirisi (tools/convert_movenet.py): TensorFlow yalnızca burada çalışır, yerel makinede değil.
-# Eşdeğerlik doğrulaması (en büyük fark < 0,01) tutarsa model GitHub sürümü `models-v1`e yüklenir (core/pose_model.py'deki
-# MODEL_SHA256 buradaki SHA-256 ile aynı olmalı). Sürümde zaten başka SHA'lı dosya varsa üzerine yazılmaz: yalnızca elle
-# (workflow_dispatch, force=true) değiştirilir; böylece depodaki sabit ile sürüm dosyası sessizce ayrışmaz.
+# İki iş, en az yetkiyle:
+#   convert: contents=read; çevirir ve doğrular (en büyük fark < 0,01, NaN/biçim/ad denetimi); .onnx + SHA-256 artifact olur.
+#   publish: contents=write; GitHub sürümü `models-v1`e yükler. Varlıkların varlığı ve SHA'sı indirmeyle değil API'den
+#            (`gh release view --json assets`, digest) okunur; API hatası işi düşürür. Sürümde zaten bulunan
+#            movenet_thunder.onnx'in digest'i farklıysa üzerine YAZILMAZ (core/pose_model.py'deki MODEL_SHA256 ile sürüm
+#            sessizce ayrışmasın): fark step summary'ye yazılır (iş düşmez); yalnızca workflow_dispatch + force=true ile yazılır.
 on:
   push:
+    tags-ignore: ["**"]
     paths:
       - tools/convert_movenet.py
       - .github/workflows/models.yml
@@ -14,59 +18,106 @@ on:
         description: "Sürümdeki movenet_thunder.onnx farklıysa üzerine yaz"
         type: boolean
         default: false
-permissions:
-  contents: write
 concurrency:
   group: models-v1
   cancel-in-progress: false
 jobs:
-  movenet:
+  convert:
     runs-on: ubuntu-24.04
-    env:
-      REPO: oguzmeric/Bandvision
-      TAG: models-v1
-      GH_TOKEN: ${{ github.token }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install "tensorflow==2.15.*" "numpy<2" kagglehub tf2onnx "onnx<1.17" onnxruntime opencv-python-headless
+      # Sürümler, ilk yeşil çalışmanın (run 37582071636) kullandıklarıyla aynıdır.
+      - run: >-
+          pip install tensorflow==2.15.1 numpy==1.26.4 kagglehub==1.0.2 tf2onnx==1.17.0 onnx==1.16.2
+          onnxruntime==1.30.0 opencv-python-headless==4.11.0.86
       - name: Çevir ve doğrula
         run: set -o pipefail; python tools/convert_movenet.py --out movenet_thunder.onnx | tee convert.log
       - name: SHA-256
         run: |
-          sha=$(sha256sum movenet_thunder.onnx | cut -d' ' -f1)
-          echo "SHA-256: $sha"
+          sha256sum movenet_thunder.onnx | tee movenet_thunder.onnx.sha256
+          sha=$(cut -d' ' -f1 movenet_thunder.onnx.sha256)
           { echo "### movenet_thunder.onnx"; echo; echo "SHA-256: \`$sha\`"; echo; echo '```'; cat convert.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: movenet_thunder.onnx
+          name: movenet
           path: |
             movenet_thunder.onnx
+            movenet_thunder.onnx.sha256
             convert.log
+  publish:
+    needs: convert
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { name: movenet }
       - name: GitHub sürümüne yükle
         env:
-          FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: oguzmeric/Bandvision
+          TAG: models-v1
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
         run: |
+          set -euo pipefail
+          new=$(cut -d' ' -f1 movenet_thunder.onnx.sha256)
+          [ "$(sha256sum movenet_thunder.onnx | cut -d' ' -f1)" = "$new" ] || { echo "::error::artifact SHA-256 uyuşmuyor"; exit 1; }
           curl -fsSL https://www.apache.org/licenses/LICENSE-2.0.txt -o LICENSE-APACHE-2.0.txt
-          new=$(sha256sum movenet_thunder.onnx | cut -d' ' -f1)
-          files=(LICENSE-APACHE-2.0.txt tools/models/MOVENET-NOTICE.md)
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            have=""
-            if curl -fsSL -o have.onnx "https://github.com/$REPO/releases/download/$TAG/movenet_thunder.onnx"; then
-              have=$(sha256sum have.onnx | cut -d' ' -f1)
-            fi
-            echo "sürümdeki SHA-256: ${have:-yok}; yeni: $new"
-            if [ "$have" = "$new" ]; then
-              echo "model aynı; yalnızca lisans ve not dosyaları güncellenir"
-            elif [ -z "$have" ] || [ "$FORCE" = "true" ]; then
-              files+=(movenet_thunder.onnx)
-            else
-              echo "::warning::sürümdeki model farklı; üzerine yazılmadı (workflow_dispatch, force=true ile yazılır)"
-            fi
-            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
+
+          # Sürüm ve varlık digest'leri API'den: "release not found" dışındaki her hata işi düşürür.
+          exists=0
+          declare -A have=()
+          if out=$(gh release view "$TAG" --repo "$REPO" --json assets \
+                     -q '.assets[] | [.name, (.digest // "unknown")] | @tsv' 2>err.txt); then
+            exists=1
+            while IFS=$'\t' read -r name digest; do
+              if [ -n "$name" ]; then have[$name]="${digest#sha256:}"; fi
+            done <<< "$out"
+          elif grep -qi "release not found" err.txt; then
+            echo "sürüm $TAG yok; oluşturulacak"
           else
-            gh release create "$TAG" movenet_thunder.onnx "${files[@]}" --repo "$REPO" --title "Modeller v1" \
-              --notes "MoveNet SinglePose Thunder (Google, Apache-2.0) ONNX çevirisi. Kaynak ve değişiklik: MOVENET-NOTICE.md."
+            cat err.txt >&2
+            echo "::error::sürüm bilgisi okunamadı (API hatası)"
+            exit 1
           fi
-          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[] | "\(.name) \(.size) \(.url)"'
+
+          upload=()
+          for f in LICENSE-APACHE-2.0.txt tools/models/MOVENET-NOTICE.md; do
+            n=$(basename "$f")
+            [ "${have[$n]:-}" = "$(sha256sum "$f" | cut -d' ' -f1)" ] || upload+=("$f")
+          done
+
+          model=movenet_thunder.onnx
+          cur="${have[$model]:-}"
+          if [ -z "$cur" ]; then
+            echo "sürümde $model yok; yüklenecek ($new)"
+            upload+=("$model")
+          elif [ "$cur" = "$new" ]; then
+            echo "$model sürümdekiyle aynı ($new)"
+          elif [ "$FORCE" = "true" ]; then
+            echo "::warning::$model sürümdekinden farklı ($cur -> $new); force=true ile üzerine yazılıyor"
+            upload+=("$model")
+          else
+            echo "::warning::yeniden üretilen $model sürümdekinden farklı; üzerine yazılmadı"
+            { echo "### Sürümdeki model farklı (üzerine yazılmadı)"; echo
+              echo "- sürümdeki SHA-256: \`$cur\`"; echo "- yeniden üretilen:  \`$new\`"
+              echo "- Sürüm korunur (core/pose_model.py'deki MODEL_SHA256 sürümdeki dosyayı gösterir). Değiştirmek için"
+              echo "  workflow_dispatch ile force=true verin ve MODEL_SHA256'yı güncelleyin."; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "$exists" = 0 ]; then
+            gh release create "$TAG" "${upload[@]}" --repo "$REPO" --title "Modeller v1" \
+              --notes "MoveNet SinglePose Thunder (Google, Apache-2.0) ONNX çevirisi. Kaynak ve değişiklik: MOVENET-NOTICE.md."
+          elif [ "${#upload[@]}" -gt 0 ]; then
+            gh release upload "$TAG" "${upload[@]}" --repo "$REPO" --clobber
+          else
+            echo "sürüm güncel; yüklenecek dosya yok"
+          fi
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[] | "\(.name) \(.size) \(.digest // "digest yok")"'
