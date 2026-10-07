@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from .core.detect_count import DetectResult, side_function
+from .core.pose_rules import KP_CONF
 from .core.profile import Profile
 from .core.safety import SafetyResult
 
@@ -138,24 +139,30 @@ _SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE"}
 
 
 def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:
-    """Poz güvenlik: iskeletler; alarm vermiş (aktif) izin kutusu kırmızı ve etiketli."""
+    """Poz güvenlik: iskeletler; alarm vermiş (aktif) izin kutusu kırmızı ve etiketli. Alarmlı iz bu karede
+    gözlenmese de (tanıma bir kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir."""
     if r is None:
         return frame
     h, w = frame.shape[:2]
     s = max(0.6, w / 960)
     th = max(1, round(2 * s))
     alarming = {(tid, kind) for tid, kind, _sec, fired in r.active if fired}
+    boxes: dict[int, Any] = dict(r.boxes)
     for t in r.tracks:
+        boxes[t.id] = t.box                                    # gözlenen iz: güncel kutu
         kp = r.poses.get(t.id)
         if kp is not None:
             for a, b in _SKELETON:
-                if kp[a, 2] >= 0.3 and kp[b, 2] >= 0.3:
+                if kp[a, 2] >= KP_CONF and kp[b, 2] >= KP_CONF:
                     cv2.line(frame, (int(kp[a, 0]), int(kp[a, 1])), (int(kp[b, 0]), int(kp[b, 1])), CYAN, th,
                              cv2.LINE_AA)
-        kinds = sorted(k for (tid, k) in alarming if tid == t.id)
-        if kinds:
-            x1, y1, x2, y2 = (int(t.box[0] * w), int(t.box[1] * h), int(t.box[2] * w), int(t.box[3] * h))
-            cv2.rectangle(frame, (x1, y1), (x2, y2), RED, th * 2, cv2.LINE_AA)
-            put_text(frame, " · ".join(_SAFETY_LABELS[k] for k in kinds), (x1, max(0, y1 - int(26 * s))),
-                     int(20 * s), RED)
+    for tid in sorted({tid for tid, _ in alarming}):
+        box = boxes.get(tid)
+        if box is None:
+            continue
+        kinds = sorted(k for (i, k) in alarming if i == tid)
+        x1, y1, x2, y2 = (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), RED, th * 2, cv2.LINE_AA)
+        put_text(frame, " / ".join(_SAFETY_LABELS[k] for k in kinds), (x1, max(0, y1 - int(26 * s))),
+                 int(20 * s), RED)
     return frame

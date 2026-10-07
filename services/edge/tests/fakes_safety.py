@@ -1,4 +1,5 @@
-"""Poz güvenlik testlerinin ortak sahteleri (model gerektirmez): test_safety.py ve test_live.py içe aktarır."""
+"""Poz güvenlik testlerinin ortak sahteleri (model gerektirmez); `tests/` paket değil, pytest dizini yola ekler:
+`from fakes_safety import FakeDetector, FakePose, hands_up_kp`. Şimdilik test_safety.py kullanır."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -17,12 +18,14 @@ class FakeDetector:
 
 
 class FakePose:
-    """Kutudan bağımsız sabit eklemler (17×3 piksel); `kp` testte değiştirilir."""
+    """Kutudan bağımsız sabit eklemler (17×3 piksel); `kp` testte değiştirilir; `calls` çağrı sayısı."""
 
     def __init__(self, kp: np.ndarray) -> None:
         self.kp = kp
+        self.calls = 0
 
     def estimate(self, _bgr: np.ndarray, _box: object) -> np.ndarray:
+        self.calls += 1
         return self.kp
 
 

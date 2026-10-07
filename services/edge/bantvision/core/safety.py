@@ -1,12 +1,14 @@
 """Poz güvenlik çözümleyicisi: kişi tanıma + izleyici (detect_count.DetectCounter) + poz (MoveNet) + kurallar.
 
-Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır; alan (ROI) varsa konum noktası (alt orta)
-alanda olmalı. Kurallar ve süreler pose_rules.py'de; tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md.
+Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır. Alan kuralı tek: kişinin konum noktası
+(alt orta, çerçeve kenarına kırpılmış) profildeki alanda (ROI / çokgen) olmalı. İzleyici ise her zaman tam karede çalışır
+(alan kırpması ya da kutu merkezi süzgeci yok): zemine çizilmiş bir alanın içindeki kişinin gövde merkezi alanın üstünde
+kalabilir. Kurallar ve süreler pose_rules.py'de; tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md.
 Kopma toleransı kare hızına uyar: yavaş akışta (örn. 1 kare/sn) sabit 0,5 sn tolerans bölümü sürekli koparırdı.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -14,14 +16,17 @@ import numpy as np
 from .detect_count import DetectCounter, inside_roi
 from .people_track import MotTrack
 from .pose_rules import GRACE_S, EpisodeTracker, hands_up, lying
-from .profile import Profile
+from .profile import Profile, Roi
+
+Box = tuple[float, float, float, float]
+_EDGE = 1.0 - 1e-6                              # inside_roi yarı açık: alt/sağ kenara değen kutu içeride sayılsın
 
 
 @dataclass
 class SafetyAlarm:
     kind: str                                   # "hands_up" | "lying"
     track_id: int
-    box: tuple[float, float, float, float]      # normalize
+    box: Box                                    # normalize
     started: float                              # olayın başladığı zaman (ts − süre)
     ts: float                                   # alarmın doğduğu zaman
 
@@ -33,6 +38,7 @@ class SafetyResult:
     active: list[tuple[int, str, float, bool]] = field(default_factory=list)    # (iz, tür, süre sn, alarm verdi mi)
     fired: list[SafetyAlarm] = field(default_factory=list)                  # bu karede doğan alarmlar
     ended: list[tuple[int, str, bool]] = field(default_factory=list)        # biten bölümler (iz, tür, alarm verdi mi)
+    boxes: dict[int, Box] = field(default_factory=dict)                     # alarm vermiş etkin izlerin son bilinen kutusu
 
 
 def grace_for(fps: float) -> float:
@@ -40,11 +46,20 @@ def grace_for(fps: float) -> float:
     return max(GRACE_S, 2.5 / fps) if fps > 0 else GRACE_S
 
 
+def anchor_point(box: Box) -> tuple[float, float]:
+    """Konum noktası: alt orta. Tanıma kutuları kareye kırpılır (alt kenar y2 = 1,0); `inside_roi` yarı açık olduğundan
+    kareye değen kişi dışarıda sayılmasın diye [0, 1) içine çekilir."""
+    x1, _, x2, y2 = box
+    return min(max((x1 + x2) / 2, 0.0), _EDGE), min(y2, _EDGE)
+
+
 class SafetyAnalyzer:
     def __init__(self, detector: Any | None = None, pose: Any | None = None) -> None:
         self.dc = DetectCounter(detector=detector, motion=False)
         self._pose = pose
         self.episodes = EpisodeTracker()
+        self._last_box: dict[int, Box] = {}                         # iz → son gözlenen (alanda) kutu
+        self._reset_ended: list[tuple[int, str, bool]] = []         # reset() ile kesilen alarmlı bölümler
 
     @property
     def pose(self) -> Any:
@@ -58,20 +73,29 @@ class SafetyAnalyzer:
         self.dc.enable_gate()
 
     def reset(self) -> None:
+        """İzleyici ve bölümler sıfırlanır; alarm vermiş bölümler bir SONRAKİ `process()` sonucunda `ended` olarak
+        bildirilir (alarm günlüğü kapanabilsin)."""
+        # sweep(alive=∅) ertelenmiş sonları ve tüm etkin bölümleri verip temizler (EpisodeTracker'ın açık arayüzü)
+        self._reset_ended += [(k[0], k[1], fired) for k, fired in self.episodes.sweep(0.0, set()) if fired]
         self.dc.reset()
         self.episodes = EpisodeTracker()
+        self._last_box.clear()
 
     def process(self, bgr: np.ndarray, profile: Profile, fps: float, ts: float) -> SafetyResult:
         h, w = bgr.shape[:2]
-        r = self.dc.process(bgr, profile, fps)                # sayım çizgisi önemsiz; geçişler kullanılmaz
+        # İzleyici tam karede (alan yok, sayım çizgisi önemsiz): alan kuralı aşağıda yalnızca konum noktasına uygulanır.
+        full = replace(profile, roi=Roi(0.0, 0.0, 1.0, 1.0), roiPolygon=None, countLine=None)
+        r = self.dc.process(bgr, full, fps)
         res = SafetyResult(tracks=r.tracks)
         grace = grace_for(fps)
         sf = profile.safety
         rules = [("hands_up", hands_up, sf.handsUp), ("lying", lying, sf.lying)]
         for t in r.tracks:
             x1, y1, x2, y2 = (float(v) for v in t.box)
-            if not inside_roi(profile, (x1 + x2) / 2, y2):
+            box = (x1, y1, x2, y2)
+            if not inside_roi(profile, *anchor_point(box)):
                 continue
+            self._last_box[t.id] = box
             kp = self.pose.estimate(bgr, (x1 * w, y1 * h, x2 * w, y2 * h))
             res.poses[t.id] = kp
             for kind, fn, rule in rules:
@@ -80,10 +104,16 @@ class SafetyAnalyzer:
                 if self.episodes.update((t.id, kind), fn(kp), ts, rule.seconds, grace_s=grace):
                     # update bölümü az önce yeniledi: etkin listedeki süre = ts − başlangıç
                     dur = next(a[2] for a in self.episodes.active() if a[0] == t.id and a[1] == kind)
-                    res.fired.append(SafetyAlarm(kind, t.id, (x1, y1, x2, y2), ts - dur, ts))
+                    res.fired.append(SafetyAlarm(kind, t.id, box, ts - dur, ts))
         alive = {t.id for t in self.dc.tracker.tracks}
         # sweep aynı anahtarı iki kez bildirebilir ya da etkin bölümü olan anahtarı bitmiş sayabilir (eski bölümün
         # ertelenmiş sonu): olduğu gibi aktarılır, tekilleştirilmez.
-        res.ended = [(k[0], k[1], fired) for k, fired in self.episodes.sweep(ts, alive, grace_s=grace)]
+        res.ended = self._reset_ended + [(k[0], k[1], fired)
+                                         for k, fired in self.episodes.sweep(ts, alive, grace_s=grace)]
+        self._reset_ended = []
         res.active = self.episodes.active()
+        ids = {a[0] for a in res.active}
+        self._last_box = {tid: b for tid, b in self._last_box.items() if tid in ids}
+        # Alarmlı iz bu karede gözlenmese de (tanıma kaçırdı) kırmızı kutu son bilinen yerinde kalsın
+        res.boxes = {a[0]: self._last_box[a[0]] for a in res.active if a[3] and a[0] in self._last_box}
         return res
