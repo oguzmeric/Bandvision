@@ -133,6 +133,30 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
   - Web paneli: "Kişi (mağaza girişi)" profili, kamera, giriş yönü, çizgi konumu; sonuçta Giriş/Çıkış ve iki çizgili grafik.
   - Video aracı: `--mode detect`, Türkçe bindirme.
 
+## 5f. Poz güvenlik alarmı: eller yukarı, yerde yatan kişi (web + Telegram) (2026-10-07)
+
+Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safety` nesnesi (`02-contracts.md`); web tarafı `13-web-platform.md` "Güvenlik alarmı ve Bildirimler". Tasarım: `docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md`. Kuyumcu gibi mağazalarda sessiz alarm: soygun sırasında "eller yukarı" ve düşme/bayılma sonrası yerde yatan kişi. Kod `poz-guvenlik` dalında; main'e birleştirilene kadar yayında değil.
+
+- **Ne var:**
+  - Analiz sunucusu (yalnızca bilgisayar): kişi tanıma (YOLOX) + izleyici + poz (MoveNet SinglePose Thunder, Apache-2.0; ONNX'e GitHub Actions'ta çevrilir, GitHub sürümü `models-v1`den indirilir, SHA-256 doğrulanır) + kural durum makinesi. Eller yukarı varsayılan 3 sn (ayar 3–5), yerde yatma 10 sn (ayar 5–30).
+  - Alarm günlüğü, olay resmi (yalnızca resim gönderimi açıksa; bilgisayarda 7 gün), Telegram bildirimi (bot anahtarı yalnızca `secrets.json`'da, çevrimdışı kuyruk, aynı kamera ve tür için 60 sn tekrar önleme).
+  - Web paneli: Güvenlik kategorisi ve "Kuyumcu güvenliği" profili, Ayarla'da kurallar, iskeletli akış, "İzleniyor" yan paneli, her sayfada alarm şeridi (bağlantı koparsa uyarı satırı), Bildirimler sayfası, deneme mesajı ve deneme alarmı.
+  - iPhone: profili tanır, çalıştırmaz ("Yalnızca bilgisayarda").
+- **Kullanıcı kararları (2026-10-06/07):** poz modeli MoveNet Thunder (RTMPose/RTMO ağırlık lisansı belirsiz olduğundan elendi); ilk etapta yalnızca Telegram (WhatsApp ileride); Telegram'a resim varsayılan kapalı; iPhone kapsam dışı; yanlış alarm hedefi kamera başına 8 saatte en fazla 1.
+- **Doğrulama durumu:** birim ve entegrasyon testleri (kurallar, çözümleyici, model indirme, alarm günlüğü, Telegram sahte sunucusu, uç noktalar) ve panel uçtan uca testleri kuralların ve altyapının tasarıma uygun çalıştığını sınar. Gerçek kamerada doğruluğu **sınamaz**.
+- **Gerçek ölçüm BEKLİYOR; şimdilik doğruluk iddiası yok.** Kabul ölçütü: olayların ≥ %95'i kural süresi + 2 sn içinde alarm verir; normal harekette kamera başına 8 saatte ≤ 1 yanlış alarm. Ölçüm için kullanıcıdan gerekenler:
+  - ≥ 20 eller yukarı olayı (farklı kişiler; önden, yandan, tezgâh arkası);
+  - ≥ 20 yerde yatma olayı (farklı yönler);
+  - ≥ 1 saat normal hareket;
+  - hepsi ofisteki bullet/dome kameradan (eğik bakış) alınmış kayıtlar.
+- **Ölçüm protokolü:**
+  1. Her kayıtta olayın başladığı an elle etiketlenir: `VIDEO.pose.json` = `[{"t": saniye, "type": "hands_up"|"lying"}]`. Tür başına 20'den az etiket ya da 1 saatten kısa video varsa araç "KALDI" der (kapı kalır).
+  2. Profil: web panelinde o kameranın güvenlik oturumunda ayarlar yapılıp **Kaydet**'e basılır. Profil JSON'u ya `<ANALYZER_DATA_DIR>/live/camera_profiles.json` içindeki kamera kaydıdır ya da oturumun `GET /api/v1/live/sessions/{id}` yanıtı (içindeki `profile`) olduğu gibi dosyaya kaydedilir.
+  3. `python tools/eval_pose.py VIDEO --profile PROFİL.json --labels VIDEO.pose.json` (isteğe bağlı `--every 2`: canlıdaki kare atlamayı taklit eder). Tür başına yakalama, yanlış alarm ve 8 saate çevrilmiş oran yazılır; çıkış kodu yalnızca ölçütler tutuyorsa 0.
+  4. Sonuçlar ölçülünce buraya yazılacak. Kayıtlar kullanıcınındır; public repoya konmaz.
+- **Bilinen risk:** MoveNet ağırlıklı olarak fitness/dans/yoga videolarıyla eğitildi; eğik ve uzak güvenlik kamerasında doğruluk ölçülene kadar bilinmiyor. Tutmazsa eşikler yalnızca ölçümle ayarlanır, o da yetmezse model seçimi yeniden değerlendirilir.
+- **Sınırlar:** poz modeli ilk kullanımda internetten indirilir (indirilemezse alarm olmaz, panel uyarır); alarm şeridi panel açıkken görünür (Telegram kapalıysa tek kanal); panelde ses yok; Supabase'e olay gönderimi yok; video yükleme (analiz) formunda güvenlik yok; aynı kamerada aynı anda sayım ve güvenlik yok.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -159,3 +183,4 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
 2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
+5. **Poz güvenlik ölçümü** (§5f): ofis bullet/dome kamerasından etiketli kayıtlar (≥ 20 eller yukarı, ≥ 20 yerde yatma, ≥ 1 saat normal hareket) → `tools/eval_pose.py`.
