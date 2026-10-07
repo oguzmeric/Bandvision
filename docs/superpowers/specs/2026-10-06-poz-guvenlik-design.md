@@ -157,7 +157,7 @@ Bir eklem **görünür** sayılır: güven ≥ `KP_CONF = 0,3`.
 - `core/pipeline.py`: `countMode == "safety"` için `_process_safety`. Sayım yok; `FrameResult.safety` dolar.
 - `overlay.py`: `draw_safety`. İskelet çizgileri; alarm veren iz kırmızı kutu ve etiket ("ELLER YUKARI" / "YERDE").
 - `live/alarms.py`: `AlarmStore`.
-  - `<data>/live/alarms.jsonl` ve `<data>/live/alarm-images/<id>.jpg`.
+  - `<data>/live/alarms.json` ve `<data>/live/alarm-images/<id>.jpg`.
   - Kayıt: `{id, sessionId, camera, type: "hands_up"|"lying"|"test", startedAt, firedAt, endedAt, acked, notify: "disabled"|"queued"|"sent"|"failed"|"suppressed", image}`.
   - 7 günden eski resim ve kayıtlar mevcut temizlik iş parçacığında silinir.
 - `live/notify.py`: `TelegramNotifier`.
