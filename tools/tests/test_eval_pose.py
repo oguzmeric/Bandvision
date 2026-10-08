@@ -358,19 +358,33 @@ def test_report_gates_every_camera_with_an_hour_or_more(capsys: pytest.CaptureFi
     assert "(16.00 / 8 saat)" in capsys.readouterr().out
 
 
-def test_report_camera_under_an_hour_is_listed_but_not_gated(capsys: pytest.CaptureFixture[str]) -> None:
-    assert ev.report(multi({"Tezgah": (0, 8.0), "Depo": (5, 59.6 / 60)})) is True
+def test_report_every_camera_needs_an_hour_of_video(capsys: pytest.CaptureFixture[str]) -> None:
+    # Tezgah 8 saat ve temiz; Depo 50 dk: toplam 8,8 saat yetse de Depo'nun süresi yetmez → KALDI
+    assert ev.report(multi({"Tezgah": (0, 8.0), "Depo": (0, 50 / 60)})) is False
     out = capsys.readouterr().out
-    assert "Depo" in out and "yetersiz süre" in out and "59 dk" in out and out.splitlines()[-1] == "GEÇTİ"
+    assert "yetersiz süre: Depo 50 dk (en az 60 dk)" in out and out.splitlines()[-1] == "KALDI"
+    assert "Tezgah" in out and "yetersiz süre: Tezgah" not in out        # yeterli kamera için bu ileti yok
+    assert ev.report(multi({"Tezgah": (0, 8.0), "Depo": (5, 59.6 / 60)})) is False   # 59,6 dk "60 dk" diye yuvarlanmaz
+    assert "yetersiz süre: Depo 59 dk (en az 60 dk)" in capsys.readouterr().out
+    assert ev.report(multi({"A": (0, 0.2), "B": (0, 0.3), "C": (0, 8.0)})) is False   # kısa her kamera ayrı yazılır
+    out = capsys.readouterr().out
+    assert "yetersiz süre: A 12 dk (en az 60 dk)" in out and "yetersiz süre: B 18 dk (en az 60 dk)" in out
+    assert "Not:" not in out
 
 
-def test_report_needs_an_hour_in_total_across_cameras(capsys: pytest.CaptureFixture[str]) -> None:
-    assert ev.report(multi({"A": (0, 0.4), "B": (0, 0.4)})) is False
+def test_report_passes_when_every_camera_has_an_hour_and_is_within_the_limit(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(multi({"Tezgah": (1, 8.0), "Giriş": (0, 1.0), "Depo": (0, 2.5)})) is True
     out = capsys.readouterr().out
-    assert "toplam" in out and "yetersiz süre" in out and out.splitlines()[-1] == "KALDI"
-    assert ev.report(multi({"A": (0, 0.5), "B": (0, 0.5)})) is True       # toplam tam 1 saat; hiçbiri tek başına 1 saat değil
+    assert "yetersiz süre" not in out and "Not:" not in out and out.splitlines()[-1] == "GEÇTİ"
+
+
+def test_report_two_half_hour_cameras_do_not_add_up_to_an_hour(capsys: pytest.CaptureFixture[str]) -> None:
+    # toplam tam 1 saat ama hiçbir kamera tek başına 1 saat değil: eskiden "Not:" ile geçerdi, artık KALDI
+    assert ev.report(multi({"A": (0, 0.5), "B": (0, 0.5)})) is False
     out = capsys.readouterr().out
-    assert "hiçbir kamerada 1 saat yok" in out and out.splitlines()[-1] == "GEÇTİ"
+    assert "yetersiz süre: A 30 dk (en az 60 dk)" in out and "yetersiz süre: B 30 dk (en az 60 dk)" in out
+    assert "Not:" not in out and out.splitlines()[-1] == "KALDI"
 
 
 def test_report_capture_gate_still_applies_in_manifest_mode(capsys: pytest.CaptureFixture[str]) -> None:
@@ -575,3 +589,18 @@ def test_main_single_video_with_end_labels_prints_tekrar_and_keeps_the_gate(
     out = capsys.readouterr().out
     assert f"{TEKRAR}: 40" in out and "Yanlış alarm: 0 (0.00 / 8 saat)" in out
     assert "Kamera" not in out and out.splitlines()[-1] == "GEÇTİ"                   # tek video: kamera tablosu yok
+
+
+def test_main_manifest_exits_1_when_one_camera_has_less_than_an_hour(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    (l1, l2), (a1, a2) = halves()
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": l1, "camera": "Tezgah"},
+                                 {"video": "b.mp4", "labels": l2, "camera": "Tezgah"},
+                                 {"video": "c.mp4", "labels": [], "camera": "Depo"}])
+    patch_manifest_run(monkeypatch, {"a.mp4": (a1, 4.0), "b.mp4": (a2, 4.0), "c.mp4": ([], 50 / 60)})
+    assert ev.main(["--manifest", m]) == 1                        # yakalama tamam, yanlış alarm yok; ama Depo 50 dk
+    out = capsys.readouterr().out
+    assert "yetersiz süre: Depo 50 dk (en az 60 dk)" in out and out.splitlines()[-1] == "KALDI"
+    patch_manifest_run(monkeypatch, {"a.mp4": (a1, 4.0), "b.mp4": (a2, 4.0), "c.mp4": ([], 1.0)})
+    assert ev.main(["--manifest", m]) == 0                        # Depo tam 1 saat ve temiz: geçer
+    assert capsys.readouterr().out.splitlines()[-1] == "GEÇTİ"

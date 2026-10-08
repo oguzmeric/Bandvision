@@ -14,9 +14,10 @@ olaya ait olmayan alarm yanlış alarmdır.
 Manifest: [{"video": "yol", "labels": "yol", "profile": "yol", "camera": "ad (isteğe bağlı)"}]; yollar manifest
 dosyasının klasörüne göredir. Kamera adı yoksa video dosyasının adıdır. Yakalama tüm kayıtlar toplanarak tür başına
 hesaplanır. Yanlış alarm KAMERA BAŞINA hesaplanır (aynı kameranın kayıtlarında yanlış alarm ve saatler toplanır, 8 saate
-çevrilir): en az 1 saatlik her kamera 8 saatte ≤ 1 olmalı ve tüm kayıtlar birlikte en az 1 saat sürmeli; kamera
-tablosu yazılır. 1 saatten kısa kamera tabloda görünür ama tek başına sınanmaz. Her kaydın etiket/profil/video girdisi
-hiçbir video işlenmeden önce denetlenir.
+çevrilir): HER kameranın kayıtları birlikte en az 1 saat sürmeli ve 8 saatte ≤ 1 yanlış alarm olmalı; kamera tablosu
+yazılır. 1 saatten kısa bir kamera sonucu KALDI yapar ("yetersiz süre: <kamera> <dk> dk (en az 60 dk)"); süreler
+kameralar arasında toplanmaz. Tek video kipinde video en az 1 saat olmalı. Her kaydın etiket/profil/video girdisi hiçbir
+video işlenmeden önce denetlenir.
 
 Profil: güvenlik (`countMode = "safety"`) profili JSON'u; web panelinde kameranın kayıtlı ayarı
 (<ANALYZER_DATA_DIR>/live/camera_profiles.json içindeki ilgili kaydın kendisi) ya da GET /api/v1/live/sessions/{id}
@@ -39,7 +40,7 @@ sys.path.insert(0, str(ROOT / "services" / "edge"))
 
 MIN_LABELS = 20                 # tür başına en az etiket
 CAPTURE_MIN_PCT = 95            # tür başına yakalama (%), tam sayı karşılaştırması: 19/20 geçer
-MIN_HOURS = 1.0                 # normal hareket kaydı en az bu kadar saat (toplamda; kamera tek başına sınanması için de)
+MIN_HOURS = 1.0                 # normal hareket kaydı en az bu kadar saat (tek videoda video, manifestte HER kamera)
 MAX_FALSE_PER_8H = 1.0
 TOLERANCE_S = 2.0
 EVENT_EXTRA_S = 10.0            # `end` yokken olay, yakalama penceresinin bitiminden bu kadar daha sürer
@@ -268,30 +269,27 @@ def duration_text(hours: float) -> str:
 
 
 def report_cameras(r: dict) -> bool:
-    """Manifest: kamera tablosu ve yanlış alarm kapısı. Geçerse True: en az 1 saatlik her kamera 8 saatte ≤ 1 ve tüm
-    kayıtlar toplamda ≥ 1 saat."""
+    """Manifest: kamera tablosu ve yanlış alarm kapısı. Geçerse True: HER kamera en az 1 saat videoya sahip ve 8 saatte
+    ≤ 1 yanlış alarmda. 1 saatten kısa kamera KALDI yapar (süreler kameralar arasında toplanmaz)."""
     cams: dict[str, dict] = r["cameras"]
     width = max(len(name) for name in cams)
-    print(f"Kamera başına yanlış alarm (sınır: 8 saatte en çok {MAX_FALSE_PER_8H:g}):")
-    ok, gated = True, 0
+    print(f"Kamera başına yanlış alarm (sınır: 8 saatte en çok {MAX_FALSE_PER_8H:g}; her kamera en az {MIN_HOURS:.0f} saat):")
+    ok = True
+    short: list[str] = []
     for name, c in cams.items():
         h, n = c["hours"], c["false"]
         head = f"  {name:<{width}}  {duration_text(h):>10}  {n:>3} yanlış alarm"
         if h < MIN_HOURS:
-            print(f"{head}  yetersiz süre (en az {MIN_HOURS:.0f} saat; tek başına sınanmaz)")
+            ok = False
+            short.append(f"yetersiz süre: {name} {math.floor(h * 60)} dk (en az {math.floor(MIN_HOURS * 60)} dk)")
+            print(f"{head}  yetersiz süre  KALDI")
             continue
-        gated += 1
         per8 = n / h * 8
         passed = per8 <= MAX_FALSE_PER_8H
         ok &= passed
         print(f"{head}  ({per8:.2f} / 8 saat)  {'geçti' if passed else 'KALDI'}")
-    if r["hours"] < MIN_HOURS:
-        print(f"Yanlış alarm: {r['false']} — yetersiz süre: toplam video {math.floor(r['hours'] * 60)} dk, "
-              f"en az {MIN_HOURS:.0f} saat normal hareket gerekli")
-        return False
-    if gated == 0:
-        print(f"Not: hiçbir kamerada {MIN_HOURS:.0f} saat yok; toplam süre yeterli ama kamera başına yanlış alarm "
-              "sınırı sınanmadı.")
+    for line in short:
+        print(line)
     return ok
 
 
