@@ -343,7 +343,7 @@ test("güvenlik paneli: Deneme alarmı bu kameranın karesiyle oluşturulur ve S
   await expect(panel.getByText("Henüz alarm yok.")).toBeVisible();
   await panel.getByRole("button", { name: "Deneme alarmı", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Deneme alarmı oluşturuldu.");
-  expect(made).toEqual([{ sessionId: "abc123" }]);
+  await expect.poll(() => made).toEqual([{ sessionId: "abc123" }]);
   const item = panel.getByRole("listitem").filter({ hasText: "Deneme alarmı" });
   await expect(item).toHaveCount(1);                                        // hemen yeniden yüklendi
   await expect(item.locator("img")).toHaveAttribute("src", "/api/live/alarms/t1/image.jpg");
@@ -476,17 +476,26 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect(modal).toHaveCount(0);
   await expect(banner).toBeVisible();
 
-  // Gördüm: onaylanır, pencere kalan alarma geçer; son alarm da onaylanınca pencere ve şerit kapanır
+  // Gördüm: onaylanır, pencere kalan alarma geçer — kapanıp açılmadan (aynı öğe, hep açık: perde yanıp sönmez,
+  // odak sayfaya kaçmaz); son alarm da onaylanınca pencere ve şerit kapanır
   await banner.getByRole("button", { name: "Kaydı izle: Eller yukarı — Tezgah kamerası" }).click();
+  type Marked = HTMLDialogElement & { izli?: number; kapandi?: number };
+  await modal.evaluate((el) => {
+    const d = el as Marked;
+    d.izli = 1;
+    d.kapandi = 0;
+    new MutationObserver(() => { if (!d.open) d.kapandi = (d.kapandi ?? 0) + 1; }).observe(d, { attributes: true, attributeFilter: ["open"] });
+  });
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
   await expect(modal.getByTestId("alarm-counter")).toHaveCount(0);            // tek alarm: sayaç yok
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();  // odak yine Gördüm'de
-  expect(calls.acks).toEqual(["a2"]);
+  expect(await modal.evaluate((el) => { const d = el as Marked; return [d.izli, d.kapandi, d.open]; })).toEqual([1, 0, true]);
+  await expect.poll(() => calls.acks).toEqual(["a2"]);
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveCount(0);
   await expect(banner).toHaveCount(0);
-  expect(calls.acks).toEqual(["a2", "a1"]);
+  await expect.poll(() => calls.acks).toEqual(["a2", "a1"]);
 
   // yeni alarm gelince pencere yeniden açılır
   list.push({ id: "a3", sessionId: "abc123", camera: "Depo", type: "lying", startedAt: now - 20, firedAt: now - 2,
@@ -575,7 +584,7 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   await expect(counter).toHaveText("1 / 2");
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();  // odak yine Gördüm'de
   expect(asked[0]).toContain("yanlış alarm olarak işaretlensin mi");
-  expect(calls.falses).toEqual(["b3"]);
+  await expect.poll(() => calls.falses).toEqual(["b3"]);
   expect(calls.acks).toEqual([]);
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
 });
@@ -621,13 +630,37 @@ test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üs
               endedAt: null, acked: false, notify: "disabled", image: false, clipPending: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
-  expect(calls.acks).toEqual(["s2"]);
+  await expect.poll(() => calls.acks).toEqual(["s2"]);
   await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");    // kalan alarma geçti
   await modal.getByRole("button", { name: "Küçült" }).click();
   await expect(modal).toHaveCount(0);
   await expect(start).toBeVisible();                                         // alttaki pencere etkilenmedi
   await start.getByRole("button", { name: "Vazgeç" }).click();
   await expect(start).toHaveCount(0);
+});
+
+test("alarm penceresi kısa ekranda kırpılmaz: başlık ve düğmeler pencerenin içinde ve tıklanır, orta bölüm kayar", async ({ page }) => {
+  await login(page);
+  await page.setViewportSize({ width: 1000, height: 420 });
+  const now = Date.now() / 1000;
+  const list: FakeAlarm[] = [{ id: "k1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 4,
+                               firedAt: now - 1, endedAt: null, acked: false, notify: "disabled", image: true, clipPending: true }];
+  await fakeFeed(page, list);
+  await page.goto("/notifications");
+  const modal = modalOf(page);
+  await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
+  const m = await modal.evaluate((d) => {
+    const r = d.getBoundingClientRect(), f = d.querySelector("footer")!.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, footerBottom: f.bottom, vh: window.innerHeight };
+  });
+  expect(m.top).toBeGreaterThanOrEqual(0);
+  expect(m.bottom).toBeLessThanOrEqual(m.vh);
+  expect(m.footerBottom).toBeLessThanOrEqual(m.bottom + 0.5);                 // düğmeler kırpılmadı
+  for (const name of ["Gördüm", "Küçült"]) {
+    const box = (await modal.getByRole("button", { name, exact: true }).boundingBox())!;
+    expect(await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.textContent?.trim(),
+                               [box.x + box.width / 2, box.y + box.height / 2])).toBe(name);
+  }
 });
 
 test("sekme başlığı: onaylanmamış alarm varken her saniye yanıp söner, alarm bitince eski haline döner", async ({ page }) => {
@@ -657,7 +690,7 @@ test("sekme başlığı: onaylanmamış alarm varken her saniye yanıp söner, a
   await expect(page).toHaveTitle(BASE);                                       // alarm bitti: geri
   await page.clock.runFor(3000);
   await expect(page).toHaveTitle(BASE);
-  expect(calls.acks).toEqual(["c1"]);
+  await expect.poll(() => calls.acks).toEqual(["c1"]);
 });
 
 test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken yeni alarm bildirilir, tıklayınca pencere açılır; sesli uyarı en çok 10 sn'de bir", async ({ page }) => {

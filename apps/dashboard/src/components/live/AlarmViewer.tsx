@@ -135,8 +135,10 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
             // açılmış pencereyi kapatmasın
             onClose={() => { if (alive.current && !dialog.current?.open) onClose(); }}
             data-testid="alarm-modal"
-            className="m-auto w-[min(48rem,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-3xl border-0 bg-white p-0 text-ink shadow-2xl outline-none backdrop:bg-[#1d1a2e]/70 backdrop:backdrop-blur-[2px]">
-      <div className="grid max-h-[calc(100vh-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto]">
+            // yükseklik sınırı pencerenin kendisinde (tarayıcının modal varsayılanı içeriği kırpardı); iç ızgara onu doldurur,
+            // kısa ekranda orta bölüm kayar, başlık ve düğmeler hep görünür
+            className="m-auto max-h-[calc(100dvh-1.5rem)] w-[min(48rem,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-3xl border-0 bg-white p-0 text-ink shadow-2xl outline-none backdrop:bg-[#1d1a2e]/70 backdrop:backdrop-blur-[2px]">
+      <div className="grid max-h-[calc(100dvh-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto]">
         <header className="flex flex-wrap items-start gap-x-4 gap-y-2 bg-nok-600 px-5 py-4 text-white">
           <span className="mt-0.5 text-3xl" aria-hidden="true">🚨</span>
           <div className="min-w-0 flex-1">

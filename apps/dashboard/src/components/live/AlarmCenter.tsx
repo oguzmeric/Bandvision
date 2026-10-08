@@ -158,7 +158,9 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     setViewer({ id, index: Math.max(0, latest.current.findIndex((a) => a.id === id)) });
   }, []);
 
-  // Liste değişince: penceredeki alarm onaylandıysa aynı yerdeki sonrakine geçilir, hiç kalmadıysa pencere kapanır
+  // Liste değişince durum eşlenir: penceredeki alarm onaylandıysa aynı yerdeki sonrakine geçilir, hiç kalmadıysa
+  // pencere kapanır. Gösterilen alarm aşağıda çizim sırasında aynı kuralla seçilir (`showing`): pencere onaylar arasında
+  // hiç kapanıp açılmaz (perde yanıp sönmez, odak sayfaya kaçmaz, ekran okuyucu yeniden duyurmaz).
   useEffect(() => {
     setViewer((v) => {
       if (!v) return v;
@@ -248,7 +250,10 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const refresh = useCallback(() => refreshRef.current(), []);
   const value = useMemo(() => ({ alarms, problem, unwatched, ackFailed, ack, markFalse, open, refresh }),
     [alarms, problem, unwatched, ackFailed, ack, markFalse, open, refresh]);
-  const showing = viewer !== null && alarms.some((a) => a.id === viewer.id) ? viewer.id : null;
+  const showing = viewer === null ? null
+    : alarms.some((a) => a.id === viewer.id) ? viewer.id
+    : alarms.length > 0 ? alarms[Math.min(viewer.index, alarms.length - 1)].id
+    : null;
 
   return (
     <Ctx.Provider value={value}>
