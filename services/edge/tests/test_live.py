@@ -764,6 +764,8 @@ def test_alarm_image_endpoint_serves_stored_image(client: TestClient) -> None:
     r = client.get(f"/api/v1/live/alarms/{a['id']}/image.jpg")
     assert r.status_code == 200 and r.content == jpeg and r.headers["content-type"] == "image/jpeg"
     assert r.headers["cache-control"] == "no-store"
+    h = client.head(f"/api/v1/live/alarms/{a['id']}/image.jpg")                  # vekil HEAD'i iletir
+    assert h.status_code == 200 and h.content == b"" and h.headers["content-type"] == "image/jpeg"
     assert client.get("/api/v1/live/alarms/..%2F..%2Fsecrets/image.jpg").status_code == 404
 
 
@@ -1855,7 +1857,9 @@ def test_fired_alarm_gets_an_event_clip_from_the_reader(client: TestClient, monk
     pose.kp = hands_up_kp()
     a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
     assert a["sessionId"] == sid and a["clip"] is False and a["clipStartedAt"] is None   # sonrası toplanıyor
+    assert a["clipPending"] is True and a["clipFailed"] is False                     # panel "Kayıt hazırlanıyor…"
     rec = wait_for(lambda: (r := client.app.state.live.alarms.get(a["id"]))["clip"] and r, timeout=30)
+    assert rec["clipPending"] is False and rec["clipFailed"] is False
     assert abs(rec["clipStartedAt"] - (rec["firedAt"] - 3.0)) < 0.8
     r = client.get(f"/api/v1/live/alarms/{a['id']}/clip.webm")
     assert r.status_code == 200 and r.headers["content-type"] == "video/webm"
@@ -1895,6 +1899,14 @@ def test_clip_endpoint_serves_webm_supports_range_and_404(client: TestClient) ->
     assert r.headers["content-range"] == f"bytes 0-99/{len(data)}"
     r = client.get(url, headers={"Range": f"bytes={len(data) - 10}-"})
     assert r.status_code == 206 and r.content == data[-10:]
+    r = client.get(url, headers={"Range": "bytes=-10"})                         # yalnızca son 10 bayt (sonek)
+    assert r.status_code == 206 and r.content == data[-10:]
+    assert r.headers["content-range"] == f"bytes {len(data) - 10}-{len(data) - 1}/{len(data)}"
+    r = client.get(url, headers={"Range": f"bytes={len(data) + 10}-{len(data) + 20}"})   # dosyanın dışında
+    assert r.status_code == 416 and r.headers["content-range"] == f"bytes */{len(data)}"
+    h = client.head(url)                                                         # HEAD: başlıklar, gövde yok
+    assert h.status_code == 200 and h.headers["content-length"] == str(len(data)) and h.content == b""
+    assert h.headers["content-type"] == "video/webm"
     assert client.get("/api/v1/live/alarms/..%2F..%2Fsecrets/clip.webm").status_code == 404
     assert client.get(f"/api/v1/live/alarms/{'b' * 32}/clip.webm").status_code == 404
 
@@ -1945,5 +1957,134 @@ def test_test_alarm_with_session_writes_a_pre_buffer_clip(client: TestClient, mo
     n = _clip_frames(r.content, tmp_path)
     assert n_buf - 3 <= n <= 8 * 10 + 3                                          # ön kayıt kadar, sonrası yok
     plain = client.post("/api/v1/live/alarms/test", json={}).json()
+    assert plain["clipPending"] is False                                          # kamerasız: kayıt beklenmez
     assert mgr.clips.drain(10)
-    assert mgr.alarms.get(plain["id"])["clip"] is False
+    got = mgr.alarms.get(plain["id"])
+    assert got["clip"] is False and got["clipFailed"] is False                    # "Bu alarmın kaydı yok", hata değil
+
+
+# ---------------------------------------------------------------------- görev 13, düzeltme turu 1
+
+def test_clip_deleted_between_lookup_and_response_is_404_not_500(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                                                  tmp_path: pathlib.Path) -> None:
+    """Temizlik ya da 500 sınırı dosyayı tam bu arada silerse 500 değil Türkçe 404."""
+    mgr = client.app.state.live
+    a = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
+    gone = tmp_path / "silindi.webm"
+    monkeypatch.setattr(mgr.alarms, "clip_file", lambda _id: gone)               # bulundu, sonra silindi
+    r = client.get(f"/api/v1/live/alarms/{a['id']}/clip.webm")
+    assert r.status_code == 404 and r.json()["detail"].startswith("Olay kaydı yok")
+
+
+def test_stale_clip_pending_is_cleared_when_the_manager_starts(tmp_path: pathlib.Path) -> None:
+    from bantvision.live.alarms import AlarmStore
+    from bantvision.live.api import LiveManager
+    from bantvision.live.store import LiveStore
+
+    a = AlarmStore(tmp_path).add("eski", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled", clip_pending=True)
+    mgr = LiveManager(LiveStore(tmp_path), tmp_path)
+    got = mgr.alarms.get(a["id"])
+    assert (got["clipPending"], got["clipFailed"]) == (False, True)              # panel: "Kayıt alınamadı"
+
+
+def test_pending_capture_is_written_while_the_camera_is_down() -> None:
+    """Kamera alarmdan hemen sonra koparsa yakalama, kamera dönmesini beklemeden (yeniden bağlanma beklemesi
+    sırasında) elindeki karelerle yazılır."""
+    from fakes_safety import FakeDetector, FakePose
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    jobs: list[Any] = []
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=FakePose(None),
+                    clip_sink=jobs.append)
+    s.loop_file = True
+    try:
+        wait_for(lambda: len(s._clips.frames()) >= 10)                         # ≥ 1 sn ön kayıt
+        assert s.capture_clip(["a" * 32], post_s=1.0)
+
+        def down() -> str:
+            raise OSError("kamera kapalı")
+
+        s.switch_source(down)                                                   # kamera koptu, geri gelmiyor
+        t0 = time.monotonic()
+        wait_for(lambda: jobs, timeout=6)
+        assert time.monotonic() - t0 < 4.0                                      # ≤ sonrası (1 sn) + 1 sn dilim
+        assert s.snapshot_status()["state"] == "reconnecting"
+        assert jobs[0].ids == ("a" * 32,) and len(jobs[0].frames) >= 10
+    finally:
+        s.stop()
+
+
+def _lock_watch_json(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """watch.json okunurken PermissionError (Windows: virüs tarayıcı/yedekleme kilidi); `locked[0] = False` kilidi
+    kaldırır. Yeniden denemeler beklemesiz."""
+    from bantvision.live import jsonfile
+
+    monkeypatch.setattr(jsonfile, "READ_RETRY_DELAYS_S", (0.0,) * 5)
+    real = pathlib.Path.read_text
+    locked = [True]
+
+    def read_text(self: pathlib.Path, *a: Any, **k: Any) -> str:
+        if self.name == "watch.json" and locked[0]:
+            raise PermissionError(13, "Erişim engellendi", str(self))
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    return locked
+
+
+def test_locked_watch_json_is_never_overwritten_and_changes_are_merged_later(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Açılışta watch.json kilitliyse liste boş başlar ama dosya ezilmez: kilitliyken yapılan izleme/bırakma sıraya
+    alınır, dosya okunabilince diskteki listeye uygulanır (önceden izlenen kameralar kaybolmaz)."""
+    import logging
+    from types import SimpleNamespace
+
+    from bantvision.core import Profile
+    from bantvision.live.api import LiveManager
+    from bantvision.live.store import LiveStore
+
+    live = tmp_path / "live"
+    live.mkdir(parents=True, exist_ok=True)
+    rec = {"sourceId": "", "channelId": None, "profileId": "p", "substream": None, "name": "", "profile": None}
+    old = [{**rec, "sourceId": "A", "name": "Kasa"}, {**rec, "sourceId": "B", "name": "Tezgah"}]
+    f = live / "watch.json"
+    f.write_text(json.dumps(old), encoding="utf-8")
+    before = f.read_bytes()
+    locked = _lock_watch_json(monkeypatch)
+    with caplog.at_level(logging.WARNING):
+        mgr = LiveManager(LiveStore(tmp_path), tmp_path)
+        cam = SimpleNamespace(source_id="C", channel_id=None, profile_id="p", substream=None, name="Depo",
+                              profile=Profile.jeweler())
+        mgr.watch(cam)                                                          # kilitliyken yeni kamera
+        mgr.unwatch("A", None)                                                  # kilitliyken (yalnızca diskte olan) bırakma
+    assert f.read_bytes() == before                                             # dosya ezilmedi
+    assert "okunamadı" in caplog.text and "ertelendi" in caplog.text
+    locked[0] = False                                                           # kilit kalktı
+    mgr.watch(SimpleNamespace(source_id="D", channel_id="7", profile_id="p", substream=True, name="NVR · 7",
+                              profile=Profile.jeweler()))
+    got = json.loads(f.read_text(encoding="utf-8"))
+    assert [(r["sourceId"], r["name"]) for r in got] == [("B", "Tezgah"), ("C", "Depo"), ("D", "NVR · 7")]
+
+
+def test_watched_cameras_are_restored_once_the_locked_watch_json_becomes_readable(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Açılıştaki geri yükleme kilitli dosyayla boş çalıştıysa, dosya okunabilince izlenen kameralar açılır."""
+    from bantvision.live.api import LiveManager
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    monkeypatch.setattr(LiveManager, "WATCH_RETRY_S", 0.2)
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        _sess, _sid = _safety_session_with_fake(c, monkeypatch)
+    (w,) = _watch(tmp_path)
+    locked = _lock_watch_json(monkeypatch)
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        time.sleep(0.6)
+        assert c.get("/api/v1/live/sessions").json() == []                      # kilitli: henüz açılmadı
+        locked[0] = False
+        (v,) = wait_for(lambda: c.get("/api/v1/live/sessions").json(), timeout=10)
+        assert (v["sourceId"], v["name"], v["profile"]["countMode"]) == (w["sourceId"], "Tezgah", "safety")
+        time.sleep(0.6)
+        assert len(c.get("/api/v1/live/sessions").json()) == 1                  # bir kez açılır
+    assert [x["sourceId"] for x in _watch(tmp_path)] == [w["sourceId"]]         # liste korundu

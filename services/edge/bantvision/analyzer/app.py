@@ -104,7 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             s.stop()
         for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)
             live.close_alarms(s.id)
-        live.clips.stop(10.0)                                # durdurulan oturumların kayıtları yazılsın (en çok 10 sn)
+        live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
         live.notifier.stop()
 
     app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan)

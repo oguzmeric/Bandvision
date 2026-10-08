@@ -398,6 +398,56 @@ def test_clip_cap_deletes_oldest_files_and_clears_their_records(tmp_path: pathli
 
 def test_clip_file_rejects_bad_ids(tmp_path: pathlib.Path) -> None:
     st = AlarmStore(tmp_path)
-    (tmp_path / "gizli.webm").write_bytes(b"x")
+    decoy = st.clips.parent / "gizli.webm"                    # alarm-clips/../gizli.webm tam buraya çözülür
+    decoy.write_bytes(b"x")
+    assert (st.clips / "../gizli.webm").resolve() == decoy.resolve()
     for bad in ("../gizli", r"..\gizli", "g" * 32, "a" * 31, "a" * 32 + ".tmp"):
         assert st.clip_file(bad) is None
+
+
+def test_clip_pending_and_failed_flags(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = st.add("s", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled", clip_pending=True)
+    b = st.add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled", clip_pending=True)
+    c = st.add(None, "Deneme", "test", 1.0, 2.0, None, "disabled")             # kamerasız: yakalama yok
+    assert (a["clipPending"], c["clipPending"], c["clipFailed"]) == (True, False, False)
+    assert st.set_clip(a["id"], 5.0)
+    st.clip_failed([b["id"], a["id"]])                                         # yazılmış kayda dokunulmaz
+    got = {x["id"]: x for x in AlarmStore(tmp_path).list()}
+    assert (got[a["id"]]["clip"], got[a["id"]]["clipPending"], got[a["id"]]["clipFailed"]) == (True, False, False)
+    assert (got[b["id"]]["clipPending"], got[b["id"]]["clipFailed"]) == (False, True)
+    _write(tmp_path, [_rec("d" * 32)])                                         # eski kayıt: alanlar varsayılan
+    old = AlarmStore(tmp_path).get("d" * 32)
+    assert (old["clipPending"], old["clipFailed"]) == (False, False)
+
+
+def test_stale_clip_pending_is_marked_failed_at_start(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = st.add("s", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled", clip_pending=True)   # yazılırken kapandı
+    again = AlarmStore(tmp_path)
+    assert again.clear_clip_pending() == 1 and again.clear_clip_pending() == 0
+    got = AlarmStore(tmp_path).get(a["id"])
+    assert (got["clipPending"], got["clipFailed"]) == (False, True)
+
+
+def test_clip_cap_scans_the_folder_without_holding_the_store_lock(tmp_path: pathlib.Path) -> None:
+    """500 dosyalık tarama ve silme alarm kaydını bekletmez: kilit yalnızca kayıtlar güncellenirken tutulur."""
+    import threading
+
+    st = AlarmStore(tmp_path)
+    recs = [st.add(None, "Tezgah", "hands_up", float(i), float(i), None, "disabled") for i in range(3)]
+    for r in recs:
+        _clip(st, r["id"])
+    free: list[bool] = []
+    real_glob = pathlib.Path.glob
+
+    def glob(self: pathlib.Path, pattern: str) -> object:
+        if self == st.clips:
+            t = threading.Thread(target=lambda: free.append(st._lock.acquire(timeout=1) and (st._lock.release() or True)))
+            t.start()
+            t.join()
+        return real_glob(self, pattern)
+
+    with patch.object(pathlib.Path, "glob", glob):
+        assert st.enforce_clip_cap(max_clips=1) == 2
+    assert free == [True]

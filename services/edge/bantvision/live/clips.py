@@ -2,14 +2,17 @@
 
 - **Ön kayıt** (`ClipBuffer`, yalnızca güvenlik oturumunda): okuyucu iş parçacığı kameradan okuduğu HER kareyi verir
   (analizden bağımsız, daha akıcı); en çok `CLIP_FPS` (10) kare/sn tutulur, işaretsiz, en çok 1280 px genişlikte,
-  JPEG (kalite 80) olarak bellekte. Son `PRE_S` (8) sn kalır, eskiler zamana göre düşer (bellek sınırlı).
+  JPEG (kalite 80) olarak bellekte. Son `PRE_S` (8) sn kalır, eskiler zamana göre düşer (bellek sınırlı). Canlı
+  oturumda JPEG'e çevirme tek yuvalı ayrı bir iş parçacığında yapılır: okuyucu yalnızca kare başvurusunu bırakır;
+  çevirici meşgulse yuvadaki kare en yenisiyle değiştirilir (sıra ve zaman sınırı korunur).
 - **Yakalama:** alarm anında ön kayıt alınır, ardından `POST_S` (4) sn daha toplanır; aynı karede doğan alarmlar tek
   yakalamayı paylaşır. Kamera koparsa ya da oturum durursa yakalama elindeki karelerle yazılır.
 - **Yazım** (`ClipWriter`): tek arka plan iş parçacığı, sınırlı kuyruk — okuyucu ve işleyici hiç beklemez. Kareler sabit
   `CLIP_FPS` ile (videodaki zaman duvar saatine eşit; boşluk önceki kareyle dolar) OpenCV `VideoWriter` + VP8 ile
   `<data>/live/alarm-clips/<alarmId>.webm` olarak geçici adla yazılır, sonra atomik olarak yeniden adlandırılır. Başarıda
   kayıt `clip: true` ve `clipStartedAt` (ilk karenin duvar saati) alır. Her hata Türkçe günlüğe yazılır, kayıt
-  `clip: false` kalır; hiçbir hata oturuma ulaşmaz.
+  `clip: false` kalır; hiçbir hata oturuma ulaşmaz. Kayıt durumu kayda yansır: yakalama planlanınca `clipPending`,
+  yazılınca `clip`, alınamazsa (görüntü yok, kuyruk dolu, kodlayıcı/disk hatası) `clipFailed`.
 
 Kayıt yalnızca bu bilgisayarda durur (Telegram'a gitmez); alarm kaydıyla birlikte 7 gün, en çok `MAX_CLIPS` dosya.
 """
@@ -41,6 +44,7 @@ CLIP_FPS = 10.0                 # kayıt kare hızı (okuyucu kareleri bu hıza 
 MAX_WIDTH = 1280                # daha geniş kare bu genişliğe küçültülür
 JPEG_QUALITY = 80
 QUEUE_MAX = 8                   # yazılmayı bekleyen en çok yakalama (her biri ≈ 120 JPEG)
+STOP_WAIT_S = 60.0              # kapanışta bekleyen kayıtların yazılması için en çok bu kadar beklenir
 
 Frame = tuple[float, float, bytes]      # (tekdüze saat, duvar saati, JPEG)
 
@@ -59,14 +63,23 @@ class _Capture:
     frames: list[Frame]
 
 
+ClipState = Callable[[Sequence[str], str], None]    # (alarm kimlikleri, "failed") — yakalama alınamadı
+
+
 class ClipBuffer:
     """Bir güvenlik oturumunun ön kaydı ve süren yakalamaları. `push` okuyucudan, `capture` işleyiciden (ya da deneme
     alarmında API'den) çağrılır; iş parçacığı güvenlidir. Biten yakalama `sink`'e verilir (kilit dışında; `sink`
-    engellememeli). `sink` hatası yutulur ve günlüğe yazılır."""
+    engellememeli). `sink` hatası yutulur ve günlüğe yazılır; yakalama alınamazsa `state(ids, "failed")`.
+
+    `threaded=True` (canlı oturum): JPEG'e çevirme tek yuvalı ayrı iş parçacığında — `push` yalnızca kareyi yuvaya
+    koyar (çevirici meşgulse yuvadaki eski kare en yenisiyle değişir); `close()` iş parçacığını durdurur.
+    `threaded=False` (varsayılan): `push` kareyi hemen çevirir (testlerde belirlenimli)."""
 
     def __init__(self, sink: Callable[[ClipJob], None], pre_s: float | None = None, fps: float | None = None,
-                 max_width: int = MAX_WIDTH, quality: int = JPEG_QUALITY) -> None:
+                 max_width: int = MAX_WIDTH, quality: int = JPEG_QUALITY, state: ClipState | None = None,
+                 threaded: bool = False) -> None:
         self._sink = sink
+        self._state = state
         self._pre = PRE_S if pre_s is None else pre_s
         self._period = 1.0 / (CLIP_FPS if fps is None else fps)
         self._max_width, self._quality = max_width, quality
@@ -74,6 +87,15 @@ class ClipBuffer:
         self._ring: deque[Frame] = deque()
         self._pending: list[_Capture] = []
         self._due = float("-inf")
+        # tek yuvalı çevirici (threaded): yuvadaki çevrilmemiş kare, çevirici meşgul mü, kapandı mı
+        self._slot_cv = threading.Condition(threading.Lock())
+        self._slot: tuple[np.ndarray, float, float] | None = None
+        self._busy = False
+        self._closed = False
+        self._thread: threading.Thread | None = None
+        if threaded:
+            self._thread = threading.Thread(target=self._run, name="kayit-jpeg", daemon=True)
+            self._thread.start()
 
     def frames(self) -> list[Frame]:
         with self._lock:
@@ -81,12 +103,61 @@ class ClipBuffer:
 
     def push(self, frame: np.ndarray, t: float, wall: float) -> None:
         """Okuyucunun yeni karesi (`t` tekdüze saat, `wall` duvar saati). Seyreltme: kare yalnızca zamanı geldiyse
-        JPEG'e çevrilir (uzun vadede en çok `CLIP_FPS`/sn; kaynak yavaşsa her kare)."""
+        JPEG'e çevrilir (uzun vadede en çok `CLIP_FPS`/sn; kaynak yavaşsa her kare). Ayrı çeviricide okuyucu yalnızca
+        başvuruyu bırakır (kopya yok: okuyucu her karede yeni dizi alır)."""
         with self._lock:
             keep = t >= self._due
             if keep:
                 self._due = max(self._due + self._period, t + self._period / 2)
-        jpeg = self._encode(frame) if keep else None
+        if not keep:
+            return
+        if self._thread is None:
+            self._add(frame, t, wall)
+            return
+        with self._slot_cv:
+            self._slot = (frame, t, wall)                   # meşgulse önceki çevrilmemiş kare düşer: en yenisi kalır
+            self._slot_cv.notify_all()
+
+    def wait_idle(self, timeout: float = 2.0) -> bool:
+        """Yuvadaki kare çevrilip eklenene dek bekler (en çok `timeout` sn); boşta ise True."""
+        deadline = time.monotonic() + timeout
+        with self._slot_cv:
+            while self._slot is not None or self._busy:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self._slot_cv.wait(left)
+        return True
+
+    def close(self) -> None:
+        """Ayrı çeviriciyi durdurur (yuvadaki son kare önce eklenir)."""
+        with self._slot_cv:
+            self._closed = True
+            self._slot_cv.notify_all()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+
+    def _run(self) -> None:
+        while True:
+            with self._slot_cv:
+                while self._slot is None and not self._closed:
+                    self._slot_cv.wait()
+                if self._slot is None:
+                    return
+                frame, t, wall = self._slot
+                self._slot, self._busy = None, True
+            try:
+                self._add(frame, t, wall)
+            except Exception:  # noqa: BLE001 — çevirici ölmesin
+                _LOG.exception("Kayıt karesi eklenemedi")
+            finally:
+                with self._slot_cv:
+                    self._busy = False
+                    self._slot_cv.notify_all()
+
+    def _add(self, frame: np.ndarray, t: float, wall: float) -> None:
+        """Kareyi JPEG'e çevirip ön kayda ve süren yakalamalara ekler; süresi dolan yakalamaları yazar."""
+        jpeg = self._encode(frame)
         with self._lock:
             if jpeg is not None:
                 item = (t, wall, jpeg)
@@ -101,11 +172,12 @@ class ClipBuffer:
 
     def capture(self, ids: Sequence[str], t: float, post_s: float | None = None) -> bool:
         """Alarm: ön kayıt alınır ve `post_s` (varsayılan `POST_S`) sn daha toplanır; 0 ise hemen yazılır (deneme
-        alarmı). Kare yoksa False (kayıt olmaz)."""
+        alarmı). Kare yoksa False (kayıt olmaz; `state(ids, "failed")`)."""
         post = POST_S if post_s is None else post_s
         with self._lock:
             pre = [f for f in self._ring if f[0] >= t - self._pre]
             if not pre and post <= 0:
+                self._failed(ids)
                 return False
             cap = _Capture(tuple(ids), t + post, pre)
             if post > 0:
@@ -121,7 +193,9 @@ class ClipBuffer:
         self._emit(done)
 
     def flush(self) -> None:
-        """Tüm süren yakalamaları hemen yazar (oturum durdu ya da güvenlikten çıktı)."""
+        """Tüm süren yakalamaları hemen yazar (oturum durdu ya da güvenlikten çıktı); çevirideki son kare beklenir."""
+        if self._thread is not None:
+            self.wait_idle(1.0)
         with self._lock:
             done = self._take(lambda _c: True)
         self._emit(done)
@@ -136,11 +210,21 @@ class ClipBuffer:
         for c in done:
             if not c.frames:
                 _LOG.warning("Olay kaydı alınamadı: kamerada görüntü yok (%s)", ", ".join(c.ids))
+                self._failed(c.ids)
                 continue
             try:
                 self._sink(ClipJob(c.ids, tuple(c.frames)))
             except Exception:  # noqa: BLE001 — kayıt hatası okuyucuyu/işleyiciyi durdurmaz
                 _LOG.exception("Olay kaydı yazıcıya verilemedi (%s)", ", ".join(c.ids))
+                self._failed(c.ids)
+
+    def _failed(self, ids: Sequence[str]) -> None:
+        if self._state is None:
+            return
+        try:
+            self._state(list(ids), "failed")
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Olay kaydı durumu yazılamadı (%s)", ", ".join(ids))
 
     def _encode(self, frame: np.ndarray) -> bytes | None:
         try:
@@ -213,11 +297,17 @@ class ClipWriter:
                 self._thread.start()
             try:
                 self._q.put_nowait(job)
+                self._busy += 1
+                return True
             except queue.Full:
                 _LOG.warning("Olay kaydı kuyruğu dolu; kayıt yazılmayacak (%s)", ", ".join(job.ids))
-                return False
-            self._busy += 1
-        return True
+        self._alarms.clip_failed(job.ids)
+        return False
+
+    def state(self, ids: Sequence[str], state: str) -> None:
+        """Oturumun yakalama durumu: "failed" → kayıtlar `clipFailed` (bekleme biter)."""
+        if state == "failed":
+            self._alarms.clip_failed(ids)
 
     def drain(self, timeout: float) -> bool:
         """Bekleyen tüm işler bitene dek bekler (en çok `timeout` sn); bittiyse True."""
@@ -230,7 +320,7 @@ class ClipWriter:
                 self._idle.wait(left)
         return True
 
-    def stop(self, timeout: float = 10.0) -> None:
+    def stop(self, timeout: float = STOP_WAIT_S) -> None:
         """Bekleyen kayıtları yazmayı (en çok `timeout` sn) bekler, sonra iş parçacığını durdurur."""
         self.drain(timeout)
         with self._lock:
@@ -285,6 +375,7 @@ class ClipWriter:
                     tmp.unlink(missing_ok=True)
                 except OSError:
                     pass
+            self._alarms.clip_failed([i for i in job.ids if i not in written])
         started = job.frames[0][1]
         for aid in written:
             if not self._alarms.set_clip(aid, started):         # kayıt bu arada silinmiş: dosya kalmasın

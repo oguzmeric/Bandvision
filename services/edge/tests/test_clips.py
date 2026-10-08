@@ -176,6 +176,7 @@ def test_writer_writes_readable_webm_and_marks_the_record(tmp_path: pathlib.Path
     assert abs(n - expected) <= 3                                # sabit 10 kare/sn: süre duvar saatine eşit
     rec = st.get(a["id"])
     assert rec["clip"] is True and rec["clipStartedAt"] == pytest.approx(2_000_000.0)
+    assert rec["clipPending"] is False and rec["clipFailed"] is False
     assert list(st.clips.glob("*.tmp.webm")) == []               # geçici dosya kalmadı
     assert AlarmStore(tmp_path).get(a["id"])["clip"] is True    # diske yazıldı
 
@@ -250,6 +251,7 @@ def test_encoder_failure_leaves_clip_false_and_never_raises(tmp_path: pathlib.Pa
         w.stop(10)
     rec = st.get(a["id"])
     assert rec["clip"] is False and rec["clipStartedAt"] is None
+    assert rec["clipFailed"] is True and rec["clipPending"] is False             # panel "Kayıt alınamadı" der
     assert "Olay kaydı yazılamadı" in caplog.text
     assert not (st.clips / f"{a['id']}.webm").exists()
     assert list(st.clips.glob("*.tmp.webm")) == []
@@ -340,3 +342,94 @@ def test_clip_buffer_is_filled_by_the_reader_not_the_slower_analysis() -> None:
         assert s.snapshot_status()["fps"] < 5.0                  # analiz çok daha yavaş
     finally:
         s.stop()
+
+
+# ---------------------------------------------------------------------- düzeltme turu 1
+
+def test_threaded_buffer_push_only_hands_over_the_frame_and_keeps_the_latest() -> None:
+    """Canlı oturumda JPEG'e çevirme ayrı tek yuvalı iş parçacığında: okuyucunun `push`'u beklemez; çevirici meşgulken
+    gelen kareler yuvada en yenisiyle değişir (aradakiler düşer), sıra korunur."""
+    import time as _time
+
+    buf = ClipBuffer(lambda _j: None, threaded=True)
+    real = buf._encode
+    started = threading.Event()
+
+    def slow(frame: np.ndarray) -> bytes | None:
+        started.set()
+        _time.sleep(0.3)
+        return real(frame)
+
+    buf._encode = slow                                                            # type: ignore[method-assign]
+    try:
+        t0 = _time.monotonic()
+        buf.push(_frame(0), 0.0, 100.0)
+        assert started.wait(2)                                                    # çevirici ilk karede meşgul
+        for i in range(1, 5):                                                     # 4 kare (zamanı gelmiş) daha
+            buf.push(_frame(i), i * 0.2, 100.0 + i * 0.2)
+        assert _time.monotonic() - t0 < 0.25                                      # okuyucu hiç beklemedi
+        assert buf.wait_idle(5)
+        ts = [t for t, _w, _j in buf.frames()]
+        assert ts == [0.0, 0.8]                                                   # ilk ve en yeni; aradakiler düştü
+    finally:
+        buf.close()
+    assert buf._thread is not None and not buf._thread.is_alive()
+
+
+def test_threaded_buffer_feeds_captures_in_order_and_completes() -> None:
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append, threaded=True)
+    try:
+        for i in range(50):                                                       # 5 sn, 10 kare/sn (gerçek zamanlı gibi)
+            buf.push(_frame(i), i / 10, 1000 + i / 10)
+            buf.wait_idle(2)
+        buf.capture(["a" * 32], 5.0, post_s=1.0)
+        for i in range(50, 65):
+            buf.push(_frame(i), i / 10, 1000 + i / 10)
+            buf.wait_idle(2)
+        assert len(jobs) == 1
+        ts = [t for t, _w, _j in jobs[0].frames]
+        assert ts == sorted(ts) and ts[0] >= 5.0 - clips.PRE_S - 1e-9 and abs(ts[-1] - 6.0) < 1e-6
+    finally:
+        buf.close()
+
+
+def test_capture_that_gets_no_frames_is_reported_failed() -> None:
+    """Yakalama alınamazsa (görüntü yok, yazıcıya verilemedi) kayıt "alınamadı" olarak bildirilir."""
+    failed: list[tuple[list[str], str]] = []
+    buf = ClipBuffer(lambda _j: None, state=lambda ids, st: failed.append((list(ids), st)))
+    assert buf.capture(["a" * 32], 1.0, post_s=0.0) is False                    # ön kayıt boş, sonrası yok
+    buf.capture(["b" * 32], 1.0, post_s=1.0)
+    buf.flush_due(3.0)                                                            # kare hiç gelmedi
+    assert failed == [(["a" * 32], "failed"), (["b" * 32], "failed")]
+
+    def boom(_j: ClipJob) -> None:
+        raise RuntimeError("yazıcı yok")
+
+    bad = ClipBuffer(boom, state=lambda ids, st: failed.append((list(ids), st)))
+    _feed(bad, 0.0, 1.0)
+    bad.capture(["c" * 32], 1.0, post_s=0.0)
+    assert failed[-1] == (["c" * 32], "failed")
+
+
+def test_full_writer_queue_marks_the_record_failed(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    st = AlarmStore(tmp_path)
+    gate = threading.Event()
+
+    def slow(path: pathlib.Path, frames: Any, fps: float) -> None:
+        gate.wait(10)
+        raise RuntimeError("yavaş")
+
+    monkeypatch.setattr(clips, "encode_webm", slow)
+    recs = [st.add("s", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled", clip_pending=True) for _ in range(5)]
+    w = ClipWriter(st, max_queue=1)
+    try:
+        results = [w.submit(_job((r["id"],), seconds=0.2)) for r in recs]
+        dropped = [r["id"] for r, ok in zip(recs, results, strict=True) if not ok]
+        assert dropped
+        for aid in dropped:
+            got = st.get(aid)
+            assert got["clipPending"] is False and got["clipFailed"] is True
+    finally:
+        gate.set()
+        w.stop(10)

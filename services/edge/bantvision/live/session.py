@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -123,12 +123,14 @@ class LiveSession:
                  detector: Any | None = None, pose: Any | None = None,
                  alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None],
                                       list[str] | None] | None = None,
-                 clip_sink: Callable[[ClipJob], None] | None = None) -> None:
+                 clip_sink: Callable[[ClipJob], None] | None = None,
+                 clip_state: Callable[[Sequence[str], str], None] | None = None) -> None:
         """`detector`: kişi tanıma modeli, `pose`: poz modeli (ikisi de birden çok kamerada ortak; yoksa ilk karede
         yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik alarmları (çalışma
         iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının kimliklerini döndürür; çalışma döngüsü
         biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı yazıcısı (engellemez); verilirse
-        güvenlik oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım oturumunda tampon yok, ek iş yok)."""
+        güvenlik oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım oturumunda tampon yok, ek iş yok).
+        `clip_state(kimlikler, "failed")`: yakalama alınamadı (alarm kaydı `clipFailed` olur)."""
         self.id = str(uuid.uuid4())
         self.name = name
         self.created = time.time()
@@ -145,6 +147,7 @@ class LiveSession:
         self._pose = pose
         self._alarm_sink = alarm_sink
         self._clip_sink = clip_sink
+        self._clip_state = clip_state
         self._clips: ClipBuffer | None = None               # yalnızca güvenlik oturumunda (okuyucu doldurur)
         self._last_alarm_at: float | None = None
         # Güvenlik izleme sağlığı karelerden çıkar (panelin yoklamasından değil): izleme başladığı an ve son sağlıklı
@@ -194,6 +197,7 @@ class LiveSession:
         clips = self._clips
         if clips is not None:                               # süren yakalamalar elindeki karelerle yazılır
             clips.flush()
+            clips.close()
         with self._lock:
             self.status.state = "stopped"
             self._pipe.detect._detector = None              # tanıma modeli ve iş parçacıkları bırakılsın
@@ -234,6 +238,7 @@ class LiveSession:
             self._labels.clear()
         if leaving is not None:
             leaving.flush()                                 # süren yakalama elindekiyle yazılır
+            leaving.close()
         if mode_changed:                                    # kutular eski yöntemle bulundu: öğretmede kullanılmasın
             with self._frame_cv:
                 self._processed = self._teach_snapshot = None
@@ -247,7 +252,13 @@ class LiveSession:
         self._watch_start = time.monotonic()                # güvenliğe geçiş: izleme yeniden kanıtlanmalı
         self._last_healthy = None
         if self._clip_sink is not None and self._clips is None:
-            self._clips = ClipBuffer(self._clip_sink)
+            # JPEG'e çevirme ayrı tek yuvalı iş parçacığında: okuyucu yalnızca kare başvurusunu bırakır
+            self._clips = ClipBuffer(self._clip_sink, state=self._clip_state, threaded=True)
+
+    @property
+    def records_clips(self) -> bool:
+        """Alarm anında olay kaydı yakalanır mı (güvenlik oturumu ve kayıt yazıcısı var)."""
+        return self._clips is not None
 
     def capture_clip(self, ids: list[str], post_s: float | None = None) -> bool:
         """Alarm kayıtları için olay kaydı: ön kayıt + `post_s` (varsayılan `clips.POST_S`) sn sonrası (0: yalnızca ön
@@ -402,14 +413,14 @@ class LiveSession:
                 url = open_url()
             except Exception as e:  # noqa: BLE001 — adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
                 self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {e}")
-                self._stop.wait(backoff)
+                self._wait_reconnect(backoff)
                 backoff = min(backoff * 2, 15.0)
                 continue
             cap = open_capture(url)
             if not cap.isOpened():
                 cap.release()
                 self._set_state("reconnecting", "Görüntü açılamadı; yeniden deneniyor.")
-                self._stop.wait(backoff)
+                self._wait_reconnect(backoff)
                 backoff = min(backoff * 2, 15.0)
                 continue
             is_file = not url.lower().startswith(("rtsp://", "http://", "https://"))
@@ -454,8 +465,21 @@ class LiveSession:
                 self._set_state("ended", "Video bitti.")
                 return
             self._set_state("reconnecting", "Görüntü kesildi; yeniden bağlanılıyor.")
-            self._stop.wait(backoff)
+            self._wait_reconnect(backoff)
             backoff = min(backoff * 2, 15.0)
+
+    def _wait_reconnect(self, seconds: float) -> None:
+        """Yeniden bağlanma beklemesi (en çok 15 sn): en çok 1 sn'lik dilimlerle; her dilimde süresi dolan yakalamalar
+        elindeki karelerle yazılır (kamera koparken doğan alarmın kaydı kamera dönmeden de çıkar)."""
+        end = time.monotonic() + seconds
+        while not self._stop.is_set():
+            clips = self._clips
+            if clips is not None:
+                clips.flush_due(time.monotonic())
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            self._stop.wait(min(1.0, left))
 
     def _ping(self, url: str) -> None:
         # Canlı tutma isteği başarısızsa akış zaten kopar ve yeniden bağlanılır

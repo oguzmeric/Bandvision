@@ -2,9 +2,11 @@
 (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"test"), startedAt, firedAt, endedAt, acked,
-notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, falseAlarm}. `clip`: olay
-kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `falseAlarm`: kullanıcı "Yanlış alarm" dedi
-(kayıt onaylanmış da sayılır). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
+notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
+falseAlarm}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
+yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: kayıt alınamadı (görüntü yok, kuyruk dolu,
+kodlayıcı/disk hatası ya da yazılırken sunucu kapandı); `falseAlarm`: kullanıcı "Yanlış alarm" dedi (kayıt onaylanmış
+da sayılır). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
 
 Saklama: 7 günden eski kayıt resmi ve kaydıyla birlikte silinir; kaydı olmayan eski resim/kayıt dosyaları ve yarım
 kalmış geçici kayıt dosyaları da temizlenir; kayıt dosyası sayısı `MAX_CLIPS`'i aşarsa en eskiler silinir.
@@ -22,6 +24,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +34,8 @@ _LOG = logging.getLogger(__name__)
 _ID = re.compile(r"[0-9a-f]{32}")
 _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "startedAt": 0.0, "endedAt": None,
                              "acked": False, "notify": "disabled", "image": False, "clip": False,
-                             "clipStartedAt": None, "falseAlarm": False}
+                             "clipStartedAt": None, "clipPending": False, "clipFailed": False,
+                             "falseAlarm": False}
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
@@ -99,11 +103,12 @@ class AlarmStore:
         return True
 
     def add(self, session_id: str | None, camera: str, kind: str, started_at: float, fired_at: float,
-            jpeg: bytes | None, notify: str) -> dict[str, Any]:
+            jpeg: bytes | None, notify: str, clip_pending: bool = False) -> dict[str, Any]:
+        """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der)."""
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
              "image": jpeg is not None, "clip": False, "clipStartedAt": None,
-             "falseAlarm": False}
+             "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False}
         with self._lock:
             if jpeg is not None:
                 try:
@@ -142,8 +147,29 @@ class AlarmStore:
         return len(stale)
 
     def set_clip(self, alarm_id: str, started_at: float) -> bool:
-        """Olay kaydı yazıldı: `clip: true`, `clipStartedAt` (ilk karenin duvar saati). Kayıt yoksa False."""
-        return self._update(alarm_id, clip=True, clipStartedAt=started_at)
+        """Olay kaydı yazıldı: `clip: true`, `clipStartedAt` (ilk karenin duvar saati), bekleme biter. Kayıt yoksa
+        False."""
+        return self._update(alarm_id, clip=True, clipStartedAt=started_at, clipPending=False, clipFailed=False)
+
+    def clip_failed(self, alarm_ids: Sequence[str]) -> None:
+        """Olay kaydı alınamadı: `clipPending: false`, `clipFailed: true` (tek kayıt)."""
+        ids = set(alarm_ids)
+        with self._lock:
+            changed = [a for a in self._items if a["id"] in ids and not a["clip"]]
+            for a in changed:
+                a["clipPending"], a["clipFailed"] = False, True
+            if changed:
+                self._save()
+
+    def clear_clip_pending(self) -> int:
+        """Açılışta: önceki çalışmadan "yakalanıyor" kalmış kayıtlar (yazılırken sunucu kapandı) alınamadı sayılır."""
+        with self._lock:
+            stale = [a for a in self._items if a.get("clipPending")]
+            for a in stale:
+                a["clipPending"], a["clipFailed"] = False, True
+            if stale:
+                self._save()
+        return len(stale)
 
     def clip_file(self, alarm_id: str) -> Path | None:
         """Olay kaydı dosyası (varsa); kimlik 32 küçük onaltılık değilse None (yol olarak kullanılır)."""
@@ -154,26 +180,27 @@ class AlarmStore:
 
     def enforce_clip_cap(self, max_clips: int = MAX_CLIPS) -> int:
         """En çok `max_clips` kayıt dosyası kalır: fazlası en eskiden (dosya zamanı) silinir, kayıtları `clip: false`
-        olur; günlüğe yazılır. Silinen sayısı döner."""
+        olur; günlüğe yazılır. Silinen sayısı döner. Klasör taraması ve silme kilit dışında (500 dosyalık tarama alarm
+        kaydını bekletmesin); kilit yalnızca kayıtlar güncellenirken tutulur."""
+        files: list[tuple[float, Path]] = []
+        for p in self.clips.glob("*.webm"):
+            if not _ID.fullmatch(p.stem):
+                continue                                    # geçici dosya (yazılıyor)
+            try:
+                files.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        if len(files) <= max_clips:
+            return 0
+        files.sort(key=lambda x: (x[0], x[1].name))
+        removed: set[str] = set()
+        for _, p in files[: len(files) - max_clips]:
+            try:
+                p.unlink(missing_ok=True)
+                removed.add(p.stem)
+            except OSError as e:
+                _LOG.warning("Olay kaydı silinemedi (%s): %s", p.stem, e)
         with self._lock:
-            files: list[tuple[float, Path]] = []
-            for p in self.clips.glob("*.webm"):
-                if not _ID.fullmatch(p.stem):
-                    continue                                # geçici dosya (yazılıyor)
-                try:
-                    files.append((p.stat().st_mtime, p))
-                except OSError:
-                    continue
-            if len(files) <= max_clips:
-                return 0
-            files.sort(key=lambda x: (x[0], x[1].name))
-            removed: set[str] = set()
-            for _, p in files[: len(files) - max_clips]:
-                try:
-                    p.unlink(missing_ok=True)
-                    removed.add(p.stem)
-                except OSError as e:
-                    _LOG.warning("Olay kaydı silinemedi (%s): %s", p.stem, e)
             changed = False
             for a in self._items:
                 if a["id"] in removed and a.get("clip"):

@@ -252,12 +252,23 @@ class LiveManager:
         closed = self.alarms.close_stale(time.time())
         if closed:
             _LOG.info("Önceki çalışmadan açık kalan %d alarm kapatıldı", closed)
+        lost = self.alarms.clear_clip_pending()             # yazılırken kapanmış kayıtlar: "alınamadı"
+        if lost:
+            _LOG.warning("Önceki çalışmada yazılamadan kalan %d olay kaydı alınamadı olarak işaretlendi", lost)
         self._watch_file = root / "live" / "watch.json"
         self._watch_lock = threading.Lock()
+        # watch.json açılışta okunamadıysa (Windows kilidi): liste boş başlar, dosyaya dokunulmaz; bu arada yapılan
+        # değişiklikler sırayla tutulur ve dosya okunabilince diskteki listeye uygulanıp yazılır (izlenenler kaybolmaz)
+        self._watch_unread = False
+        self._watch_ops: list[tuple[str, Any]] = []
+        self._restore_pending = False                       # geri yükleme kilitli dosyayla çalıştı: okununca yinele
         self._watch: list[dict[str, Any]] = self._load_watch()
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
     # ------------------------------------------------------------------ poz güvenlik alarmları
+
+    WATCH_RETRY_S: ClassVar[float] = 5.0               # kilitli watch.json bu aralıkla yeniden okunur
+    WATCH_RETRY_MAX: ClassVar[int] = 360                # en çok 30 dakika
 
     _TITLES: ClassVar[dict[str, str]] = {
         "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "test": "🧪 DENEME ALARMI"}
@@ -279,6 +290,7 @@ class LiveManager:
         mono = time.monotonic()                             # yalnız tekrar önleme süresi
         camera = getattr(s, "name", "Kamera")
         send_image = bool(getattr(s.profile, "safety", None) and s.profile.safety.sendImage)
+        clip_pending = bool(getattr(s, "records_clips", False))   # oturum bu alarmların kaydını yakalayacak
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
         new_ids: list[str] = []
         with self._alarm_lock:
@@ -292,7 +304,8 @@ class LiveManager:
                 if self.notifier.configured():
                     last = self._last_sent.get((cam_key, a.kind))
                     notify = "suppressed" if last is not None and mono - last < COOLDOWN_S else "queued"
-                rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify)
+                rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify,
+                                       clip_pending=clip_pending and in_safety)
                 new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
@@ -359,7 +372,7 @@ class LiveManager:
         except rec.RecorderError as e:
             raise _err(e) from e
         s = LiveSession(name, open_url, profile, keep_alive, detector=self.detector, pose=self.pose,
-                        alarm_sink=self.on_safety, clip_sink=self.clips.submit)
+                        alarm_sink=self.on_safety, clip_sink=self.clips.submit, clip_state=self.clips.state)
         s.loop_file = os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"   # yalnızca test: dosya başa sarar
         s.source_id, s.channel_id, s.profile_id = source_id, channel_id, profile_id  # type: ignore[attr-defined]
         fixed_url = src["kind"] == "camera" and src.get("brand") == "custom"      # tam RTSP adresi: seçim yok
@@ -370,20 +383,66 @@ class LiveManager:
             self.watch(s)
         return s
 
+    @staticmethod
+    def _valid_watch(data: Any) -> list[dict[str, Any]]:
+        return [r for r in (data or []) if isinstance(r, dict) and isinstance(r.get("sourceId"), str)
+                and isinstance(r.get("profileId"), str) and (r.get("channelId") is None or isinstance(r["channelId"], str))]
+
     def _load_watch(self) -> list[dict[str, Any]]:
         res = read_json(self._watch_file)
         if res.status == "unreadable":
-            _LOG.error("watch.json okunamadı (dosya kilitli olabilir); güvenlik kameraları bu açılışta geri yüklenmeyecek")
+            _LOG.error("watch.json okunamadı (dosya kilitli olabilir); dosyaya dokunulmadı — okunabilince izlenen "
+                       "güvenlik kameraları yeniden açılacak")
+            self._watch_unread = True
             return []
         if res.status == "corrupt" or (res.status == "ok" and not isinstance(res.data, list)):
             _LOG.warning("watch.json bozuk; kenara alındı (watch.json.corrupt), izlenen kamera listesi boş başlıyor")
             quarantine(self._watch_file)
             return []
-        return [r for r in (res.data or []) if isinstance(r, dict) and isinstance(r.get("sourceId"), str)
-                and isinstance(r.get("profileId"), str) and (r.get("channelId") is None or isinstance(r["channelId"], str))]
+        return self._valid_watch(res.data)
+
+    @staticmethod
+    def _apply_watch(records: list[dict[str, Any]], op: tuple[str, Any]) -> list[dict[str, Any]]:
+        kind, arg = op
+        if kind == "set":
+            key = (arg["sourceId"], arg.get("channelId"))
+            return [r for r in records if (r["sourceId"], r.get("channelId")) != key] + [arg]
+        if kind == "del":
+            return [r for r in records if (r["sourceId"], r.get("channelId")) != arg]
+        return [r for r in records if r["sourceId"] != arg]          # "del_source"
+
+    def _change_watch(self, op: tuple[str, Any]) -> None:
+        """Kilit altında: değişikliği listeye uygular ve yazar. Dosya açılışta okunamadıysa değişiklik ayrıca sıraya
+        alınır: diskteki liste okunabilince aynı sırayla ona uygulanır."""
+        before = self._watch
+        self._watch = self._apply_watch(self._watch, op)
+        if self._watch_unread:
+            self._watch_ops.append(op)
+        elif self._watch == before:
+            return
+        self._save_watch()
+
+    def _merge_watch_disk(self) -> bool:
+        """Kilit altında: açılışta okunamayan watch.json'u yeniden okur; bu arada yapılan değişiklikleri diskteki
+        listeye uygular. Hâlâ okunamıyorsa False (yazılmaz)."""
+        res = read_json(self._watch_file, delays=())
+        if res.status == "unreadable":
+            return False
+        disk = self._valid_watch(res.data) if res.status == "ok" and isinstance(res.data, list) else []
+        if res.status == "corrupt":
+            quarantine(self._watch_file)
+        for op in self._watch_ops:
+            disk = self._apply_watch(disk, op)
+        self._watch, self._watch_ops, self._watch_unread = disk, [], False
+        _LOG.info("watch.json yeniden okundu; izlenen güvenlik kameraları listesi birleştirildi (%d kamera)", len(disk))
+        return True
 
     def _save_watch(self) -> None:
-        """Kilit altında çağrılır; yazma hatası günlüğe yazılır (liste bellekte sürer)."""
+        """Kilit altında çağrılır; yazma hatası günlüğe yazılır (liste bellekte sürer). Dosya açılışta okunamadıysa ve
+        hâlâ okunamıyorsa yazılmaz (önceden izlenen kameralar ezilmesin)."""
+        if self._watch_unread and not self._merge_watch_disk():
+            _LOG.warning("watch.json hâlâ okunamıyor; izlenen kameralar silinmesin diye yazma ertelendi")
+            return
         try:
             write_json_atomic(self._watch_file, self._watch, indent=2)
         except OSError as e:
@@ -397,30 +456,48 @@ class LiveManager:
         rec_ = {"sourceId": sid, "channelId": ch, "profileId": getattr(s, "profile_id", None) or s.profile.id,
                 "substream": getattr(s, "substream", None), "name": s.name, "profile": s.profile.to_dict()}
         with self._watch_lock:
-            self._watch = [r for r in self._watch if (r["sourceId"], r.get("channelId")) != (sid, ch)] + [rec_]
-            self._save_watch()
+            self._change_watch(("set", rec_))
 
     def unwatch(self, source_id: str, channel_id: str | None) -> None:
         with self._watch_lock:
-            keep = [r for r in self._watch if (r["sourceId"], r.get("channelId")) != (source_id, channel_id)]
-            if len(keep) != len(self._watch):
-                self._watch = keep
-                self._save_watch()
+            self._change_watch(("del", (source_id, channel_id)))
 
     def unwatch_source(self, source_id: str) -> None:
         with self._watch_lock:
-            keep = [r for r in self._watch if r["sourceId"] != source_id]
-            if len(keep) != len(self._watch):
-                self._watch = keep
-                self._save_watch()
+            self._change_watch(("del_source", source_id))
+
+    def _retry_watch(self) -> None:
+        """Arka planda: kilitli watch.json okunabilene dek `WATCH_RETRY_S`'de bir dener (en çok `WATCH_RETRY_MAX`
+        kez); okununca listeyi birleştirip yazar ve açılışta açılamayan kameraları açar (açık olanlara dokunmaz)."""
+        for _ in range(self.WATCH_RETRY_MAX):
+            time.sleep(self.WATCH_RETRY_S)
+            with self._watch_lock:
+                if self._watch_unread and not self._merge_watch_disk():
+                    continue
+                self._save_watch()                          # birleşik liste (varsa ertelenen değişikliklerle)
+                records = list(self._watch) if self._restore_pending else []
+                self._restore_pending = False
+            open_ = {(getattr(x, "source_id", None), getattr(x, "channel_id", None)) for x in list(self.sessions.values())}
+            todo = [r for r in records if (r["sourceId"], r.get("channelId")) not in open_]
+            if todo:
+                self._restore(todo)
+            return
+        _LOG.error("watch.json %d denemede okunamadı; izlenen güvenlik kameraları yeniden açılmadı", self.WATCH_RETRY_MAX)
 
     def restore_watched(self) -> int:
         """Açılışta (lifespan) izlenen güvenlik kameralarını yeniden açar; açılan sayısını döndürür. Hiçbir koşulda
         hata fırlatmaz: bir kaydın hatası (kaynak/profil yok, beklenmeyen hata) Türkçe günlüğe yazılır, diğerleri ve
         sunucunun açılışı sürer. Kaynağı silinmiş, profili artık güvenlik olmayan ya da profil anlık görüntüsü bozuk
-        kayıt listeden çıkar."""
+        kayıt listeden çıkar. watch.json kilitliyse dosya okunabilince bir kez daha denenir (arka planda)."""
         with self._watch_lock:
             records = list(self._watch)
+            locked = self._watch_unread
+            self._restore_pending = locked
+        if locked:
+            threading.Thread(target=self._retry_watch, name="izleme-listesi", daemon=True).start()
+        return self._restore(records)
+
+    def _restore(self, records: list[dict[str, Any]]) -> int:
         restored = 0
         for r in records:
             label = str(r.get("name") or r.get("sourceId"))
@@ -859,7 +936,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         send_image = bool(s is not None and safety and s.profile.safety.sendImage)
         now = time.time()
         notify = "queued" if manager.notifier.configured() else "disabled"
-        rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify)
+        rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify,
+                                  clip_pending=bool(s is not None and safety and s.records_clips))
         if s is not None and safety:
             s.capture_clip([rec_["id"]], post_s=0.0)        # yalnızca ön kayıt; yazım arka planda
         if notify == "queued":
@@ -879,16 +957,21 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Alarm bulunamadı.")
         return manager.alarms.get(alarm_id) or {}
 
-    @r.get("/alarms/{alarm_id}/clip.webm")
+    @r.api_route("/alarms/{alarm_id}/clip.webm", methods=["GET", "HEAD"])
     def alarm_clip(alarm_id: str) -> FileResponse:
         """İhlal anının kaydı (VP8 WebM). Tarayıcının video oynatıcısı ileri/geri sarmak için `Range` ister: 206 ve
-        `Content-Range` (Starlette FileResponse)."""
+        `Content-Range` (Starlette FileResponse); kapsam dışı aralık 416. Dosya bu arada silinmişse (7 gün temizliği,
+        en çok 500 sınırı) 404: dosya bilgisi burada alınır ve yanıta verilir (yanıt yeniden bakıp 500 vermez)."""
         path = manager.alarms.clip_file(alarm_id)
-        if path is None:
+        try:
+            st = path.stat() if path is not None else None
+        except OSError:
+            st = None
+        if path is None or st is None:
             raise HTTPException(404, "Olay kaydı yok (hazırlanıyor, 7 günü geçti ya da alınamadı).")
-        return FileResponse(path, media_type="video/webm", headers={"Cache-Control": "no-store"})
+        return FileResponse(path, media_type="video/webm", headers={"Cache-Control": "no-store"}, stat_result=st)
 
-    @r.get("/alarms/{alarm_id}/image.jpg")
+    @r.api_route("/alarms/{alarm_id}/image.jpg", methods=["GET", "HEAD"])
     def alarm_image(alarm_id: str) -> Response:
         jpeg = manager.alarms.image_bytes(alarm_id)
         if jpeg is None:
