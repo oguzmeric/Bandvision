@@ -15,7 +15,7 @@ from typing import Any, ClassVar, Literal
 
 import cv2
 from fastapi import APIRouter, HTTPException, Query, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..core import Profile
@@ -836,17 +836,22 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     # ---------------------------------------------------------------- poz güvenlik: alarm günlüğü ve Telegram
 
     @r.get("/alarms")
-    def alarms(active: bool = False, since: float | None = None,
-               session_id: str | None = Query(None, alias="sessionId")) -> list[dict[str, Any]]:
-        """Alarm günlüğü (en yeni önce, en çok 50). `sessionId`: yalnızca o kameranın alarmları — yan panel, başka
-        kameraların alarmları yüzünden kendi alarmlarını kaçırmasın."""
-        return manager.alarms.list(active_only=active, since=since, session_id=session_id)
+    def alarms(active: bool = False, since: float | None = None, until: float | None = None,
+               session_id: str | None = Query(None, alias="sessionId"),
+               kind: Literal["hands_up", "lying", "test"] | None = Query(None, alias="type"),
+               limit: int = Query(50, ge=1, le=1000)) -> list[dict[str, Any]]:
+        """Alarm günlüğü (en yeni önce, varsayılan en çok 50; Alarmlar sayfası 1000'e kadar ister). `sessionId`: yalnızca
+        o kameranın alarmları — yan panel, başka kameraların alarmları yüzünden kendi alarmlarını kaçırmasın. `since` /
+        `until`: alarm anı aralığı (dahil); `type`: tür."""
+        return manager.alarms.list(active_only=active, since=since, until=until, session_id=session_id, kind=kind,
+                                   limit=limit)
 
     @r.post("/alarms/test")
     def test_alarm(body: TestAlarmIn) -> dict[str, Any]:
         """Deneme alarmı: panel şeridi ve (yapılandırılmışsa) Telegram; tekrar önlemeye tabi değil. `sessionId` bir
-        güvenlik oturumuysa o kameranın son karesi olay resmi olarak saklanır (o kameranın "Son alarmlar"ında görünür);
-        Telegram'a resim yalnızca o kamerada `sendImage` açıksa gider."""
+        güvenlik oturumuysa o kameranın son karesi olay resmi olarak saklanır (o kameranın "Son alarmlar"ında görünür)
+        ve ön kayıttan (son 8 sn, sonrası beklenmez) olay kaydı yazılır; Telegram'a resim yalnızca o kamerada
+        `sendImage` açıksa gider (kayıt hiçbir zaman gitmez)."""
         s = manager.sessions.get(body.sessionId) if body.sessionId else None
         camera = s.name if s else "Deneme"
         safety = s is not None and s.profile.countMode == "safety"
@@ -855,6 +860,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         now = time.time()
         notify = "queued" if manager.notifier.configured() else "disabled"
         rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify)
+        if s is not None and safety:
+            s.capture_clip([rec_["id"]], post_s=0.0)        # yalnızca ön kayıt; yazım arka planda
         if notify == "queued":
             manager.notifier.enqueue(rec_["id"], manager._text("test", camera, now), jpeg if send_image else None)
         return rec_
@@ -864,6 +871,22 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if not manager.alarms.ack(alarm_id):
             raise HTTPException(404, "Alarm bulunamadı.")
         return manager.alarms.get(alarm_id) or {}
+
+    @r.post("/alarms/{alarm_id}/false-alarm")
+    def false_alarm(alarm_id: str) -> dict[str, Any]:
+        """"Yanlış alarm": kayıt `falseAlarm` ve onaylanmış olur (şeritten kalkar); kayıt ve resim saklanmaya devam eder."""
+        if not manager.alarms.mark_false_alarm(alarm_id):
+            raise HTTPException(404, "Alarm bulunamadı.")
+        return manager.alarms.get(alarm_id) or {}
+
+    @r.get("/alarms/{alarm_id}/clip.webm")
+    def alarm_clip(alarm_id: str) -> FileResponse:
+        """İhlal anının kaydı (VP8 WebM). Tarayıcının video oynatıcısı ileri/geri sarmak için `Range` ister: 206 ve
+        `Content-Range` (Starlette FileResponse)."""
+        path = manager.alarms.clip_file(alarm_id)
+        if path is None:
+            raise HTTPException(404, "Olay kaydı yok (hazırlanıyor, 7 günü geçti ya da alınamadı).")
+        return FileResponse(path, media_type="video/webm", headers={"Cache-Control": "no-store"})
 
     @r.get("/alarms/{alarm_id}/image.jpg")
     def alarm_image(alarm_id: str) -> Response:

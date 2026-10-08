@@ -2,9 +2,12 @@
 (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"test"), startedAt, firedAt, endedAt, acked,
-notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt}. `clip`: olay kaydı (video)
-var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati. Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm
-yazmalar kilit altında ve atomik.
+notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, falseAlarm}. `clip`: olay
+kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `falseAlarm`: kullanıcı "Yanlış alarm" dedi
+(kayıt onaylanmış da sayılır). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
+
+Saklama: 7 günden eski kayıt resmi ve kaydıyla birlikte silinir; kaydı olmayan eski resim/kayıt dosyaları ve yarım
+kalmış geçici kayıt dosyaları da temizlenir; kayıt dosyası sayısı `MAX_CLIPS`'i aşarsa en eskiler silinir.
 
 Dosya açılışta okunamazsa (Windows'ta virüs tarayıcı/yedekleme kilidi) birkaç kez yeniden denenir; yine okunamazsa günlük
 boş başlar ama dosyaya dokunulmaz: ilk kayıtta yeniden okunup birleştirilir (geçmiş ezilmez). Yalnızca JSON'u bozuk
@@ -28,8 +31,10 @@ _LOG = logging.getLogger(__name__)
 _ID = re.compile(r"[0-9a-f]{32}")
 _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "startedAt": 0.0, "endedAt": None,
                              "acked": False, "notify": "disabled", "image": False, "clip": False,
-                             "clipStartedAt": None}
+                             "clipStartedAt": None, "falseAlarm": False}
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
+TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
+_TEMP_CLIP = ".tmp.webm"
 
 
 def _record(item: Any) -> dict[str, Any] | None:
@@ -97,7 +102,8 @@ class AlarmStore:
             jpeg: bytes | None, notify: str) -> dict[str, Any]:
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
-             "image": jpeg is not None, "clip": False, "clipStartedAt": None}
+             "image": jpeg is not None, "clip": False, "clipStartedAt": None,
+             "falseAlarm": False}
         with self._lock:
             if jpeg is not None:
                 try:
@@ -185,18 +191,26 @@ class AlarmStore:
     def ack(self, alarm_id: str) -> bool:
         return self._update(alarm_id, acked=True)
 
+    def mark_false_alarm(self, alarm_id: str) -> bool:
+        """Kullanıcı "Yanlış alarm" dedi: `falseAlarm` ve `acked` (alarm kapanır). Kayıt yoksa False."""
+        return self._update(alarm_id, falseAlarm=True, acked=True)
+
     def get(self, alarm_id: str) -> dict[str, Any] | None:
         with self._lock:
             a = self._find(alarm_id)
             return dict(a) if a else None
 
     def list(self, active_only: bool = False, since: float | None = None, limit: int = 50,
-             session_id: str | None = None) -> list[dict[str, Any]]:
-        """En yeni önce; `limit` süzgeçlerden SONRA uygulanır (`session_id` verilince yalnızca o oturumun alarmları)."""
+             session_id: str | None = None, kind: str | None = None, until: float | None = None,
+             ) -> list[dict[str, Any]]:
+        """En yeni önce; `limit` süzgeçlerden SONRA uygulanır. Süzgeçler: yalnızca onaylanmamış, `since` ≤ firedAt ≤
+        `until`, `session_id` (yalnızca o oturumun alarmları), `kind` (tür)."""
         with self._lock:
             items = [dict(a) for a in self._items if (not active_only or not a["acked"])
                      and (since is None or a["firedAt"] >= since)
-                     and (session_id is None or a["sessionId"] == session_id)]
+                     and (until is None or a["firedAt"] <= until)
+                     and (session_id is None or a["sessionId"] == session_id)
+                     and (kind is None or a["type"] == kind)]
         return sorted(items, key=lambda a: a["firedAt"], reverse=True)[:limit]
 
     def image_bytes(self, alarm_id: str) -> bytes | None:
@@ -209,8 +223,10 @@ class AlarmStore:
                 return None
 
     def expire(self, now: float, days: float = 7) -> int:
-        """`days`'ten eski kayıtlar (zamanı sonlu olmayan bozuk kayıtlar da) ve resimleri silinir; resmi silinemeyen
-        kayıt sonraki temizliğe kalır. Kaydı olmayan eski resimler de silinir. Silinen kayıt sayısı döner."""
+        """`days`'ten eski kayıtlar (zamanı sonlu olmayan bozuk kayıtlar da) resim ve olay kaydıyla birlikte silinir;
+        dosyası silinemeyen kayıt sonraki temizliğe kalır. Kaydı olmayan eski resim ve kayıt dosyaları, `now`'dan
+        `TEMP_CLIP_MAX_AGE_S` önceden kalan yarım geçici kayıt dosyaları da silinir; sonra `MAX_CLIPS` sınırı uygulanır.
+        Silinen kayıt sayısı döner."""
         cutoff = now - days * 86400
         with self._lock:
             removed: set[str] = set()
@@ -218,23 +234,38 @@ class AlarmStore:
                 fired = float(a["firedAt"])
                 if math.isfinite(fired) and fired >= cutoff:
                     continue
-                if a.get("image"):
-                    try:
-                        (self.images / f"{a['id']}.jpg").unlink(missing_ok=True)
-                    except OSError as e:
-                        _LOG.warning("Olay resmi silinemedi (%s): %s", a["id"], e)
-                        continue                            # kayıt kalır, sonraki temizlikte yeniden denenir
+                try:
+                    (self.images / f"{a['id']}.jpg").unlink(missing_ok=True)
+                    (self.clips / f"{a['id']}.webm").unlink(missing_ok=True)
+                except OSError as e:
+                    _LOG.warning("Olay resmi/kaydı silinemedi (%s): %s", a["id"], e)
+                    continue                                # kayıt kalır, sonraki temizlikte yeniden denenir
                 removed.add(a["id"])
             known = {a["id"] for a in self._items} - removed
-            if self.images.exists():                        # kaydı olmayan eski resimler
-                for img in self.images.iterdir():
+            self._remove_orphans(self.images, ".jpg", known, cutoff)
+            self._remove_orphans(self.clips, ".webm", known, cutoff)
+            if self.clips.exists():                         # çökmeden kalan yarım geçici kayıtlar
+                for f in self.clips.glob(f"*{_TEMP_CLIP}"):
                     try:
-                        if (img.is_file() and img.suffix.lower() == ".jpg" and img.stem not in known
-                                and img.stat().st_mtime < cutoff):
-                            img.unlink()
+                        if f.stat().st_mtime < now - TEMP_CLIP_MAX_AGE_S:
+                            f.unlink()
                     except OSError:
                         pass
             if removed:
                 self._items = [a for a in self._items if a["id"] not in removed]
                 self._save()
+        self.enforce_clip_cap()
         return len(removed)
+
+    @staticmethod
+    def _remove_orphans(folder: Path, suffix: str, known: set[str], cutoff: float) -> None:
+        """Kaydı olmayan (ve `cutoff`'tan eski: yazılmakta olan yeni dosyaya dokunulmaz) `<id><suffix>` dosyaları."""
+        if not folder.exists():
+            return
+        for f in folder.iterdir():
+            try:
+                if (f.is_file() and f.name.endswith(suffix) and not f.name.endswith(_TEMP_CLIP)
+                        and f.name[: -len(suffix)] not in known and f.stat().st_mtime < cutoff):
+                    f.unlink()
+            except OSError:
+                pass

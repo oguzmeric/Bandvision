@@ -290,3 +290,114 @@ def test_missing_file_is_not_a_warning(tmp_path: pathlib.Path, caplog: pytest.Lo
 
 
 _REAL_READ = pathlib.Path.read_text
+
+
+# ---------------------------------------------------------------- görev 13: olay kaydı, yanlış alarm, süzgeçler
+
+def _clip(st: AlarmStore, aid: str, data: bytes = b"\x1aE\xdf\xa3webm", started: float = 1.0) -> pathlib.Path:
+    p = st.clips / f"{aid}.webm"
+    p.write_bytes(data)
+    assert st.set_clip(aid, started)
+    return p
+
+
+def test_old_records_get_clip_and_false_alarm_defaults(tmp_path: pathlib.Path) -> None:
+    _write(tmp_path, [_rec("a" * 32)])                       # önceki sürümün kaydı: clip/falseAlarm alanı yok
+    got = AlarmStore(tmp_path).get("a" * 32)
+    assert got is not None and (got["clip"], got["clipStartedAt"], got["falseAlarm"]) == (False, None, False)
+    new = AlarmStore(tmp_path).add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled")
+    assert (new["clip"], new["clipStartedAt"], new["falseAlarm"]) == (False, None, False)
+
+
+def test_mark_false_alarm_acks_and_persists(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = st.add("s", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
+    assert st.mark_false_alarm(a["id"]) and not st.mark_false_alarm("b" * 32)
+    got = AlarmStore(tmp_path).get(a["id"])
+    assert got["falseAlarm"] is True and got["acked"] is True
+    assert st.list(active_only=True) == []
+
+
+def test_list_filters_by_type_and_until(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    h1 = st.add("s", "Tezgah", "hands_up", 10.0, 10.0, None, "disabled")
+    ly = st.add("s", "Tezgah", "lying", 20.0, 20.0, None, "disabled")
+    h2 = st.add("s", "Kasa", "hands_up", 30.0, 30.0, None, "disabled")
+    assert [x["id"] for x in st.list(kind="hands_up")] == [h2["id"], h1["id"]]
+    assert [x["id"] for x in st.list(until=20.0)] == [ly["id"], h1["id"]]          # sınır dahil
+    assert [x["id"] for x in st.list(since=15.0, until=25.0)] == [ly["id"]]
+    assert [x["id"] for x in st.list(kind="hands_up", until=29.0)] == [h1["id"]]
+    assert len(st.list(limit=2)) == 2 and st.list(kind="test") == []
+
+
+def test_expire_deletes_clips_with_their_records(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    old = st.add(None, "Tezgah", "hands_up", 0.0, 0.0, b"x", "disabled")
+    new = st.add(None, "Tezgah", "hands_up", 9 * 86400.0, 9 * 86400.0, b"y", "disabled")
+    old_clip, new_clip = _clip(st, old["id"]), _clip(st, new["id"])
+    assert st.clip_file(old["id"]) == old_clip
+    assert st.expire(now=9 * 86400.0 + 1, days=7) == 1
+    assert not old_clip.exists() and st.clip_file(old["id"]) is None
+    assert new_clip.exists() and st.get(new["id"])["clip"] is True
+
+
+def test_record_whose_clip_cannot_be_deleted_stays_for_next_cleanup(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    old = st.add(None, "Tezgah", "hands_up", 0.0, 0.0, None, "disabled")
+    _clip(st, old["id"])
+    real = pathlib.Path.unlink
+
+    def locked(self: pathlib.Path, *a: object, **k: object) -> None:
+        if self.suffix == ".webm":
+            raise PermissionError("kilitli (oynatılıyor)")
+        real(self, *a, **k)                                                        # type: ignore[arg-type]
+
+    with patch.object(pathlib.Path, "unlink", locked):
+        assert st.expire(now=9 * 86400.0, days=7) == 0
+    assert st.get(old["id"]) is not None
+    assert st.expire(now=9 * 86400.0, days=7) == 1 and not (st.clips / f"{old['id']}.webm").exists()
+
+
+def test_orphan_clips_and_stale_temp_files_are_cleaned(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    keep = st.add(None, "Tezgah", "hands_up", 9 * 86400.0, 9 * 86400.0, None, "disabled")
+    _clip(st, keep["id"])
+    orphan_old = st.clips / f"{'c' * 32}.webm"                # kaydı yok, eski: silinir
+    orphan_new = st.clips / f"{'d' * 32}.webm"                # kaydı yok ama yeni (yazılıyor olabilir): kalır
+    temp_old = st.clips / f"{'e' * 32}.tmp.webm"              # çökmeden kalan yarım dosya: silinir
+    temp_new = st.clips / f"{'f' * 32}.tmp.webm"              # şu an yazılıyor: kalır
+    for f in (orphan_old, orphan_new, temp_old, temp_new):
+        f.write_bytes(b"x")
+    now = 9 * 86400.0 + 1
+    os.utime(orphan_old, (100000.0, 100000.0))
+    os.utime(orphan_new, (now - 60, now - 60))
+    os.utime(temp_old, (now - 7200, now - 7200))
+    os.utime(temp_new, (now - 60, now - 60))
+    st.expire(now=now, days=7)
+    assert not orphan_old.exists() and not temp_old.exists()
+    assert orphan_new.exists() and temp_new.exists() and st.clip_file(keep["id"]) is not None
+
+
+def test_clip_cap_deletes_oldest_files_and_clears_their_records(tmp_path: pathlib.Path,
+                                                                caplog: pytest.LogCaptureFixture) -> None:
+    st = AlarmStore(tmp_path)
+    recs = [st.add(None, "Tezgah", "hands_up", float(i), float(i), None, "disabled") for i in range(5)]
+    for i, r in enumerate(recs):
+        p = _clip(st, r["id"])
+        os.utime(p, (1000.0 + i, 1000.0 + i))               # 0 en eski
+    with caplog.at_level(logging.WARNING):
+        assert st.enforce_clip_cap(max_clips=3) == 2
+    assert "sınırı" in caplog.text
+    for i, r in enumerate(recs):
+        got = st.get(r["id"])
+        assert got["clip"] is (i >= 2) and (st.clip_file(r["id"]) is not None) is (i >= 2)
+        assert got["clipStartedAt"] is None if i < 2 else got["clipStartedAt"] == 1.0
+    assert AlarmStore(tmp_path).get(recs[0]["id"])["clip"] is False             # diske yazıldı
+    assert st.enforce_clip_cap(max_clips=3) == 0
+
+
+def test_clip_file_rejects_bad_ids(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    (tmp_path / "gizli.webm").write_bytes(b"x")
+    for bad in ("../gizli", r"..\gizli", "g" * 32, "a" * 31, "a" * 32 + ".tmp"):
+        assert st.clip_file(bad) is None

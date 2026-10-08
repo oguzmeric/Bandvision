@@ -1857,6 +1857,93 @@ def test_fired_alarm_gets_an_event_clip_from_the_reader(client: TestClient, monk
     assert a["sessionId"] == sid and a["clip"] is False and a["clipStartedAt"] is None   # sonrası toplanıyor
     rec = wait_for(lambda: (r := client.app.state.live.alarms.get(a["id"]))["clip"] and r, timeout=30)
     assert abs(rec["clipStartedAt"] - (rec["firedAt"] - 3.0)) < 0.8
-    path = client.app.state.live.alarms.clips / f"{a['id']}.webm"
-    n = _clip_frames(path.read_bytes(), tmp_path)
+    r = client.get(f"/api/v1/live/alarms/{a['id']}/clip.webm")
+    assert r.status_code == 200 and r.headers["content-type"] == "video/webm"
+    n = _clip_frames(r.content, tmp_path)
     assert abs(n - (3.0 + 1.5) * clips.CLIP_FPS) <= 6              # ≈ (ön + son) × 10 kare/sn
+
+
+def _store_clip(mgr: Any, aid: str) -> bytes:
+    """Kayıt klasörüne gerçek (küçük) bir WebM yazar ve kaydı işaretler."""
+    import cv2
+    import numpy as np
+
+    from bantvision.live import clips
+
+    frames = []
+    for i in range(20):
+        _ok, buf = cv2.imencode(".jpg", np.full((120, 160, 3), i * 10, np.uint8))
+        frames.append((i / 10, 5000.0 + i / 10, buf.tobytes()))
+    path = mgr.alarms.clips / f"{aid}.webm"
+    clips.encode_webm(path, frames, 10.0)
+    assert mgr.alarms.set_clip(aid, 5000.0)
+    return path.read_bytes()
+
+
+def test_clip_endpoint_serves_webm_supports_range_and_404(client: TestClient) -> None:
+    mgr = client.app.state.live
+    a = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
+    url = f"/api/v1/live/alarms/{a['id']}/clip.webm"
+    r = client.get(url)
+    assert r.status_code == 404 and r.json()["detail"] == "Olay kaydı yok (hazırlanıyor, 7 günü geçti ya da alınamadı)."
+    data = _store_clip(mgr, a["id"])
+    r = client.get(url)
+    assert r.status_code == 200 and r.headers["content-type"] == "video/webm" and r.content == data
+    assert r.headers["cache-control"] == "no-store" and r.headers["accept-ranges"] == "bytes"
+    r = client.get(url, headers={"Range": "bytes=0-99"})                 # tarayıcı sararken parça ister
+    assert r.status_code == 206 and r.content == data[:100]
+    assert r.headers["content-range"] == f"bytes 0-99/{len(data)}"
+    r = client.get(url, headers={"Range": f"bytes={len(data) - 10}-"})
+    assert r.status_code == 206 and r.content == data[-10:]
+    assert client.get("/api/v1/live/alarms/..%2F..%2Fsecrets/clip.webm").status_code == 404
+    assert client.get(f"/api/v1/live/alarms/{'b' * 32}/clip.webm").status_code == 404
+
+
+def test_false_alarm_endpoint_marks_and_acks(client: TestClient) -> None:
+    mgr = client.app.state.live
+    a = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
+    assert client.get("/api/v1/live/alarms?active=1").json()[0]["falseAlarm"] is False
+    r = client.post(f"/api/v1/live/alarms/{a['id']}/false-alarm")
+    assert r.status_code == 200 and r.json()["falseAlarm"] is True and r.json()["acked"] is True
+    assert client.get("/api/v1/live/alarms?active=1").json() == []              # şeritten kalkar
+    assert client.get("/api/v1/live/alarms").json()[0]["falseAlarm"] is True     # geçmişte kalır
+    r = client.post(f"/api/v1/live/alarms/{'b' * 32}/false-alarm")
+    assert r.status_code == 404 and r.json()["detail"] == "Alarm bulunamadı."
+
+
+def test_alarms_endpoint_filters_type_until_and_limit(client: TestClient) -> None:
+    mgr = client.app.state.live
+    for i in range(60):
+        mgr.alarms.add("s", "Tezgah", "hands_up" if i % 2 else "lying", float(i), float(i), None, "disabled")
+    url = "/api/v1/live/alarms"
+    assert len(client.get(url).json()) == 50                                     # varsayılan sınır aynı
+    assert len(client.get(url, params={"limit": 1000}).json()) == 60
+    got = client.get(url, params={"type": "lying", "until": 9, "limit": 1000}).json()
+    assert [a["firedAt"] for a in got] == [8.0, 6.0, 4.0, 2.0, 0.0]
+    got = client.get(url, params={"since": 50, "until": 52}).json()
+    assert [a["firedAt"] for a in got] == [52.0, 51.0, 50.0]
+    assert client.get(url, params={"type": "yok"}).status_code == 422
+    assert client.get(url, params={"limit": 0}).status_code == 422
+    assert client.get(url, params={"limit": 1001}).status_code == 422
+
+
+def test_test_alarm_with_session_writes_a_pre_buffer_clip(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                                          tmp_path: pathlib.Path) -> None:
+    """Kameranın yan panelindeki "Deneme alarmı": ön kayıttan (sonrası beklenmeden) olay kaydı yazılır. Oturumsuz
+    deneme alarmının kaydı olmaz."""
+    from fakes_safety import FakePose
+
+    mgr = client.app.state.live
+    sess, sid = _safety_session_with_fake(client, monkeypatch, pose=FakePose(None))
+    wait_for(lambda: len(sess._clips.frames()) >= 20)                           # ≥ 2 sn ön kayıt
+    n_buf = len(sess._clips.frames())
+    rec = client.post("/api/v1/live/alarms/test", json={"sessionId": sid}).json()
+    got = wait_for(lambda: (r := mgr.alarms.get(rec["id"]))["clip"] and r, timeout=30)
+    assert 0 < got["firedAt"] - got["clipStartedAt"] <= 8.5
+    r = client.get(f"/api/v1/live/alarms/{rec['id']}/clip.webm")
+    assert r.status_code == 200 and r.headers["content-type"] == "video/webm"
+    n = _clip_frames(r.content, tmp_path)
+    assert n_buf - 3 <= n <= 8 * 10 + 3                                          # ön kayıt kadar, sonrası yok
+    plain = client.post("/api/v1/live/alarms/test", json={}).json()
+    assert mgr.clips.drain(10)
+    assert mgr.alarms.get(plain["id"])["clip"] is False
