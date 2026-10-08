@@ -162,7 +162,21 @@ export interface Alarm {
   id: string; sessionId: string | null; camera: string; type: AlarmType;
   startedAt: number; firedAt: number; endedAt: number | null; acked: boolean;
   notify: "disabled" | "queued" | "sent" | "failed" | "suppressed"; image: boolean;
+  /** İhlal anının kaydı (video) hazır mı; alarmdan sonra ≈4 sn toplanıp arka planda yazılır */
+  clip?: boolean;
+  /** Kaydın ilk karesinin zamanı (unix saniye); kayıt yoksa null */
+  clipStartedAt?: number | null;
+  /** Kullanıcı "Yanlış alarm" dedi (onaylanmış sayılır) */
+  falseAlarm?: boolean;
 }
+/** Alarm penceresinin büyük başlığı */
+export const ALARM_TITLES: Record<AlarmType, string> = { hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", test: "DENEME ALARMI" };
+/** Alarmdan sonra bu kadar saniye kayıt yoksa "Kayıt hazırlanıyor…" (ön 8 + son 4 sn + yazım) yerine resim gösterilir */
+export const CLIP_PENDING_S = 20;
+/** Alarmlar sayfasının bir aralıkta istediği en çok alarm */
+export const ALARM_LIST_LIMIT = 1000;
+export const alarmClipUrl = (id: string) => `/api/live/alarms/${id}/clip.webm`;
+export const alarmImageUrl = (id: string) => `/api/live/alarms/${id}/image.jpg`;
 export interface NotifyConfig {
   enabled: boolean; chatId: string; hasToken: boolean;
   /** Son Telegram gönderim hatası (Türkçe, anahtarsız); başarılı gönderimde silinir */

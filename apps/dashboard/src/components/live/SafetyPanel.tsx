@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, api, safetyHealth, stateDot, type Alarm, type LiveSession, type SafetyConfig } from "@/lib/live";
+import { useCallback, useEffect, useState } from "react";
+import { ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, alarmImageUrl, api, safetyHealth, stateDot, type Alarm, type LiveSession, type SafetyConfig } from "@/lib/live";
+import { useAlarmCenter } from "./AlarmCenter";
+import AlarmViewer from "./AlarmViewer";
 
 export const SAFETY_DEFAULTS: SafetyConfig = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false };
 
-/** Güvenlik oturumunun yan paneli: izleniyor (ve izlenmiyorsa nedeni), süren durumlar, son alarmlar, deneme alarmı */
+/** Güvenlik oturumunun yan paneli: izleniyor (ve izlenmiyorsa nedeni), süren durumlar, son alarmlar (tıklayınca kayıt
+ * penceresi), deneme alarmı */
 export function SafetyPanel({ session }: { session: LiveSession }) {
   // liste hangi oturuma ait olduğunu taşır: kamera değişince önceki kameranın alarmları bir an bile görünmez
   const [loaded, setLoaded] = useState<{ id: string; list: Alarm[] }>({ id: session.id, list: [] });
   const [reload, setReload] = useState(0);
   const [test, setTest] = useState<{ id: string; ok: boolean; text: string } | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const center = useAlarmCenter();
   useEffect(() => {
     let alive = true;
     // sunucu `sessionId` ile süzer (genel 50 sınırı başka kameralar yüzünden bu kameranın alarmlarını kesmesin);
@@ -28,6 +33,15 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
   // ekler gerekçeyi üreten koşula göre (bağımsız bayraklara göre değil): yalnızca model hatası yeniden denenir
   const loading = health.cause === "loading";
   const modelFailed = health.cause === "modelError";
+
+  const changed = useCallback(() => { setReload((x) => x + 1); center?.refresh(); }, [center]);
+  const ack = useCallback(async (a: Alarm) => {
+    try { await api(`alarms/${a.id}/ack`, { method: "POST" }); changed(); return true; } catch { return false; }
+  }, [changed]);
+  const markFalse = useCallback(async (a: Alarm) => {
+    try { await api(`alarms/${a.id}/false-alarm`, { method: "POST" }); changed(); return true; } catch { return false; }
+  }, [changed]);
+  const close = useCallback(() => setViewing(null), []);
 
   /** Bu kameranın karesiyle deneme alarmı: şeritte ve bu kameranın "Son alarmlar"ında görünür */
   async function testAlarm() {
@@ -63,15 +77,21 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
       {alarms.length === 0 ? <p className="text-[13px] text-faint">Henüz alarm yok.</p> : (
         <ul className="grid gap-2">
           {alarms.map((a) => (
-            <li key={a.id} className="flex items-center gap-2.5 rounded-xl border border-line p-2">
-              {a.image
-                // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
-                ? <img src={`/api/live/alarms/${a.id}/image.jpg`} alt="" className="h-12 w-16 rounded-lg object-cover" />
-                : <span className="grid h-12 w-16 place-items-center rounded-lg bg-canvas text-lg" aria-hidden="true">🚨</span>}
-              <span className="min-w-0 text-[13px]">
-                <b>{ALARM_LABELS[a.type]}</b> · {new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}
-                <span className="block text-[11.5px] text-faint">{NOTIFY_LABELS[a.notify]}</span>
-              </span>
+            <li key={a.id}>
+              <button type="button" onClick={() => setViewing(a.id)} title="Kaydı izle"
+                      className="flex w-full items-center gap-2.5 rounded-xl border border-line p-2 text-left transition hover:border-brand-100 hover:bg-brand-50/40">
+                <span className="relative shrink-0">
+                  {a.image
+                    // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
+                    ? <img src={alarmImageUrl(a.id)} alt="" className="h-12 w-16 rounded-lg object-cover" />
+                    : <span className="grid h-12 w-16 place-items-center rounded-lg bg-canvas text-lg" aria-hidden="true">🚨</span>}
+                  {a.clip && <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] text-white" aria-hidden="true">▶</span>}
+                </span>
+                <span className="min-w-0 text-[13px]">
+                  <b>{ALARM_LABELS[a.type]}</b> · {new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}
+                  <span className="block text-[11.5px] text-faint">{a.falseAlarm ? "Yanlış alarm · " : ""}{NOTIFY_LABELS[a.notify]}</span>
+                </span>
+              </button>
             </li>
           ))}
         </ul>
@@ -82,6 +102,9 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
       </button>
       {test && test.id === session.id && (
         <p role="status" className={`mt-2 text-[12px] ${test.ok ? "text-ok-600" : "text-nok-600"}`}>{test.text}</p>
+      )}
+      {viewing && alarms.some((a) => a.id === viewing) && (
+        <AlarmViewer alarms={alarms} id={viewing} mode="browse" onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
       )}
     </section>
   );
