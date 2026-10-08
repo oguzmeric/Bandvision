@@ -451,3 +451,28 @@ def test_clip_cap_scans_the_folder_without_holding_the_store_lock(tmp_path: path
     with patch.object(pathlib.Path, "glob", glob):
         assert st.enforce_clip_cap(max_clips=1) == 2
     assert free == [True]
+
+
+def test_locked_file_merge_marks_stale_clip_pending_failed(tmp_path: pathlib.Path,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """alarms.json açılışta kilitliyse açılış temizliği boş listeyle çalışır: dosya okunup birleştirilince önceki
+    çalışmadan "kayıt yazılıyor" kalmış kayıt alınamadı sayılır (panel sonsuza dek "hazırlanıyor" demez)."""
+    from bantvision.live import jsonfile
+
+    monkeypatch.setattr(jsonfile, "READ_RETRY_DELAYS_S", (0.0,) * 5)
+    _write(tmp_path, [_rec("a" * 32, clipPending=True)])
+    _flaky_read(monkeypatch, "alarms.json", 10**6)
+    st = AlarmStore(tmp_path)
+    assert st.clear_clip_pending() == 0                                       # boş liste (kilitli)
+    monkeypatch.setattr(pathlib.Path, "read_text", _REAL_READ)               # kilit kalktı
+    st.add("s", "Cam", "test", 2.0, 2.0, None, "disabled")                    # yazımda birleşir
+    got = AlarmStore(tmp_path).get("a" * 32)
+    assert (got["clipPending"], got["clipFailed"]) == (False, True)
+
+
+def test_clip_failed_leaves_records_that_never_waited_for_a_clip(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    plain = st.add(None, "Deneme", "test", 1.0, 1.0, None, "disabled")       # kamerasız: kayıt beklenmedi
+    st.clip_failed([plain["id"]])
+    got = st.get(plain["id"])
+    assert (got["clipPending"], got["clipFailed"]) == (False, False)          # "Bu alarmın kaydı yok", hata değil

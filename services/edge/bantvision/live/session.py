@@ -262,16 +262,28 @@ class LiveSession:
 
     def capture_clip(self, ids: list[str], post_s: float | None = None) -> bool:
         """Alarm kayıtları için olay kaydı: ön kayıt + `post_s` (varsayılan `clips.POST_S`) sn sonrası (0: yalnızca ön
-        kayıt, hemen yazılır — deneme alarmı). Güvenlik oturumu değilse ya da henüz kare yoksa False. Engellemez, hata
-        fırlatmaz."""
+        kayıt, hemen yazılır — deneme alarmı). Güvenlik oturumu değilse (ör. tam bu arada güvenlikten çıkıldı) ya da
+        henüz kare yoksa False ve kayıtlar "alınamadı" olur (bekleme asılı kalmaz). Engellemez, hata fırlatmaz."""
+        if not ids:
+            return False
         clips = self._clips
-        if clips is None or not ids:
+        if clips is None:
+            self._clip_failed(ids)
             return False
         try:
             return clips.capture(ids, time.monotonic(), post_s)
         except Exception:  # noqa: BLE001 — kayıt hatası alarmı/oturumu düşürmez
             _LOG.exception("Olay kaydı başlatılamadı (oturum %s)", self.id[:8])
+            self._clip_failed(ids)
             return False
+
+    def _clip_failed(self, ids: list[str]) -> None:
+        if self._clip_state is None:
+            return
+        try:
+            self._clip_state(ids, "failed")
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Olay kaydı durumu yazılamadı (oturum %s)", self.id[:8])
 
     def _warm(self, profile: Profile) -> None:
         """Ortak modeller ilk kişiyi/kareyi beklemeden arka planda yüklenmeye başlar: kişi sayımı ve güvenlik tanıma

@@ -86,8 +86,9 @@ class AlarmStore:
             _LOG.warning("alarms.json yazılamadı: %s", e)
 
     def _merge_disk(self) -> bool:
-        """Açılışta okunamayan dosyayı yeniden okur ve bellektekilerle birleştirir; okunamazsa False. Diskten gelen ve
-        sonu yazılmamış (deneme dışı) kayıtlar önceki çalışmadandır: sonları şimdi yazılır."""
+        """Açılışta okunamayan dosyayı yeniden okur ve bellektekilerle birleştirir; okunamazsa False. Diskten gelen
+        kayıtlar önceki çalışmadandır: sonu yazılmamış (deneme dışı) olanların sonu şimdi yazılır, "kayıt yazılıyor"
+        kalmış olanlar alınamadı sayılır (açılıştaki temizlik boş listeyle çalışmıştı)."""
         res = read_json(self._file, delays=())
         if res.status == "unreadable":
             return False
@@ -98,6 +99,8 @@ class AlarmStore:
             for r in disk:
                 if r["endedAt"] is None and r["type"] != "test":
                     r["endedAt"] = now
+                if r.get("clipPending"):
+                    r["clipPending"], r["clipFailed"] = False, True
             self._items = disk + self._items
         self._load_failed = False
         return True
@@ -152,10 +155,11 @@ class AlarmStore:
         return self._update(alarm_id, clip=True, clipStartedAt=started_at, clipPending=False, clipFailed=False)
 
     def clip_failed(self, alarm_ids: Sequence[str]) -> None:
-        """Olay kaydı alınamadı: `clipPending: false`, `clipFailed: true` (tek kayıt)."""
+        """Olay kaydı alınamadı: bekleyen (`clipPending`) kayıtlar `clipPending: false`, `clipFailed: true` (tek kayıt).
+        Kaydı beklenmeyen (ör. kamerasız deneme alarmı) ya da yazılmış kayda dokunulmaz."""
         ids = set(alarm_ids)
         with self._lock:
-            changed = [a for a in self._items if a["id"] in ids and not a["clip"]]
+            changed = [a for a in self._items if a["id"] in ids and a.get("clipPending") and not a["clip"]]
             for a in changed:
                 a["clipPending"], a["clipFailed"] = False, True
             if changed:

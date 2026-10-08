@@ -176,12 +176,13 @@ class ClipBuffer:
         post = POST_S if post_s is None else post_s
         with self._lock:
             pre = [f for f in self._ring if f[0] >= t - self._pre]
-            if not pre and post <= 0:
-                self._failed(ids)
-                return False
+            empty = not pre and post <= 0
             cap = _Capture(tuple(ids), t + post, pre)
             if post > 0:
                 self._pending.append(cap)
+        if empty:
+            self._failed(ids)                               # kayıt yazımı (JSON) kilit dışında
+            return False
         if post <= 0:
             self._emit([cap])
         return True

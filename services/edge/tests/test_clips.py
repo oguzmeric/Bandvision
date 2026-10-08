@@ -225,7 +225,7 @@ def test_resized_stream_mid_clip_is_written_at_first_frame_size(tmp_path: pathli
 def test_encoder_failure_leaves_clip_false_and_never_raises(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
                                                             caplog: pytest.LogCaptureFixture, failure: str) -> None:
     st = AlarmStore(tmp_path)
-    a = st.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
+    a = st.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled", clip_pending=True)   # oturum yakalıyor
     if failure == "raise":
         def broken(_p: pathlib.Path, _f: Any, _fps: float) -> None:
             raise RuntimeError("kodlayıcı çöktü")
@@ -433,3 +433,48 @@ def test_full_writer_queue_marks_the_record_failed(tmp_path: pathlib.Path, monke
     finally:
         gate.set()
         w.stop(10)
+
+
+# ---------------------------------------------------------------------- son cila
+
+def test_failed_state_is_written_outside_the_buffer_lock() -> None:
+    """Boş ön kayıtta "alınamadı" bildirimi (alarm günlüğüne JSON yazımı) ClipBuffer kilidi dışında yapılır: okuyucu
+    bu sırada beklemez."""
+    seen: list[bool] = []
+    buf: ClipBuffer
+
+    def state(_ids: Any, _st: str) -> None:
+        got = buf._lock.acquire(blocking=False)
+        if got:
+            buf._lock.release()
+        seen.append(got)
+
+    buf = ClipBuffer(lambda _j: None, state=state)
+    assert buf.capture(["a" * 32], 1.0, post_s=0.0) is False
+    assert seen == [True]
+
+
+def test_capture_clip_reports_failure_when_buffer_is_gone_or_raises() -> None:
+    """Güvenlikten tam o anda çıkıldıysa (tampon yok) ya da yakalama hata verirse kayıtlar "alınamadı" olur;
+    "Kayıt hazırlanıyor…" asılı kalmaz."""
+    from fakes_safety import FakeDetector, FakePose
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    states: list[tuple[list[str], str]] = []
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), detector=FakeDetector([]), pose=FakePose(None),
+                    clip_sink=lambda _j: None, clip_state=lambda ids, st: states.append((list(ids), st)))
+    try:
+        assert s._clips is not None
+
+        def boom(*_a: Any, **_k: Any) -> bool:
+            raise RuntimeError("yakalama bozuk")
+
+        s._clips.capture = boom                                                   # type: ignore[method-assign]
+        assert s.capture_clip(["a" * 32]) is False
+        s.set_profile(Profile.people())                                           # güvenlikten çıktı: tampon yok
+        assert s.capture_clip(["b" * 32]) is False
+        assert states == [(["a" * 32], "failed"), (["b" * 32], "failed")]
+    finally:
+        s.stop()

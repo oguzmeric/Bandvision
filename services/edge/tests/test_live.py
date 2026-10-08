@@ -2088,3 +2088,72 @@ def test_watched_cameras_are_restored_once_the_locked_watch_json_becomes_readabl
         time.sleep(0.6)
         assert len(c.get("/api/v1/live/sessions").json()) == 1                  # bir kez açılır
     assert [x["sourceId"] for x in _watch(tmp_path)] == [w["sourceId"]]         # liste korundu
+
+
+# ---------------------------------------------------------------------- görev 13, son cila
+
+def test_alarm_added_before_a_sink_error_does_not_stay_pending(client: TestClient) -> None:
+    """Alarm kaydı eklendikten sonra hata olursa (ör. bildirim kuyruğu) oturum kimlikleri alamaz ve kaydı yakalayamaz:
+    kayıt "yazılıyor" asılı kalmaz, "alınamadı" olur."""
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr = client.app.state.live
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+
+    def broken(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("kuyruk bozuk")
+
+    mgr.notifier.enqueue = broken                                                # type: ignore[method-assign]
+    s = _fake_safety_session(records_clips=True)
+    with pytest.raises(RuntimeError):
+        mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    (a,) = mgr.alarms.list()
+    assert (a["clipPending"], a["clipFailed"]) == (False, True)
+
+
+def test_identical_rewatch_retries_a_failed_watch_json_write(tmp_path: pathlib.Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """watch.json yazılamadıysa (disk/kilit) aynı kameranın yeniden izlenmesi (liste değişmese de) yeniden yazar."""
+    from types import SimpleNamespace
+
+    from bantvision.core import Profile
+    from bantvision.live import api as api_mod
+    from bantvision.live.api import LiveManager
+    from bantvision.live.store import LiveStore
+
+    mgr = LiveManager(LiveStore(tmp_path), tmp_path)
+    real, fail = api_mod.write_json_atomic, [True]
+
+    def flaky(*a: Any, **k: Any) -> None:
+        if fail[0]:
+            raise OSError(28, "No space left on device")
+        real(*a, **k)
+
+    monkeypatch.setattr(api_mod, "write_json_atomic", flaky)
+    cam = SimpleNamespace(source_id="A", channel_id=None, profile_id="p", substream=None, name="Kasa",
+                          profile=Profile.jeweler())
+    mgr.watch(cam)
+    assert not (tmp_path / "live" / "watch.json").exists()
+    fail[0] = False
+    mgr.watch(cam)                                                              # aynı kayıt: yine de yazılır
+    assert [w["sourceId"] for w in _watch(tmp_path)] == ["A"]
+
+
+def test_locked_watch_json_retry_stops_at_shutdown_and_opens_nothing(tmp_path: pathlib.Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kilitli watch.json'u yeniden deneyen arka plan işi sunucu kapanınca durur: kapanıştan sonra oturum açmaz."""
+    from bantvision.live.api import LiveManager
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    monkeypatch.setattr(LiveManager, "WATCH_RETRY_S", 0.3)
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        _safety_session_with_fake(c, monkeypatch)
+    locked = _lock_watch_json(monkeypatch)
+    app = _app_with_fakes(tmp_path)
+    with TestClient(app):
+        mgr = app.state.live
+        assert mgr._watch_unread
+    locked[0] = False                                                           # kilit kapanıştan sonra kalktı
+    time.sleep(1.2)
+    assert mgr._watch_stop.is_set() and mgr.sessions == {}                      # kapanıştan sonra açılan yok

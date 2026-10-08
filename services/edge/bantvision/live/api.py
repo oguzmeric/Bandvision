@@ -262,6 +262,8 @@ class LiveManager:
         self._watch_unread = False
         self._watch_ops: list[tuple[str, Any]] = []
         self._restore_pending = False                       # geri yükleme kilitli dosyayla çalıştı: okununca yinele
+        self._watch_dirty = False                           # son watch.json yazımı başarısız: aynı liste de yazılsın
+        self._watch_stop = threading.Event()                # kapanış: kilitli dosya denemesi durur, oturum açmaz
         self._watch: list[dict[str, Any]] = self._load_watch()
         disable_power_throttling()          # canlı sayım gerçek zamanlı: Windows verimlilik modu kare hızını 2–3'e düşürüyordu
 
@@ -293,6 +295,19 @@ class LiveManager:
         clip_pending = bool(getattr(s, "records_clips", False))   # oturum bu alarmların kaydını yakalayacak
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
         new_ids: list[str] = []
+        try:
+            self._register(s, fired, ended, jpeg, now, mono, camera, send_image, clip_pending, cam_key, new_ids)
+        except BaseException:
+            # kayıt eklendikten sonra hata: oturum kimlikleri alamaz, kaydı yakalayamaz — "yazılıyor" asılı kalmasın
+            if new_ids:
+                self.alarms.clip_failed(new_ids)
+            raise
+        return new_ids
+
+    def _register(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None, now: float,
+                  mono: float, camera: str, send_image: bool, clip_pending: bool, cam_key: str,
+                  new_ids: list[str]) -> None:
+        """`on_safety`'nin kilitli gövdesi; eklenen alarm kimlikleri `new_ids`'e yazılır (hata olsa da)."""
         with self._alarm_lock:
             in_safety = getattr(s.profile, "countMode", "safety") == "safety"
             for tid, kind, _was_fired in ended:
@@ -317,7 +332,6 @@ class LiveManager:
                 if notify == "queued":
                     self._last_sent[(cam_key, a.kind)] = mono
                     self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now), jpeg if send_image else None)
-        return new_ids
 
     def close_alarms(self, session_id: str, now: float | None = None) -> None:
         """Oturumun açık alarmlarının sonunu yazar (oturum silindi/durdu, yöntem değişti, sunucu kapanıyor)."""
@@ -418,8 +432,8 @@ class LiveManager:
         self._watch = self._apply_watch(self._watch, op)
         if self._watch_unread:
             self._watch_ops.append(op)
-        elif self._watch == before:
-            return
+        elif self._watch == before and not self._watch_dirty:
+            return                                          # değişiklik yok ve dosya güncel
         self._save_watch()
 
     def _merge_watch_disk(self) -> bool:
@@ -445,7 +459,9 @@ class LiveManager:
             return
         try:
             write_json_atomic(self._watch_file, self._watch, indent=2)
+            self._watch_dirty = False
         except OSError as e:
+            self._watch_dirty = True                        # sonraki izleme/bırakma (aynı liste de olsa) yeniden yazar
             _LOG.warning("watch.json yazılamadı: %s", e)
 
     def watch(self, s: LiveSession) -> None:
@@ -470,7 +486,8 @@ class LiveManager:
         """Arka planda: kilitli watch.json okunabilene dek `WATCH_RETRY_S`'de bir dener (en çok `WATCH_RETRY_MAX`
         kez); okununca listeyi birleştirip yazar ve açılışta açılamayan kameraları açar (açık olanlara dokunmaz)."""
         for _ in range(self.WATCH_RETRY_MAX):
-            time.sleep(self.WATCH_RETRY_S)
+            if self._watch_stop.wait(self.WATCH_RETRY_S):
+                return                                      # sunucu kapanıyor
             with self._watch_lock:
                 if self._watch_unread and not self._merge_watch_disk():
                     continue
@@ -479,7 +496,7 @@ class LiveManager:
                 self._restore_pending = False
             open_ = {(getattr(x, "source_id", None), getattr(x, "channel_id", None)) for x in list(self.sessions.values())}
             todo = [r for r in records if (r["sourceId"], r.get("channelId")) not in open_]
-            if todo:
+            if todo and not self._watch_stop.is_set():
                 self._restore(todo)
             return
         _LOG.error("watch.json %d denemede okunamadı; izlenen güvenlik kameraları yeniden açılmadı", self.WATCH_RETRY_MAX)
@@ -497,9 +514,15 @@ class LiveManager:
             threading.Thread(target=self._retry_watch, name="izleme-listesi", daemon=True).start()
         return self._restore(records)
 
+    def stop_background(self) -> None:
+        """Sunucu kapanırken: kilitli watch.json denemesi durur (kapanıştan sonra oturum açmaz)."""
+        self._watch_stop.set()
+
     def _restore(self, records: list[dict[str, Any]]) -> int:
         restored = 0
         for r in records:
+            if self._watch_stop.is_set():
+                break
             label = str(r.get("name") or r.get("sourceId"))
             try:
                 if self.store.source(r["sourceId"]) is None:
