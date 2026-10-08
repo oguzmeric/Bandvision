@@ -24,10 +24,10 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
   }, [session.id, reload]);
   const alarms = loaded.id === session.id ? loaded.list : [];
   const active = session.safety?.active ?? [];
-  const sf = session.safety;
   const health = safetyHealth(session);
-  const loading = sf?.model === "loading" || sf?.detector === "loading";
-  const modelFailed = sf?.model === "error" || sf?.detector === "error";
+  // ekler gerekçeyi üreten koşula göre (bağımsız bayraklara göre değil): yalnızca model hatası yeniden denenir
+  const loading = health.cause === "loading";
+  const modelFailed = health.cause === "modelError";
 
   /** Bu kameranın karesiyle deneme alarmı: şeritte ve bu kameranın "Son alarmlar"ında görünür */
   async function testAlarm() {

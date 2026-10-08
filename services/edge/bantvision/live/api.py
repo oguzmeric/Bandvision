@@ -215,6 +215,10 @@ class ActionIn(_Strict):
     action: Literal["start", "stop", "reset", "learnBackground", "learnSample", "cancelCalibration"]
 
 
+class NotSafetyProfile(LookupError):
+    """Geri yüklemede: kameranın çözülen profili artık güvenlik değil (kayıt listeden çıkar)."""
+
+
 def _err(e: Exception) -> HTTPException:
     if isinstance(e, rec.RecorderError):
         return HTTPException(401 if e.kind == "unauthorized" else 502, str(e))
@@ -329,17 +333,19 @@ class LiveManager:
         Geri yükleme için: `name` kayıttaki ad (kayıt cihazına sorulmaz); `fallback` kayıttaki güvenlik profili
         (kaydedilmeden güvenliğe geçilmişse); `lazy` kanal bilgisi açılışta istenmez, okuyucu bağlanırken ister ve
         olmazsa yeniden dener (kayıt cihazı bilgisayardan geç açılabilir; açılış beklemez); `safety_only` çözülen profil
-        güvenlik değilse LookupError."""
+        güvenlik değilse `NotSafetyProfile`. Kayıttaki profil kullanılırsa adı da korunur (şablonun adı yazılmaz)."""
         src = self.source_or_404(source_id)
         template = self.store.profile(profile_id)
         profile = self.store.camera_profile(source_id, channel_id, profile_id) or template  # kamera ayarı ya da şablon
-        if fallback is not None and fallback.countMode == "safety" and (profile is None or profile.countMode != "safety"):
-            profile = fallback
+        from_snapshot = (fallback is not None and fallback.countMode == "safety"
+                         and (profile is None or profile.countMode != "safety"))
+        if from_snapshot:
+            profile = fallback                               # kaydedilmeden güvenliğe geçilmişti: çalışan profil (adıyla)
         if profile is None or (template is None and fallback is None):
             raise HTTPException(404, "Profil bulunamadı.")
         if safety_only and profile.countMode != "safety":
-            raise LookupError("profil güvenlik değil")
-        if template is not None:
+            raise NotSafetyProfile("profil güvenlik değil")
+        if template is not None and not from_snapshot:
             profile.name = template.name                     # yeniden adlandırma kamera ayarlarına da yansısın
         for s in list(self.sessions.values()):              # aynı kamera iki kez açılmasın
             if getattr(s, "source_id", None) == source_id and getattr(s, "channel_id", None) == channel_id:
@@ -411,7 +417,8 @@ class LiveManager:
     def restore_watched(self) -> int:
         """Açılışta (lifespan) izlenen güvenlik kameralarını yeniden açar; açılan sayısını döndürür. Hiçbir koşulda
         hata fırlatmaz: bir kaydın hatası (kaynak/profil yok, beklenmeyen hata) Türkçe günlüğe yazılır, diğerleri ve
-        sunucunun açılışı sürer. Kaynağı silinmiş kayıt listeden çıkar."""
+        sunucunun açılışı sürer. Kaynağı silinmiş, profili artık güvenlik olmayan ya da profil anlık görüntüsü bozuk
+        kayıt listeden çıkar."""
         with self._watch_lock:
             records = list(self._watch)
         restored = 0
@@ -422,13 +429,19 @@ class LiveManager:
                     _LOG.warning("İzlenen güvenlik kamerasının kaynağı silinmiş; listeden çıkarıldı: %s", label)
                     self.unwatch(r["sourceId"], r.get("channelId"))
                     continue
-                fallback = Profile.from_dict(r["profile"]) if isinstance(r.get("profile"), dict) else None
+                try:
+                    fallback = Profile.from_dict(r["profile"]) if isinstance(r.get("profile"), dict) else None
+                except (KeyError, TypeError, ValueError, AttributeError) as e:
+                    _LOG.warning("İzlenen güvenlik kamerasının kaydı bozuk; listeden çıkarıldı: %s (%s: %s)",
+                                 label, type(e).__name__, e)
+                    self.unwatch(r["sourceId"], r.get("channelId"))
+                    continue
                 sub = r.get("substream")
                 self.open_session(r["sourceId"], r.get("channelId"), r["profileId"],
                                   sub if isinstance(sub, bool) else None, name=str(r.get("name") or "") or None,
                                   fallback=fallback, lazy=True, safety_only=True)
                 restored += 1
-            except LookupError:
+            except NotSafetyProfile:
                 _LOG.warning("İzlenen kameranın profili artık güvenlik değil; listeden çıkarıldı: %s", label)
                 self.unwatch(r["sourceId"], r.get("channelId"))
             except HTTPException as e:

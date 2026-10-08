@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import pathlib
 import time
@@ -21,6 +22,10 @@ _CHUNK = 1 << 16
 
 class DownloadTimeout(TimeoutError):
     """Genel süre sınırı aşıldı (ileti Türkçe, hangi model olduğu yazılı)."""
+
+
+class ModelIntegrityError(RuntimeError):
+    """İndirilen dosyanın parmak izi tutmuyor (ileti Türkçe, hangi model olduğu yazılı)."""
 
 
 def sha256_file(p: pathlib.Path) -> str:
@@ -50,7 +55,7 @@ def download_verified(url: str, dest: pathlib.Path, sha256: str, timeout: float 
     try:
         _download(url, tmp, timeout, deadline, label)
         if sha256_file(tmp) != sha256:
-            raise RuntimeError(f"{label} doğrulanamadı (SHA-256 tutmuyor).")
+            raise ModelIntegrityError(f"{label} doğrulanamadı (SHA-256 tutmuyor).")
         tmp.replace(dest)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -60,10 +65,25 @@ def download_verified(url: str, dest: pathlib.Path, sha256: str, timeout: float 
 
 
 def failure_reason(e: BaseException) -> str:
-    """Yükleme hatasının kullanıcıya gösterilecek Türkçe nedeni. Ağ hataları (adres çözülemedi, bağlantı reddedildi/
-    koptu, zaman aşımı) tek Türkçe cümleye iner; asıl (çoğu İngilizce) ileti yalnızca günlüğe gider."""
-    if isinstance(e, DownloadTimeout):              # kendi Türkçe iletimiz (TimeoutError alt sınıfı: önce bakılır)
+    """Yükleme hatasının kullanıcıya gösterilecek Türkçe nedeni; kullanıcıya hiç İngilizce ileti gitmez, asıl ileti
+    yalnızca günlüğe yazılır (çağıran yazar). Yalnızca kendi Türkçe iletilerimiz (süre aşımı, parmak izi) aynen geçer:
+    - sunucu isteği reddetti (HTTP hatası) → "Model sunucusu isteği reddetti (HTTP <kod>)";
+    - ağ hataları (adres çözülemedi, bağlantı reddedildi/koptu, zaman aşımı) → "internete ulaşılamadı (…)";
+    - disk dolu / klasöre yazma izni yok → kendi iletisi; diğer OSError ve SSL hataları → "Model indirilemedi
+      (bağlantı hatası)";
+    - beklenmeyen diğer hatalar → genel ileti."""
+    if isinstance(e, DownloadTimeout | ModelIntegrityError):   # kendi Türkçe iletilerimiz (önce bakılır)
         return str(e)
+    if isinstance(e, urllib.error.HTTPError):                  # URLError alt sınıfı: önce bakılır
+        return f"Model sunucusu isteği reddetti (HTTP {e.code})"
     if isinstance(e, urllib.error.URLError | ConnectionError | TimeoutError):
         return "internete ulaşılamadı (bağlantıyı kontrol edin)"
-    return str(e) or type(e).__name__
+    if isinstance(e, OSError):
+        if e.errno == errno.ENOSPC:
+            return "Model kaydedilemedi (diskte yer yok)"
+        if isinstance(e, PermissionError):
+            return "Model klasörüne yazılamadı (erişim izni yok)"
+        return "Model indirilemedi (bağlantı hatası)"
+    if isinstance(e, ImportError):
+        return "model çalıştırıcısı (onnxruntime) yüklenemedi"
+    return "beklenmeyen hata (ayrıntı analiz sunucusunun günlüğünde)"

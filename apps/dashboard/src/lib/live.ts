@@ -125,17 +125,36 @@ export type ModelState = "loading" | "ready" | "error";
 /** Güvenlik kamerası bu kadar süredir izlenmiyorsa alarm şeridinde uyarı satırı çıkar */
 export const WATCH_WARN_AFTER_S = 60;
 
+/** Sağlıksızlığın nedeni hangi koşuldan geliyor: kamera, model yükleniyor, model yüklenemedi (1 dk sonra yeniden
+ * denenir), görüntü işlenemiyor */
+export type HealthCause = "camera" | "loading" | "modelError" | "processing";
+
+/**
+ * Sunucunun `safety_health` sırasıyla ilk tutmayan koşul: kamera → poz modeli → kişi tanıma modeli → işleme. Gerekçe
+ * metni ile aynı koşuldan çıkar (ör. poz modeli yüklenirken tanıma modelinin hatası "yeniden denenir" eki almaz).
+ */
+function healthCause(s: LiveSession): HealthCause {
+  if (s.state !== "live") return "camera";
+  for (const st of [s.safety?.model, s.safety?.detector]) {
+    if (st === "loading") return "loading";
+    if (st === "error") return "modelError";
+  }
+  return "processing";
+}
+
 /**
  * Güvenlik oturumu gerçekten izleniyor mu (analiz sunucusunun `safety.healthy`/`reason`'ı). Sağlık alanı olmayan eski
- * sunucuda kamera durumu ve poz modelinden çıkarılır.
+ * sunucuda kamera durumu ve poz modelinden çıkarılır. `cause`: gerekçenin geldiği koşul (sağlıklıysa null).
  */
-export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string | null } {
+export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string | null; cause: HealthCause | null } {
   const sf = s.safety;
-  if (sf && typeof sf.healthy === "boolean") return { healthy: sf.healthy, reason: sf.healthy ? null : sf.reason ?? null };
-  if (s.state !== "live") return { healthy: false, reason: s.state === "connecting" ? "Kameraya bağlanılıyor" : "Kamera bağlantısı yok" };
-  if (sf?.model === "loading") return { healthy: false, reason: "Poz modeli yükleniyor" };
-  if (sf?.model === "error") return { healthy: false, reason: sf.modelError || "Poz modeli yüklenemedi" };
-  return { healthy: true, reason: null };
+  if (sf && typeof sf.healthy === "boolean") {
+    return sf.healthy ? { healthy: true, reason: null, cause: null } : { healthy: false, reason: sf.reason ?? null, cause: healthCause(s) };
+  }
+  if (s.state !== "live") return { healthy: false, reason: s.state === "connecting" ? "Kameraya bağlanılıyor" : "Kamera bağlantısı yok", cause: "camera" };
+  if (sf?.model === "loading") return { healthy: false, reason: "Poz modeli yükleniyor", cause: "loading" };
+  if (sf?.model === "error") return { healthy: false, reason: sf.modelError || "Poz modeli yüklenemedi", cause: "modelError" };
+  return { healthy: true, reason: null, cause: null };
 }
 
 export type AlarmType = "hands_up" | "lying" | "test";

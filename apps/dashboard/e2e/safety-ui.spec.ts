@@ -19,6 +19,8 @@ interface Fake {
   state: string; message: string; model: string | undefined; lastAlarmAt: number | null;
   /** Sunucunun izleme sağlığı (I2); verilmezse alan gönderilmez (eski sunucu) */
   healthy?: boolean; reason?: string | null; modelError?: string | null; unhealthyFor?: number | null;
+  /** Kişi tanıma modeli (verilmezse alan gönderilmez) */
+  detector?: string; detectorError?: string | null;
 }
 
 function fakeSession(f: Fake, id = "abc123", name = "Tezgah kamerası") {
@@ -28,7 +30,8 @@ function fakeSession(f: Fake, id = "abc123", name = "Tezgah kamerası") {
     counting: false, total: 0, totalOut: 0, staffIn: 0, staffOut: 0, twoWay: false, ratePerMinute: 0,
     calibrating: null, calibrationMessage: "", sourceId: null, channelId: null, profileId: null, substream: null,
     safety: { active: [{ type: "hands_up", trackId: 1, seconds: 1.5 }], lastAlarmAt: f.lastAlarmAt,
-              ...(f.model ? { model: f.model } : {}), modelError: f.modelError ?? null, ...health },
+              ...(f.model ? { model: f.model } : {}), modelError: f.modelError ?? null,
+              ...(f.detector ? { detector: f.detector, detectorError: f.detectorError ?? null } : {}), ...health },
     profile: {
       id: "p", name: "Kuyumcu güvenliği", roi: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, linePosition: 0.5, direction: "down",
       diffThreshold: 30, expectedArea: 0, splitTouching: false, countMode: "safety",
@@ -85,6 +88,16 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
   await nextPoll();
   await expect(reason).toHaveText(`${MODEL_ERR} · 1 dakika sonra yeniden denenir.`);
   await expect(card.getByTestId("watch-state")).toHaveAttribute("title", MODEL_ERR);
+  // ek, gerekçeyi üreten koşula göre: poz modeli yüklenirken tanıma modelinin hatası "yeniden denenir" eklemez
+  const DET_ERR = "Kişi tanıma modeli yüklenemedi: Model indirilemedi (bağlantı hatası)";
+  Object.assign(f, { model: "loading", modelError: null, detector: "error", detectorError: DET_ERR, reason: "Poz modeli yükleniyor" });
+  await nextPoll();
+  await expect(reason).toHaveText("Poz modeli yükleniyor…");
+  // poz hazır, tanıma hatası: gerekçe tanıma hatası ve ek onun
+  Object.assign(f, { model: "ready", reason: DET_ERR });
+  await nextPoll();
+  await expect(reason).toHaveText(`${DET_ERR} · 1 dakika sonra yeniden denenir.`);
+  Object.assign(f, { detector: undefined, detectorError: undefined });
   // model hazır ama kare işlenemiyor (işleme hatası): yine uyarı
   Object.assign(f, { model: "ready", modelError: null, reason: "Görüntü işlenemiyor: bozuk kare", lastAlarmAt: null });
   await nextPoll();

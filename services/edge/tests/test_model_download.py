@@ -101,8 +101,22 @@ def test_failure_reason_is_turkish_for_network_errors() -> None:
     assert model_download.failure_reason(urllib.error.URLError("getaddrinfo failed")) == net
     assert model_download.failure_reason(ConnectionResetError("reset")) == net
     assert model_download.failure_reason(TimeoutError("timed out")) == net
-    assert model_download.failure_reason(RuntimeError("Poz modeli doğrulanamadı (SHA-256 tutmuyor).")).startswith("Poz")
+    assert model_download.failure_reason(
+        model_download.ModelIntegrityError("Poz modeli doğrulanamadı (SHA-256 tutmuyor).")).startswith("Poz")
     assert model_download.failure_reason(model_download.DownloadTimeout("Poz modeli 300 sn içinde indirilemedi.")) \
         == "Poz modeli 300 sn içinde indirilemedi."
-    assert model_download.failure_reason(OSError("ağ yok")) == "ağ yok"
-    assert model_download.failure_reason(ValueError()) == "ValueError"
+    # Wave-A kalıntısı 5: kullanıcıya İngilizce ileti gitmez (asıl metin yalnızca günlükte)
+    import errno
+    import ssl
+
+    reason = model_download.failure_reason
+    http = urllib.error.HTTPError("https://x", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+    assert reason(http) == "Model sunucusu isteği reddetti (HTTP 404)"
+    bad = "Model indirilemedi (bağlantı hatası)"
+    assert reason(OSError("ağ yok")) == bad
+    assert reason(ssl.SSLError("CERTIFICATE_VERIFY_FAILED")) == bad
+    assert reason(OSError(errno.ENOSPC, "No space left on device")) == "Model kaydedilemedi (diskte yer yok)"
+    assert reason(PermissionError(13, "Access is denied")) == "Model klasörüne yazılamadı (erişim izni yok)"
+    assert reason(ImportError("No module named onnxruntime")) == "model çalıştırıcısı (onnxruntime) yüklenemedi"
+    assert reason(ValueError("INVALID_PROTOBUF : Load model failed")) == \
+        "beklenmeyen hata (ayrıntı analiz sunucusunun günlüğünde)"

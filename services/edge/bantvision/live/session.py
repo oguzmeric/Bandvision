@@ -55,6 +55,10 @@ class SessionStatus:
 STALE_S = 10.0                              # bu kadar süredir kare işlenmediyse güvenlik kamerası izlenmiyor sayılır
 _PROCESSING = "İşleme hatası: "
 _LOG_EVERY_S = 60.0                         # aynı işleme hatası günlüğe en çok dakikada bir (her karede değil)
+# Hatadaki ortak model, boş sahnede de (kişi yokken model hiç çağrılmaz) yeniden denensin: güvenlik karelerinde en çok
+# bu aralıkla `warm()`. Asıl bekleme SharedModel'de (hatadan 60 sn sonra): panelin "1 dakika sonra yeniden denenir"i
+# saniye hassasiyetinde doğru olur; `warm()` ucuzdur (kilit + saat karşılaştırması).
+MODEL_RETRY_CHECK_S = 1.0
 
 
 def safety_health(state: str, model: str, model_error: str, detector: str, detector_error: str,
@@ -143,7 +147,11 @@ class LiveSession:
         self._clip_sink = clip_sink
         self._clips: ClipBuffer | None = None               # yalnızca güvenlik oturumunda (okuyucu doldurur)
         self._last_alarm_at: float | None = None
-        self._unhealthy_since: float | None = time.monotonic()   # güvenlik: ne zamandır izlenmiyor (sağlıklıysa None)
+        # Güvenlik izleme sağlığı karelerden çıkar (panelin yoklamasından değil): izleme başladığı an ve son sağlıklı
+        # karenin anı (tekdüze). Panel kamera sağlıksızlaştıktan çok sonra açılsa da süreyi doğru görür.
+        self._watch_start = time.monotonic()
+        self._last_healthy: float | None = None
+        self._model_check_at = 0.0
         if detector is not None:
             self._pipe.detect._detector = detector
         if profile.countMode == "safety":
@@ -236,7 +244,8 @@ class LiveSession:
 
         self._pipe.safety = SafetyAnalyzer(detector=self._detector, pose=self._pose)
         self._pipe.safety.enable_gate()
-        self._unhealthy_since = time.monotonic()            # güvenliğe geçiş: izleme yeniden kanıtlanmalı
+        self._watch_start = time.monotonic()                # güvenliğe geçiş: izleme yeniden kanıtlanmalı
+        self._last_healthy = None
         if self._clip_sink is not None and self._clips is None:
             self._clips = ClipBuffer(self._clip_sink)
 
@@ -318,17 +327,14 @@ class LiveSession:
 
     def _safety_status(self) -> dict[str, Any]:
         """Güvenlik durumu (kilit altında çağrılır): süren bölümler, son alarm, modellerin durumu ve izleme sağlığı.
-        `unhealthyFor`: kaç saniyedir sağlıksız (sağlıklıysa None); panel 60 sn'yi aşınca uyarır."""
+        `unhealthyFor`: sağlıksızsa son sağlıklı kareden (hiç olmadıysa izlemenin başından) bu yana geçen saniye,
+        sağlıklıysa None; panel 60 sn'yi aşınca uyarır. Yoklamadan bağımsızdır: karelerden çıkar."""
         model, model_error = str(getattr(self._pose, "state", "ready")), str(getattr(self._pose, "error", "") or "")
         det, det_error = str(getattr(self._detector, "state", "ready")), str(getattr(self._detector, "error", "") or "")
         st = self.status
         healthy, reason = safety_health(st.state, model, model_error, det, det_error, st.processing_error,
                                         st.last_ok_at, time.time())
-        mono = time.monotonic()
-        if healthy:
-            self._unhealthy_since = None
-        elif self._unhealthy_since is None:
-            self._unhealthy_since = mono
+        since = self._last_healthy if self._last_healthy is not None else self._watch_start
         return {
             "active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
                        for tid, k, sec, _f in (self._pipe.safety.episodes.active() if self._pipe.safety else [])],
@@ -337,7 +343,7 @@ class LiveSession:
             "detector": det, "detectorError": det_error or None,
             "processingError": st.processing_error, "lastOkAt": st.last_ok_at,
             "healthy": healthy, "reason": reason,
-            "unhealthyFor": None if healthy else round(mono - (self._unhealthy_since or mono), 1),
+            "unhealthyFor": None if healthy else round(max(0.0, time.monotonic() - since), 1),
         }
 
     def jpeg(self, after: int = 0, timeout: float = 2.0) -> tuple[int, bytes | None]:
@@ -541,6 +547,8 @@ class LiveSession:
                     if self.status.message.startswith(_PROCESSING):
                         self.status.message = ""
                 self._after_frame(r, frame)
+                if profile.countMode == "safety":
+                    self._after_safety_frame()
             self._notify_safety(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
@@ -556,6 +564,23 @@ class LiveSession:
                         self._jpeg = buf.tobytes()
                         self._jpeg_seq += 1
                         self._frame_cv.notify_all()
+
+    def _after_safety_frame(self) -> None:
+        """Kilit altında, başarıyla işlenen her güvenlik karesinden sonra: izleme sağlıklıysa anı kaydedilir
+        (`unhealthyFor` buradan çıkar); hatadaki ortak model en çok `MODEL_RETRY_CHECK_S`'de bir yeniden denenir (boş
+        sahnede model çağrılmaz; asıl bekleme SharedModel'de)."""
+        mono = time.monotonic()
+        models = [(m, str(getattr(m, "state", "ready"))) for m in (self._pose, self._detector)]
+        healthy, _ = safety_health(self.status.state, models[0][1], "", models[1][1], "", None,
+                                   self.status.last_ok_at, time.time())
+        if healthy:
+            self._last_healthy = mono
+        if mono - self._model_check_at >= MODEL_RETRY_CHECK_S:
+            self._model_check_at = mono
+            for m, state in models:
+                warm = getattr(m, "warm", None)
+                if state == "error" and callable(warm):
+                    warm()
 
     def _after_frame(self, r: FrameResult, frame: np.ndarray) -> None:
         """Kalibrasyon olayları ve sayımlar (kilit altında)."""

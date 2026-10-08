@@ -320,7 +320,10 @@ def test_idle_scene_skips_detection_but_rechecks_every_second() -> None:
 
 def test_area_and_line_are_saved_per_camera(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Aynı profil iki kamerada: birinde ayarlanıp kaydedilen alan/çizgi diğerini ve şablonu etkilemez."""
+    from fakes_safety import FakeDetector
+
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    client.app.state.live.detector = FakeDetector([])          # kişi sayımı oturumu modeli ısıtır: gerçek model yok
     people = next(p for p in client.get("/api/v1/live/profiles").json() if p["name"] == "Mağaza girişi")
     srcs = [client.post("/api/v1/live/sources", json=camera(name=n, brand="custom", customUrl=str(CLIP), password="")
                         ).json() for n in ("Hol", "Dış cephe")]
@@ -1116,7 +1119,8 @@ def test_shared_pose_failure_is_logged_and_retried_only_after_60_seconds(caplog:
     with caplog.at_level(logging.ERROR):
         assert pose.estimate("bgr", (0, 0, 1, 1)) is None
         wait_for(lambda: pose.state == "error", timeout=10)
-    assert pose.error.startswith("Poz modeli yüklenemedi") and "ağ yok" in pose.error
+    assert pose.error == "Poz modeli yüklenemedi: Model indirilemedi (bağlantı hatası)"   # İngilizce/ham ileti yok
+    assert any("ağ yok" in r.getMessage() for r in caplog.records)                  # asıl ileti günlükte
     assert any("Poz modeli yüklenemedi" in r.getMessage() for r in caplog.records)
     for _ in range(5):                                                              # her karede yeniden denenmez
         assert pose.estimate("bgr", (0, 0, 1, 1)) is None
@@ -1599,6 +1603,7 @@ def test_switched_into_safety_without_saving_is_restored_as_safety(tmp_path: pat
     with TestClient(_app_with_fakes(tmp_path)) as c:
         (v,) = c.get("/api/v1/live/sessions").json()
         assert v["profile"]["countMode"] == "safety" and v["profileId"] == egg["id"] and v["name"] == "Kasa"
+        assert v["profile"]["name"] == "Kuyumcu güvenliği"           # çalışan profilin adı (şablonun "Yumurta"sı değil)
 
 
 def test_watched_camera_whose_source_was_deleted_is_dropped_and_app_starts(
@@ -1624,6 +1629,8 @@ def test_watched_camera_whose_source_was_deleted_is_dropped_and_app_starts(
 def test_restored_recorder_camera_connects_lazily_without_blocking_start(tmp_path: pathlib.Path) -> None:
     """Kayıt cihazı kamerası geri yüklenirken kanal listesi açılışta istenmez (cihaz geç açılabilir): oturum hemen
     oluşur, bağlantıyı okuyucu yeniden dener; durum panelde görünür."""
+    from fakes_safety import FakeDetector, FakePose
+
     from bantvision.core import Profile
     from bantvision.live import recorders as rec
     from bantvision.live.api import LiveManager
@@ -1634,6 +1641,7 @@ def test_restored_recorder_camera_connects_lazily_without_blocking_start(tmp_pat
                              "username": "admin", "name": "NVR"}, "x")
     prof = store.save_profile(Profile.jeweler())
     mgr = LiveManager(store, tmp_path)
+    mgr.detector, mgr.pose = FakeDetector([]), FakePose(None)    # güvenlik oturumu modelleri ısıtır: gerçek model yok
     calls: list[str] = []
 
     def unreachable(_src: dict[str, Any], channel_id: str) -> Any:
@@ -1667,6 +1675,122 @@ def test_stale_open_alarms_are_closed_at_start(tmp_path: pathlib.Path) -> None:
     assert got[open_["id"]]["endedAt"] >= before and got[done["id"]]["endedAt"] == 5.0
     assert got[test["id"]]["endedAt"] is None                                         # deneme alarmının sonu yok
     assert AlarmStore(tmp_path).get(open_["id"])["endedAt"] >= before                # diske de yazıldı
+
+
+def test_watched_record_with_broken_profile_snapshot_is_dropped_as_corrupt(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Profil anlık görüntüsü bozuk kayıt (Profile.from_dict KeyError/ValueError…) "kayıt bozuk" diye günlüğe yazılır ve
+    listeden çıkar; "profil artık güvenlik değil" denmez. Diğer kayıtlar açılır."""
+    import logging
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with TestClient(_app_with_fakes(tmp_path)) as c:
+        _safety_session_with_fake(c, monkeypatch)
+    good = _watch(tmp_path)[0]
+    broken = [{**good, "channelId": "7", "name": "Bozuk çizgi", "profile": {"countMode": "safety", "countLine": {"a": {}}}},
+              {**good, "channelId": "8", "name": "Bozuk süre",
+               "profile": {"countMode": "safety", "safety": {"handsUp": {"seconds": "abc"}}}}]
+    (tmp_path / "live" / "watch.json").write_text(json.dumps([*broken, good]), encoding="utf-8")
+    with caplog.at_level(logging.WARNING), TestClient(_app_with_fakes(tmp_path)) as c:
+        (v,) = c.get("/api/v1/live/sessions").json()
+        assert v["sourceId"] == good["sourceId"] and v["channelId"] is None
+    assert [w["name"] for w in _watch(tmp_path)] == ["Tezgah"]
+    text = caplog.text
+    assert "kaydı bozuk" in text and "Bozuk çizgi" in text and "Bozuk süre" in text
+    assert "artık güvenlik değil" not in text
+
+
+def test_unhealthy_time_comes_from_frames_even_when_no_panel_polls() -> None:
+    """Kamera, hiçbir panel yoklamazken sağlıksızlaşırsa sonradan açılan panel süreyi hemen doğru görür (60 sn daha
+    beklemez): süre son sağlıklı kareden ölçülür, yoklama anından değil. Hiç sağlıklı olmadıysa izlemenin başından."""
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=FakePose(hands_up_kp()))
+    s.loop_file = True
+    real, fail = s._pipe.process, [False]
+
+    def process(frame: Any, ts: float) -> Any:
+        if fail[0]:
+            raise RuntimeError("bozuk kare")
+        return real(frame, ts)
+
+    s._pipe.process = process                                                        # type: ignore[method-assign]
+    try:
+        st = wait_for(lambda: (v := s.snapshot_status())["safety"]["healthy"] and v)    # panel sağlıklı gördü
+        assert st["safety"]["unhealthyFor"] is None
+        fail[0] = True
+        time.sleep(3.0)                                                              # bu sürede kimse yoklamıyor
+        sf = s.snapshot_status()["safety"]
+        assert sf["healthy"] is False and sf["reason"] == "Görüntü işlenemiyor: bozuk kare"
+        assert 2.5 <= sf["unhealthyFor"] <= 6.0
+    finally:
+        s.stop()
+    pose = FakePose(None)
+    pose.state = "loading"                                                           # type: ignore[attr-defined]
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=pose)
+    s.loop_file = True
+    try:
+        time.sleep(2.0)
+        assert s.snapshot_status()["safety"]["unhealthyFor"] >= 1.8                   # hiç sağlıklı olmadı: baştan
+    finally:
+        s.stop()
+
+
+def test_pose_model_in_error_is_retried_from_frames_even_in_an_empty_scene(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boş sahnede poz modeli hiç çağrılmaz; hatadaki model yine de kareler üzerinden yeniden denenir: SharedModel'in
+    60 sn beklemesi dolunca ("1 dakika sonra yeniden denenir") bir saniye içinde yüklenir. Çağrı sıklığı sınırlı."""
+    from fakes_safety import FakeDetector, FakePose
+
+    from bantvision.core import Profile
+    from bantvision.live import session as session_mod
+    from bantvision.live.api import SharedPose
+    from bantvision.live.session import LiveSession
+
+    now, calls = [1000.0], []
+
+    def loader() -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("ağ yok")
+        return FakePose(None)
+
+    pose = SharedPose(loader=loader, clock=lambda: now[0])
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=pose)   # kimse yok
+    s.loop_file = True
+    try:
+        wait_for(lambda: pose.state == "error", timeout=10)
+        time.sleep(1.5)
+        assert len(calls) == 1                                                       # bekleme süresinde denenmez
+        now[0] += 61.0                                                               # 1 dakika geçti
+        wait_for(lambda: pose.state == "ready", timeout=5)
+        assert len(calls) == 2
+    finally:
+        s.stop()
+
+    class ErrPose(FakePose):
+        state, error = "error", "Poz modeli yüklenemedi: x"
+
+        def __init__(self) -> None:
+            super().__init__(None)
+            self.warms = 0
+
+        def warm(self) -> None:
+            self.warms += 1
+
+    monkeypatch.setattr(session_mod, "MODEL_RETRY_CHECK_S", 0.5)
+    err = ErrPose()
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([]), pose=err)
+    s.loop_file = True
+    try:
+        base = err.warms                                                             # açılıştaki ısıtma
+        time.sleep(2.6)
+        assert 3 <= err.warms - base <= 7                                            # ≈ 0,5 sn'de bir (her karede değil)
+        assert err.calls == 0                                                        # poz hiç çağrılmadı (boş sahne)
+    finally:
+        s.stop()
 
 
 # ---------------------------------------------------------------------- son düzeltme dalgası A: olay resmi her zaman yerelde (I5)
