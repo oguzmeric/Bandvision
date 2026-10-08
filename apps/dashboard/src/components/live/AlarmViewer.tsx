@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ALARM_TITLES, CLIP_PENDING_S, NOTIFY_LABELS, alarmClipUrl, alarmImageUrl, type Alarm } from "@/lib/live";
+import { ALARM_TITLES, CLIP_PENDING_MAX_S, CLIP_PENDING_S, NOTIFY_LABELS, alarmClipUrl, alarmImageUrl, type Alarm } from "@/lib/live";
 
 /** "active": onaylanmamış alarmlar (alarm penceresi, Küçült); "browse": geçmiş alarmlar (Alarmlar sayfası, Son alarmlar) */
 export type ViewerMode = "active" | "browse";
@@ -32,44 +32,55 @@ function clock(sec: number): string {
  * Alarm penceresi: büyük kırmızı başlık (tür, kamera, tarih-saat, sürüyor/süre), ihlal anının kaydı (video; hazır
  * değilse olay resmi), kayıt içinde durumun başladığı ve alarmın verildiği an (tıklayınca oraya atlar), Gördüm /
  * Kamerayı aç / Yanlış alarm / Küçült. Birden çok alarmda "1 / 3" ve ‹ › ile gezinilir.
- * Erişilebilirlik: `role="alertdialog"`, açılınca odak pencereye gelir ve içinde kalır (Tab döner); Esc küçültür.
+ * Yerel `<dialog>` + `showModal()`: tarayıcının üst katmanında açılır — açık başka bir modal pencerenin (ör. "Canlı sayımı
+ * başlat", geometri) de üstünde; sayfanın geri kalanı etkisizdir. Erişilebilirlik: `role="alertdialog"`, açılınca odak
+ * pencereye (Gördüm) gelir ve içinde kalır (Tab döner); Esc (`cancel`) küçültür, asla onaylamaz.
  */
 export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck, onFalseAlarm }: Props) {
   const index = Math.max(0, alarms.findIndex((x) => x.id === id));
   const a = alarms[index];
-  const dialog = useRef<HTMLDivElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
   const primary = useRef<HTMLButtonElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
-  const [clipFailed, setClipFailed] = useState<string | null>(null);
+  const [playFailed, setPlayFailed] = useState<string | null>(null);   // oynatılamayan kayıt (ör. 404)
   const [duration, setDuration] = useState<{ id: string; sec: number } | null>(null);
   const [, setTick] = useState(0);
 
-  // açılınca odak pencereye (Gördüm varsa ona); kapanınca önceki öğeye geri
+  // açılınca üst katmanda modal; odak pencereye (Gördüm varsa ona); kapanınca önceki öğeye geri
+  const alive = useRef(true);
   useEffect(() => {
+    const d = dialog.current;
+    if (!d) return;
+    alive.current = true;
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    (primary.current ?? dialog.current)?.focus();
-    return () => { if (before && document.contains(before)) before.focus(); };
+    if (!d.open) d.showModal();
+    (primary.current ?? d).focus();
+    return () => {
+      alive.current = false;
+      if (d.open) d.close();
+      if (before && document.contains(before)) before.focus();
+    };
   }, []);
 
-  // Esc: odak pencerede ya da hiçbir yerde değilse (arka plana tıklandı) küçültür
+  // işlemden sonra (Gördüm / Yanlış alarm pencereyi sıradaki alarma geçirince) odak kaybolduysa yine Gördüm'e
+  const shownId = a?.id;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      const el = document.activeElement;
-      if (dialog.current && (dialog.current.contains(el) || el === document.body || el === null)) {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    const d = dialog.current;
+    if (!d?.open || busy) return;
+    const el = document.activeElement;
+    if (!el || el === document.body || !d.contains(el) || (el instanceof HTMLButtonElement && el.disabled)) {
+      (primary.current ?? d).focus();
+    }
+  }, [shownId, busy]);
 
   const now = Date.now() / 1000;
-  const pending = a ? !a.clip && now - a.firedAt < CLIP_PENDING_S : false;
-  // kayıt hazırlanırken ekran kendiliğinden yenilensin (20 sn sonra resim/simgeye geçilir)
+  const age = a ? now - a.firedAt : 0;
+  // kayıt yakalanıyor/yazılıyor: sunucunun clipPending'i (eski sunucuda: kameralı alarmda ilk 20 sn); bayat bayrağa
+  // karşı en çok 2 dakika
+  const pending = a ? !a.clip && (a.clipPending ?? (a.sessionId !== null && age < CLIP_PENDING_S)) && age < CLIP_PENDING_MAX_S : false;
+  // kayıt hazırlanırken ekran kendiliğinden yenilensin (süre dolunca resim/simgeye geçilir)
   useEffect(() => {
     if (!pending) return;
     const t = setTimeout(() => setTick((x) => x + 1), 1000);
@@ -97,7 +108,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     if (!ok) setError({ id: a.id, text: kind === "ack" ? "Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin." : "Yanlış alarm kaydedilemedi. Tekrar deneyin." });
   }
 
-  const showVideo = Boolean(a.clip) && clipFailed !== a.id;
+  const showVideo = Boolean(a.clip) && playFailed !== a.id;
   const ongoing = a.type !== "test" && a.endedAt === null;
   const base = a.clipStartedAt ?? null;
   const len = duration?.id === a.id ? duration.sec : null;
@@ -111,13 +122,21 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     v.currentTime = Math.max(0, t);
     void v.play().catch(() => undefined);
   };
-  const caption = pending ? "Kayıt hazırlanıyor…" : clipFailed === a.id ? "Kayıt oynatılamadı; olay resmi gösteriliyor." : "Bu alarmın kaydı yok.";
+  const withImage = a.image ? "; olay resmi gösteriliyor." : ".";
+  const caption = pending ? "Kayıt hazırlanıyor…"
+    : playFailed === a.id ? "Kayıt oynatılamadı; olay resmi gösteriliyor."
+    : a.clipFailed ? `Kayıt alınamadı${withImage}`
+    : "Bu alarmın kaydı yok.";
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-[#1d1a2e]/70 p-3 backdrop-blur-[2px] md:p-6">
-      <div ref={dialog} role="alertdialog" aria-modal="true" aria-label="Güvenlik alarmı" tabIndex={-1} onKeyDown={trap}
-           data-testid="alarm-modal"
-           className="grid max-h-[calc(100vh-1.5rem)] w-full max-w-3xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-3xl bg-white shadow-2xl outline-none">
+    <dialog ref={dialog} role="alertdialog" aria-modal="true" aria-label="Güvenlik alarmı" onKeyDown={trap}
+            onCancel={(e) => { e.preventDefault(); onClose(); }}         // Esc: Küçült / Kapat (onay değil)
+            // tarayıcı kendisi kapattıysa durum eşlensin; geliştirmede (StrictMode) ilk kapanışın geç gelen olayı, yeniden
+            // açılmış pencereyi kapatmasın
+            onClose={() => { if (alive.current && !dialog.current?.open) onClose(); }}
+            data-testid="alarm-modal"
+            className="m-auto w-[min(48rem,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-3xl border-0 bg-white p-0 text-ink shadow-2xl outline-none backdrop:bg-[#1d1a2e]/70 backdrop:backdrop-blur-[2px]">
+      <div className="grid max-h-[calc(100vh-1.5rem)] grid-rows-[auto_minmax(0,1fr)_auto]">
         <header className="flex flex-wrap items-start gap-x-4 gap-y-2 bg-nok-600 px-5 py-4 text-white">
           <span className="mt-0.5 text-3xl" aria-hidden="true">🚨</span>
           <div className="min-w-0 flex-1">
@@ -152,7 +171,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
             {showVideo ? (
               <video key={a.id} ref={video} src={alarmClipUrl(a.id)} autoPlay muted loop playsInline controls data-testid="alarm-video"
                      aria-label="İhlal anının kaydı" className="h-full w-full object-contain"
-                     onError={() => setClipFailed(a.id)}
+                     onError={() => setPlayFailed(a.id)}
                      onLoadedMetadata={(e) => { const d = e.currentTarget.duration; if (Number.isFinite(d) && d > 0) setDuration({ id: a.id, sec: d }); }} />
             ) : a.image ? (
               // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi (analiz sunucusundan, vekil üzerinden)
@@ -229,6 +248,6 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
           {mode === "active" && <p className="text-[11.5px] text-faint">Küçültünce alarm sayfanın üstündeki şeritte kalır; Gördüm deyince kapanır.</p>}
         </footer>
       </div>
-    </div>
+    </dialog>
   );
 }

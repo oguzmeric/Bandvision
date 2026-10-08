@@ -72,6 +72,9 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   expect(part.headers()["content-range"]).toBe(`bytes 0-99/${body.length}`);
   expect(part.headers()["accept-ranges"]).toBe("bytes");
   expect((await part.body()).length).toBe(100);
+  const head = await page.request.head(src!);                           // HEAD da vekilden geçer (405 değil)
+  expect(head.status()).toBe(200);
+  expect(head.headers()["content-length"]).toBe(String(body.length));
   // tarayıcı kaydı vekil üzerinden çözer: süresi bilinir; zaman çizelgesinde alarm anı
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
   expect(await video.evaluate((v: HTMLVideoElement) => v.duration)).toBeGreaterThan(1);

@@ -130,7 +130,7 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
 interface FakeAlarm {
   id: string; sessionId: string | null; camera: string; type: string; startedAt: number; firedAt: number;
   endedAt: number | null; acked: boolean; notify: string; image: boolean;
-  clip?: boolean; clipStartedAt?: number | null; falseAlarm?: boolean;
+  clip?: boolean; clipStartedAt?: number | null; falseAlarm?: boolean; clipPending?: boolean; clipFailed?: boolean;
 }
 
 /** Alarm penceresi (yeni onaylanmamış alarmda açılır) */
@@ -425,8 +425,8 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   const modal = modalOf(page);
   await expect(modal).toHaveCount(0);                                         // alarm yok: pencere yok
   list.push(
-    { id: "a2", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 8, firedAt: now - 5,
-      endedAt: null, acked: false, notify: "disabled", image: true, clip: false, clipStartedAt: null },
+    { id: "a2", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 48, firedAt: now - 45,
+      endedAt: null, acked: false, notify: "disabled", image: true, clip: false, clipStartedAt: null, clipPending: true },
     { id: "a1", sessionId: null, camera: "Kasa", type: "test", startedAt: now - 60, firedAt: now - 60, endedAt: null,
       acked: false, notify: "sent", image: false },
   );
@@ -442,7 +442,8 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   expect(await modal.evaluate((el) => el.contains(document.activeElement))).toBe(true);
   for (let i = 0; i < 4; i += 1) await page.keyboard.press("Shift+Tab");
   expect(await modal.evaluate((el) => el.contains(document.activeElement))).toBe(true);
-  // kayıt henüz yok (alarm 5 sn önce): olay resmi ve "Kayıt hazırlanıyor…"
+  // kayıt sunucuda hâlâ yazılıyor (clipPending; alarm 45 sn önce — sabit 20 sn sınırı yok): olay resmi ve
+  // "Kayıt hazırlanıyor…"
   await expect(modal.getByTestId("clip-caption")).toHaveText("Kayıt hazırlanıyor…");
   await expect(modal.locator("img")).toHaveAttribute("src", "/api/live/alarms/a2/image.jpg");
   await expect(modal.getByTestId("alarm-video")).toHaveCount(0);
@@ -470,6 +471,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect(modal.getByTestId("alarm-counter")).toHaveText("2 / 2");
   await expect(modal.getByTestId("alarm-status")).toHaveCount(0);
   await expect(modal.getByRole("link", { name: "Kamerayı aç" })).toHaveCount(0);
+  await expect(modal.getByTestId("clip-caption")).toHaveText("Bu alarmın kaydı yok.");   // kamerasız: beklenmez
   await modal.getByRole("button", { name: "Küçült" }).click();               // Küçült: şerit kalır
   await expect(modal).toHaveCount(0);
   await expect(banner).toBeVisible();
@@ -479,6 +481,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
   await expect(modal.getByTestId("alarm-counter")).toHaveCount(0);            // tek alarm: sayaç yok
+  await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();  // odak yine Gördüm'de
   expect(calls.acks).toEqual(["a2"]);
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveCount(0);
@@ -500,8 +503,8 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
       endedAt: now - 2, acked: false, notify: "sent", image: true, clip: false, clipStartedAt: null },
     { id: "b2", sessionId: null, camera: "Depo", type: "lying", startedAt: now - 140, firedAt: now - 130, endedAt: now - 100,
       acked: false, notify: "disabled", image: false, clip: false },
-    { id: "b1", sessionId: null, camera: "Kasa", type: "hands_up", startedAt: now - 300, firedAt: now - 297, endedAt: now - 290,
-      acked: false, notify: "failed", image: true, clip: false },
+    { id: "b1", sessionId: "abc123", camera: "Kasa", type: "hands_up", startedAt: now - 300, firedAt: now - 297, endedAt: now - 290,
+      acked: false, notify: "failed", image: true, clip: false, clipFailed: true },
   ];
   const calls = await fakeFeed(page, list);
   const clipAsked: string[] = [];
@@ -529,8 +532,8 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   await next.click();
   await expect(counter).toHaveText("3 / 3");
   await expect(next).toBeDisabled();
-  // eski, kaydı yok ama resmi var: olay resmine düşülür
-  await expect(modal.getByTestId("clip-caption")).toHaveText("Bu alarmın kaydı yok.");
+  // kayıt alınamadı (sunucu clipFailed): olay resmine düşülür ve nedeni yazılır
+  await expect(modal.getByTestId("clip-caption")).toHaveText("Kayıt alınamadı; olay resmi gösteriliyor.");
   await expect(modal.locator("img")).toHaveAttribute("src", "/api/live/alarms/b1/image.jpg");
   await prev.click();
   await prev.click();
@@ -570,10 +573,61 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   page.once("dialog", (d) => { asked.push(d.message()); return d.accept(); });
   await modal.getByRole("button", { name: "Yanlış alarm" }).click();
   await expect(counter).toHaveText("1 / 2");
+  await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();  // odak yine Gördüm'de
   expect(asked[0]).toContain("yanlış alarm olarak işaretlensin mi");
   expect(calls.falses).toEqual(["b3"]);
   expect(calls.acks).toEqual([]);
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
+});
+
+test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üstünde açılır, tıklanır; Esc onaylamaz, alttakini kapatmaz", async ({ page }) => {
+  await login(page);
+  const now = Date.now() / 1000;
+  const list: FakeAlarm[] = [];
+  const calls = await fakeFeed(page, list);
+  const source = { id: "src1", kind: "camera", name: "Tezgah kamerası", brand: "custom", host: "", port: 554, channel: 1,
+                   substream: true, customUrl: "rtsp://kamera/akis", recorderBrand: "trassir", httpPort: null, rtspPort: null,
+                   username: "", hasPassword: false, createdAt: 0 };
+  await page.route("**/api/live/sources", (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: [source] }) : route.continue());
+  await page.route("**/api/live/sources/src1/snapshot*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route("**/api/live/sessions", (route) => route.fulfill({ json: [] }));
+  await page.goto("/cameras");
+  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  const start = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
+  await expect(start).toBeVisible();
+
+  list.push({ id: "s1", sessionId: "abc123", camera: "Kasa", type: "hands_up", startedAt: now - 4, firedAt: now - 1,
+              endedAt: null, acked: false, notify: "disabled", image: false, clipPending: true });
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
+  // en üstte: düğmenin ortasındaki öğe düğmenin kendisi (alttaki pencere örtmüyor); odak alarm penceresinde
+  const topAt = async (name: string) => {
+    const box = (await modal.getByRole("button", { name, exact: true }).boundingBox())!;
+    return page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.textContent?.trim(), [box.x + box.width / 2, box.y + box.height / 2]);
+  };
+  expect(await topAt("Küçült")).toBe("Küçült");
+  expect(await topAt("Gördüm")).toBe("Gördüm");
+  await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();
+  // Esc: yalnızca alarm penceresi küçülür — onay isteği yok, "Canlı sayımı başlat" açık kalır
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  await expect(start).toBeVisible();
+  expect(calls.acks).toEqual([]);
+
+  // ikinci alarm: pencere yine üstte; Gördüm ve Küçült tıklanır
+  list.push({ id: "s2", sessionId: "abc123", camera: "Depo", type: "lying", startedAt: now - 12, firedAt: now,
+              endedAt: null, acked: false, notify: "disabled", image: false, clipPending: true });
+  await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  expect(calls.acks).toEqual(["s2"]);
+  await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");    // kalan alarma geçti
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(start).toBeVisible();                                         // alttaki pencere etkilenmedi
+  await start.getByRole("button", { name: "Vazgeç" }).click();
+  await expect(start).toHaveCount(0);
 });
 
 test("sekme başlığı: onaylanmamış alarm varken her saniye yanıp söner, alarm bitince eski haline döner", async ({ page }) => {

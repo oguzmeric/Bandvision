@@ -166,13 +166,19 @@ export interface Alarm {
   clip?: boolean;
   /** Kaydın ilk karesinin zamanı (unix saniye); kayıt yoksa null */
   clipStartedAt?: number | null;
+  /** Kayıt yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); eski sunucuda yok */
+  clipPending?: boolean;
+  /** Kayıt alınamadı (görüntü yok, kuyruk dolu, kodlayıcı/disk hatası, yazılırken sunucu kapandı) */
+  clipFailed?: boolean;
   /** Kullanıcı "Yanlış alarm" dedi (onaylanmış sayılır) */
   falseAlarm?: boolean;
 }
 /** Alarm penceresinin büyük başlığı */
 export const ALARM_TITLES: Record<AlarmType, string> = { hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", test: "DENEME ALARMI" };
-/** Alarmdan sonra bu kadar saniye kayıt yoksa "Kayıt hazırlanıyor…" (ön 8 + son 4 sn + yazım) yerine resim gösterilir */
+/** clipPending göndermeyen eski sunucuda: kameralı alarmdan sonra bu kadar saniye "Kayıt hazırlanıyor…" */
 export const CLIP_PENDING_S = 20;
+/** clipPending bayat kalırsa (ör. sunucu çöktü) en çok bu kadar saniye "Kayıt hazırlanıyor…" denir */
+export const CLIP_PENDING_MAX_S = 120;
 /** Alarmlar sayfasının bir aralıkta istediği en çok alarm */
 export const ALARM_LIST_LIMIT = 1000;
 export const alarmClipUrl = (id: string) => `/api/live/alarms/${id}/clip.webm`;
