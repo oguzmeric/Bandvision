@@ -268,3 +268,310 @@ def test_main_warns_when_a_labelled_rule_is_disabled(tmp_path: pathlib.Path, mon
     patch_run(monkeypatch, [a for a in alarms if a[1] != "hands_up"], hours=8.0, profile=fake_profile(False))
     assert ev.main(["v.mp4", "--profile", "p.json", "--labels", write(tmp_path, "l.json", labels)]) == 1
     assert "UYARI: profilde Eller yukarı kuralı kapalı" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- olay içi tekrar (`end`, `tekrar`)
+SEC = {"hands_up": 3.0, "lying": 10.0}
+TEKRAR = "Tekrar (aynı olayın içinde, yanlış alarm sayılmaz)"
+
+
+def test_repeat_alarms_inside_a_caught_event_are_tekrar_not_false() -> None:
+    # t=10: yakalama penceresi [10, 15]; olay (end yok) t + süre + 2 + 10 = 25'e kadar sürer
+    alarms = [(13.0, "hands_up"), (16.0, "hands_up"), (25.0, "hands_up"), (25.1, "hands_up")]
+    r = ev.match_pose([{"t": 10.0, "type": "hands_up"}], alarms, SEC)
+    assert r["hands_up"] == {"labels": 1, "caught": 1}
+    assert r["repeat"] == 2 and r["false"] == 1                    # 16 ve 25 (sınır dahil) tekrar; 25,1 olay dışı: yanlış
+
+
+def test_event_with_end_lasts_until_end_plus_tolerance() -> None:
+    alarms = [(21.0, "lying"), (40.0, "lying"), (62.0, "lying"), (62.1, "lying")]
+    r = ev.match_pose([{"t": 10.0, "type": "lying", "end": 60.0}], alarms, SEC)
+    assert r["lying"] == {"labels": 1, "caught": 1}
+    assert r["repeat"] == 2 and r["false"] == 1                    # 40 ve 62 (end + 2 sınırı) tekrar; 62,1 yanlış
+    no_end = ev.match_pose([{"t": 10.0, "type": "lying"}], alarms, SEC)    # end yok: olay 10 + 10 + 2 + 10 = 32'ye kadar
+    assert no_end["lying"]["caught"] == 1 and no_end["repeat"] == 0 and no_end["false"] == 3
+
+
+def test_alarm_after_a_missed_label_is_false_not_tekrar() -> None:
+    # 15 < 20 ≤ 25: olay penceresinde ama etiket yakalanmadı (alarm geç geldi) → tekrar sayılmaz, yanlış alarmdır
+    r = ev.match_pose([{"t": 10.0, "type": "hands_up"}], [(20.0, "hands_up")], SEC)
+    assert r["hands_up"] == {"labels": 1, "caught": 0}
+    assert r["repeat"] == 0 and r["false"] == 1
+
+
+def test_repeat_must_be_the_same_type_as_the_caught_label() -> None:
+    r = ev.match_pose([{"t": 10.0, "type": "hands_up"}], [(12.0, "hands_up"), (14.0, "lying")], SEC)
+    assert r["hands_up"]["caught"] == 1 and r["repeat"] == 0 and r["false"] == 1
+
+
+def test_event_window_does_not_starve_a_later_label() -> None:
+    # 17 hem 1. etiketin olay penceresinde (10–25) hem 2. etiketin yakalama penceresinde (16–21): önce yakalamalar
+    labels = [{"t": 10.0, "type": "hands_up"}, {"t": 16.0, "type": "hands_up"}]
+    r = ev.match_pose(labels, [(12.0, "hands_up"), (17.0, "hands_up")], SEC)
+    assert r["hands_up"] == {"labels": 2, "caught": 2} and r["repeat"] == 0 and r["false"] == 0
+
+
+def test_repeat_counting_does_not_depend_on_alarm_order() -> None:
+    alarms = [(16.0, "hands_up"), (13.0, "hands_up"), (30.0, "hands_up")]
+    r = ev.match_pose([{"t": 10.0, "type": "hands_up"}], alarms, SEC)
+    assert r["hands_up"]["caught"] == 1 and r["repeat"] == 1 and r["false"] == 1
+
+
+def test_labels_accept_an_optional_end_and_reject_a_bad_one() -> None:
+    ok = [{"t": 10.0, "type": "lying", "end": 40}, {"t": 5, "type": "hands_up", "end": 5},
+          {"t": 1, "type": "lying", "end": None}]
+    assert ev.check_labels(ok) == ok                               # end == t ve null (yok) geçerli
+    for bad in (5.0, "20", True, float("nan"), float("inf"), [30]):
+        with pytest.raises(ev.InputError) as e:
+            ev.check_labels([{"t": 10.0, "type": "lying", "end": bad}])
+        assert "1. kaydın bitişi (end)" in str(e.value)
+
+
+# ---------------------------------------------------------------- manifest: toplama ve kamera başına kapı
+def multi(cams: dict[str, tuple[int, float]], hu: tuple[int, int] = GOOD, ly: tuple[int, int] = GOOD) -> dict[str, Any]:
+    """`aggregate` sonucu biçiminde: kamera → (yanlış alarm, saat)."""
+    r = result(hu, ly, sum(f for f, _ in cams.values()), sum(h for _, h in cams.values()))
+    r["cameras"] = {name: {"false": f, "hours": h} for name, (f, h) in cams.items()}
+    return r
+
+
+def test_aggregate_sums_capture_across_entries_and_false_alarms_per_camera() -> None:
+    parts = [("Tezgah", {**result((10, 9), (5, 5), 1, 4.0), "repeat": 2}),
+             ("Giriş", result((10, 10), (15, 14), 0, 2.0)),
+             ("Tezgah", result((0, 0), (0, 0), 2, 4.0))]
+    r = ev.aggregate(parts)
+    assert r["hands_up"] == {"labels": 20, "caught": 19} and r["lying"] == {"labels": 20, "caught": 19}
+    assert r["repeat"] == 2 and r["false"] == 3 and r["hours"] == pytest.approx(10.0)
+    assert r["cameras"] == {"Tezgah": {"false": 3, "hours": 8.0}, "Giriş": {"false": 0, "hours": 2.0}}
+    assert list(r["cameras"]) == ["Tezgah", "Giriş"]              # ilk görülme sırası
+
+
+def test_report_gates_every_camera_with_an_hour_or_more(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(multi({"Tezgah": (1, 8.0), "Giriş": (0, 2.0)})) is True      # Tezgah tam sınırda (1 / 8 saat)
+    out = capsys.readouterr().out
+    assert "Tezgah" in out and "Giriş" in out and "(1.00 / 8 saat)" in out and out.splitlines()[-1] == "GEÇTİ"
+    # toplamda 1 yanlış alarm / 10 saat = 0,8 / 8 saat (tek video gibi bakılsa geçerdi); ama Giriş tek başına 4 / 8 saat
+    assert ev.report(multi({"Tezgah": (0, 8.0), "Giriş": (1, 2.0)})) is False
+    out = capsys.readouterr().out
+    assert "(4.00 / 8 saat)" in out and out.splitlines()[-1] == "KALDI"
+    assert ev.report(multi({"Tezgah": (0, 8.0), "Giriş": (2, 1.0)})) is False     # tam 1 saat: o kamera da sınanır
+    assert "(16.00 / 8 saat)" in capsys.readouterr().out
+
+
+def test_report_camera_under_an_hour_is_listed_but_not_gated(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(multi({"Tezgah": (0, 8.0), "Depo": (5, 59.6 / 60)})) is True
+    out = capsys.readouterr().out
+    assert "Depo" in out and "yetersiz süre" in out and "59 dk" in out and out.splitlines()[-1] == "GEÇTİ"
+
+
+def test_report_needs_an_hour_in_total_across_cameras(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(multi({"A": (0, 0.4), "B": (0, 0.4)})) is False
+    out = capsys.readouterr().out
+    assert "toplam" in out and "yetersiz süre" in out and out.splitlines()[-1] == "KALDI"
+    assert ev.report(multi({"A": (0, 0.5), "B": (0, 0.5)})) is True       # toplam tam 1 saat; hiçbiri tek başına 1 saat değil
+    out = capsys.readouterr().out
+    assert "hiçbir kamerada 1 saat yok" in out and out.splitlines()[-1] == "GEÇTİ"
+
+
+def test_report_capture_gate_still_applies_in_manifest_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(multi({"Tezgah": (0, 8.0)}, hu=(20, 18))) is False
+    out = capsys.readouterr().out
+    assert "%90.0 (18/20)" in out and out.splitlines()[-1] == "KALDI"
+
+
+def test_report_prints_tekrar_without_affecting_the_gate(capsys: pytest.CaptureFixture[str]) -> None:
+    r = result(GOOD, GOOD, 0, 8.0)
+    r["repeat"] = 7
+    assert ev.report(r) is True
+    out = capsys.readouterr().out
+    assert f"{TEKRAR}: 7" in out and "Yanlış alarm: 0 (0.00 / 8 saat)" in out and out.splitlines()[-1] == "GEÇTİ"
+    m = multi({"Tezgah": (0, 8.0)})
+    m["repeat"] = 3
+    assert ev.report(m) is True
+    assert f"{TEKRAR}: 3" in capsys.readouterr().out
+
+
+def test_report_single_video_output_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(result(GOOD, GOOD, 1, 8.0)) is True
+    assert capsys.readouterr().out == ("Eller yukarı: %100.0 (20/20)\nYerde yatan kişi: %100.0 (20/20)\n"
+                                       "Yanlış alarm: 1 (1.00 / 8 saat)\nGEÇTİ\n")    # tekrar yok → tekrar satırı, tablo yok
+
+
+# ---------------------------------------------------------------- manifest: komut satırı
+def make_manifest(tmp: pathlib.Path, spec: list[dict[str, Any]]) -> str:
+    """`tmp/kayit/manifest.json` + yolları manifeste göre verilen dosyalar. spec: {"video": "a.mp4"|"alt/c.mp4", "labels": [...],
+    "camera"?}. Dönen: manifest yolu."""
+    base = tmp / "kayit"
+    entries = []
+    for i, s in enumerate(spec):
+        video = base / s["video"]
+        video.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"")                                     # run sahte; yalnızca dosyanın var olması denetlenir
+        (base / f"l{i}.json").write_text(json.dumps(s["labels"]), encoding="utf-8")
+        (base / f"p{i}.json").write_text("{}", encoding="utf-8")
+        e: dict[str, Any] = {"video": s["video"], "labels": f"l{i}.json", "profile": f"p{i}.json"}
+        if "camera" in s:
+            e["camera"] = s["camera"]
+        entries.append(e)
+    m = base / "manifest.json"
+    m.write_text(json.dumps(entries), encoding="utf-8")
+    return str(m)
+
+
+def patch_manifest_run(monkeypatch: pytest.MonkeyPatch, by_video: dict[str, tuple[list[tuple[float, str]], float]],
+                       profile: Any = None) -> list[tuple[str, int]]:
+    """`run` video dosya adına göre (alarmlar, saat) döndürür; `load_profile` sahte. Dönen liste (video yolu, every)."""
+    calls: list[tuple[str, int]] = []
+
+    def fake_run(video: str, _profile: Any, every: int = 1) -> tuple[list[tuple[float, str]], float, dict[str, float]]:
+        calls.append((video, every))
+        alarms, hours = by_video[pathlib.Path(video).name]
+        return alarms, hours, {"hands_up": 3.0, "lying": 10.0}
+
+    monkeypatch.setattr(ev, "load_profile", lambda _path: profile or fake_profile())
+    monkeypatch.setattr(ev, "run", fake_run)
+    return calls
+
+
+def halves() -> tuple[list[list[dict[str, Any]]], list[list[tuple[float, str]]]]:
+    """Etiketler ve alarmlar iki yarıya bölünür (t < 1000 ve ≥ 1000); toplamda 20 + 20 etiket, hepsi yakalanır."""
+    labels, alarms = full_labels_and_alarms()
+    return ([[lab for lab in labels if lab["t"] < 1000], [lab for lab in labels if lab["t"] >= 1000]],
+            [[a for a in alarms if a[0] < 1000], [a for a in alarms if a[0] >= 1000]])
+
+
+def test_main_manifest_aggregates_capture_and_resolves_paths_relative_to_the_manifest(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    (l1, l2), (a1, a2) = halves()
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": l1, "camera": "Tezgah"},
+                                 {"video": "b.mp4", "labels": l2, "camera": "Tezgah"},
+                                 {"video": "alt/c.mp4", "labels": []}])           # kamera adı yok → dosya adı
+    calls = patch_manifest_run(monkeypatch, {"a.mp4": (a1, 4.0), "b.mp4": (a2 + [(1.0e6, "lying")], 4.0),
+                                             "c.mp4": ([], 2.0)})
+    assert ev.main(["--manifest", m, "--every", "2"]) == 0
+    out = capsys.readouterr()
+    assert "Eller yukarı: %100.0 (20/20)" in out.out and "Yerde yatan kişi: %100.0 (20/20)" in out.out   # girdiler toplanır
+    assert "Tezgah" in out.out and "c.mp4" in out.out and out.out.splitlines()[-1] == "GEÇTİ"
+    assert "(1.00 / 8 saat)" in out.out and "(0.00 / 8 saat)" in out.out    # Tezgah: 8 saatte 1; c.mp4: 0
+    base = tmp_path / "kayit"
+    assert [(pathlib.Path(v).resolve(), e) for v, e in calls] == [
+        ((base / "a.mp4").resolve(), 2), ((base / "b.mp4").resolve(), 2), ((base / "alt" / "c.mp4").resolve(), 2)]
+
+
+def test_main_manifest_fails_when_a_single_camera_exceeds_the_false_alarm_limit(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    (l1, l2), (a1, a2) = halves()
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": l1, "camera": "Tezgah"},
+                                 {"video": "b.mp4", "labels": l2, "camera": "Tezgah"},
+                                 {"video": "c.mp4", "labels": [], "camera": "Giriş"}])
+    # Tezgah 8 saatte 0; Giriş 2 saatte 1 (4 / 8 saat). Toplamda 1 / 10 saat = 0,8 / 8 saat: tek kapı olsaydı geçerdi
+    patch_manifest_run(monkeypatch, {"a.mp4": (a1, 4.0), "b.mp4": (a2, 4.0), "c.mp4": ([(5.0, "lying")], 2.0)})
+    assert ev.main(["--manifest", m]) == 1
+    out = capsys.readouterr().out
+    assert "Giriş" in out and "(4.00 / 8 saat)" in out and out.splitlines()[-1] == "KALDI"
+    assert "Eller yukarı: %100.0 (20/20)" in out                    # yakalama tamam; yalnızca Giriş kamerası kaldı
+
+
+def test_main_manifest_counts_tekrar_separately_and_warns_for_disabled_rules(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    labels, alarms = full_labels_and_alarms()
+    labels = [{**lab, "end": lab["t"] + 30} for lab in labels]      # her olay 30 sn sürer
+    again = [(t + 8, k) for t, k in alarms]                        # her alarmın 8 sn sonra tekrarı (olayın içinde)
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": labels, "camera": "Tezgah"}])
+    patch_manifest_run(monkeypatch, {"a.mp4": (alarms + again, 8.0)}, profile=fake_profile(False))
+    assert ev.main(["--manifest", m]) == 0
+    out = capsys.readouterr()
+    assert f"{TEKRAR}: 40" in out.out and "(0.00 / 8 saat)" in out.out
+    assert "UYARI" in out.err and "a.mp4" in out.err and "Eller yukarı kuralı kapalı" in out.err
+
+
+@pytest.mark.parametrize(("manifest", "needle"), [
+    ("not json {", "Manifest dosyası okunamadı"),
+    ({"video": "a.mp4"}, "liste"),                                 # liste değil
+    ([], "liste"),                                                 # boş liste
+    (["a.mp4"], "1. kayıt bir nesne değil"),
+    ([{"video": "a.mp4", "labels": "l.json"}], "1. kayıtta \"profile\""),                       # alan eksik
+    ([{"video": "a.mp4", "labels": "l.json", "profile": 5}], "1. kayıtta \"profile\""),         # metin değil
+    ([{"video": "a.mp4", "labels": "l.json", "profile": "  "}], "1. kayıtta \"profile\""),      # boş
+    ([{"video": "a.mp4", "labels": "l.json", "profile": "p.json"}, {"video": "b.mp4"}], "2. kayıtta \"labels\""),
+    ([{"video": "a.mp4", "labels": "l.json", "profile": "p.json", "kamera": "x"}], "1. kayıtta bilinmeyen alan: kamera"),
+    ([{"video": "a.mp4", "labels": "l.json", "profile": "p.json", "camera": ""}], "1. kayıtta \"camera\""),
+    ([{"video": "a.mp4", "labels": "l.json", "profile": "p.json", "camera": 3}], "1. kayıtta \"camera\""),
+])
+def test_main_manifest_rejects_malformed_entries_in_turkish(
+        tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], manifest: Any, needle: str) -> None:
+    assert ev.main(["--manifest", write(tmp_path, "m.json", manifest)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("HATA: Manifest") and needle in err
+    assert "Traceback" not in err and "KeyError" not in err
+
+
+def test_main_manifest_missing_file_is_a_turkish_input_error(tmp_path: pathlib.Path,
+                                                             capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.main(["--manifest", str(tmp_path / "yok.json")]) == 2
+    assert capsys.readouterr().err.startswith("HATA: Manifest dosyası okunamadı")
+
+
+def test_main_manifest_checks_every_entry_before_processing_any_video(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    good = [{"t": 5.0, "type": "lying"}]
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": good}, {"video": "b.mp4", "labels": good}])
+    base = tmp_path / "kayit"
+    calls = patch_manifest_run(monkeypatch, {"a.mp4": ([], 1.0), "b.mp4": ([], 1.0)})
+    (base / "l1.json").write_text("not json {", encoding="utf-8")                  # 2. kaydın etiketi bozuk
+    assert ev.main(["--manifest", m]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("HATA: Manifest 2. kayıt (b.mp4): Etiket dosyası okunamadı") and calls == []   # hiç video işlenmedi
+    (base / "l1.json").write_text(json.dumps(good), encoding="utf-8")
+    (base / "b.mp4").unlink()                                                       # 2. kaydın videosu yok
+    assert ev.main(["--manifest", m]) == 2
+    assert "Manifest 2. kayıt (b.mp4): video bulunamadı" in capsys.readouterr().err and calls == []
+    (base / "b.mp4").write_bytes(b"")
+
+    def bad_profile(path: str) -> Any:
+        if path.endswith("p0.json"):
+            raise ev.InputError("Profil geçersiz: deneme")
+        return fake_profile()
+
+    monkeypatch.setattr(ev, "load_profile", bad_profile)
+    assert ev.main(["--manifest", m]) == 2
+    assert "Manifest 1. kayıt (a.mp4): Profil geçersiz: deneme" in capsys.readouterr().err and calls == []
+
+
+def test_main_manifest_reports_a_video_that_cannot_be_opened_with_its_entry(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    m = make_manifest(tmp_path, [{"video": "a.mp4", "labels": [{"t": 5.0, "type": "lying"}]}])
+    monkeypatch.setattr(ev, "load_profile", lambda _path: fake_profile())
+
+    def broken(video: str, _profile: Any, every: int = 1) -> Any:
+        raise ev.InputError(f"Video açılamadı: {video}")
+
+    monkeypatch.setattr(ev, "run", broken)
+    assert ev.main(["--manifest", m]) == 2
+    assert "HATA: Manifest 1. kayıt (a.mp4): Video açılamadı" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("argv", "needle"), [
+    (["v.mp4", "--manifest", "m.json"], "--manifest ile VIDEO"),
+    (["--manifest", "m.json", "--labels", "l.json"], "--manifest ile VIDEO"),
+    (["--manifest", "m.json", "--profile", "p.json"], "--manifest ile VIDEO"),
+    ([], "VIDEO"),
+    (["v.mp4", "--labels", "l.json"], "--profile"),
+    (["v.mp4", "--profile", "p.json"], "--labels"),
+])
+def test_main_rejects_wrong_argument_combinations_in_turkish(capsys: pytest.CaptureFixture[str], argv: list[str],
+                                                              needle: str) -> None:
+    assert ev.main(argv) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("HATA: ") and needle in err and "usage" not in err.lower()
+
+
+def test_main_single_video_with_end_labels_prints_tekrar_and_keeps_the_gate(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    labels, alarms = full_labels_and_alarms()
+    labels = [{**lab, "end": lab["t"] + 30} for lab in labels]
+    patch_run(monkeypatch, alarms + [(t + 8, k) for t, k in alarms], hours=8.0)
+    assert ev.main(["v.mp4", "--profile", "p.json", "--labels", write(tmp_path, "l.json", labels)]) == 0
+    out = capsys.readouterr().out
+    assert f"{TEKRAR}: 40" in out and "Yanlış alarm: 0 (0.00 / 8 saat)" in out
+    assert "Kamera" not in out and out.splitlines()[-1] == "GEÇTİ"                   # tek video: kamera tablosu yok
