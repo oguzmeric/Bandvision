@@ -116,7 +116,7 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
   - Gerçek videolar:
     - Tepeden mağaza girişi: 3 giriş + 3 çıkış, birebir ve zamanları doğru.
     - Yatık koridor: 9 giriş + 3 çıkış, 12 geçişin hepsi doğru, sahte olay 0. Kapıya kadar gidip dönen iki kişi giriş + çıkış sayıldı.
-- **Personel rengi** (2026-10-06, `personel-rengi` dalında; main'e birleştirilene kadar yayında değil):
+- **Personel rengi** (2026-10-06; main'e birleştirildi, TestFlight derleme 25):
   - Üniforma/yelek rengi kamera (web) ya da profil (iPhone) başına bir kez öğretilir (en çok 3 renk, isteğe bağlı); o renkteki kişilerin geçişi müşteri Giriş/Çıkış'a eklenmez, ayrı "Personel geçişi" sayılır. Renk yoksa davranış değişmez. Algoritma `03-algorithm.md` §4.10 eki.
   - Web: `staffIn`/`staffOut`, CSV'de `personel_giris`/`personel_cikis`; iPhone yalnızca ekranda gösterir (CSV/webhook değişmez). Personel geçişi olay olarak gönderilmez.
   - Python ↔ Swift eşdeğerliği `staff_parity.json` ile sınanır.
@@ -133,29 +133,48 @@ Algoritma `03-algorithm.md` §4.10; sözleşmede `countMode: "detect"`, `detectC
   - Web paneli: "Kişi (mağaza girişi)" profili, kamera, giriş yönü, çizgi konumu; sonuçta Giriş/Çıkış ve iki çizgili grafik.
   - Video aracı: `--mode detect`, Türkçe bindirme.
 
-## 5f. Poz güvenlik alarmı: eller yukarı, yerde yatan kişi (web + Telegram) (2026-10-07)
+## 5f. Poz güvenlik alarmı: eller yukarı, yerde yatan kişi (web + Telegram) (2026-10-07/08)
 
-Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safety` nesnesi (`02-contracts.md`); web tarafı `13-web-platform.md` "Güvenlik alarmı ve Bildirimler". Tasarım: `docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md`. Kuyumcu gibi mağazalarda sessiz alarm: soygun sırasında "eller yukarı" ve düşme/bayılma sonrası yerde yatan kişi.
+Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safety` nesnesi (`02-contracts.md`); web tarafı `13-web-platform.md` "Güvenlik alarmı ve Bildirimler". Tasarım: `docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md` (sonundaki "Değişiklikler (2026-10-07/08)" bölümü dahil). Kuyumcu gibi mağazalarda sessiz alarm: soygun sırasında "eller yukarı" ve düşme/bayılma sonrası yerde yatan kişi.
 
 - **Ne var:**
-  - Analiz sunucusu (yalnızca bilgisayar): kişi tanıma (YOLOX) + izleyici + poz (MoveNet SinglePose Thunder, Apache-2.0; ONNX'e GitHub Actions'ta çevrilir, GitHub sürümü `models-v1`den indirilir, SHA-256 doğrulanır) + kural durum makinesi. Eller yukarı varsayılan 3 sn (ayar 3–5), yerde yatma 10 sn (ayar 5–30).
-  - Alarm günlüğü, olay resmi (yalnızca resim gönderimi açıksa; bilgisayarda 7 gün), Telegram bildirimi (bot anahtarı yalnızca `secrets.json`'da, çevrimdışı kuyruk, aynı kamera ve tür için 60 sn tekrar önleme).
-  - Web paneli: Güvenlik kategorisi ve "Kuyumcu güvenliği" profili, Ayarla'da kurallar, iskeletli akış, "İzleniyor" yan paneli, her sayfada alarm şeridi (bağlantı koparsa uyarı satırı), Bildirimler sayfası, deneme mesajı ve deneme alarmı.
+  - Analiz sunucusu (yalnızca bilgisayar): kişi tanıma (YOLOX) + izleyici + poz (MoveNet SinglePose Thunder, Apache-2.0; ONNX'e GitHub Actions'ta çevrilir, GitHub sürümü `models-v1`den indirilir, SHA-256 doğrulanır) + kural durum makinesi. İki model de ortak indirme yardımcısıyla (zaman aşımlı, SHA-256) arka planda yüklenir; hata Türkçe gösterilir ve 60 sn sonra yeniden denenir.
+  - Kurallar: eller yukarı varsayılan 3 sn (ayar 3–5), yerde yatma 10 sn (ayar 5–30). **Alan kısıtı yok:** kural karedeki herkese uygulanır (kullanıcı kararı, 2026-10-07). Eller yukarı eşikleri `0,20·s` (bilek) ve `0,30·s` (dirsek); gerçek bir kamera ölçümüyle gevşetildi, yanlış alarma etkisi ölçülecek. Alarmdan sonra 3 sn'lik kopma affı: tek olay tek alarm kaydı.
+  - Alarm günlüğü (`alarms.json`, 7 gün); **olay resmi her zaman bu bilgisayarda 7 gün**; **olay kaydı (video): alarmdan 8 sn önce ve 4 sn sonra, en çok 10 kare/sn, bu bilgisayarda 7 gün, en çok 500 dosya, Telegram'a hiç gitmez**; Telegram bildirimi (bot anahtarı yalnızca `secrets.json`'da, çevrimdışı kuyruk, aynı kamera ve tür için 60 sn tekrar önleme; Telegram'a fotoğraf yalnızca kamerada "Olay resmini Telegram'a gönder" açıksa).
+  - Telegram hataları: yanlış anahtar, bulunamayan sohbet ve gruptan atılmış bot hemen "Gönderilemedi" olur (24 saat "Gönderiliyor" kalmaz), iletiler Türkçe; ağ hataları 24 saate kadar yeniden denenir; son hata Bildirimler sayfasında görünür.
+  - İzleme sağlığı: kamera kartı "Nöbette" yazısını yalnızca kamera gerçekten izlenirken gösterir (canlı, iki model hazır, işleme hatası yok, son 10 sn'de kare işlendi), aksi halde "Uyarı" ve nedeni. Bir güvenlik kamerası 60 sn'den uzun süre izlenmezse alarm şeridinde sarı uyarı çıkar.
+  - Yeniden başlatma: güvenlik kameraları `watch.json`'a yazılır ve analiz sunucusu yeniden başlayınca kendiliğinden yeniden izlemeye alınır (kayıt cihazı kameraları bağlanana kadar yeniden dener); önceki çalışmadan "devam ediyor" kalmış alarmlar açılışta kapatılır.
+  - Web paneli:
+    - Güvenlik kategorisi ve "Kuyumcu güvenliği" profili; Ayarla'da yalnızca kurallar (alan düzenleyicisi yok); iskeletli akış; "İzleniyor" yan paneli (neden, süren durumlar, son alarmlar, kamera karesiyle Deneme alarmı).
+    - Her sayfada yapışkan alarm şeridi (izlenmeyen kamera ve bağlantı kopması uyarıları).
+    - **Alarm penceresi:** yeni alarmda kendiliğinden açılır, ihlal anının kaydını oynatır, zaman çizelgesi; Gördüm / Kamerayı aç / Yanlış alarm / Küçült.
+    - **Alarmlar sayfası:** geçmiş, süzgeçler, sayılar, aynı kayıt penceresi.
+    - Bildirimler sayfası: Telegram kurulumu, Anahtarı sil, son gönderim hatası, deneme mesajı ve deneme alarmı; "Bu tarayıcıda": masaüstü bildirimi ve sesli uyarı (ikisi de varsayılan kapalı); sekme başlığı alarm varken yanıp söner.
   - iPhone: profili tanır, çalıştırmaz ("Yalnızca bilgisayarda").
-- **Kullanıcı kararları (2026-10-06/07):** poz modeli MoveNet Thunder (RTMPose/RTMO ağırlık lisansı belirsiz olduğundan elendi); ilk etapta yalnızca Telegram (WhatsApp ileride); Telegram'a resim varsayılan kapalı; iPhone kapsam dışı; yanlış alarm hedefi kamera başına 8 saatte en fazla 1.
-- **Doğrulama durumu:** birim ve entegrasyon testleri (kurallar, çözümleyici, model indirme, alarm günlüğü, Telegram sahte sunucusu, uç noktalar) ve panel uçtan uca testleri kuralların ve altyapının tasarıma uygun çalıştığını sınar. Gerçek kamerada doğruluğu **sınamaz**.
-- **Gerçek ölçüm BEKLİYOR; şimdilik doğruluk iddiası yok.** Kabul ölçütü: olayların ≥ %95'i kural süresi + 2 sn içinde alarm verir; normal harekette kamera başına 8 saatte ≤ 1 yanlış alarm. Ölçüm için kullanıcıdan gerekenler:
+- **Kullanıcı kararları (2026-10-06/07/08):** poz modeli MoveNet Thunder (RTMPose/RTMO ağırlık lisansı belirsiz olduğundan elendi); ilk etapta yalnızca Telegram (WhatsApp ileride); Telegram'a resim varsayılan kapalı; iPhone kapsam dışı; yanlış alarm hedefi kamera başına 8 saatte en fazla 1. Sonradan (2026-10-07): **alan kısıtı yok**; **daha profesyonel alarm: alarm penceresi ve ihlal anının kaydı ekranda**; ses isteğe bağlı (varsayılan kapalı, alarm sessiz kalır); eller yukarı eşikleri gerçek kamera ölçümüyle ayarlandı.
+- **Doğrulama durumu:** birim ve entegrasyon testleri (kurallar, çözümleyici, model indirme, alarm günlüğü, olay kaydı, Telegram sahte sunucusu, izleme sağlığı, yeniden başlatmada geri yükleme, uç noktalar) ve panel uçtan uca testleri kuralların ve altyapının tasarıma uygun çalıştığını sınar. Gerçek kamerada doğruluğu **sınamaz**. Tek bir gerçek kameranın karelerinden yalnızca eller yukarı eşikleri ayarlandı (2026-10-07); bu bir kabul ölçümü değildir.
+- **Gerçek ölçüm BEKLİYOR; şimdilik doğruluk iddiası yok.** Kabul ölçütü: olayların ≥ %95'i kural süresi + 2 sn içinde alarm verir; normal harekette kamera başına 8 saatte ≤ 1 yanlış alarm; sayım yapan kameralarla birlikte güvenlik oturumu ≥ 5 kare/sn. Ölçüm için kullanıcıdan gerekenler:
   - ≥ 20 eller yukarı olayı (farklı kişiler; önden, yandan, tezgâh arkası);
   - ≥ 20 yerde yatma olayı (farklı yönler);
-  - ≥ 1 saat normal hareket;
-  - hepsi ofisteki bullet/dome kameradan (eğik bakış) alınmış kayıtlar.
+  - **her kamera için** ≥ 1 saat normal hareket (yürüme, eğilme, çömelme, oturma, rafa uzanma);
+  - hepsi ofisteki bullet/dome kameradan (eğik bakış) alınmış kayıtlar; hangi kaydın hangi kameraya ait olduğu bilinmeli.
 - **Ölçüm protokolü:**
-  1. Her kayıtta olayın başladığı an elle etiketlenir: `VIDEO.pose.json` = `[{"t": saniye, "type": "hands_up"|"lying"}]`. Tür başına 20'den az etiket ya da 1 saatten kısa video varsa araç "KALDI" der (kapı kalır).
-  2. Profil: web panelinde o kameranın güvenlik oturumunda ayarlar yapılıp **Kaydet**'e basılır. Profil JSON'u ya `<ANALYZER_DATA_DIR>/live/camera_profiles.json` içindeki kamera kaydıdır ya da oturumun `GET /api/v1/live/sessions/{id}` yanıtı (içindeki `profile`) olduğu gibi dosyaya kaydedilir.
-  3. `python tools/eval_pose.py VIDEO --profile PROFİL.json --labels VIDEO.pose.json` (isteğe bağlı `--every 2`: canlıdaki kare atlamayı taklit eder). Tür başına yakalama, yanlış alarm ve 8 saate çevrilmiş oran yazılır; çıkış kodu yalnızca ölçütler tutuyorsa 0.
-  4. Sonuçlar ölçülünce buraya yazılacak. Kayıtlar kullanıcınındır; public repoya konmaz.
-- **Bilinen risk:** MoveNet ağırlıklı olarak fitness/dans/yoga videolarıyla eğitildi; eğik ve uzak güvenlik kamerasında doğruluk ölçülene kadar bilinmiyor. Tutmazsa eşikler yalnızca ölçümle ayarlanır, o da yetmezse model seçimi yeniden değerlendirilir.
-- **Sınırlar:** poz modeli ilk kullanımda internetten indirilir (indirilemezse alarm olmaz, panel uyarır); alarm şeridi panel açıkken görünür (Telegram kapalıysa tek kanal); panelde ses yok; Supabase'e olay gönderimi yok; video yükleme (analiz) formunda güvenlik yok; aynı kamerada aynı anda sayım ve güvenlik yok.
+  1. **Kamera başına kayıt.** Her kamera için ayrı kayıt(lar); olay kayıtları ve normal hareket kayıtları kameraya göre ayrılır. Yanlış alarm kamera başına sınanır.
+  2. **Etiket.** Her kayıtta olayın başladığı an elle etiketlenir: `VIDEO.pose.json` = `[{"t": saniye, "type": "hands_up"|"lying", "end": saniye (isteğe bağlı)}]`. `end` olayın bittiği andır; yazılırsa o olayın içinde gelen ikinci alarm "tekrar" sayılır, yanlış alarm olmaz (yazılmazsa olay `t + süre + 2 + 10` sn kabul edilir). Tür başına 20'den az etiket ya da toplam 1 saatten kısa video varsa araç "KALDI" der (kapı kalır).
+  3. **Profil.** Web panelinde o kameranın güvenlik oturumunda ayarlar yapılıp **Kaydet**'e basılır. Profil JSON'u ya `<ANALYZER_DATA_DIR>/live/camera_profiles.json` içindeki kamera kaydıdır ya da oturumun `GET /api/v1/live/sessions/{id}` yanıtı (içindeki `profile`) olduğu gibi dosyaya kaydedilir.
+  4. **Manifest.** Birden çok kayıt ve kamera için bir `MANIFEST.json` yazılır: `[{"video": "yol", "labels": "yol", "profile": "yol", "camera": "ad"}]` (yollar manifest dosyasının klasörüne göre; `camera` yazılmazsa video dosya adı kamera sayılır, aynı kameranın kayıtları aynı adı taşımalıdır).
+  5. **Çalıştırma.** `python tools/eval_pose.py --manifest MANIFEST.json` (tek video için `python tools/eval_pose.py VIDEO --profile PROFİL.json --labels VIDEO.pose.json`; isteğe bağlı `--every 2`: canlıdaki kare atlamayı taklit eder). Yakalama tüm kayıtlardan tür başına toplanır; yanlış alarm kamera başına toplanıp 8 saate çevrilir ve kamera tablosu yazılır; "tekrar" ayrı satırdır. Çıkış kodu yalnızca ölçütler tutuyorsa 0: her tür ≥ %95 (≥ 20 etiket), en az 1 saatlik her kamera ≤ 1 / 8 saat, toplam ≥ 1 saat.
+  6. **Kare hızı denetimi.** Ölçüm sırasında sayım yapan kameralar da çalışırken güvenlik oturumunun `fps` değeri (canlı sayfa ya da `GET /api/v1/live/sessions`) okunur; hedef ≥ 5 kare/sn. Altındaysa doğruluk ölçümü `--every N` ile o kare hızını taklit ederek de yapılır.
+  7. Sonuçlar ölçülünce buraya yazılacak. Kayıtlar kullanıcınındır; public repoya konmaz.
+- **Bilinen risk:** MoveNet ağırlıklı olarak fitness/dans/yoga videolarıyla eğitildi; eğik ve uzak güvenlik kamerasında doğruluk ölçülene kadar bilinmiyor. Eller yukarı eşikleri tek bir kameranın ölçümüyle gevşetildi ve alan kısıtı kaldırıldı: ikisinin yanlış alarma etkisi de ölçülene kadar bilinmiyor. Tutmazsa eşikler yalnızca ölçümle ayarlanır, o da yetmezse model seçimi yeniden değerlendirilir.
+- **Sınırlar:**
+  - Analiz sunucusunun çalışıyor olması gerekir. Windows oturumu açılınca kendiliğinden başlatma **sağlanmıyor**: bilgisayar yeniden başlayınca sunucu elle başlatılır (başlayınca güvenlik kameraları kendiliğinden yeniden izlemeye alınır).
+  - Poz ve kişi tanıma modelleri ilk kullanımda internetten indirilir (indirilemezse alarm olmaz, kart "Uyarı" der ve neden yan panelde yazar). Adres çözümleme (DNS) indirme zaman aşımına dahil değildir: bu aşamada takılırsa model "yükleniyor" kalır.
+  - Alarm şeridi ve penceresi panel açıkken görünür (Telegram kapalıysa tek kanal). Masaüstü bildirimi yalnızca analiz bilgisayarında `http://localhost` ya da https adresinde çalışır; başka bilgisayardan düz http ile açılan panelde açılmaz.
+  - Sesli uyarı isteğe bağlıdır (varsayılan kapalı); tarayıcı, sayfaya bir kez tıklanana kadar sesi engelleyebilir ("Dene" düğmesi sesi açar).
+  - İzleyici olayın ortasında aynı kişiye yeni kimlik verirse tek olay için ikinci bir alarm kaydı doğabilir (Telegram'a 60 sn tekrar önleme içinde gitmez).
+  - Son Telegram gönderim hatası bellekte tutulur (sunucu yeniden başlayınca sıfırlanır).
+  - Supabase'e olay gönderimi yok; video yükleme (analiz) formunda güvenlik yok; aynı kamerada aynı anda sayım ve güvenlik yok.
 
 ## 6. Araştırma ve tasarım notları
 
@@ -183,4 +202,4 @@ Algoritma `03-algorithm.md` §4.11; sözleşmede `countMode: "safety"` ve `safet
 2. **A2:** Python'daki ölçüme dayalı QC'nin (boy, en-boy, kırık/ezik, leke, boy sınıfı) iPhone'a aktarılması (F4); kusur nedeni kartlarda.
 3. **Edge kutusu (F2):** RTSP/ONVIF kamera kaynağı, yeniden bağlanma, outbox, tarayıcıda önizleme, Docker. Gerçek bir kamerayla (IP + marka) geliştirmek en sağlıklısı.
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
-5. **Poz güvenlik ölçümü** (§5f): ofis bullet/dome kamerasından etiketli kayıtlar (≥ 20 eller yukarı, ≥ 20 yerde yatma, ≥ 1 saat normal hareket) → `tools/eval_pose.py`.
+5. **Poz güvenlik ölçümü** (§5f): ofis bullet/dome kameralarından, kamera başına etiketli kayıtlar (toplam ≥ 20 eller yukarı, ≥ 20 yerde yatma; her kamera için ≥ 1 saat normal hareket) → `tools/eval_pose.py --manifest`; ayrıca kare hızı denetimi (hedef ≥ 5 kare/sn).

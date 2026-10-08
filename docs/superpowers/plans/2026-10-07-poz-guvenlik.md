@@ -1,5 +1,7 @@
 # Poz Güvenlik Alarmı Uygulama Planı
 
+> **Durum (2026-10-08):** Plan uygulandı. Kod, plandan sonra alınan kullanıcı kararlarıyla bazı yerlerde plandan ayrıldı: alan kısıtı yok, eller yukarı eşikleri `0,20` / `0,30`, olay resmi her zaman saklanır, ses isteğe bağlı (varsayılan kapalı), alarm penceresi ve ihlal anının kaydı, izleme sağlığı, yeniden başlatmada geri yükleme. Güncel davranış için `docs/03-algorithm.md` §4.11, `docs/13-web-platform.md` ve tasarım belgesinin "Değişiklikler (2026-10-07/08)" bölümüne bakın; aşağıdaki kod parçaları tarihsel taslaktır.
+
 > **Ajanlar için:** GEREKLİ ALT BECERİ: görev görev uygulamak için superpowers:subagent-driven-development (önerilen) ya da superpowers:executing-plans. Adımlar onay kutusu (`- [ ]`) ile izlenir.
 
 **Amaç:** Web analiz sunucusundaki canlı kameralarda "eller yukarı" ve yerde yatan kişiyi poz analiziyle algılayıp panelde ve Telegram'da sessiz alarm vermek.
