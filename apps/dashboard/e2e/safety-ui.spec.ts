@@ -691,6 +691,17 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   expect(await page.evaluate(() => localStorage.getItem("bv.alarm.desktop"))).toBeNull();
 });
 
+test("Bu tarayıcıda: güvensiz adreste (başka bilgisayardan http) masaüstü bildirimi açılmaz, nedeni yazılır", async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, "isSecureContext", { configurable: true, get: () => false }));
+  await login(page);
+  const section = page.getByRole("region", { name: "Bu tarayıcıda" });
+  const desktop = section.getByRole("checkbox", { name: "Masaüstü bildirimi" });
+  await desktop.click();
+  await expect(section.getByRole("status")).toHaveText(/^Masaüstü bildirimi yalnızca güvenli adreste çalışır/);
+  await expect(desktop).not.toBeChecked();
+  expect(await page.evaluate(() => localStorage.getItem("bv.alarm.desktop"))).toBeNull();
+});
+
 test("Alarmlar sayfası (sahte API): kenar çubuğunda Bildirimler'den önce; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;

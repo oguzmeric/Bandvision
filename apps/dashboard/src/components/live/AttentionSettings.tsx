@@ -28,6 +28,11 @@ export default function AttentionSettings() {
       setDesktop(false);
       return;
     }
+    if (!window.isSecureContext) {
+      // tarayıcılar bildirimi yalnızca güvenli adreste verir: başka bilgisayardan http://192.168… ile açılan panelde olmaz
+      setMsg({ ok: false, text: "Masaüstü bildirimi yalnızca güvenli adreste çalışır: paneli analiz bilgisayarında http://localhost ile ya da https ile açın." });
+      return;
+    }
     if (!desktopSupported()) {
       setMsg({ ok: false, text: "Bu tarayıcı masaüstü bildirimini desteklemiyor." });
       return;
