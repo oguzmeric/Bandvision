@@ -840,7 +840,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if not data["name"]:
             data["name"] = _default_name(data)
         manager.forget(source_id)
-        return store.save_source(data, body.password, source_id)
+        saved = store.save_source(data, body.password, source_id)
+        manager.viewers.drop(source_id)                      # izleme okuyucuları eski adres/şifreyi bırakır, yenisiyle açılır
+        return saved
 
     @r.delete("/sources/{source_id}", status_code=204)
     def delete_source(source_id: str) -> Response:
@@ -848,7 +850,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             manager.remove_session(s)
         manager.unwatch_source(source_id)                    # geri yüklenemeyen kayıtlar da
         manager.forget(source_id)
-        if not store.delete_source(source_id):
+        deleted = store.delete_source(source_id)
+        manager.viewers.drop(source_id)                      # silinen kameranın izleme okuyucuları kapanır
+        if not deleted:
             raise HTTPException(404, "Kaynak bulunamadı.")
         return Response(status_code=204)
 
