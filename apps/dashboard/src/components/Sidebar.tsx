@@ -16,6 +16,7 @@ const icon = (d: string) => (
 const NAV: NavItem[] = [
   { href: "/live", label: "Canlı sayım", icon: icon("M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4M3.5 3.5a12 12 0 0 0 0 17M20.5 3.5a12 12 0 0 1 0 17") },
   { href: "/cameras", label: "Kameralar", icon: icon("M3 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H3zM16 11l5-3v8l-5-3M6 11h.01") },
+  { href: "/watch", label: "İzleme", icon: icon("M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z") },
   // siren (kubbe, taban, ışık çizgileri); kalkan simgesi "Kalite"de kullanılıyor
   { href: "/alarms", label: "Alarmlar", icon: icon("M7 18v-6a5 5 0 0 1 10 0v6M5 18h14v3H5zM12 12v3M12 2v2M4.2 5.2l1.4 1.4M19.8 5.2l-1.4 1.4M2 12h2M20 12h2") },
   { href: "/notifications", label: "Bildirimler", icon: icon("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0") },
