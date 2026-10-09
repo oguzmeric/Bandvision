@@ -1,6 +1,6 @@
 # Çoklu kamera izleme (şablonlu ızgara) — web tasarımı
 
-Tarih: 2026-10-08 · Durum: tasarım (kullanıcı bölüm bölüm onayladı) · Alt proje A (web). Alt proje B (iPhone) ayrı tasarımla gelecek.
+Tarih: 2026-10-08 · Durum: uygulandı (ölçüm bekliyor) · Tasarım kullanıcı tarafından bölüm bölüm onaylandı; uygulanan davranış ve tasarımdan ayrılanlar `docs/13-web-platform.md`'de, durum `docs/12-durum.md` §5g'de · Alt proje A (web). Alt proje B (iPhone) ayrı tasarımla gelecek.
 
 ## Amaç
 Birden fazla kamerayı TRASSIR istemcisindeki gibi tek ekranda, şablonlu bir ızgarada **canlı izlemek**.
