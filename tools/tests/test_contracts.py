@@ -189,3 +189,16 @@ def test_view_layout_cells_tile_the_grid_exactly(lay: dict[str, Any]) -> None:
 
 def test_view_layout_ids_are_the_agreed_set() -> None:
     assert [d["id"] for d in _layouts()] == ["1", "2", "3", "4", "6", "8", "9", "12", "16"]
+
+
+def test_layout_enums_in_both_schemas_equal_the_catalog_ids() -> None:
+    """Düzen kimlikleri iki şemada da sayılır (şablonun `layout`'u, kataloğun `id`'si): katalogla birebir aynı olmalı.
+    Yeni düzen eklenip şemalardan biri unutulursa kaydedilen şablon sözleşme dışında kalırdı."""
+    def schema(name: str) -> Any:
+        return json.loads((vc.CONTRACTS / name).read_text(encoding="utf-8"))
+
+    ids = [d["id"] for d in _layouts()]
+    template = schema("view-template.schema.json")["properties"]["layout"]["enum"]
+    catalog = schema("view-layouts.schema.json")["properties"]["layouts"]["items"]["properties"]["id"]["enum"]
+    assert template == ids, "view-template.schema.json layout enum ≠ view-layouts.json kimlikleri"
+    assert catalog == ids, "view-layouts.schema.json id enum ≠ view-layouts.json kimlikleri"
