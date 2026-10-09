@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "view-template.schema.json",
+  "title": "Çoklu izleme şablonu",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "layout", "tiles", "createdAt", "updatedAt"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 80},
+    "name": {"type": "string", "minLength": 1, "maxLength": 60},
+    "layout": {"enum": ["1", "2", "3", "4", "6", "8", "9", "12", "16"]},
+    "tiles": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": {
+        "oneOf": [
+          {"type": "null"},
+          {"type": "object", "additionalProperties": false, "required": ["sourceId", "channelId"],
+           "properties": {"sourceId": {"type": "string", "minLength": 1, "maxLength": 120},
+                          "channelId": {"type": ["string", "null"], "maxLength": 120}}}
+        ]
+      }
+    },
+    "createdAt": {"type": "number"},
+    "updatedAt": {"type": "number"}
+  }
+}

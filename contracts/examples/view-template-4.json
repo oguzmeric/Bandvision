@@ -1,0 +1,4 @@
+{"id": "6f1c0e8e2b2c4f6c9d7a1b2c3d4e5f60", "name": "Giriş katı", "layout": "4",
+ "tiles": [{"sourceId": "src-nvr", "channelId": "1"}, {"sourceId": "src-nvr", "channelId": "2"},
+           {"sourceId": "src-cam", "channelId": null}, null],
+ "createdAt": 1791400000.0, "updatedAt": 1791400100.0}

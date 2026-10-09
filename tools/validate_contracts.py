@@ -4,7 +4,8 @@ Kullanım: python tools/validate_contracts.py
 
 Kontroller:
 - `contracts/*.schema.json` dosyalarının kendisi geçerli Draft 2020-12 şeması mı,
-- `contracts/examples/` altındaki her örnek, dosya adı önekine karşılık gelen şemaya uyuyor mu.
+- `contracts/examples/` altındaki her örnek, dosya adı önekine karşılık gelen şemaya uyuyor mu,
+- `DATA_FILES` içindeki veri dosyaları (ör. `view-layouts.json`) kendi şemalarına uyuyor mu.
 
 Formatlar (uuid, date-time) da denetlenir; bunun için `jsonschema[format-nongpl]` kurulu olmalıdır.
 Eşlemesi olmayan bir örnek dosyası hata sayılır, böylece hiçbir örnek doğrulanmadan kalmaz.
@@ -31,7 +32,11 @@ EXAMPLE_SCHEMAS: list[tuple[str, str]] = [
     ("device-pair-request", "device.schema.json#/$defs/pairRequest"),
     ("device-pair-response", "device.schema.json#/$defs/pairResponse"),
     ("analysis-job", "analysis-job.schema.json"),
+    ("view-template", "view-template.schema.json"),
 ]
+
+# Veri dosyaları: kendi şemalarına uymalı (düzen kataloğu web ve iPhone'da birebir kullanılır)
+DATA_FILES: list[tuple[str, str]] = [("view-layouts.json", "view-layouts.schema.json")]
 
 
 def load_schemas() -> dict[str, dict[str, Any]]:
@@ -102,6 +107,16 @@ def main() -> int:
                 print(f"HATA {ex.name} ({ref}) {msg}")
         else:
             print(f"ok   {ex.name} ({ref})")
+
+    for data_name, ref in DATA_FILES:
+        errs = errors_for(json.loads((CONTRACTS / data_name).read_text(encoding="utf-8")), ref, schemas)
+        if errs:
+            failures += 1
+            print(f"HATA: {data_name}")
+            for e in errs:
+                print(f"  - {e}")
+        else:
+            print(f"tamam: {data_name}")
 
     print(f"{len(schemas)} şema, {len(examples)} örnek, {failures} hata")
     return 1 if failures else 0

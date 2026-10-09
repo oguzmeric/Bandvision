@@ -103,7 +103,8 @@ pytest -q tools/tests                # olumlu + olumsuz (bozulmuş örnek) testl
 ```
 
 - Örnekler `contracts/examples/` altında; hangi şemaya ait oldukları **dosya adı önekinden** anlaşılır:
-  `profile-*` → profil, `event-*` → olay, `batch*` → paket, `device-pair-request*` / `device-pair-response*` → `device.schema.json` içindeki `$defs`, `analysis-job*` → analiz işi.
+  `profile-*` → profil, `event-*` → olay, `batch*` → paket, `device-pair-request*` / `device-pair-response*` → `device.schema.json` içindeki `$defs`, `analysis-job*` → analiz işi, `view-template*` → çoklu izleme şablonu (§8).
+  Veri dosyaları (`view-layouts.json`) örnek değildir; `DATA_FILES` ile kendi şemalarına karşı doğrulanır.
   Eşlenmeyen bir örnek dosyası CI'ı kırar (eşleme: `tools/validate_contracts.py` → `EXAMPLE_SCHEMAS`).
 - `uuid` ve `date-time` formatları denetlenir. `format-nongpl` eki kurulu değilse `date-time` sessizce geçer, bu yüzden CI bu eki kurar.
 - `tools/tests/test_contracts.py` içindeki olumsuz testler, geçerli bir örneği tek noktadan bozup şemanın doğru kuraldan reddettiğini kontrol eder. Bir kısıtı gevşetirsen ilgili test kırılır; bilinçli bir değişiklikse testi de güncelle.
@@ -122,3 +123,36 @@ Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`ban
 | `expiresAt` | oluşturma + saklama süresi (varsayılan 7 gün) |
 
 `done` ise `result`, `failed` ise `error` zorunlu. Örnekler: `examples/analysis-job-*.json`.
+
+## 8. Çoklu izleme — `view-layouts.json`, `view-template.schema.json`
+Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (web ve ileride iPhone). Tasarım: `superpowers/specs/2026-10-08-coklu-izleme-design.md`.
+
+**Düzen kataloğu** (`view-layouts.json`, şema: `view-layouts.schema.json`, `version: 1`). Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y, w, h], …]}`.
+- Hücre `(x, y, w, h)` birim ızgarada verilir; **hücre sırası kutu sırasıdır** (şablondaki `tiles[i]`, `cells[i]` hücresine konur).
+- Tuval herhangi bir boyutta olabilir; hücreler `cols × rows` ızgarasına oranlanarak yerleşir. Hücreler ızgarayı boşluksuz ve çakışmasız kaplar; kutu sayısı `id`'ye eşittir (testlerle denetlenir).
+- `version` kırıcı değişiklikte artar. Var olan bir düzenin hücrelerini değiştirmek kırıcıdır: kayıtlı şablonlardaki kutu sırası bozulur.
+
+| id | Ad | cols×rows | Hücreler `[x, y, w, h]` |
+|---|---|---|---|
+| `1` | Tek | 1×1 | `[0,0,1,1]` |
+| `2` | 2'li (yan yana) | 2×1 | `[0,0,1,1]` `[1,0,1,1]` |
+| `3` | 3'lü (1 büyük + 2) | 3×2 | `[0,0,2,2]` `[2,0,1,1]` `[2,1,1,1]` |
+| `4` | 4'lü | 2×2 | 2×2 eşit |
+| `6` | 6'lı (1 büyük + 5) | 3×3 | `[0,0,2,2]` `[2,0,1,1]` `[2,1,1,1]` `[0,2,1,1]` `[1,2,1,1]` `[2,2,1,1]` |
+| `8` | 8'li (1 büyük + 7) | 4×4 | `[0,0,3,3]` `[3,0,1,1]` `[3,1,1,1]` `[3,2,1,1]` `[0,3,1,1]` `[1,3,1,1]` `[2,3,1,1]` `[3,3,1,1]` |
+| `9` | 9'lu | 3×3 | 3×3 eşit |
+| `12` | 12'li | 4×3 | 4×3 eşit |
+| `16` | 16'lı | 4×4 | 4×4 eşit |
+
+"Eşit" düzenlerde hücreler soldan sağa, yukarıdan aşağıya `[x, y, 1, 1]` sırasıyla dizilir.
+
+**Şablon** (`view-template.schema.json`): `{id, name, layout, tiles, createdAt, updatedAt}`.
+- `name` 1–60 karakter; `layout` yukarıdaki düzen kimliklerinden biri; `createdAt` / `updatedAt` Unix saniyesi.
+- `tiles` uzunluğu düzenin hücre sayısına eşittir. Her öğe `null` (boş kutu) ya da `{sourceId, channelId}` olur; tek kamerada (kanalsız kaynak) `channelId` `null`'dır.
+- Aynı kamera (`sourceId` + `channelId`) bir şablonda en fazla bir kez yer alır.
+- Şema yalnızca biçimi denetler. `tiles` uzunluğunun düzenle uyumu ve kameranın tekrarsızlığı alanlar arası kurallardır; şablonu kaydeden taraf (web'de analiz sunucusu) denetler.
+- Kamera kimlikleri **platforma özgüdür**: web'de analiz sunucusunun kaynak kimliği kullanılır, iPhone kendi kimliklerini kullanacak. Biçim ortaktır.
+
+Örnekler: `examples/view-template-*.json` (önek `view-template` → `view-template.schema.json`). `view-layouts.json` bir örnek değil veri dosyasıdır; `tools/validate_contracts.py` içindeki `DATA_FILES` ile kendi şemasına karşı doğrulanır.
+
+**Python kataloğu** `services/edge/bantvision/live/layouts.py` aynı düzenleri taşır; `services/edge/tests/test_layouts.py` onu `view-layouts.json` ile birebir eşitlik için karşılaştırır. Düzen eklemek ya da değiştirmek için önce `view-layouts.json` ve şemadaki `id` listesi, sonra Python kataloğu ve diğer uygulamalar aynı değişiklikte güncellenir. Geometri değişmezleri (tam kaplama, çakışmasızlık, kutu sayısı) `tools/tests/test_contracts.py` içinde.

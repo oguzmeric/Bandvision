@@ -164,3 +164,28 @@ def test_unmapped_example_is_reported(tmp_path: pathlib.Path, monkeypatch: pytes
     monkeypatch.setattr(vc, "EXAMPLES", tmp_path)
     assert vc.main() == 1
     assert "mystery.json" in capsys.readouterr().out
+
+
+def _layouts() -> list[dict[str, Any]]:
+    return json.loads((vc.CONTRACTS / "view-layouts.json").read_text(encoding="utf-8"))["layouts"]
+
+
+def test_view_layouts_file_matches_schema() -> None:
+    data = json.loads((vc.CONTRACTS / "view-layouts.json").read_text(encoding="utf-8"))
+    assert vc.errors_for(data, "view-layouts.schema.json") == []
+
+
+@pytest.mark.parametrize("lay", _layouts(), ids=lambda d: d["id"])
+def test_view_layout_cells_tile_the_grid_exactly(lay: dict[str, Any]) -> None:
+    cover = [[0] * lay["cols"] for _ in range(lay["rows"])]
+    for x, y, w, h in lay["cells"]:
+        assert w >= 1 and h >= 1 and x + w <= lay["cols"] and y + h <= lay["rows"], (lay["id"], x, y, w, h)
+        for yy in range(y, y + h):
+            for xx in range(x, x + w):
+                cover[yy][xx] += 1
+    assert all(c == 1 for row in cover for c in row), f"{lay['id']}: boşluk ya da çakışma"   # tam ve çakışmasız
+    assert len(lay["cells"]) == int(lay["id"])                                             # ad = kutu sayısı
+
+
+def test_view_layout_ids_are_the_agreed_set() -> None:
+    assert [d["id"] for d in _layouts()] == ["1", "2", "3", "4", "6", "8", "9", "12", "16"]
