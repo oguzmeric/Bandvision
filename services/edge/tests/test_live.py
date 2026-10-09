@@ -106,6 +106,40 @@ def test_api_never_returns_password(client: TestClient) -> None:
     assert client.get("/api/v1/live/sources").json() == []
 
 
+def test_custom_url_credentials_never_leave_the_server_and_survive_round_trip(client: TestClient) -> None:
+    """Tam RTSP adresine yazılmış kullanıcı:şifre hiçbir yanıtta yok (`rtsp://***@…`). Panel kendi gördüğü (gizlenmiş)
+    adresi geri gönderirse kayıtlı adres korunur; yeni adres yazılırsa o kaydedilir."""
+    url = f"rtsp://admin:{SECRET}@10.1.2.3:554/stream1"
+    shown = "rtsp://***@10.1.2.3:554/stream1"
+    r = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=url, username="", password=""))
+    assert r.status_code == 201 and r.json()["customUrl"] == shown and SECRET not in r.text
+    src = r.json()
+    listed = client.get("/api/v1/live/sources")
+    assert listed.json()[0]["customUrl"] == shown and SECRET not in listed.text
+    store = client.app.state.live.store
+    r = client.put(f"/api/v1/live/sources/{src['id']}", json={**src, "name": "Arka kapı", "password": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["customUrl"] == shown and r.json()["name"] == "Arka kapı" and SECRET not in r.text
+    assert store.source(src["id"])["customUrl"] == url                    # gerçek adres (şifreli) korundu
+    assert SECRET in client.app.state.live.camera_url(store.source(src["id"]))
+    r = client.put(f"/api/v1/live/sources/{src['id']}", json={**src, "customUrl": "rtsp://10.1.2.4/akis", "password": None})
+    assert r.json()["customUrl"] == "rtsp://10.1.2.4/akis" and store.source(src["id"])["customUrl"] == "rtsp://10.1.2.4/akis"
+
+
+@pytest.mark.parametrize(("url", "want"), [
+    ("rtsp://admin:sifre@10.0.0.5:554/Streaming/101", "rtsp://***@10.0.0.5:554/Streaming/101"),
+    ("RTSP://admin@kamera/akis", "RTSP://***@kamera/akis"),
+    ("rtsp://u:p@ss/w@rd@10.0.0.5/a", "rtsp://***@10.0.0.5/a"),           # kodlanmamış @ ve / içeren şifre de sızmaz
+    ("rtsp://10.0.0.5/a?x=1", "rtsp://10.0.0.5/a?x=1"),
+    ("", ""),
+    ("C:/video/klip.mp4", "C:/video/klip.mp4"),
+])
+def test_redact_credentials(url: str, want: str) -> None:
+    from bantvision.live.recorders import redact_credentials
+
+    assert redact_credentials(url) == want
+
+
 def test_api_validates_input(client: TestClient) -> None:
     assert client.post("/api/v1/live/sources", json={**camera(), "port": 70000}).status_code == 422
     assert client.post("/api/v1/live/sources", json={**camera(), "extra": 1}).status_code == 422

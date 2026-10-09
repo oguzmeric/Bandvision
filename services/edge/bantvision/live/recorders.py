@@ -388,6 +388,21 @@ def camera_rtsp_url(brand: CameraBrand, host: str, port: int, channel: int, subs
     return f"rtsp://{h}:{port}{brand.path(channel, substream)}"
 
 
+REDACTED_USERINFO = "***"
+
+
+def redact_credentials(url: str) -> str:
+    """Adresteki `kullanıcı:şifre@` kısmını `***@` yapar (yanıtlarda şifre görünmesin). Kodlanmamış `@`/`/` içeren
+    şifre de sızmasın diye "://"den sonraki SON `@`'a kadar her şey gizlenir. Kimliksiz adres olduğu gibi döner."""
+    i = url.find("://")
+    if i < 0:
+        return url
+    at = url.rfind("@", i + 3)
+    if at < 0:
+        return url
+    return f"{url[:i + 3]}{REDACTED_USERINFO}{url[at:]}"
+
+
 def with_credentials(url: str, username: str, password: str) -> str:
     """RTSP adresine yüzde kodlanmış `kullanıcı:şifre@` ekler (OpenCV/FFmpeg için). Sonuç günlüğe yazılmamalı.
 

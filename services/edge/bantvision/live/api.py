@@ -1,7 +1,8 @@
 """Canlı sayım API'si (`/api/v1/live`): kaynaklar, kanal listesi ve küçük resimler, profiller, canlı oturumlar.
 
 Panel (apps/dashboard) bu uçlara sunucu tarafından, erişim anahtarıyla konuşur. Şifreler hiçbir yanıtta yer almaz
-(`hasPassword` dışında); hata iletileri şifre içermez. Görüntü bu bilgisayarda kalır.
+(`hasPassword` dışında; tam RTSP adresine yazılmış kimlik `rtsp://***@…` olarak gizlenir); hata iletileri şifre
+içermez. Görüntü bu bilgisayarda kalır.
 """
 from __future__ import annotations
 
@@ -840,9 +841,15 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     # ---------------------------------------------------------------- kaynaklar
 
+    def _public_source(src: dict[str, Any]) -> dict[str, Any]:
+        """Kaynağın yanıttaki hâli: tam RTSP adresindeki kullanıcı:şifre gizlenir (şifre panele/telefona gitmez)."""
+        if not src.get("customUrl"):
+            return src
+        return {**src, "customUrl": rec.redact_credentials(str(src["customUrl"]))}
+
     @r.get("/sources")
     def sources() -> list[dict[str, Any]]:
-        return store.sources()
+        return [_public_source(s) for s in store.sources()]
 
     @r.post("/sources", status_code=201)
     def create_source(body: SourceIn) -> dict[str, Any]:
@@ -850,19 +857,22 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         data["name"] = data["name"].strip()
         if not data["name"]:
             data["name"] = _default_name(data)
-        return store.save_source(data, body.password or "")
+        return _public_source(store.save_source(data, body.password or ""))
 
     @r.put("/sources/{source_id}")
     def update_source(source_id: str, body: SourceIn) -> dict[str, Any]:
-        manager.source_or_404(source_id)
+        cur = manager.source_or_404(source_id)
         data = body.model_dump(exclude={"password"})
+        stored_url = str(cur.get("customUrl") or "")
+        if stored_url and data["customUrl"] == rec.redact_credentials(stored_url):
+            data["customUrl"] = stored_url                   # panel gizlenmiş adresi geri gönderdi: kayıtlı adres kalır
         data["name"] = data["name"].strip()
         if not data["name"]:
             data["name"] = _default_name(data)
         manager.forget(source_id)
         saved = store.save_source(data, body.password, source_id)
         manager.viewers.drop(source_id)                      # izleme okuyucuları eski adres/şifreyi bırakır, yenisiyle açılır
-        return saved
+        return _public_source(saved)
 
     @r.delete("/sources/{source_id}", status_code=204)
     def delete_source(source_id: str) -> Response:
