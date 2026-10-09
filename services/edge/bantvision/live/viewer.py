@@ -11,7 +11,9 @@
   EVICT_IDLE_S'den uzun süredir istenmeyen en eski okuyucu yeni isteğe yer açar (şablon değişince eski şablonun
   okuyucuları 30 sn beklemez); çıkarılacak okuyucu yoksa istek "Sınır aşıldı" ile reddedilir.
 - Kopunca katlanarak bekler (1 → 30 sn); bekleme, akış en az GOOD_AFTER_S sn kare verdikten sonra sıfırlanır.
-- Kaynak silinir ya da düzenlenirse `drop(kaynak)` o kaynağın okuyucularını kapatır.
+- Kaynak silinir ya da düzenlenirse `drop(kaynak)` o kaynağın okuyucularını kapatır (açıcı reddi önbelleği de silinir).
+- Açıcının reddi (silinmiş kaynak, kanalsız kayıt cihazı, açıcı hatası) OPEN_FAIL_CACHE_S önbellekte; sınır reddi canlı.
+- `peek` (durum yoklaması) varsayılan olarak kare işlemez (küçültme yok), yalnızca durumu verir.
 - Verilen kareler salt okunurdur (yanlışlıkla üzerine çizen kod gürültüyle hata alır).
 """
 from __future__ import annotations
@@ -39,6 +41,7 @@ REAP_EVERY_S = 5.0
 BACKOFF_MAX_S = 30.0
 GOOD_AFTER_S = 5.0          # bekleme yalnızca akış bu kadar süre kare verdiyse sıfırlanır (tek kare yetmez)
 REJECT_TTL_S = 10.0         # reddedilen isteğin iletisi bu süre `peek()` ile görülür
+OPEN_FAIL_CACHE_S = 1.0     # açıcının reddi (silinmiş kaynak…) bu süre yeniden sorulmaz; sınır reddi önbelleğe girmez
 EVICT_IDLE_S = 3.0          # sınırdayken bu kadar süredir kullanılmayan okuyucu yeni isteğe yer açar (şablon değişimi)
 SESSION_GRACE_S = 5.0       # yeni analiz oturumu ilk karesini verene dek izleme okuyucusu en çok bu kadar tutulur
 CLOSE_WAIT_S = 3.0          # stop(): tüm okuyucular için ortak bekleme
@@ -228,6 +231,7 @@ class ViewHub:
         self._rejected: dict[Key, tuple[TileFrame, float]] = {}    # son red (sınır, silinmiş kaynak) + geçerlilik sonu
         self._last: dict[Key, _Shown] = {}
         self._session_seen: dict[Key, tuple[object, float, float]] = {}   # oturum, ilk görülme, son görülme
+        self._open_failed: dict[Key, tuple[TileFrame, float]] = {}  # açıcı reddi önbelleği (sınır reddi girmez)
         self._stop = threading.Event()
         self._reaper_wanted = reaper
         self._reaper: threading.Thread | None = None               # ilk okuyucu açılınca başlar
@@ -241,19 +245,23 @@ class ViewHub:
             return None
         return s
 
-    def _from_session(self, s: Any, key: Key) -> TileFrame:
+    def _from_session(self, s: Any, key: Key, with_frame: bool) -> tuple[TileFrame, bool]:
+        """Oturumun durumu ve (istenirse) küçültülmüş karesi; ikinci değer: oturumun karesi var mı. Durum yoklaması
+        (`with_frame=False`) kare küçültmez."""
         got = s.latest_frame()
         st = s.status
         state = {"live": "live", "connecting": "connecting", "reconnecting": "connecting"}.get(st.state, "error")
         if got is None:
-            return TileFrame(0, None, state, st.message, float(st.fps))
+            return TileFrame(0, None, state, st.message, float(st.fps)), False
+        if not with_frame:
+            return TileFrame(got[0], None, state, st.message, float(st.fps)), True
         with self._lock:
             shown = self._last.get(key)
         if shown is not None and shown.origin is s and shown.seq == got[0]:
             frame = shown.frame                              # aynı kare: yeniden küçültülmez
         else:
             frame = _readonly(downscale(got[1], MAX_WIDTH[key[2]]))
-        return TileFrame(got[0], frame, state, st.message, float(st.fps))
+        return TileFrame(got[0], frame, state, st.message, float(st.fps)), True
 
     def _remember(self, key: Key, t: TileFrame, origin: object) -> None:
         if t.frame is None:
@@ -266,43 +274,47 @@ class ViewHub:
             else:
                 self._last[key] = _Shown(t.frame, t.seq, origin, now)
 
-    def _or_last(self, key: Key, t: TileFrame) -> TileFrame:
-        """Kare henüz yoksa son gösterilen kare ("bağlanıyor" durumuyla) kullanılır; hiç yoksa karesiz kalır."""
+    def _or_last(self, key: Key, t: TileFrame, with_frame: bool = True) -> TileFrame:
+        """Kare henüz yoksa son gösterilen kare ("bağlanıyor" durumuyla) kullanılır; hiç yoksa karesiz kalır.
+        `with_frame=False`: aynı durum, kare olmadan (durum yoklaması)."""
         if t.frame is not None:
-            return t
+            return t if with_frame else TileFrame(t.seq, None, t.state, t.message, t.fps)
         with self._lock:
             shown = self._last.get(key)
         if shown is None:
             return t
-        return TileFrame(shown.seq, shown.frame, "error" if t.state == "error" else "connecting", t.message, t.fps)
+        return TileFrame(shown.seq, shown.frame if with_frame else None, "error" if t.state == "error" else "connecting",
+                         t.message, t.fps)
 
-    def _session_tile(self, key: Key, s: Any, touch: bool) -> TileFrame:
+    def _session_tile(self, key: Key, s: Any, touch: bool, with_frame: bool = True) -> TileFrame:
         """Oturum önceliklidir: okuyucu yalnızca yeni oturumun ilk karesine dek (en çok SESSION_GRACE_S, oturum sorun
-        bildirmiyorsa) tutulur; sonra bırakılır ve oturum sürdükçe yeniden açılmaz (`tile` oturum varken okuyucu açmaz)."""
-        t = self._from_session(s, key)
+        bildirmiyorsa) tutulur; sonra bırakılır ve oturum sürdükçe yeniden açılmaz (`tile` oturum varken okuyucu açmaz).
+        Durum yoklaması da (`peek`) bu kararı uygular."""
+        t, has_frame = self._from_session(s, key, with_frame)
         state = str(getattr(getattr(s, "status", None), "state", ""))
         now = self._clock()
         with self._lock:
             seen = self._session_seen.get(key)
             first = seen[1] if seen is not None and seen[0] is s else now
             self._session_seen[key] = (s, first, now)
-            grace = t.frame is None and state not in SESSION_TROUBLE and now - first < SESSION_GRACE_S
+            grace = not has_frame and state not in SESSION_TROUBLE and now - first < SESSION_GRACE_S
             v = self._viewers.get(key) if grace else self._viewers.pop(key, None)
         if not grace:
             if v is not None:
                 v.request_stop()                             # bağlantı oturuma kalsın (bekleme yok; iş parçacığı kendisi biter)
-            if t.frame is not None:
+            if has_frame:
                 self._remember(key, t, s)
                 return t
-            return self._or_last(key, t)
+            return self._or_last(key, t, with_frame)
         if v is not None:                                    # kısa geçiş: oturumun ilk karesi gelene dek okuyucu sürer
             if touch:
                 v.touch()
             snap = v.snapshot()
             if snap.frame is not None:
-                self._remember(key, snap, v)
-                return snap
-        return self._or_last(key, t)
+                if with_frame:
+                    self._remember(key, snap, v)
+                return self._or_last(key, snap, with_frame)
+        return self._or_last(key, t, with_frame)
 
     def _forget_session(self, key: Key) -> None:
         """Oturum yok (ya da durdu): bir sonraki oturumun kısa geçişi baştan sayılır; durmuş oturuma referans kalmaz."""
@@ -320,6 +332,13 @@ class ViewHub:
     def _reject(self, key: Key, t: TileFrame) -> TileFrame:
         """Reddi sakla: durum uç noktaları (`peek`) "bağlanıyor" yerine nedenini göstersin. Kilit altında çağrılır."""
         self._rejected[key] = (t, self._clock() + REJECT_TTL_S)
+        return t
+
+    def _open_rejected(self, key: Key, message: str) -> TileFrame:
+        """Açıcının reddi (silinmiş kaynak, kanalsız kayıt cihazı, açıcı hatası) OPEN_FAIL_CACHE_S boyunca önbellekte:
+        birleştirici 10 Hz'de sorsa da açıcı (JSON okumaları) hub kilidi altında saniyede bir çalışır. Kilit altında."""
+        t = self._reject(key, TileFrame(0, None, "error", message, 0.0))
+        self._open_failed[key] = (t, self._clock() + OPEN_FAIL_CACHE_S)
         return t
 
     def _ensure_reaper(self) -> None:
@@ -343,17 +362,20 @@ class ViewHub:
                 return TileFrame(0, None, "error", STOPPED_MSG, 0.0)
             v = self._viewers.get(key)
             if v is None:
+                failed = self._open_failed.get(key)
+                if failed is not None and failed[1] > self._clock():
+                    return failed[0]                         # açıcı az önce reddetti: JSON yeniden okunmaz
                 limit, msg = LIMITS[quality]
                 if sum(1 for k in self._viewers if k[2] == quality) >= limit:
                     evicted = self._evictable(quality)
-                    if evicted is None:                      # hepsi kullanılıyor: yer açılmaz
+                    if evicted is None:                      # hepsi kullanılıyor: yer açılmaz (bu red önbelleğe girmez)
                         return self._reject(key, TileFrame(0, None, "error", msg, 0.0))
                 try:
                     open_url, keep_alive = self._opener(source_id, channel_id, quality == "sub")
                 except SourceGone as e:                      # açılamayan istek için kimse çıkarılmaz
-                    return self._reject(key, TileFrame(0, None, "error", str(e) or "Kamera silinmiş.", 0.0))
+                    return self._open_rejected(key, str(e) or "Kamera silinmiş.")
                 except Exception as e:  # noqa: BLE001 — kaynak ayarı geçersiz (ör. adres eksik)
-                    return self._reject(key, TileFrame(0, None, "error", f"Kaynağa ulaşılamadı: {_detail(e)}", 0.0))
+                    return self._open_rejected(key, f"Kaynağa ulaşılamadı: {_detail(e)}")
                 if evicted is not None:
                     del self._viewers[evicted.key]
                 v = CameraViewer(key, open_url, keep_alive, self._capture, self._clock)
@@ -367,21 +389,23 @@ class ViewHub:
         self._remember(key, snap, v)
         return self._or_last(key, snap)
 
-    def peek(self, source_id: str, channel_id: str | None, quality: str = "sub") -> TileFrame:
-        """Okuyucu açmaz, canlı tutmaz. Okuyucu yoksa son red (sınır, silinmiş kaynak…) kısa süre bildirilir."""
+    def peek(self, source_id: str, channel_id: str | None, quality: str = "sub",
+             with_frame: bool = False) -> TileFrame:
+        """Okuyucu açmaz, canlı tutmaz. Okuyucu yoksa son red (sınır, silinmiş kaynak…) kısa süre bildirilir. Durum
+        yoklaması kare istemez: varsayılan `with_frame=False` kare küçültmez ve döndürmez (durum `tile` ile aynı)."""
         key: Key = (source_id, channel_id, quality)
         s = self._session(source_id, channel_id)
         if s is not None:
-            return self._session_tile(key, s, touch=False)
+            return self._session_tile(key, s, touch=False, with_frame=with_frame)
         self._forget_session(key)
         with self._lock:
             v = self._viewers.get(key)
             rejected = self._rejected.get(key)
         if v is not None:
-            return self._or_last(key, v.snapshot())
+            return self._or_last(key, v.snapshot(), with_frame)
         if rejected is not None and rejected[1] > self._clock():
             return rejected[0]
-        return self._or_last(key, TileFrame(0, None, "connecting", "", 0.0))
+        return self._or_last(key, TileFrame(0, None, "connecting", "", 0.0), with_frame)
 
     def open_count(self, quality: str) -> int:
         with self._lock:
@@ -391,7 +415,7 @@ class ViewHub:
         """Kaynak silindi ya da düzenlendi: o kaynağın okuyucuları kapanır, bir sonraki `tile()` güncel ayarla açar."""
         with self._lock:
             gone = [self._viewers.pop(k) for k in [k for k in self._viewers if k[0] == source_id]]
-            for table in (self._rejected, self._last, self._session_seen):
+            for table in (self._rejected, self._last, self._session_seen, self._open_failed):
                 for k in [k for k in table if k[0] == source_id]:
                     del table[k]
         _stop_viewers(gone, time.monotonic() + DROP_WAIT_S)
@@ -404,8 +428,9 @@ class ViewHub:
             gone = [self._viewers.pop(k) for k in idle]
             for k in [k for k, x in self._last.items() if now - x.at > IDLE_S]:
                 del self._last[k]
-            for k in [k for k, x in self._rejected.items() if x[1] <= now]:
-                del self._rejected[k]
+            for table in (self._rejected, self._open_failed):
+                for k in [k for k, x in table.items() if x[1] <= now]:
+                    del table[k]
             for k in [k for k, x in self._session_seen.items() if now - x[2] > IDLE_S]:
                 del self._session_seen[k]
         _stop_viewers(gone, time.monotonic() + SWEEP_WAIT_S)
@@ -426,6 +451,7 @@ class ViewHub:
             self._rejected.clear()
             self._last.clear()
             self._session_seen.clear()
+            self._open_failed.clear()
             reaper = self._reaper
         deadline = time.monotonic() + CLOSE_WAIT_S
         _stop_viewers(gone, deadline)

@@ -532,7 +532,7 @@ def test_stopped_session_is_treated_as_absent() -> None:
     try:
         t = wait(lambda: (x := hub.tile("a", "1")).frame is not None and x)
         assert t.frame.shape[1] == 960 and opened == ["rtsp://a/1/sub"]          # oturum karesi değil, okuyucu
-        assert hub.peek("a", "1").frame.shape[1] == 960
+        assert hub.peek("a", "1", with_frame=True).frame.shape[1] == 960
     finally:
         hub.stop()
 
@@ -703,7 +703,97 @@ def test_session_in_error_drops_reader_even_from_status_poll() -> None:
         wait(lambda: hub.tile("a", None).frame is not None)
         sessions[("a", None)] = FakeSession(frame=None, state="error")
         p = hub.peek("a", None)                                                  # durum yoklaması da bırakır
-        assert hub.open_count("sub") == 0 and p.state == "error" and p.frame is not None
+        assert hub.open_count("sub") == 0 and p.state == "error"
+        assert hub.peek("a", None, with_frame=True).frame is not None            # son kare kaldı
         assert hub.tile("a", None).state == "error" and opened == ["rtsp://a/None/sub"]
+    finally:
+        hub.stop()
+
+
+# ------------------------------------------------------------ durum yoklaması kare işlemez; açıcı reddi önbellekte
+
+
+def test_peek_is_state_only_and_never_downscales(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+    real = viewer_mod.downscale
+
+    def counting(frame: np.ndarray, max_w: int) -> np.ndarray:
+        calls["n"] += 1
+        return real(frame, max_w)
+
+    monkeypatch.setattr(viewer_mod, "downscale", counting)
+    s = FakeSession(np.zeros((1080, 1920, 3), np.uint8), seq=1)
+    sessions: dict[tuple[str, str | None], Any] = {("s", None): s}
+    hub, _ = make_hub(sessions=sessions)
+    try:
+        for i in range(5):
+            s.seq = 10 + i                                                       # oturumdan her yoklamada yeni kare
+            p = hub.peek("s", None)
+            assert p.state == "live" and p.frame is None and p.fps == 12.0
+        assert calls["n"] == 0                                                   # durum için kare küçültülmedi
+        wait(lambda: hub.tile("k", None).frame is not None)                     # okuyucu yolu
+        n = calls["n"]
+        p = hub.peek("k", None)
+        assert p.state == "live" and p.frame is None and calls["n"] == n
+        assert hub.peek("k", None, with_frame=True).frame is not None           # kare isteyen açıkça ister
+    finally:
+        hub.stop()
+
+
+def _counting_hub(clock: Any, gone: set[str]) -> tuple[ViewHub, dict[str, int]]:
+    calls = {"n": 0}
+
+    def opener(source_id: str, channel_id: str | None, sub: bool) -> tuple[Any, Any]:
+        calls["n"] += 1
+        if source_id in gone:
+            raise SourceGone("Kamera silinmiş.")
+        return (lambda: f"rtsp://{source_id}/{channel_id}"), None
+
+    hub = ViewHub(opener, lambda s, c: None, capture=lambda url: FakeCap(), clock=clock, reaper=False)
+    return hub, calls
+
+
+def test_opener_rejection_is_cached_for_one_second() -> None:
+    clock = Clock()
+    hub, calls = _counting_hub(clock, {"silindi"})
+    try:
+        for _ in range(10):                                                      # birleştirici 10 Hz'de sorar
+            assert hub.tile("silindi", None).message == "Kamera silinmiş."
+        assert calls["n"] == 1                                                   # JSON okuyan açıcı bir kez
+        clock.t += 0.5
+        hub.tile("silindi", None)
+        assert calls["n"] == 1
+        clock.t += 0.6                                                           # 1 sn doldu: yeniden denenir
+        assert hub.tile("silindi", None).message == "Kamera silinmiş." and calls["n"] == 2
+        assert hub.peek("silindi", None).message == "Kamera silinmiş."
+    finally:
+        hub.stop()
+
+
+def test_drop_clears_cached_opener_rejection() -> None:
+    clock = Clock()
+    gone = {"a"}
+    hub, calls = _counting_hub(clock, gone)
+    try:
+        assert hub.tile("a", None).message == "Kamera silinmiş."
+        gone.clear()                                                             # kaynak düzenlendi/geri geldi
+        hub.drop("a")
+        t = hub.tile("a", None)                                                  # saat ilerlemeden hemen açılır
+        assert t.state != "error" and calls["n"] == 2 and hub.open_count("sub") == 1
+    finally:
+        hub.stop()
+
+
+def test_limit_rejection_is_not_cached() -> None:
+    clock = Clock()
+    hub, _calls = _counting_hub(clock, set())
+    try:
+        for i in range(MAX_SUB):
+            hub.tile(f"s{i}", None)
+        assert "Sınır aşıldı" in hub.tile("x", None).message
+        clock.t += IDLE_S + 1
+        assert hub.sweep() == MAX_SUB                                            # yer açıldı (drop değil)
+        t = hub.tile("x", None)                                                  # aynı anda: önbellekteki red yok
+        assert t.state != "error" and hub.open_count("sub") == 1
     finally:
         hub.stop()

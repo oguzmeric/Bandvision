@@ -1002,10 +1002,10 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if view is None:
             raise HTTPException(404, "Şablon bulunamadı.")
         tiles: list[dict[str, Any] | None] = []
-        # Kaynaklar istek başına BİR kez okunur (kutu başına iki dosya okuması değil). Not: depo okunamazsa boş liste
-        # verir ("yok" ile ayırt edilemez); o durumda kutular geçici olarak "Kamera silinmiş." görünür, sonraki
-        # yoklamada düzelir.
-        sources = {x["id"]: x for x in store.sources()}
+        # Kaynaklar istek başına BİR kez okunur (kutu başına iki dosya okuması değil); yalnızca sources.json (şifre
+        # dosyası değil). Not: depo okunamazsa boş liste verir ("yok" ile ayırt edilemez); o durumda kutular geçici
+        # olarak "Kamera silinmiş." görünür, sonraki yoklamada düzelir. Durum kare istemez (`peek` kare küçültmez).
+        sources = {x["id"]: x for x in store.source_records()}
         for t in view["tiles"]:
             if not t:
                 tiles.append(None)
@@ -1047,7 +1047,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def camera_status(source: str = Query(pattern=_REF, max_length=120),
                       channel: str | None = Query(None, pattern=_REF, max_length=120),
                       quality: Literal["sub", "main"] = "sub") -> dict[str, Any]:
-        src = manager.source_or_404(source)
+        src = next((x for x in store.source_records() if x["id"] == source), None)    # şifre dosyası okunmaz
+        if src is None:
+            raise HTTPException(404, "Kaynak bulunamadı.")
         tf = manager.viewers.peek(source, channel, quality)
         s = manager._session_for(source, channel)
         return {"name": manager.camera_name(source, channel, {source: src}), "state": tf.state, "message": tf.message,

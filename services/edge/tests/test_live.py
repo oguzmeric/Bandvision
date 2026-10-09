@@ -2227,31 +2227,30 @@ def _two_file_sources(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tu
 
 
 def test_view_status_reads_sources_once_per_request(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kutu başına iki dosya okuması yok: geçici bir kilit tüm kutuları "silinmiş" göstermesin."""
+    """Kutu başına dosya okuması yok (geçici bir kilit tüm kutuları "silinmiş" göstermesin) ve durum yoklaması şifre
+    dosyasını (secrets.json) hiç okumaz: yalnızca sources.json, istek başına bir kez."""
     a, b = _two_file_sources(client, monkeypatch)
     v = client.post("/api/v1/live/views", json={"name": "İki", "layout": "2",
                                                  "tiles": [{"sourceId": a, "channelId": None},
                                                            {"sourceId": b, "channelId": None}]}).json()
     store = client.app.state.live.store
-    calls = {"sources": 0, "source": 0}
-    orig_sources, orig_source = store.sources, store.source
+    reads: list[str] = []
+    orig_read = store._read
 
-    def sources() -> Any:
-        calls["sources"] += 1
-        return orig_sources()
+    def read(name: str, default: Any) -> Any:
+        reads.append(name)
+        return orig_read(name, default)
 
-    def source(source_id: str) -> Any:
-        calls["source"] += 1
-        return orig_source(source_id)
-
-    monkeypatch.setattr(store, "sources", sources)
-    monkeypatch.setattr(store, "source", source)
+    monkeypatch.setattr(store, "_read", read)
     tiles = client.get(f"/api/v1/live/views/{v['id']}/status").json()["tiles"]
     assert [t["name"] for t in tiles] == ["Kapı", "Depo"]
-    assert calls == {"sources": 1, "source": 0}
-    calls.update(sources=0, source=0)
+    assert reads == ["sources.json"]
+    reads.clear()
     cam = client.get(f"/api/v1/live/cameras/status?source={a}").json()
-    assert cam["name"] == "Kapı" and calls == {"sources": 1, "source": 1}     # yalnızca 404 denetimi okur
+    assert cam["name"] == "Kapı" and reads == ["sources.json"]
+    reads.clear()
+    assert client.get("/api/v1/live/cameras/status?source=yok").status_code == 404
+    assert reads == ["sources.json"]
 
 
 def test_view_stream_ends_when_template_is_deleted_mid_stream(client: TestClient,

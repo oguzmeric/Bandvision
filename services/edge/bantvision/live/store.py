@@ -88,6 +88,11 @@ class LiveStore:
     def source(self, source_id: str) -> dict[str, Any] | None:
         return next((s for s in self.sources() if s["id"] == source_id), None)
 
+    def source_records(self) -> list[dict[str, Any]]:
+        """Yalnızca sources.json (şifre dosyası okunmaz, `hasPassword` yok): sık yoklanan durum uç noktaları için."""
+        with self._lock:
+            return list(self._read("sources.json", []))
+
     def password(self, source_id: str) -> str:
         with self._lock:
             return str(self._read("secrets.json", {}).get(source_id, ""))
