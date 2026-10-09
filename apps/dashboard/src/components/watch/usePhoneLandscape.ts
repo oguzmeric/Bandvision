@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-/** Telefon yan çevrilmiş: yatay ve kısa ekran */
-const QUERY = "(orientation: landscape) and (max-height: 500px)";
+/** Telefon yan çevrilmiş: yatay ve kısa ekran, parmakla kullanılan (kaba işaretçi); kısa bir masaüstü penceresi sayılmaz */
+const QUERY = "(orientation: landscape) and (max-height: 500px) and (pointer: coarse)";
 
 /**
  * Telefonu yan çevirince izleme tam ekrana yakın görünür (`active`): ızgara/tek kamera ekranı kaplar, araç çubuğu

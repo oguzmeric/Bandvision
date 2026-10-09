@@ -1,5 +1,5 @@
 /** Çoklu izleme (analiz sunucusu `/api/v1/live/views…`; sözleşme contracts/view-layouts.json, view-template.schema.json) */
-import type { AlarmType } from "./live";
+import { ApiError, type AlarmType } from "./live";
 
 export interface ViewLayout { id: string; name: string; cols: number; rows: number; cells: Array<[number, number, number, number]> }
 export interface TileRef { sourceId: string; channelId: string | null }
@@ -22,6 +22,10 @@ export const STATUS_POLL_MS = 1500;
 export const STREAM_RETRY_MS = 2000;
 /** Şablon listesi alınamazsa (analiz sunucusu yok) bu aralıkla yeniden denenir */
 export const RELOAD_RETRY_MS = 5000;
+/** Sekme görünürken canlı akış bu aralıkla baştan açılır (sessizce donan ağ bağlantısına karşı sigorta) */
+export const STREAM_REKEY_MS = 15 * 60_000;
+/** Tek kamera bağlı değilken (bağlanıyor/hata) akış bu aralıkla baştan açılır: sunucu akışı bitirmiş olabilir */
+export const STUCK_REBUMP_MS = 30_000;
 /** Kapsayıcı boyutu değişince yeni akış boyutu bu kadar durulduktan sonra istenir (ilk ölçüm hemen) */
 export const RESIZE_DEBOUNCE_MS = 300;
 
@@ -38,6 +42,12 @@ export function streamSize(el: HTMLElement): { w: number; h: number } {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const round = (v: number) => Math.max(16, Math.round((v * dpr) / 16) * 16);
   return { w: round(r.width), h: round(r.height) };
+}
+
+/** Analiz sunucusuyla konuşulamıyor: oturum süresi doldu (401) ya da sunucuya ulaşılamıyor */
+export type Problem = "auth" | "down";
+export function problemOf(e: unknown): Problem {
+  return e instanceof ApiError && e.status === 401 ? "auth" : "down";
 }
 
 /** Kutunun/kameranın bağlantı durumu metni; "Kamera silinmiş." ve "Sınır aşıldı…" kendi başına anlaşılır, öneksiz gösterilir */

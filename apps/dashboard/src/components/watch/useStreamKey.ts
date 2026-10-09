@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { STREAM_RETRY_MS } from "@/lib/views";
+import { STREAM_REKEY_MS, STREAM_RETRY_MS } from "@/lib/views";
 
 /**
  * Canlı MJPEG `<img>`'inin yeniden bağlanma anahtarı (`k`). Sunucu akışı bilerek bitirebilir (şablon silindi, merkez
@@ -10,7 +10,8 @@ import { STREAM_RETRY_MS } from "@/lib/views";
  *   - `<img>` `error` olayı: `STREAM_RETRY_MS` sonra (`onError`);
  *   - sekme yeniden görünür olunca (telefon uyandı, sekmeye dönüldü): hemen;
  *   - ağ geri gelince (`online`): hemen;
- *   - çağıran `bump()` derse (durum yoklaması koptuktan sonra düzeldi: sunucu yeniden başladı): hemen.
+ *   - çağıran `bump()` derse (durum yoklaması koptuktan sonra düzeldi: sunucu yeniden başladı): hemen;
+ *   - sigorta: sekme görünürken `STREAM_REKEY_MS`'de bir (ağ sessizce takılıp görüntü donarsa ne olay ne hata gelir).
  * Anahtar `src`'ye eklenir; değişince tarayıcı akışı baştan açar.
  */
 export function useStreamKey(): { streamKey: number; onError: () => void; bump: () => void } {
@@ -26,9 +27,11 @@ export function useStreamKey(): { streamKey: number; onError: () => void; bump: 
     const onVisible = () => { if (document.visibilityState === "visible") bump(); };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", bump);
+    const rekey = setInterval(() => { if (document.visibilityState === "visible") bump(); }, STREAM_REKEY_MS);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", bump);
+      clearInterval(rekey);
       clearTimeout(timer.current);
     };
   }, [bump]);

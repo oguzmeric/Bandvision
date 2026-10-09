@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ApiError, api } from "@/lib/live";
-import { useAlarmCenter } from "@/components/live/AlarmCenter";
+import { ApiError, api, type Source } from "@/lib/live";
+import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import {
-  LAST_VIEW_KEY, liveHref, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
-  type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
+  LAST_VIEW_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
+  type Problem, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
+import { refKey } from "./CameraList";
+import ConnectionProblem from "./ConnectionProblem";
 import TileOverlay from "./TileOverlay";
 import SingleCamera, { type SingleMode } from "./SingleCamera";
+import ViewEditor from "./ViewEditor";
 import { usePhoneLandscape } from "./usePhoneLandscape";
 import { useStreamKey } from "./useStreamKey";
 
@@ -19,7 +22,9 @@ function remember(id: string): void {
   try { window.localStorage.setItem(LAST_VIEW_KEY, id); } catch { /* depolama yok */ }
 }
 
-/** İzleme sayfası: şablon seçici, birleşik canlı görüntü + kutu katmanları, tek kamera, tüm ekran (video duvarı) */
+const TOOL_BTN = "h-10 rounded-[10px] border border-line px-3 text-sm disabled:opacity-50";
+
+/** İzleme sayfası: şablon seçici ve düzenleyici, birleşik canlı görüntü + kutu katmanları, tek kamera, tüm ekran (video duvarı) */
 export default function WatchView() {
   const [layouts, setLayouts] = useState<ViewLayout[]>([]);
   const [views, setViews] = useState<ViewTemplate[]>([]);
@@ -29,8 +34,16 @@ export default function WatchView() {
   const [status, setStatus] = useState<ViewStatus | null>(null);
   const [single, setSingle] = useState<{ sourceId: string; channelId: string | null; name: string; liveHref: string } | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
-  /** Analiz sunucusuna ulaşılamıyor (liste ya da durum yoklaması başarısız); düzelince kalkar */
-  const [down, setDown] = useState(false);
+  /** Analiz sunucusuyla konuşulamıyor (liste ya da durum yoklaması başarısız): sunucu yok ya da oturum doldu; düzelince kalkar */
+  const [problem, setProblem] = useState<Problem | null>(null);
+  /** Şablon düzenleyici açık: düzenlenen şablon ("new": yeni) */
+  const [editing, setEditing] = useState<ViewTemplate | "new" | null>(null);
+  /** Kayıt cihazları ("Tüm kanallardan şablon" için) */
+  const [recorders, setRecorders] = useState<Source[]>([]);
+  /** Kopyala / tüm kanallardan şablon sürerken tekrar tıklanamaz (çift kopya olmasın) */
+  const [busy, setBusy] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   /** Sunucu bu şablon için 404 verdi (silindi): akış istenmez, liste yeniden alınıp seçim düzeltilir */
   const [goneId, setGoneId] = useState<string | null>(null);
   /** Video duvarı (tam ekran) açık mı; tarayıcı tam ekranı desteklemiyorsa (ör. iPhone) düğme gizlenir */
@@ -49,12 +62,12 @@ export default function WatchView() {
       setLayouts(l);
       setViews(v);
       setLoaded(true);
-      setDown(false);
+      setProblem(null);
       const want = select ?? remembered();
       setCurrentId((cur) => (want && v.some((x) => x.id === want) ? want : cur && v.some((x) => x.id === cur) ? cur : v[0]?.id ?? null));
       return true;
-    } catch {
-      setDown(true);
+    } catch (e) {
+      setProblem(problemOf(e));
       return false;
     }
   }, []);
@@ -75,6 +88,11 @@ export default function WatchView() {
   useEffect(() => { if (currentId) remember(currentId); }, [currentId]);
   const hasView = view !== null;
   useEffect(() => { if (!hasView) setSingle(null); }, [hasView]);   // şablon kalmadıysa tek kamera da kapanır
+  // Kayıt cihazları: şablon listesi alınabildikten sonra (sunucu ayakta), "Tüm kanallardan şablon" seçici için
+  useEffect(() => {
+    if (!loaded) return;
+    api<Source[]>("sources").then((s) => setRecorders(s.filter((x) => x.kind === "recorder"))).catch(() => undefined);
+  }, [loaded]);
 
   const immersive = phone.active && !wallOn;
 
@@ -92,7 +110,7 @@ export default function WatchView() {
     const ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(measure, RESIZE_DEBOUNCE_MS); });
     ro.observe(el);
     return () => { ro.disconnect(); clearTimeout(t); };
-  }, [layout, single, wallOn, immersive]);
+  }, [layout, single, wallOn, immersive, editing]);
 
   // Kutu durumları; aynı zamanda akışın bekçisi: Chrome, ilk karesi geldikten sonra kopan çok parçalı görüntüde çoğu
   // zaman `error` vermez (sekme görünür ve çevrimiçi kalır, görüntü son karede donar, rozetler taze görünür). Yoklama
@@ -103,12 +121,14 @@ export default function WatchView() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failed = false;
     let notFound = false;
+    let fails = 0;                                      // üst üste başarısız yoklama (404 sunucunun ayakta olduğunu gösterir, sayılmaz)
     const poll = async () => {
       try {
         const s = await api<ViewStatus>(`views/${currentId}/status`);
         if (!alive) return;
         setStatus(s);
-        setDown(false);
+        fails = 0;
+        setProblem(null);
         setGoneId((g) => (g === currentId ? null : g));
         notFound = false;
         if (failed) { failed = false; bump(); }
@@ -116,12 +136,14 @@ export default function WatchView() {
         if (!alive) return;
         failed = true;
         if (e instanceof ApiError && e.status === 404) {
+          fails = 0;
           setGoneId(currentId);
           if (!notFound) void reload();
           notFound = true;
         } else {
           notFound = false;
-          setDown(true);
+          fails += 1;
+          if (fails >= FAILS_BEFORE_WARNING) setProblem(problemOf(e));   // tek aksama uyarı çıkarmaz (alarm şeridiyle aynı eşik)
         }
       }
       if (alive) timer = setTimeout(poll, STATUS_POLL_MS);
@@ -151,6 +173,29 @@ export default function WatchView() {
     if (!st || !ref || st.sourceId !== ref.sourceId || (st.channelId ?? null) !== (ref.channelId ?? null)) return null;
     return st;
   };
+  /** Düzenleyicinin kutu adları: şablonun son durumundaki kamera adları (kamera → ad) */
+  const names = Object.fromEntries((status?.tiles ?? []).filter((t): t is TileStatus => !!t)
+    .map((t) => [refKey({ sourceId: t.sourceId, channelId: t.channelId }), t.name]));
+  const startEdit = (v: ViewTemplate | "new") => { setInfo(null); setError(null); setEditing(v); };
+  /** Şablonu kopyalar ("… (kopya)") ve yeni şablona geçer */
+  const copy = async () => {
+    if (!view || busy) return;
+    setBusy(true); setInfo(null); setError(null);
+    try {
+      const v = await api<ViewTemplate>("views", { method: "POST", json: { name: `${view.name} (kopya)`.slice(0, 60), layout: view.layout, tiles: view.tiles } });
+      await reload(v.id);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  /** Kayıt cihazının tüm kanallarından (en çok 16) şablon kurar ve ona geçer */
+  const fromRecorder = async (sourceId: string) => {
+    if (!sourceId || busy) return;
+    setBusy(true); setInfo(null); setError(null);
+    try {
+      const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
+      setInfo(v.truncated ? `İlk 16 kanal alındı (toplam ${v.channelCount}).` : null);
+      await reload(v.id);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
   const openTile = (i: number) => {
     const t = view?.tiles[i];
     if (!t) return;
@@ -174,21 +219,39 @@ export default function WatchView() {
       {!single && !immersive && (
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="mr-2 text-2xl font-semibold">İzleme</h1>
-          <select aria-label="Şablon" value={currentId ?? ""} onChange={(e) => setCurrentId(e.target.value || null)}
-                  className="h-10 min-w-0 flex-1 rounded-[10px] border border-line bg-white px-3 text-sm sm:max-w-[320px]">
-            {views.length === 0 && <option value="">{loaded ? "Henüz şablon yok" : "Yükleniyor…"}</option>}
-            {views.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-          {canWall && (
-            <button type="button" onClick={wall} disabled={!view} className="h-10 rounded-[10px] border border-line px-3 text-sm">Tüm ekran</button>
+          {!editing && (
+            <>
+              <select aria-label="Şablon" value={currentId ?? ""}
+                      onChange={(e) => { setInfo(null); setError(null); setCurrentId(e.target.value || null); }}
+                      className="h-10 min-w-0 flex-1 rounded-[10px] border border-line bg-white px-3 text-sm sm:max-w-[320px]">
+                {views.length === 0 && <option value="">{loaded ? "Henüz şablon yok" : "Yükleniyor…"}</option>}
+                {views.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              {canWall && <button type="button" onClick={wall} disabled={!view} className={TOOL_BTN}>Tüm ekran</button>}
+              <button type="button" onClick={() => startEdit("new")} disabled={layouts.length === 0} className={TOOL_BTN}>Yeni şablon</button>
+              <button type="button" onClick={() => view && startEdit(view)} disabled={!view || layouts.length === 0} className={TOOL_BTN}>Düzenle</button>
+              <button type="button" onClick={copy} disabled={!view || busy} className={TOOL_BTN}>Kopyala</button>
+              {recorders.length > 0 && (
+                <select aria-label="Tüm kanallardan şablon" value="" disabled={busy} onChange={(e) => fromRecorder(e.target.value)}
+                        className="h-10 rounded-[10px] border border-line bg-white px-2 text-sm disabled:opacity-50">
+                  <option value="">Tüm kanallardan şablon…</option>
+                  {recorders.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              )}
+            </>
           )}
-          {/* Görev 6: "Yeni şablon", "Düzenle", "Tüm kanallardan şablon" düğmeleri buraya */}
         </div>
       )}
-      {down && !single && (
-        <p role="status" className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700">Analiz sunucusuna ulaşılamıyor; yeniden deneniyor…</p>
+      {problem && !single && (
+        <p role="status" className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700"><ConnectionProblem problem={problem} /></p>
       )}
-      {view && layout ? (
+      {error && <p role="alert" className="rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
+      {info && <p role="status" className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700">{info}</p>}
+      {editing ? (
+        <ViewEditor initial={editing === "new" ? null : editing} layouts={layouts} names={names}
+                    onSaved={(v) => { setEditing(null); void reload(v.id); }} onCancel={() => setEditing(null)}
+                    onDeleted={() => { setEditing(null); void reload(); }} />
+      ) : view && layout ? (
         // Video duvarı (tam ekran) bu kapsayıcıdır: tek kameraya geçilince de içinde kalır, tam ekran bozulmaz
         <div ref={wallRef} data-wall={wallOn ? "true" : undefined} className={wallOn ? "grid h-screen w-screen place-items-center bg-black" : undefined}>
           {single ? (

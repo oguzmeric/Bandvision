@@ -9,7 +9,7 @@ const POLL_MS = 2000;
 /** Güvenlik kameralarının izlenme durumu daha seyrek yoklanır */
 const SESSIONS_POLL_MS = 5000;
 /** Üst üste bu kadar istek başarısız olunca (≈6 sn) şeritte uyarı satırı çıkar */
-const FAILS_BEFORE_WARNING = 3;
+export const FAILS_BEFORE_WARNING = 3;
 /** Bu sekmede gösterilmiş alarmlar (pencere aynı alarm için yeniden açılmasın; sayfa yenilense de) */
 const SHOWN_KEY = "bv.alarm.shown";
 const SHOWN_MAX = 200;
