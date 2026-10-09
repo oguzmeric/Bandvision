@@ -1,6 +1,6 @@
 # Çoklu kamera izleme (şablonlu ızgara) — web tasarımı
 
-Tarih: 2026-10-08 · Durum: uygulandı (ölçüm bekliyor) · Tasarım kullanıcı tarafından bölüm bölüm onaylandı; uygulanan davranış ve tasarımdan ayrılanlar `docs/13-web-platform.md`'de, durum `docs/12-durum.md` §5g'de · Alt proje A (web). Alt proje B (iPhone) ayrı tasarımla gelecek.
+Tarih: 2026-10-08 · Durum: uygulandı (ölçüm bekliyor) · Tasarım kullanıcı tarafından bölüm bölüm onaylandı; uygulanan davranış ve tasarımdan ayrılanlar `docs/13-web-platform.md`'de, durum `docs/12-durum.md` §5g'de, sonradan yapılan değişiklikler bu belgenin sonunda ("Değişiklikler (2026-10-09)") · Alt proje A (web). Alt proje B (iPhone) ayrı tasarımla gelecek.
 
 ## Amaç
 Birden fazla kamerayı TRASSIR istemcisindeki gibi tek ekranda, şablonlu bir ızgarada **canlı izlemek**.
@@ -91,13 +91,13 @@ Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y
   - durumunu (`connecting` / `live` / `error` + Türkçe neden, fps) tutar.
 - **Paylaşım:**
   - Aynı anahtar birden çok şablonda ya da tarayıcıda olsa da tek okuyucu açılır.
-  - Kamerada zaten analiz oturumu çalışıyorsa NVR'a ikinci bağlantı açılmaz; oturumun ham karesi kullanılır. İzleme oturumları **asla** başlatmaz, durdurmaz ya da değiştirmez.
+  - Kamerada zaten analiz oturumu çalışıyorsa NVR'a ikinci bağlantı açılmaz; oturumun ham karesi kullanılır. İzleme oturumları **asla** başlatmaz, durdurmaz ya da değiştirmez. Oturum önceliklidir: izlenen kamerada analiz başlatılınca okuyucu en çok 5 sn tutulur, oturum sorun bildirirse hemen bırakılır (bkz. "Değişiklikler (2026-10-09)").
 - **Yaşam süresi:** Okuyucu 30 sn boyunca kullanılmazsa kapanır.
-- **Sınır:** Aynı anda en çok 16 `sub` ve 2 `main` okuyucu açılır. Fazlası için kutu durumu `error: "Sınır aşıldı (en çok 16 kamera)"` olur.
+- **Sınır:** Aynı anda en çok 16 `sub` ve 2 `main` okuyucu açılır. Sınırdayken 3 sn'dir istenmeyen en eski okuyucu yeni isteğe yer açar; çıkarılacak okuyucu yoksa kutu durumu `error: "Sınır aşıldı (en çok 16 kamera)."` olur.
 
 ### Birleştirici
 - Anahtar `(şablon, w, h)`. Tuval boyutu tarayıcıdan gelir, en çok 1920×1080'e sığdırılır ve 16'nın katına yuvarlanır.
-- Saniyede en çok 10 kez, yalnızca en az bir izleyici varken tuval oluşturulur:
+- Saniyede en çok 10 kez, yalnızca en az bir izleyici varken ve en az bir kutu değiştiyse tuval oluşturulur (değişmeyen tuval 5 sn'de bir yeniden gönderilir); şablon başına en çok 8 farklı boyut:
   - her hücreye kamera karesi oran korunarak sığdırılır (siyah pay);
   - boş ya da karesiz hücre koyu gri olur;
   - kamera adı, durum ve rozetler tuvale **çizilmez**; bunlar sayfada HTML olarak eklenir.
@@ -138,8 +138,8 @@ Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y
   - Durum 1,5 sn'de bir yoklanır. Akış koparsa 2 sn sonra yeniden bağlanılır.
 - **Tek kamera:**
   - Çift tıkla (telefonda dokun) açılır; geri ya da Esc ile ızgaraya dönülür.
-  - Ham tek kamera akışı kullanılır (`quality=sub`); "Net görüntü" ile `main`'e geçilir.
-  - Kutunun üstüne gelince "Tam ekran" ve "Canlı sayıma git" düğmeleri çıkar. Analiz çalışıyorsa oturuma gidilir, çalışmıyorsa başlatma penceresi açılır.
+  - Ham tek kamera akışı kullanılır (`quality=sub`); "Net görüntü" ile `main`'e geçilir (kamerada analiz oturumu varsa oturumun karesi gösterilir).
+  - Kutunun üstüne gelince "Tam ekran" (tek kamerayı açar; gerçek tam ekran araç çubuğundaki "Tüm ekran"dır) ve "Canlı sayıma git" düğmeleri çıkar. Analiz çalışıyorsa oturuma gidilir, çalışmıyorsa Kameralar sayfası (`/cameras`) açılır; canlı sayım oradan başlatılır.
 - **Düzenleme kipi:**
   - Sağda kamera listesi: tek kameralar ve NVR kanalları, küçük resim ve adla.
   - Kutuya sürükle-bırak ya da kutuya tıklayıp listeden seç. Kutu boşaltılabilir, kutular sürükleyerek yer değiştirebilir.
@@ -147,21 +147,22 @@ Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y
   - "Kaydet" ve "Vazgeç". Şablon yeniden adlandırılabilir, kopyalanabilir ve silinebilir (onaylı).
 - **Telefon görünümü:**
   - Şablon seçici üstte, ızgara genişliği kaplar. Birleşik akışın boyutu kapsayıcının gerçek boyutundan istenir.
-  - Dokununca tek kamera açılır; yan çevirince tam ekran olur.
+  - Dokununca tek kamera açılır; yan çevirince ızgara (ya da tek kamera) ekranı kaplar (CSS kaplama: gerçek tam ekran dokunuş ister, yön değişimiyle açılamaz).
 
 ## Telefondan erişim (ofis ağı)
-- **Varsayılan:** Panel yalnızca bu bilgisayardan açılır. Başlatıcı `next dev`/`next start`'ı `-H 127.0.0.1` ile çalıştırır. Bugün Next'in tüm ağ arayüzlerini dinlemesiyle oluşan şifresiz yerel ağ erişimi böylece kapanır.
+- **Varsayılan:** Panel yalnızca bu bilgisayardan açılır. Başlatıcı erişim kapalıyken `next dev`'i `-H 127.0.0.1` ile çalıştırır; `npm run dev` / `npm start` betikleri de `127.0.0.1`'de dinler. Bugün Next'in tüm ağ arayüzlerini dinlemesiyle oluşan şifresiz yerel ağ erişimi böylece kapanır.
 - **Açma:** Ayarlar → "Telefondan erişim":
   - Önce panel şifresi belirlenir (en az 8 karakter). Şifre yalnızca scrypt özeti olarak panelin yerel dosyasında tutulur (`apps/dashboard/.local/access.json`, git dışı); bir oturum sırrı da aynı dosyada durur.
-  - Erişim açıkken panel tüm ağ arayüzlerini dinler ve **herkes için** şifre ister, bu bilgisayar dahil. Uzak adres güvenilir biçimde ayırt edilemediği için yerel istisna yapılmaz.
+  - Erişim açıkken panel tüm ağ arayüzlerini dinler (her zaman üretim kipinde, `next start`) ve **herkes için** şifre ister, bu bilgisayar dahil. Uzak adres güvenilir biçimde ayırt edilemediği için yerel istisna yapılmaz.
 - **Çalıştırma:** Panel küçük bir başlatıcıyla çalışır (`tools/panel_run.mjs`):
   - erişim dosyasını okur;
   - `-H` adresini ve oturum sırrı ile şifre özetini ortam değişkeni olarak verip Next'i çalıştırır;
-  - dosya değişince Next'i yeniden başlatır (yaklaşık 10 sn). Şifre değişince eski oturumlar düşer.
+  - dosya değişince Next'i yeniden başlatır (yaklaşık 10 sn; yerel ağ kipinde gerekiyorsa önce 1–2 dk derler). Şifre değişince eski oturumlar düşer;
+  - tek kopya çalışır, kendi derleme klasörünü ve başarı işaretini kullanır, durumunu bir dosyaya yazar (bkz. "Değişiklikler (2026-10-09)").
 - `DASHBOARD_PASSWORD` ortam değişkeni varsa önceliklidir; bugünkü davranış korunur.
 - **Ayarlar sayfası:** Açıkken telefonda açılacak adresi (bilgisayarın yerel IP'leri) ve bir **QR kodu** gösterir. QR için küçük bir npm paketi (`qrcode`, MIT) eklenir.
 - **Windows güvenlik duvarı:** İlk açılışta "özel ağ" izni isteyebilir; bunu kullanıcı onaylar. Sayfada bu not yazar.
-- **Analiz sunucusu** yalnızca `127.0.0.1`'de kalır. Telefon yalnızca panelle konuşur; kamera şifreleri telefona gitmez.
+- **Analiz sunucusu** yalnızca `127.0.0.1`'de kalır. Telefon yalnızca panelle konuşur; kamera şifreleri telefona gitmez (tam RTSP adresindeki kullanıcı:şifre de yanıtlarda `rtsp://***@…` olarak gizlenir).
 - **Bilinen sınır:** Yerel ağda bağlantı şifrelenmemiş http'dir. Dışarıdan erişim ayrıca ele alınacak.
 
 ## Hata ve sınır durumları
@@ -203,3 +204,13 @@ Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y
 ## Gizlilik (KVKK)
 - Izgara **kayıt yapmaz**; yalnızca canlı görüntü gösterir. Görüntü bilgisayardan yalnızca aynı ağdaki, şifreyle giriş yapmış tarayıcıya gider.
 - Analiz sunucusu dış ağa açılmaz. Kamera şifreleri yalnızca bilgisayardaki `secrets.json`'da kalır.
+
+## Değişiklikler (2026-10-09)
+Tüm dal incelemesinden sonraki son düzeltme turu. Belgenin yukarısı bu maddelere göre düzeltildi; ayrıntı `docs/13-web-platform.md`.
+- **Şablon değişiminde uzun "Sınır aşıldı" yok:** sınırdayken aynı kalitede 3 sn'den uzun süredir istenmeyen en eski okuyucu yeni isteğe yer açar (kullanılan okuyucu asla çıkarılmaz). Tarayıcı akışı kapatınca birleştiricinin aboneliği hemen bırakılır; eski şablonun okuyucuları birkaç saniyede boşa çıkar.
+- **Analiz oturumu önceliği:** izlenen kamerada analiz başlatılınca izleme okuyucusu en çok 5 sn tutulur; oturum yeniden bağlanıyor/hata bildirirse hemen bırakılır ve oturum sürdükçe yeniden açılmaz (bağlantı sınırı 2–3 olan NVR'da analiz aç kalmaz). Kutu bu sırada son kareyle oturumun durumunu gösterir; oturumlu kutuda `fps` oturumun işleme hızıdır.
+- **Başka cihazda düzenlenen şablon:** durum farklı düzen ya da kutuda farklı kamera bildirirse panel şablon listesini bir kez yeniden alır.
+- **Başlatıcı:** tek kopya kilidi (`apps/dashboard/.local/panel.lock`); üretim derlemesi `.next-lan` klasörüne, başarı işareti `.bv-build-ok` yalnızca başarılı derlemeden sonra; derlemede giriş denetimi (middleware) yoksa yerel ağa açılmaz; durum dosyası `panel-state.json` (`building` / `failed` / `listening`); `panel_baslat.bat` 240 sn bekler ve derlenirken bunu yazar; Ayarlar derleme durumunu gösterir.
+- **Güvenlik sıkılaştırma:** giriş yalnızca `application/json` gövdeyle (aksi `415`); şifresiz kipte `Host` geri döngü adı değilse `403` (DNS yeniden bağlama); giriş muafiyeti tam yol (`/login`, `/api/login`); tam RTSP adresindeki kimlik yanıtlarda gizlenir.
+- **Verim:** değişmeyen kutularda tuval yeniden çizilmez/kodlanmaz (5 sn'de bir aynı tuval); şablon başına en çok 8 farklı boyut (`503`); durum yoklaması kare işlemez ve şifre dosyasını okumaz; açıcı reddi 1 sn önbellekte; gizli sekmede akış istenmez.
+- **"Canlı sayıma git"** oturum yoksa Kameralar sayfasını açar (tasarımdaki "başlatma penceresi" yerine).
