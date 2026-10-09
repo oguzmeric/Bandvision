@@ -27,6 +27,7 @@ from .alarms import AlarmStore
 from .clips import ClipWriter
 from .jsonfile import quarantine, read_json, write_json_atomic
 from .layouts import LAYOUTS, MAX_TILES, layout_by_id, smallest_for
+from .mosaic import MosaicHub
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
@@ -265,6 +266,7 @@ class LiveManager:
         self.alarms = AlarmStore(root)
         self.views = ViewStore(root)
         self.viewers = ViewHub(self._view_opener, self._session_for)
+        self.mosaics = MosaicHub(self.views.get, self.viewers)
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
         self.pose = SharedPose()
@@ -937,6 +939,93 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(503, str(e)) from e
         return {**v, "truncated": len(chans) > MAX_TILES, "channelCount": len(chans)}
 
+    def _mjpeg(parts: Iterator[bytes]) -> StreamingResponse:
+        return StreamingResponse(parts, media_type="multipart/x-mixed-replace; boundary=frame",
+                                 headers={"Cache-Control": "no-store"})
+
+    def _part(jpeg: bytes) -> bytes:
+        return (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpeg)).encode()
+                + b"\r\n\r\n" + jpeg + b"\r\n")
+
+    @r.get("/views/{view_id}/stream")
+    def view_stream(view_id: str, w: int = Query(1280, ge=16, le=7680), h: int = Query(720, ge=16, le=4320),
+                    limit: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
+        """`limit`: yalnızca test/teşhis — bu kadar kareden sonra akış biter (panel kullanmaz)."""
+        try:
+            comp, tok = manager.mosaics.acquire(view_id, w, h)
+        except LookupError as e:
+            raise HTTPException(404, "Şablon bulunamadı.") from e
+
+        def frames() -> Iterator[bytes]:
+            seq, idle, sent = 0, time.monotonic(), 0
+            try:
+                while limit is None or sent < limit:
+                    seq2, jpeg = comp.jpeg(tok, seq, timeout=2.0)
+                    if comp.gone:
+                        return
+                    if jpeg is None or seq2 == seq:
+                        if time.monotonic() - idle > 60:
+                            return
+                        continue
+                    idle, seq = time.monotonic(), seq2
+                    sent += 1
+                    yield _part(jpeg)
+            finally:
+                manager.mosaics.release(comp, tok)
+
+        return _mjpeg(frames())
+
+    @r.get("/views/{view_id}/status")
+    def view_status(view_id: str) -> dict[str, Any]:
+        view = manager.views.get(view_id)
+        if view is None:
+            raise HTTPException(404, "Şablon bulunamadı.")
+        tiles: list[dict[str, Any] | None] = []
+        for t in view["tiles"]:
+            if not t:
+                tiles.append(None)
+                continue
+            src_id, ch = t["sourceId"], t.get("channelId")
+            gone = store.source(src_id) is None
+            tf = manager.viewers.peek(src_id, ch)
+            s = manager._session_for(src_id, ch)
+            tiles.append({"sourceId": src_id, "channelId": ch, "name": manager.camera_name(src_id, ch),
+                          "state": "error" if gone else tf.state,
+                          "message": "Kamera silinmiş." if gone else tf.message, "fps": tf.fps,
+                          "analysis": _analysis(manager, s) if s is not None else None})
+        return {"id": view["id"], "layout": view["layout"], "tiles": tiles}
+
+    @r.get("/cameras/stream")
+    def camera_stream(source: str = Query(pattern=_REF), channel: str | None = Query(None, pattern=_REF),
+                      quality: Literal["sub", "main"] = "sub",
+                      limit: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
+        manager.source_or_404(source)
+
+        def frames() -> Iterator[bytes]:
+            last, idle, sent = -1, time.monotonic(), 0
+            while limit is None or sent < limit:
+                tf = manager.viewers.tile(source, channel, quality)
+                if tf.frame is not None and tf.seq != last:
+                    last, idle = tf.seq, time.monotonic()
+                    ok, buf = cv2.imencode(".jpg", tf.frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ok:
+                        sent += 1
+                        yield _part(buf.tobytes())
+                elif time.monotonic() - idle > 60:
+                    return
+                time.sleep(0.08)
+
+        return _mjpeg(frames())
+
+    @r.get("/cameras/status")
+    def camera_status(source: str = Query(pattern=_REF), channel: str | None = Query(None, pattern=_REF),
+                      quality: Literal["sub", "main"] = "sub") -> dict[str, Any]:
+        manager.source_or_404(source)
+        tf = manager.viewers.peek(source, channel, quality)
+        s = manager._session_for(source, channel)
+        return {"name": manager.camera_name(source, channel), "state": tf.state, "message": tf.message,
+                "fps": tf.fps, "analysis": _analysis(manager, s) if s is not None else None}
+
     # ---------------------------------------------------------------- canlı oturumlar
 
     @r.get("/sessions")
@@ -1251,3 +1340,20 @@ def _session_view(s: LiveSession) -> dict[str, Any]:
     v.update(sourceId=getattr(s, "source_id", None), channelId=getattr(s, "channel_id", None),
              profileId=getattr(s, "profile_id", None), substream=getattr(s, "substream", None))
     return v
+
+
+def _analysis(manager: LiveManager, s: LiveSession) -> dict[str, Any]:
+    """Kutudaki rozet: o kamerada çalışan analizin özeti (+ onaylanmamış güvenlik alarmı)."""
+    v = s.snapshot_status()
+    mode = s.profile.countMode
+    a: dict[str, Any] = {"mode": mode, "sessionId": s.id, "name": s.profile.name}
+    if mode == "detect":
+        a.update(entered=v["total"], exited=v["totalOut"])
+    elif mode == "safety":
+        sf = v.get("safety") or {}
+        a.update(healthy=sf.get("healthy"), reason=sf.get("reason"))
+    else:
+        a.update(total=v["total"])
+    open_alarms = manager.alarms.list(active_only=True, session_id=s.id, limit=1)
+    a["alarm"] = {"id": open_alarms[0]["id"], "type": open_alarms[0]["type"]} if open_alarms else None
+    return a

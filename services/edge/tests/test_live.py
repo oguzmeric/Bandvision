@@ -2157,3 +2157,60 @@ def test_locked_watch_json_retry_stops_at_shutdown_and_opens_nothing(tmp_path: p
     locked[0] = False                                                           # kilit kapanıştan sonra kalktı
     time.sleep(1.2)
     assert mgr._watch_stop.is_set() and mgr.sessions == {}                      # kapanıştan sonra açılan yok
+
+
+# ---------------------------------------------------------------------- çoklu izleme: birleşik akış ve kutu durumu
+
+def test_view_stream_and_status_with_file_sources(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    a = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                        name="Kapı")).json()["id"]
+    v = client.post("/api/v1/live/views", json={"name": "İki", "layout": "2",
+                                                 "tiles": [{"sourceId": a, "channelId": None}, None]}).json()
+    # `limit`: yalnızca test/teşhis — N kareden sonra akış biter (TestClient sonsuz akışı sonuna kadar bekler)
+    r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=640&h=360&limit=2")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("multipart/x-mixed-replace")
+    assert r.content.count(b"Content-Type: image/jpeg") == 2 and b"\xff\xd8" in r.content
+    st = wait_for(lambda: (x := client.get(f"/api/v1/live/views/{v['id']}/status").json())["tiles"][0]["state"] == "live"
+                  and x)
+    assert st["tiles"][0]["name"] == "Kapı" and st["tiles"][0]["analysis"] is None and st["tiles"][1] is None
+    r = client.get(f"/api/v1/live/cameras/stream?source={a}&quality=sub&limit=1")
+    assert r.status_code == 200 and r.content.count(b"Content-Type: image/jpeg") == 1
+    assert client.get("/api/v1/live/views/yok/status").status_code == 404
+    assert client.get("/api/v1/live/cameras/stream?source=yok").status_code == 404
+    client.delete(f"/api/v1/live/sources/{a}")                       # kaynak silindi: şablon bozulmaz, kutu söyler
+    t0 = client.get(f"/api/v1/live/views/{v['id']}/status").json()["tiles"][0]
+    assert t0["state"] == "error" and t0["message"] == "Kamera silinmiş." and t0["name"] == "Silinmiş kamera"
+
+
+def test_view_status_reports_running_analysis_and_unacked_alarm(client: TestClient,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    sess, sid = _safety_session_with_fake(client, monkeypatch)       # mevcut yardımcı (sahte tanıyıcı + poz)
+    src_id = sess.source_id
+    v = client.post("/api/v1/live/views", json={"name": "Kasa", "layout": "1",
+                                                 "tiles": [{"sourceId": src_id, "channelId": None}]}).json()
+    st = wait_for(lambda: (x := client.get(f"/api/v1/live/views/{v['id']}/status").json())["tiles"][0]["analysis"]
+                  and x["tiles"][0]["analysis"].get("alarm") and x, timeout=30)
+    a = st["tiles"][0]["analysis"]
+    assert a["mode"] == "safety" and a["sessionId"] == sid and a["alarm"]["type"] == "hands_up"
+    assert client.app.state.live.viewers.open_count("sub") == 0      # oturum karesi kullanıldı: ikinci bağlantı yok
+
+
+def test_view_and_camera_status_report_stored_limit_rejection(client: TestClient,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sınır aşıldıysa kutu "bağlanıyor" değil nedenini söyler (okuyucu açılmadığı için `peek` saklı reddi verir)."""
+    from bantvision.live import viewer
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    monkeypatch.setitem(viewer.LIMITS, "sub", (0, "Sınır aşıldı (en çok 16 kamera)."))
+    a = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                        name="Depo")).json()["id"]
+    v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",
+                                                 "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    client.app.state.live.viewers.tile(a, None)                      # reddedilir, okuyucu açılmaz
+    t0 = client.get(f"/api/v1/live/views/{v['id']}/status").json()["tiles"][0]
+    assert t0["state"] == "error" and t0["message"] == "Sınır aşıldı (en çok 16 kamera)." and t0["name"] == "Depo"
+    cam = client.get(f"/api/v1/live/cameras/status?source={a}").json()
+    assert cam["state"] == "error" and cam["message"] == "Sınır aşıldı (en çok 16 kamera)."
+    assert cam["name"] == "Depo" and cam["analysis"] is None
+    assert client.app.state.live.viewers.open_count("sub") == 0
