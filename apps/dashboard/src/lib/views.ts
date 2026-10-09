@@ -14,10 +14,16 @@ export interface TileAnalysis {
 }
 export interface TileStatus { sourceId: string; channelId: string | null; name: string; state: "connecting" | "live" | "error"; message: string; fps: number; analysis: TileAnalysis | null }
 export interface ViewStatus { id: string; layout: string; tiles: Array<TileStatus | null> }
+/** `cameras/status` cevabı: kutu durumuyla aynı, kaynak/kanal kimliği olmadan */
+export type CameraStatus = Omit<TileStatus, "sourceId" | "channelId">;
 
 export const LAST_VIEW_KEY = "bv.watch.last";
 export const STATUS_POLL_MS = 1500;
 export const STREAM_RETRY_MS = 2000;
+/** Şablon listesi alınamazsa (analiz sunucusu yok) bu aralıkla yeniden denenir */
+export const RELOAD_RETRY_MS = 5000;
+/** Kapsayıcı boyutu değişince yeni akış boyutu bu kadar durulduktan sonra istenir (ilk ölçüm hemen) */
+export const RESIZE_DEBOUNCE_MS = 300;
 
 /** Kutunun ızgaradaki yeri (yüzde): birleşik görüntü aynı oranlarla çizilir */
 export function cellBox(l: ViewLayout, i: number): { left: string; top: string; width: string; height: string } {
@@ -32,6 +38,20 @@ export function streamSize(el: HTMLElement): { w: number; h: number } {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const round = (v: number) => Math.max(16, Math.round((v * dpr) / 16) * 16);
   return { w: round(r.width), h: round(r.height) };
+}
+
+/** Kutunun/kameranın bağlantı durumu metni; "Kamera silinmiş." ve "Sınır aşıldı…" kendi başına anlaşılır, öneksiz gösterilir */
+export function stateText(t: { state: "connecting" | "live" | "error"; message: string }): string {
+  if (t.state === "connecting") return "Bağlanıyor…";
+  const m = t.message.trim();
+  if (!m) return "Bağlantı yok";
+  if (m === "Kamera silinmiş." || m.startsWith("Sınır aşıldı")) return m;
+  return `Bağlantı yok — ${m}`;
+}
+
+/** "Canlı sayıma git": analiz çalışıyorsa o oturum, çalışmıyorsa Kameralar sayfası (oradan başlatılır) */
+export function liveHref(a: TileAnalysis | null | undefined): string {
+  return a ? `/live?s=${a.sessionId}` : "/cameras";
 }
 
 export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "info" } {

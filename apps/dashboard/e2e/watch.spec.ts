@@ -20,14 +20,18 @@ test("izleme (gerçek yığın): API ile şablon, birleşik akış gelir, tek ka
     kind: "camera", brand: "custom", customUrl: CLIP, name: "İzleme klibi" } })).json();
   const view = await (await page.request.post("/api/live/views", { data: {
     name: "E2E izleme", layout: "2", tiles: [{ sourceId: src.id, channelId: null }, null] } })).json();
-  await page.goto("/watch");
-  await page.getByRole("combobox", { name: "Şablon" }).selectOption(view.id);
-  await expect.poll(async () => page.getByAltText("E2E izleme canlı görüntü")
-    .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
-  await expect(page.getByTestId("watch-tile").first()).toContainText("İzleme klibi");
-  await page.getByTestId("watch-tile").first().dblclick();
-  await expect.poll(async () => page.getByAltText("İzleme klibi canlı görüntü")
-    .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
-  await page.request.delete(`/api/live/views/${view.id}`);
-  await page.request.delete(`/api/live/sources/${src.id}`);
+  try {
+    await page.goto("/watch");
+    await page.getByRole("combobox", { name: "Şablon" }).selectOption(view.id);
+    await expect.poll(async () => page.getByAltText("E2E izleme canlı görüntü")
+      .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect(page.getByTestId("watch-tile").first()).toContainText("İzleme klibi");
+    await page.getByTestId("watch-tile").first().dblclick();
+    await expect.poll(async () => page.getByAltText("İzleme klibi canlı görüntü")
+      .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+  } finally {
+    // test düşse de şablon ve kaynak kalmasın (sonraki testler "Henüz kaynak yok" bekleyebilir)
+    await page.request.delete(`/api/live/views/${view.id}`);
+    await page.request.delete(`/api/live/sources/${src.id}`);
+  }
 });
