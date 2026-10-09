@@ -31,6 +31,7 @@ from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
+from .viewer import SourceGone, ViewHub
 from .views import ViewsBusy, ViewStore
 
 _LOG = logging.getLogger(__name__)
@@ -263,6 +264,7 @@ class LiveManager:
         root = data_dir or store.root.parent
         self.alarms = AlarmStore(root)
         self.views = ViewStore(root)
+        self.viewers = ViewHub(self._view_opener, self._session_for)
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
         self.pose = SharedPose()
@@ -637,6 +639,22 @@ class LiveManager:
             if c.id == channel_id:
                 return f"{name} · {c.title.strip()}"
         return f"{name} · {channel_id}"
+
+    def _view_opener(self, source_id: str, channel_id: str | None, sub: bool
+                     ) -> tuple[Callable[[], str], Callable[[str], None] | None]:
+        """İzleme okuyucusunun adres üreticisi: kanal bilgisi ilk bağlanışta istenir (açılış beklemez)."""
+        src = self.store.source(source_id)
+        if src is None:
+            raise SourceGone("Kamera silinmiş.")
+        if src["kind"] == "recorder" and not channel_id:
+            raise SourceGone("Kayıt cihazından kamera seçilmemiş.")
+        return self.opener(src, channel_id, sub, lazy=True)
+
+    def _session_for(self, source_id: str, channel_id: str | None) -> LiveSession | None:
+        for s in list(self.sessions.values()):
+            if getattr(s, "source_id", None) == source_id and getattr(s, "channel_id", None) == channel_id:
+                return s
+        return None
 
     def camera_url(self, src: dict[str, Any]) -> str:
         custom = str(src.get("customUrl", "")).strip()

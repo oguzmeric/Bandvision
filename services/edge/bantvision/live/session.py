@@ -380,6 +380,13 @@ class LiveSession:
                 self._frame_cv.wait(left)
             return self._jpeg_seq, self._jpeg
 
+    def latest_frame(self) -> tuple[int, np.ndarray] | None:
+        """Son okunan ham kare (sıra, kare). Çoklu izleme NVR'a ikinci bağlantı açmadan bunu kullanır; yan etkisi yok."""
+        with self._frame_cv:
+            if self._latest is None:
+                return None
+            return self._latest[0], self._latest[2]
+
     def raw_jpeg(self) -> bytes | None:
         """İşaretsiz son işlenen kare (kalibrasyon düzenleyicisinin arka planı). Verilen kare, kutularıyla birlikte
         personel rengi öğretmesinin örnekleyeceği kare olarak hatırlanır. Henüz işlenen kare yoksa son okunan kare

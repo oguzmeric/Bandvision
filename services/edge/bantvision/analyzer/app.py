@@ -98,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         stop_cleanup.set()
         live.stop_background()                               # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
+        live.viewers.stop()                                  # izleme okuyucuları (kameralar bırakılır)
         worker.stop()
         sessions = list(live.sessions.values())
         # İzlenen güvenlik kameraları listesi (watch.json) korunur: sonraki açılışta yeniden açılırlar
