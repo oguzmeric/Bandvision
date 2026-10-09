@@ -6,6 +6,9 @@ birleştirici IDLE_STOP_S sonra durur ve eski tuvali bırakır. Durmuş birleşt
 aboneyle yeniden başlar; başlatma/durdurma kararı tek kilit altındadır (iki iş parçacığı çalışmaz, abone kaçmaz).
 Şablon her karede yeniden okunur: düzenleme bağlantı kopmadan yansır. Bir kutunun hatası yalnızca o kutuyu griye
 çevirir. Kamera adı/rozet/alarm tuvale çizilmez (panel HTML çizer).
+Hiçbir kutu değişmediyse (kareler aynı: kamera kopuk ya da görüntü durağan) tuval yeniden çizilip kodlanmaz; akış
+60 sn'de bitmesin diye en az KEEPALIVE_S'de bir aynı tuval yeniden gönderilir. Kutular yine de her turda sorulur
+(okuyucular canlı kalır). Bir şablon için en çok MAX_SIZES_PER_VIEW farklı boyutta birleştirici çalışır.
 """
 from __future__ import annotations
 
@@ -28,6 +31,9 @@ SUB_TTL_S = 10.0
 IDLE_STOP_S = 5.0
 JPEG_QUALITY = 75
 LOG_EVERY_S = 60.0                       # aynı şablonun hata günlüğü bu aralıkla en çok bir satır
+KEEPALIVE_S = 5.0                        # kutular değişmese de bu aralıkla (aynı) tuval gönderilir
+MAX_SIZES_PER_VIEW = 8                   # bir şablonun aynı anda en çok bu kadar farklı boyutta birleştiricisi olur
+TOO_MANY_SIZES_MSG = "Bu şablon için çok fazla farklı boyutta izleyici var."
 STOPPED_MSG = "İzleme durduruldu."
 EMPTY = (40, 40, 40)                     # BGR koyu gri: boş ya da karesiz kutu
 _TOKENS = itertools.count(1)
@@ -37,6 +43,10 @@ _LOGGED_LOCK = threading.Lock()
 
 class MosaicStopped(RuntimeError):
     """Birleştirici kapatıldı (sunucu kapanıyor); yeni abone alınmaz."""
+
+
+class TooManySizes(RuntimeError):
+    """Şablonun MAX_SIZES_PER_VIEW farklı boyutta birleştiricisi zaten çalışıyor (her boyut ayrı tuval ve kodlama)."""
 
 
 def _warn_limited(key: str, message: str, *args: object) -> None:
@@ -201,19 +211,24 @@ class Composer:
                 if self._thread is threading.current_thread():
                     self._running = False
 
-    def _tile_frame(self, tile: dict[str, Any] | None) -> np.ndarray | None:
+    def _tile_frame(self, tile: dict[str, Any] | None) -> tuple[np.ndarray | None, object]:
+        """Kutunun karesi ve değişim imzası (kamera, sıra no, kare nesnesi): imza aynıysa kutu değişmemiştir."""
         if not tile:
-            return None
+            return None, None
+        ref = (tile["sourceId"], tile.get("channelId"))
         try:
-            frame: np.ndarray | None = self._hub.tile(tile["sourceId"], tile.get("channelId")).frame
-            return frame
+            t = self._hub.tile(tile["sourceId"], tile.get("channelId"))
         except Exception:  # noqa: BLE001 — bir kutunun hatası tuvali öldürmesin: o kutu gri
             _warn_limited(f"tile:{self.view_id}", "Mozaik kutusu okunamadı (şablon %s)", self.view_id)
-            return None
+            return None, (ref, "hata")
+        frame: np.ndarray | None = t.frame
+        return frame, (ref, t.seq, None if frame is None else id(frame))
 
     def _loop(self) -> None:
         idle_since: float | None = None
         period = 1.0 / FPS
+        last_sig: object = None                              # son gönderilen tuvalin imzası (düzen + kutular)
+        sent_at = 0.0
         while not self._stop.is_set():
             t0 = time.monotonic()
             if not self._alive():
@@ -239,17 +254,26 @@ class Composer:
                     self._cv.notify_all()
                 return
             try:
-                frames = [self._tile_frame(t) for t in list(view.get("tiles", []))[:len(lay.cells)]]
-                ok, buf = cv2.imencode(".jpg", compose(lay, self.w, self.h, frames, self.view_id),
-                                       [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                got = [self._tile_frame(t) for t in list(view.get("tiles", []))[:len(lay.cells)]]
+                sig = (lay.id, tuple(g[1] for g in got))
+                now = self._clock()
+                with self._cv:
+                    same = sig == last_sig and self._jpeg is not None
+                    if same and now - sent_at >= KEEPALIVE_S:     # değişmedi: aynı tuval yeniden (kodlama yok)
+                        self._seq += 1
+                        sent_at = now
+                        self._cv.notify_all()
+                if not same:
+                    ok, buf = cv2.imencode(".jpg", compose(lay, self.w, self.h, [g[0] for g in got], self.view_id),
+                                           [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                    if ok:
+                        with self._cv:
+                            self._seq += 1
+                            self._jpeg = buf.tobytes()
+                            self._cv.notify_all()
+                        last_sig, sent_at = sig, now
             except Exception:  # noqa: BLE001 — bir karenin hatası akışı öldürmesin
                 _warn_limited(f"frame:{self.view_id}", "Mozaik karesi üretilemedi (şablon %s)", self.view_id)
-                ok = False
-            if ok:
-                with self._cv:
-                    self._seq += 1
-                    self._jpeg = buf.tobytes()
-                    self._cv.notify_all()
             self._stop.wait(max(0.0, period - (time.monotonic() - t0)))
 
 
@@ -264,7 +288,7 @@ class MosaicHub:
     def acquire(self, view_id: str, w: int, h: int) -> tuple[Composer, int]:
         """Şablonun bu boyuttaki birleştiricisine abone olur. Abonelik hub kilidi altında yapılır: aynı anda bir
         başka `acquire` bu birleştiriciyi "boşta" sanıp sözlükten atamaz. Şablon yoksa `LookupError`, hub kapalıysa
-        `MosaicStopped`."""
+        `MosaicStopped`, şablonun MAX_SIZES_PER_VIEW farklı boyutu zaten izleniyorsa `TooManySizes`."""
         if self._stopped:
             raise MosaicStopped(STOPPED_MSG)
         if self._views_get(view_id) is None:
@@ -280,6 +304,8 @@ class MosaicHub:
                 self._comps.pop(k).stop()
             comp = self._comps.get(key)
             if comp is None or comp.gone or comp.stopped:
+                if sum(1 for k in self._comps if k[0] == view_id and k != key) >= MAX_SIZES_PER_VIEW:
+                    raise TooManySizes(TOO_MANY_SIZES_MSG)
                 comp = Composer(view_id, w, h, self._views_get, self._hub, self._clock)
                 self._comps[key] = comp
             return comp, comp.subscribe()

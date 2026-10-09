@@ -28,7 +28,7 @@ from .alarms import AlarmStore
 from .clips import ClipWriter
 from .jsonfile import quarantine, read_json, write_json_atomic
 from .layouts import LAYOUTS, MAX_TILES, layout_by_id, smallest_for
-from .mosaic import MosaicHub, MosaicStopped
+from .mosaic import MosaicHub, MosaicStopped, TooManySizes
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
@@ -971,7 +971,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         """`limit`: yalnızca test/teşhis — bu kadar kareden sonra akış biter (panel kullanmaz)."""
         try:
             comp, tok = manager.mosaics.acquire(view_id, w, h)
-        except MosaicStopped as e:
+        except (MosaicStopped, TooManySizes) as e:
             raise HTTPException(503, str(e)) from e
         except LookupError as e:
             raise HTTPException(404, "Şablon bulunamadı.") from e

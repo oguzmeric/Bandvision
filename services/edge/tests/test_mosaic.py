@@ -282,3 +282,91 @@ def test_bad_tile_greys_only_itself_and_logs_at_most_once_per_minute(caplog: pyt
         assert len(warns) == 1                               # dakikada en çok bir günlük satırı (şablon başına)
     finally:
         mh.stop()
+
+
+# ---------------------------------------------------------------------- değişmeyen kutularda iş yok; boyut sınırı
+
+
+class StaticHub(FakeHub):
+    """Her kutu hep aynı kare (sıra numarası değişmez): kamera kopuk ya da görüntü durağan."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.frame = np.full((90, 160, 3), 120, np.uint8)
+        self.seq = 1
+
+    def tile(self, source_id: str, channel_id: str | None, quality: str = "sub") -> TileFrame:
+        self.asked.append((source_id, channel_id))
+        return TileFrame(self.seq, self.frame, "live", "", 0.0)
+
+
+def _count_compose(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    calls = {"n": 0}
+    real = mosaic.compose
+
+    def counting(*a: Any, **k: Any) -> np.ndarray:
+        calls["n"] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(mosaic, "compose", counting)
+    return calls
+
+
+def test_unchanged_tiles_are_not_recomposed_but_a_keepalive_frame_goes_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _count_compose(monkeypatch)
+    view = {"id": "v", "layout": "2", "tiles": [{"sourceId": "a", "channelId": None}, None]}
+    clock = FakeClock()
+    hub = StaticHub()
+    mh = MosaicHub(_views(view), hub, clock=clock)
+    try:
+        comp, tok = mh.acquire("v", 320, 180)
+        seq, jpeg = comp.jpeg(tok, 0, 3.0)
+        assert jpeg is not None and calls["n"] == 1
+        n_asked = len(hub.asked)
+        seq2, _ = comp.jpeg(tok, seq, 1.0)                    # 1 sn: kutular değişmedi, yeni tuval yok
+        assert seq2 == seq and calls["n"] == 1
+        assert len(hub.asked) > n_asked                       # kutular yine soruldu (okuyucular canlı kalır)
+        clock.now += mosaic.KEEPALIVE_S + 0.1                 # 5 sn: aynı tuval yeniden gönderilir (akış 60 sn'de bitmez)
+        seq3, jpeg3 = comp.jpeg(tok, seq, 3.0)
+        assert seq3 > seq and jpeg3 == jpeg and calls["n"] == 1   # yeniden çizilmedi, yeniden kodlanmadı
+        hub.seq = 2                                           # bir kutuya yeni kare geldi
+        seq4, _ = comp.jpeg(tok, seq3, 3.0)
+        assert seq4 > seq3 and calls["n"] == 2
+    finally:
+        mh.stop()
+
+
+def test_template_edit_recomposes_even_if_frames_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _count_compose(monkeypatch)
+    view = {"id": "v", "layout": "2", "tiles": [{"sourceId": "a", "channelId": None}, None]}
+    mh = MosaicHub(_views(view), StaticHub())
+    try:
+        comp, tok = mh.acquire("v", 320, 180)
+        seq, _ = comp.jpeg(tok, 0, 3.0)
+        view["tiles"] = [None, {"sourceId": "a", "channelId": None}]     # aynı kare, başka kutu
+        seq2, _ = comp.jpeg(tok, seq, 3.0)
+        assert seq2 > seq and calls["n"] == 2
+    finally:
+        mh.stop()
+
+
+def test_at_most_8_sizes_per_template() -> None:
+    views: dict[str, dict[str, Any]] = {
+        k: {"id": k, "layout": "1", "tiles": [{"sourceId": "a", "channelId": None}]} for k in ("v", "w")}
+    clock = FakeClock()
+    mh = MosaicHub(lambda vid: dict(views[vid]) if vid in views else None, FakeHub(), clock=clock)
+    try:
+        sizes = [(320 + 16 * i, 240) for i in range(mosaic.MAX_SIZES_PER_VIEW)]
+        held = [mh.acquire("v", w, h) for w, h in sizes]
+        with pytest.raises(mosaic.TooManySizes) as e:
+            mh.acquire("v", 1280, 720)
+        assert str(e.value) == "Bu şablon için çok fazla farklı boyutta izleyici var."
+        c, _ = mh.acquire("v", *sizes[0])                     # var olan boyut: paylaşılır
+        assert c is held[0][0]
+        mh.acquire("w", 1280, 720)                            # başka şablon etkilenmez
+        for comp, tok in held:                                # izleyiciler gitti: boyutlar boşalır
+            mh.release(comp, tok)
+            assert _idle_stop(clock, comp)
+        mh.acquire("v", 1280, 720)
+    finally:
+        mh.stop()

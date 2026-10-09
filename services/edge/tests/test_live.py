@@ -2341,3 +2341,17 @@ def test_camera_endpoints_limit_reference_length_like_tiles(client: TestClient) 
         assert client.get(f"/api/v1/live/cameras/{path}?source={long_ref}").status_code == 422
         assert client.get(f"/api/v1/live/cameras/{path}?source=ok&channel={long_ref}").status_code == 422
     assert client.get("/api/v1/live/cameras/status?source=" + "a" * 120).status_code == 404     # sınırda geçerli
+
+
+def test_view_stream_is_503_when_template_has_too_many_sizes(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live import mosaic
+
+    monkeypatch.setattr(mosaic, "MAX_SIZES_PER_VIEW", 1)
+    a, _b = _two_file_sources(client, monkeypatch)
+    v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",
+                                                 "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    client.app.state.live.mosaics.acquire(v["id"], 320, 240)          # bir izleyici bu boyutta
+    r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=640&h=360&limit=1")
+    assert r.status_code == 503 and r.json()["detail"] == "Bu şablon için çok fazla farklı boyutta izleyici var."
+    r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=320&h=240&limit=1")    # aynı boyut paylaşılır
+    assert r.status_code == 200
