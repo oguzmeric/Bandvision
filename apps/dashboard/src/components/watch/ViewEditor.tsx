@@ -26,7 +26,8 @@ const nextEmpty = (tiles: Array<TileRef | null>, from: number): number | null =>
  * Kutu seçimi: bir kutu seçilidir (tıklanan/odaklanıp Enter-Boşluk basılan; yeni kamera onda yerleşir, sonra sıradaki boş
  * kutu seçilir). DOLU bir kutu seçiliyken başka bir kutuya tıklamak ikisinin yerini değiştirir (boş kutuya tıklamak
  * kamerayı oraya taşır) ve seçim hedefte kalır; aynı kutuya yeniden tıklamak seçimi korur. Fare ile sürükle-bırak da var
- * (listeden kutuya, kutudan kutuya); dokunmatik ve klavye için tıklama yolu yeter.
+ * (listeden kutuya, kutudan kutuya; kutudan kutuya sürükleyince seçim ilk boş kutuya geçer, listeden seçilen kamera
+ * dolu kutuyu ezmez); dokunmatik ve klavye için tıklama yolu yeter.
  */
 export default function ViewEditor({ initial, layouts, names, onSaved, onCancel, onDeleted }: {
   initial: ViewTemplate | null; layouts: ViewLayout[]; names: Record<string, string>;
@@ -85,6 +86,14 @@ export default function ViewEditor({ initial, layouts, names, onSaved, onCancel,
     place(selected, ref, label);
   };
   const swap = (a: number, b: number) => setTiles((t) => { const n = [...t]; [n[a], n[b]] = [n[b], n[a]]; return n; });
+  /** Sürükleyerek yer değiştirme: seçili kutu dolmuş olabilir, seçim ilk boş kutuya geçer */
+  const dragSwap = (a: number, b: number) => {
+    const n = [...tiles];
+    [n[a], n[b]] = [n[b], n[a]];
+    setTiles(n);
+    setSelected(firstEmpty(n));
+    setPickHint(null);
+  };
   const clickTile = (i: number) => {
     setPickHint(null);
     if (selected !== null && selected !== i && tiles[selected]) swap(selected, i);   // dolu seçiliyken başka kutu: yer değiştir/taşı
@@ -133,7 +142,7 @@ export default function ViewEditor({ initial, layouts, names, onSaved, onCancel,
                    onDrop={(e) => {
                      e.preventDefault();
                      const from = e.dataTransfer.getData("application/x-bv-tile");
-                     if (from !== "") return swap(Number(from), i);
+                     if (from !== "") return dragSwap(Number(from), i);
                      const cam = e.dataTransfer.getData("application/x-bv-camera");
                      if (cam) { const { ref, name: n } = JSON.parse(cam) as { ref: TileRef; name: string }; place(i, ref, n); }
                    }}>

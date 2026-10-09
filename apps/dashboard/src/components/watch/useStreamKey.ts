@@ -13,9 +13,13 @@ import { STREAM_REKEY_MS, STREAM_RETRY_MS } from "@/lib/views";
  *   - çağıran `bump()` derse (durum yoklaması koptuktan sonra düzeldi: sunucu yeniden başladı): hemen;
  *   - sigorta: sekme görünürken `STREAM_REKEY_MS`'de bir (ağ sessizce takılıp görüntü donarsa ne olay ne hata gelir).
  * Anahtar `src`'ye eklenir; değişince tarayıcı akışı baştan açar.
+ * `visible`: sekme görünür mü. Gizliyken çağıran `<img>`'i hiç çizmez: arka plandaki masaüstü sekmesi akışı (sunucuda
+ * birleştirici ve okuyucular) boşuna açık tutmaz; görünür olunca yeni anahtarla yeniden açılır.
  */
-export function useStreamKey(): { streamKey: number; onError: () => void; bump: () => void } {
+export function useStreamKey(): { streamKey: number; onError: () => void; bump: () => void; visible: boolean } {
   const [streamKey, setStreamKey] = useState(0);
+  // İlk çizim (sunucu tarafı dahil) görünür kabul edilir; gerçek durum ilk etkide okunur (hidrasyon uyuşmazlığı olmasın)
+  const [visible, setVisible] = useState(true);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const bump = useCallback(() => {
@@ -24,12 +28,17 @@ export function useStreamKey(): { streamKey: number; onError: () => void; bump: 
   }, []);
 
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible") bump(); };
-    document.addEventListener("visibilitychange", onVisible);
+    setVisible(document.visibilityState !== "hidden");
+    const onVisibility = () => {
+      const shown = document.visibilityState !== "hidden";
+      setVisible(shown);
+      if (shown) bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("online", bump);
     const rekey = setInterval(() => { if (document.visibilityState === "visible") bump(); }, STREAM_REKEY_MS);
     return () => {
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", bump);
       clearInterval(rekey);
       clearTimeout(timer.current);
@@ -41,5 +50,5 @@ export function useStreamKey(): { streamKey: number; onError: () => void; bump: 
     timer.current = setTimeout(() => setStreamKey((k) => k + 1), STREAM_RETRY_MS);
   }, []);
 
-  return { streamKey, onError, bump };
+  return { streamKey, onError, bump, visible };
 }

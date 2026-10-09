@@ -888,3 +888,112 @@ test("izleme: silinmiş kamerada (404) tek kamera akışı 30 sn'de bir boşuna 
   expect(ks.length).toBe(n);
   await expect(page.getByText("Kamera silinmiş.")).toBeVisible();
 });
+
+// ---- Son düzeltme turu: başka cihazda düzenlenen şablon, gizli sekme, silinmiş kamera, sürükleyerek yer değiştirme
+
+test("izleme: şablon başka yerde düzenlenirse (durum farklı düzen/kamera bildirir) liste yeniden alınır, katmanlar güncellenir", async ({ page }) => {
+  await mock(page, STATUS);
+  const cam = (sourceId: string, name: string) => ({ sourceId, channelId: null, name, state: "live", message: "", fps: 10, analysis: null });
+  const V1 = { ...VIEW, layout: "2", tiles: [{ sourceId: "a", channelId: null }, { sourceId: "d", channelId: null }] };
+  const S1 = { id: "v1", layout: "2", tiles: [STATUS.tiles[0], cam("d", "Depo")] };
+  const V2 = { ...V1, tiles: [{ sourceId: "e", channelId: null }, { sourceId: "d", channelId: null }] };
+  const S2 = { id: "v1", layout: "2", tiles: [cam("e", "Ek kamera"), cam("d", "Depo")] };
+  let edited = 0;                                                    // 0: ilk hâl, 1: düzen değişti, 2: kutudaki kamera değişti
+  let listed = 0;
+  await page.route("**/api/live/views", (r) => { listed += 1; return r.fulfill({ json: [[VIEW, V1, V2][edited]] }); });
+  await page.route("**/api/live/views/v1/status", (r) => r.fulfill({ json: [STATUS, S1, S2][edited] }));
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await expect(tiles).toHaveCount(4);
+  const before = listed;
+  edited = 1;                                                        // başka bir cihazda düzen 2'liye çevrildi
+  await expect(tiles).toHaveCount(2);
+  await expect(tiles.nth(1)).toContainText("Depo");
+  expect(listed).toBe(before + 1);                                   // bu uyuşmazlık için tek yeniden yükleme
+  edited = 2;                                                        // aynı düzen, kutudaki kamera değişti
+  await expect(tiles.nth(0)).toContainText("Ek kamera");
+  await page.waitForTimeout(3500);                                   // eşleşince yeniden yükleme durur (≥2 yoklama turu)
+  expect(listed).toBe(before + 2);
+});
+
+/** Sekmeyi gizli/görünür yapar (tarayıcı sekme değişimini taklit eder) */
+async function setHidden(page: Page, hidden: boolean) {
+  await page.evaluate((h) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+}
+
+test("izleme: gizli sekmede akış bırakılır (görüntü kalkar), sekmeye dönünce yeni anahtarla açılır; tek kamerada da", async ({ page }) => {
+  await mock(page, STATUS);
+  const ks = await streamKeys(page, "**/api/live/views/v1/stream**");
+  const cks = await streamKeys(page, "**/api/live/cameras/stream**");
+  await login(page);
+  const img = page.getByAltText("Giriş katı canlı görüntü");
+  await expect(img).toBeVisible();
+  await setHidden(page, true);
+  await expect(img).toHaveCount(0);                                  // akış isteği düştü
+  const n = ks.length;
+  await setHidden(page, false);
+  await expect(img).toBeVisible();
+  await expect.poll(() => ks.length).toBeGreaterThan(n);
+  expect(new Set(ks).size).toBe(ks.length);                          // yeni anahtar
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByTestId("watch-tile").nth(0).dblclick();
+  const one = page.getByAltText("Kapı canlı görüntü");
+  await expect(one).toBeVisible();
+  await setHidden(page, true);
+  await expect(one).toHaveCount(0);
+  const m = cks.length;
+  await setHidden(page, false);
+  await expect(one).toBeVisible();
+  await expect.poll(() => cks.length).toBeGreaterThan(m);
+});
+
+test("izleme: silinmiş kamerada akış hatası (404) tek kamerayı tekrar tekrar yeniden açtırmaz", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/cameras/status**", (r) => r.fulfill({ status: 404, json: { detail: "Kaynak bulunamadı." } }));
+  let streams = 0;
+  await page.route("**/api/live/cameras/stream**", (r) => { streams += 1; return r.fulfill({ status: 404, json: { detail: "Kaynak bulunamadı." } }); });
+  await page.clock.install();
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByTestId("watch-tile").nth(0).dblclick();
+  await expect(page.getByText("Kamera silinmiş.")).toBeVisible();
+  await page.clock.runFor(3_000);                                    // silinmiş bilinmeden kurulmuş tek bekleme bitsin
+  await page.waitForTimeout(200);
+  const n = streams;
+  await page.clock.runFor(20_000);                                   // hata başına 2 sn'de bir yeniden açmaz
+  await page.waitForTimeout(300);
+  expect(streams).toBe(n);
+});
+
+test("izleme: düzenleyicide sürükleyerek yer değiştirince seçim ilk boş kutuya geçer (listeden seçim kamerayı ezmez)", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/sources", (r) => r.fulfill({ json: [
+    { id: "a", kind: "camera", name: "Kapı", brand: "custom", hasPassword: false },
+    { id: "d", kind: "camera", name: "Depo", brand: "custom", hasPassword: false }] }));
+  await page.route("**/api/live/sources/*/snapshot**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  const { calls } = await mockStore(page, [VIEW]);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByRole("button", { name: "Düzenle" }).click();
+  const ed = page.getByRole("region", { name: "Şablon düzenleyici" });
+  const box = (n: number) => ed.getByRole("button", { name: `Kutu ${n}`, exact: true });
+  const tile = (n: number) => ed.getByTestId("edit-tile").nth(n - 1);
+  await expect(box(4)).toHaveAttribute("aria-pressed", "true");                  // açılışta ilk boş kutu (4) seçili
+  await tile(1).dragTo(tile(4));                                                  // dolu Kutu 1 → seçili boş Kutu 4
+  await expect(tile(4)).toContainText("Kapı");
+  await expect(box(1)).toHaveAttribute("aria-pressed", "true");                  // seçim ilk boş kutuya geçti
+  await expect(tile(1)).toContainText("Listeden kamera seçin");                   // boş ve seçili
+  await expect(box(4)).toHaveAttribute("aria-pressed", "false");
+  await ed.getByRole("button", { name: "Depo" }).click();                         // listeden seçim boş kutuya
+  await expect(tile(1)).toContainText("Depo");
+  await expect(tile(4)).toContainText("Kapı");                                   // ezilmedi
+  await ed.getByRole("button", { name: "Kaydet" }).click();
+  await expect.poll(() => calls.length).toBe(1);
+  expect(calls[0].body).toEqual({ name: "Giriş katı", layout: "4", tiles: [{ sourceId: "d", channelId: null },
+    { sourceId: "b", channelId: "2" }, { sourceId: "c", channelId: null }, { sourceId: "a", channelId: null }] });
+});

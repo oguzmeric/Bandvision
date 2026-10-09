@@ -15,6 +15,16 @@ import ViewEditor from "./ViewEditor";
 import { usePhoneLandscape } from "./usePhoneLandscape";
 import { useStreamKey } from "./useStreamKey";
 
+/** Durum, şablonun bu hâline mi ait: aynı düzen ve her kutuda aynı kamera (boş kutu boş) */
+function sameTiles(status: ViewStatus, view: ViewTemplate): boolean {
+  if (status.layout !== view.layout || status.tiles.length !== view.tiles.length) return false;
+  return status.tiles.every((st, i) => {
+    const ref = view.tiles[i] ?? null;
+    if (!st || !ref) return !st && !ref;
+    return st.sourceId === ref.sourceId && (st.channelId ?? null) === (ref.channelId ?? null);
+  });
+}
+
 function remembered(): string | null {
   try { return window.localStorage.getItem(LAST_VIEW_KEY); } catch { return null; }
 }
@@ -49,7 +59,7 @@ export default function WatchView() {
   /** Video duvarı (tam ekran) açık mı; tarayıcı tam ekranı desteklemiyorsa (ör. iPhone) düğme gizlenir */
   const [wallOn, setWallOn] = useState(false);
   const [canWall, setCanWall] = useState(false);
-  const { streamKey, onError, bump } = useStreamKey();
+  const { streamKey, onError, bump, visible } = useStreamKey();
   const phone = usePhoneLandscape();
   const gridRef = useRef<HTMLDivElement>(null);
   const wallRef = useRef<HTMLDivElement>(null);
@@ -85,6 +95,18 @@ export default function WatchView() {
 
   const view = views.find((v) => v.id === currentId) ?? null;
   const layout = view ? layouts.find((l) => l.id === view.layout) ?? null : null;
+
+  // Şablon başka bir cihazda düzenlendi: aynı şablonun durumu farklı düzen ya da kutularda farklı kamera bildirir
+  // (önbellekteki şablon eski). Uyuşmazlık başına BİR kez liste yeniden alınır; yükleme sürerken tekrarlanmaz,
+  // eşleşme görülünce (ya da yükleme başarısız olursa) yeniden izin verilir.
+  const resyncing = useRef(false);
+  useEffect(() => {
+    if (!status || !view || status.id !== view.id) return;
+    if (sameTiles(status, view)) { resyncing.current = false; return; }
+    if (resyncing.current) return;
+    resyncing.current = true;
+    void reload(view.id).then((ok) => { if (!ok) resyncing.current = false; });
+  }, [status, view, reload]);
   useEffect(() => { if (currentId) remember(currentId); }, [currentId]);
   const hasView = view !== null;
   useEffect(() => { if (!hasView) setSingle(null); }, [hasView]);   // şablon kalmadıysa tek kamera da kapanır
@@ -205,7 +227,8 @@ export default function WatchView() {
 
   const aspect = layout ? `${layout.cols * 16} / ${layout.rows * 9}` : "16 / 9";
   const ratio = layout ? (layout.cols * 16) / (layout.rows * 9) : 16 / 9;
-  const src = view && size && view.id !== goneId ? `/api/live/views/${view.id}/stream?w=${size.w}&h=${size.h}&k=${streamKey}` : null;
+  // Gizli sekmede akış istenmez (`<img>` çizilmez): sunucuda birleştirici ve okuyucular boşuna açık kalmaz
+  const src = visible && view && size && view.id !== goneId ? `/api/live/views/${view.id}/stream?w=${size.w}&h=${size.h}&k=${streamKey}` : null;
   const singleMode: SingleMode = wallOn ? "wall" : phone.active ? "phone" : "page";
   // Video duvarında ızgara ekranı oranını koruyarak doldurur (ultra geniş ekranda taşmaz); telefon yatayken ekranı kaplar
   const gridClass = wallOn ? "relative overflow-hidden bg-black"

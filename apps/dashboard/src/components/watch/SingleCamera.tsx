@@ -21,6 +21,7 @@ const GONE: CameraStatus = { name: "", state: "error", message: "Kamera silinmi�
  * kesintide kamera akışını bitirir, durum yoklaması sağlıklı kalsa da görüntü kendiliğinden dönmez); bağlı değilden
  * bağlıya geçince hemen. Yoklama üst üste `FAILS_BEFORE_WARNING` kez koparsa görüntünün üstünde sunucuya ulaşılamadığı
  * (ya da oturumun dolduğu, 401) yazar; eski "canlı" durumu gösterilmez. `liveHref`: analizi varsa o oturum, yoksa Kameralar sayfası.
+ * Gizli sekmede `<img>` çizilmez (akış bırakılır); silinmiş kamerada akış hatası yeniden açmayı tetiklemez.
  */
 export default function SingleCamera({ sourceId, channelId, name, liveHref, mode, onClose }: {
   sourceId: string; channelId: string | null; name: string; liveHref: string; mode: SingleMode; onClose: () => void;
@@ -28,7 +29,7 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
   const [quality, setQuality] = useState<"sub" | "main">("sub");
   const [cam, setCam] = useState<CameraStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
-  const { streamKey, onError, bump } = useStreamKey();
+  const { streamKey, onError, bump, visible } = useStreamKey();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -115,8 +116,11 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
     <section className={mode === "page" ? "grid gap-3" : undefined}>
       {!overlay && header}
       <div className={frame}>
-        {/* eslint-disable-next-line @next/next/no-img-element -- canlı MJPEG akışı */}
-        <img alt={`${name} canlı görüntü`} src={`/api/live/cameras/stream?${q}`} className="absolute inset-0 h-full w-full object-contain" onError={onError} />
+        {visible && (
+          // eslint-disable-next-line @next/next/no-img-element -- canlı MJPEG akışı
+          <img alt={`${name} canlı görüntü`} src={`/api/live/cameras/stream?${q}`} className="absolute inset-0 h-full w-full object-contain"
+               onError={gone ? undefined : onError} />
+        )}
         {(state || problem) && (
           <span role="status" className="pointer-events-none absolute inset-0 grid place-items-center p-4 text-center text-sm text-white/90">
             {problem ? <ConnectionProblem problem={problem} /> : state}
