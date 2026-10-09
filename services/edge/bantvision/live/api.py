@@ -27,7 +27,7 @@ from .alarms import AlarmStore
 from .clips import ClipWriter
 from .jsonfile import quarantine, read_json, write_json_atomic
 from .layouts import LAYOUTS, MAX_TILES, layout_by_id, smallest_for
-from .mosaic import MosaicHub
+from .mosaic import MosaicHub, MosaicStopped
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
@@ -629,9 +629,11 @@ class LiveManager:
                     return c
         raise HTTPException(404, "Kamera kayıt cihazında bulunamadı.")
 
-    def camera_name(self, source_id: str, channel_id: str | None) -> str:
-        """Kutu etiketi: kaynak adı (+ kanal adı). Ağa çıkmaz: kanal adı önbellekte yoksa kanal kimliği yazılır."""
-        src = self.store.source(source_id)
+    def camera_name(self, source_id: str, channel_id: str | None,
+                    sources: dict[str, dict[str, Any]] | None = None) -> str:
+        """Kutu etiketi: kaynak adı (+ kanal adı). Ağa çıkmaz: kanal adı önbellekte yoksa kanal kimliği yazılır.
+        `sources`: istek başına bir kez okunmuş kaynak tablosu (verilmezse depo okunur)."""
+        src = self.store.source(source_id) if sources is None else sources.get(source_id)
         if src is None:
             return "Silinmiş kamera"
         name = str(src.get("name") or "").strip() or "Kamera"
@@ -953,6 +955,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         """`limit`: yalnızca test/teşhis — bu kadar kareden sonra akış biter (panel kullanmaz)."""
         try:
             comp, tok = manager.mosaics.acquire(view_id, w, h)
+        except MosaicStopped as e:
+            raise HTTPException(503, str(e)) from e
         except LookupError as e:
             raise HTTPException(404, "Şablon bulunamadı.") from e
 
@@ -961,7 +965,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             try:
                 while limit is None or sent < limit:
                     seq2, jpeg = comp.jpeg(tok, seq, timeout=2.0)
-                    if comp.gone:
+                    if comp.gone or comp.stopped:
                         return
                     if jpeg is None or seq2 == seq:
                         if time.monotonic() - idle > 60:
@@ -981,22 +985,27 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if view is None:
             raise HTTPException(404, "Şablon bulunamadı.")
         tiles: list[dict[str, Any] | None] = []
+        # Kaynaklar istek başına BİR kez okunur (kutu başına iki dosya okuması değil). Not: depo okunamazsa boş liste
+        # verir ("yok" ile ayırt edilemez); o durumda kutular geçici olarak "Kamera silinmiş." görünür, sonraki
+        # yoklamada düzelir.
+        sources = {x["id"]: x for x in store.sources()}
         for t in view["tiles"]:
             if not t:
                 tiles.append(None)
                 continue
             src_id, ch = t["sourceId"], t.get("channelId")
-            gone = store.source(src_id) is None
+            gone = src_id not in sources
             tf = manager.viewers.peek(src_id, ch)
             s = manager._session_for(src_id, ch)
-            tiles.append({"sourceId": src_id, "channelId": ch, "name": manager.camera_name(src_id, ch),
+            tiles.append({"sourceId": src_id, "channelId": ch, "name": manager.camera_name(src_id, ch, sources),
                           "state": "error" if gone else tf.state,
                           "message": "Kamera silinmiş." if gone else tf.message, "fps": tf.fps,
                           "analysis": _analysis(manager, s) if s is not None else None})
         return {"id": view["id"], "layout": view["layout"], "tiles": tiles}
 
     @r.get("/cameras/stream")
-    def camera_stream(source: str = Query(pattern=_REF), channel: str | None = Query(None, pattern=_REF),
+    def camera_stream(source: str = Query(pattern=_REF, max_length=120),
+                      channel: str | None = Query(None, pattern=_REF, max_length=120),
                       quality: Literal["sub", "main"] = "sub",
                       limit: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
         manager.source_or_404(source)
@@ -1018,12 +1027,13 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         return _mjpeg(frames())
 
     @r.get("/cameras/status")
-    def camera_status(source: str = Query(pattern=_REF), channel: str | None = Query(None, pattern=_REF),
+    def camera_status(source: str = Query(pattern=_REF, max_length=120),
+                      channel: str | None = Query(None, pattern=_REF, max_length=120),
                       quality: Literal["sub", "main"] = "sub") -> dict[str, Any]:
-        manager.source_or_404(source)
+        src = manager.source_or_404(source)
         tf = manager.viewers.peek(source, channel, quality)
         s = manager._session_for(source, channel)
-        return {"name": manager.camera_name(source, channel), "state": tf.state, "message": tf.message,
+        return {"name": manager.camera_name(source, channel, {source: src}), "state": tf.state, "message": tf.message,
                 "fps": tf.fps, "analysis": _analysis(manager, s) if s is not None else None}
 
     # ---------------------------------------------------------------- canlı oturumlar

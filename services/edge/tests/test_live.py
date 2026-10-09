@@ -2189,6 +2189,9 @@ def test_view_status_reports_running_analysis_and_unacked_alarm(client: TestClie
     src_id = sess.source_id
     v = client.post("/api/v1/live/views", json={"name": "Kasa", "layout": "1",
                                                  "tiles": [{"sourceId": src_id, "channelId": None}]}).json()
+    wait_for(lambda: sess.latest_frame() is not None)                # oturum karesi hazır: birleştirici onu kullanır
+    r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=320&h=180&limit=1")      # kare paylaşım yolu çalışır
+    assert r.status_code == 200 and r.content.count(b"Content-Type: image/jpeg") == 1
     st = wait_for(lambda: (x := client.get(f"/api/v1/live/views/{v['id']}/status").json())["tiles"][0]["analysis"]
                   and x["tiles"][0]["analysis"].get("alarm") and x, timeout=30)
     a = st["tiles"][0]["analysis"]
@@ -2214,3 +2217,77 @@ def test_view_and_camera_status_report_stored_limit_rejection(client: TestClient
     assert cam["state"] == "error" and cam["message"] == "Sınır aşıldı (en çok 16 kamera)."
     assert cam["name"] == "Depo" and cam["analysis"] is None
     assert client.app.state.live.viewers.open_count("sub") == 0
+
+
+def _two_file_sources(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    ids = [client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                           name=n)).json()["id"] for n in ("Kapı", "Depo")]
+    return ids[0], ids[1]
+
+
+def test_view_status_reads_sources_once_per_request(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kutu başına iki dosya okuması yok: geçici bir kilit tüm kutuları "silinmiş" göstermesin."""
+    a, b = _two_file_sources(client, monkeypatch)
+    v = client.post("/api/v1/live/views", json={"name": "İki", "layout": "2",
+                                                 "tiles": [{"sourceId": a, "channelId": None},
+                                                           {"sourceId": b, "channelId": None}]}).json()
+    store = client.app.state.live.store
+    calls = {"sources": 0, "source": 0}
+    orig_sources, orig_source = store.sources, store.source
+
+    def sources() -> Any:
+        calls["sources"] += 1
+        return orig_sources()
+
+    def source(source_id: str) -> Any:
+        calls["source"] += 1
+        return orig_source(source_id)
+
+    monkeypatch.setattr(store, "sources", sources)
+    monkeypatch.setattr(store, "source", source)
+    tiles = client.get(f"/api/v1/live/views/{v['id']}/status").json()["tiles"]
+    assert [t["name"] for t in tiles] == ["Kapı", "Depo"]
+    assert calls == {"sources": 1, "source": 0}
+    calls.update(sources=0, source=0)
+    cam = client.get(f"/api/v1/live/cameras/status?source={a}").json()
+    assert cam["name"] == "Kapı" and calls == {"sources": 1, "source": 1}     # yalnızca 404 denetimi okur
+
+
+def test_view_stream_ends_when_template_is_deleted_mid_stream(client: TestClient,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    a, _b = _two_file_sources(client, monkeypatch)
+    v = client.post("/api/v1/live/views", json={"name": "Silinecek", "layout": "1",
+                                                 "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    result: dict[str, Any] = {}
+
+    def read() -> None:
+        r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=320&h=180")       # sınırsız: yalnızca silinince biter
+        result["status"], result["frames"] = r.status_code, r.content.count(b"Content-Type: image/jpeg")
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    wait_for(lambda: client.app.state.live.mosaics._comps)
+    time.sleep(0.6)
+    assert client.delete(f"/api/v1/live/views/{v['id']}").status_code == 204
+    reader.join(20)
+    assert not reader.is_alive() and result["status"] == 200 and result["frames"] >= 1
+
+
+def test_view_stream_is_503_after_mosaics_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    a, _b = _two_file_sources(client, monkeypatch)
+    v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",
+                                                 "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    client.app.state.live.mosaics.stop()
+    r = client.get(f"/api/v1/live/views/{v['id']}/stream?limit=1")
+    assert r.status_code == 503 and r.json()["detail"] == "İzleme durduruldu."
+
+
+def test_camera_endpoints_limit_reference_length_like_tiles(client: TestClient) -> None:
+    long_ref = "a" * 121
+    for path in ("status", "stream"):
+        assert client.get(f"/api/v1/live/cameras/{path}?source={long_ref}").status_code == 422
+        assert client.get(f"/api/v1/live/cameras/{path}?source=ok&channel={long_ref}").status_code == 422
+    assert client.get("/api/v1/live/cameras/status?source=" + "a" * 120).status_code == 404     # sınırda geçerli
