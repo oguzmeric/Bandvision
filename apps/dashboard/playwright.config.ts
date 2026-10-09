@@ -21,6 +21,8 @@ const HASH_MODE = hashPassword(HASH_MODE_PASSWORD);
 /** Telefondan erişim ayarı (e2e/access.spec.ts) geçici klasöre yazılır; repodaki apps/dashboard/.local/ asla kullanılmaz.
  * Test işçileri de bu dosyayı okuyabilsin diye yolu ortama koyarız (ilk değerlendirme ana süreçte olur). */
 const ACCESS_FILE = (process.env.BV_E2E_ACCESS_FILE ??= path.join(DATA_DIR, "panel-access.json"));
+/** Başlatıcının durum dosyası (Ayarlar'daki "derleniyor/başarısız" satırı; e2e/access.spec.ts yazar) da geçici klasörde */
+const STATE_FILE = (process.env.BV_E2E_STATE_FILE ??= path.join(DATA_DIR, "panel-state.json"));
 
 export default defineConfig({
   testDir: "./e2e",
@@ -51,7 +53,7 @@ export default defineConfig({
       env: { ANALYZER_URL: `http://127.0.0.1:${ANALYZER_PORT}`, NEXT_TELEMETRY_DISABLED: "1",
              DASHBOARD_PASSWORD: PANEL_PASSWORD,
              // Telefondan erişim ayarı repoya (apps/dashboard/.local/) değil geçici klasöre yazılır
-             PANEL_ACCESS_FILE: ACCESS_FILE },
+             PANEL_ACCESS_FILE: ACCESS_FILE, PANEL_STATE_FILE: STATE_FILE },
       reuseExistingServer: false,
       timeout: 60_000,
     },
@@ -61,7 +63,8 @@ export default defineConfig({
       url: `http://127.0.0.1:${HASH_PORT}/login`,
       env: { ANALYZER_URL: `http://127.0.0.1:${ANALYZER_PORT}`, NEXT_TELEMETRY_DISABLED: "1",
              DASHBOARD_PASSWORD: "", PANEL_PASSWORD_HASH: HASH_MODE.hash, PANEL_PASSWORD_SALT: HASH_MODE.salt,
-             PANEL_SESSION_SECRET: newSecret(), PANEL_ACCESS_FILE: path.join(DATA_DIR, "panel-access-hash.json") },
+             PANEL_SESSION_SECRET: newSecret(), PANEL_ACCESS_FILE: path.join(DATA_DIR, "panel-access-hash.json"),
+             PANEL_STATE_FILE: path.join(DATA_DIR, "panel-state-hash.json") },
       reuseExistingServer: false,
       timeout: 60_000,
     },

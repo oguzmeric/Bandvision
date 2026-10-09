@@ -34,3 +34,14 @@ test("giriş sonrası yalnızca bu siteye ve aynı adrese gidilir", async ({ pag
   await page.getByRole("button", { name: "Giriş yap" }).click();
   await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/videos$/);
 });
+
+test("giriş muafiyeti yalnızca /login ve /api/login: benzer adlı yollar giriş ister", async ({ page, request }) => {
+  for (const p of ["/api/loginx", "/api/login-yok"]) {
+    expect((await request.get(p)).status(), p).toBe(401);
+  }
+  await page.goto("/loginx");
+  await expect(page.getByLabel("Şifre")).toBeVisible();                                 // 404 değil: giriş formu
+  await page.goto("/login");
+  await expect(page.getByLabel("Şifre")).toBeVisible();
+  expect((await request.post("/api/login", { data: { password: "yanlis" } })).status()).toBe(401);   // muaf: 401 "Şifre yanlış."
+});

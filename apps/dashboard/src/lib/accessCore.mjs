@@ -4,6 +4,7 @@ import { randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { hostName } from "./hostCheck.mjs";
 
 export const MIN_PASSWORD = 8;
 /** Şifre üst sınırı: scrypt'e ve karşılaştırmaya sınırsız uzunlukta girdi verilmesin */
@@ -66,6 +67,13 @@ export function panelCommand(plan, opts = {}) {
   return { mode: lan || opts.prod === true ? "start" : "dev", host: lan ? "0.0.0.0" : "127.0.0.1" };
 }
 
+/** Başlatıcının üretim derlemesi klasörü (BV_DIST_DIR ile next.config.ts'e verilir): `npm run build`/e2e (.next) ve
+ * geliştirme sunucusu (.next-dev) ile çakışmaz. */
+export const LAUNCHER_DIST = ".next-lan";
+/** Derleme sıfır çıkış koduyla bitince yazılan işaret (zamanı = derlemenin başladığı an). Yarıda kesilen derleme
+ * BUILD_ID bıraksa da işaret bırakmaz: bir sonraki açılışta yeniden derlenir. */
+export const BUILD_MARKER = ".bv-build-ok";
+
 const BUILD_INPUT_DIRS = ["src", "public"];
 const BUILD_INPUT_FILES = ["next.config.ts", "next.config.mjs", "next.config.js", "package.json", "package-lock.json",
   "tsconfig.json", "postcss.config.mjs"];
@@ -79,11 +87,69 @@ function newestMtime(p) {
   return newest;
 }
 
-/** Üretim derlemesi (.next/BUILD_ID) yok ya da kaynaktan eski mi? (src/, public/, next.config.*, package*.json zamanlarına bakar) */
-export function buildIsStale(dashDir) {
+/**
+ * Başlatıcının üretim derlemesi (`<distDir>/.bv-build-ok` + BUILD_ID) yok ya da kaynaktan eski mi? İşaret yoksa (derleme
+ * hiç bitmedi ya da öldürüldü) ya da src/, public/, next.config.*, package*.json'dan biri işaretten yeniyse eski sayılır.
+ */
+export function buildIsStale(dashDir, distDir = LAUNCHER_DIST) {
   let built;
-  try { built = fs.statSync(path.join(dashDir, ".next", "BUILD_ID")).mtimeMs; } catch { return true; }
+  try {
+    built = fs.statSync(path.join(dashDir, distDir, BUILD_MARKER)).mtimeMs;
+    fs.statSync(path.join(dashDir, distDir, "BUILD_ID"));
+  } catch { return true; }
   return [...BUILD_INPUT_DIRS, ...BUILD_INPUT_FILES].some((rel) => newestMtime(path.join(dashDir, rel)) > built);
+}
+
+/**
+ * Derlemenin middleware listesi dolu mu (`<distDir>/server/middleware-manifest.json`)? Next, liste boşsa ya da dosya
+ * yoksa isteği giriş denetimi olmadan geçirir: bu durumda yerel ağa AÇILMAZ.
+ */
+export function middlewareReady(manifestText) {
+  try {
+    const m = JSON.parse(manifestText);
+    const mw = m && typeof m === "object" ? m.middleware : null;
+    return Boolean(mw) && typeof mw === "object" && !Array.isArray(mw) && Object.keys(mw).length > 0;
+  } catch { return false; }
+}
+
+/** Tek kopya kilidi: canlı başlatıcı kilidin zamanını bu aralıkla yeniler; bundan eski kilit bayat sayılır (PID
+ * yeniden kullanılmış olabilir: bilgisayar yeniden başladı, başlatıcı zorla kapatıldı). */
+export const LOCK_HEARTBEAT_MS = 15_000;
+export const LOCK_STALE_MS = 60_000;
+/** PID'i henüz yazılmamış kilit (başka başlatıcı tam şu an oluşturuyor) bu kadar süre "çalışıyor" sayılır */
+export const LOCK_FRESH_MS = 5_000;
+
+/**
+ * Kilit dosyası varken karar (saf): `existingPid` dosyadaki PID (okunamadıysa null), `alive` o süreç var mı,
+ * `ageMs` kilidin son yenilenmesinden bu yana geçen süre. "running": başka başlatıcı çalışıyor (çık); "stale": devral.
+ */
+export function lockDecision(existingPid, alive, ageMs = 0) {
+  const valid = Number.isInteger(existingPid) && existingPid > 0;
+  if (!valid) return ageMs < LOCK_FRESH_MS ? "running" : "stale";
+  return alive && ageMs < LOCK_STALE_MS ? "running" : "stale";
+}
+
+const PANEL_STATES = new Set(["building", "failed", "listening"]);
+
+/** Başlatıcının durum dosyası (`{state, host, at, message}`); Ayarlar ve panel_baslat.bat okur */
+export function panelStateFile(env, cwd) {
+  return env.PANEL_STATE_FILE || path.join(cwd, ".local", "panel-state.json");
+}
+
+/** Durum dosyasının metninden Ayarlar'ın göstereceği kısım; bilinmeyen durum, bozuk ya da boş dosya null */
+export function panelState(text) {
+  try {
+    const d = JSON.parse(text);
+    if (!d || typeof d !== "object" || !PANEL_STATES.has(d.state)) return null;
+    return { state: d.state, message: typeof d.message === "string" ? d.message.slice(0, 300) : "" };
+  } catch { return null; }
+}
+
+/** Giriş isteği yalnızca `application/json` olabilir: site dışı "basit" istekler (text/plain, form) ön kontrolsüz
+ * gönderilebildiği için kısıtı kilitleyebilirdi; JSON ön kontrol ister ve tarayıcı onu başka siteye vermez. */
+export function isJsonContentType(value) {
+  if (typeof value !== "string") return false;
+  return value.split(";")[0].trim().toLowerCase() === "application/json";
 }
 
 /**
@@ -121,22 +187,8 @@ export function createLoginThrottle({ now = Date.now, free = 5, baseMs = 10_000,
  * (127.0.0.1, localhost, ::1) ya da bu bilgisayarın kendi IPv4 adreslerinden biri olabilir.
  */
 export function hostAllowed(hostHeader, ownIps = []) {
-  if (typeof hostHeader !== "string") return false;
-  const h = hostHeader.trim().toLowerCase();
-  let name, port = "";
-  if (h.startsWith("[")) {
-    const end = h.indexOf("]");
-    if (end < 0) return false;
-    name = h.slice(1, end);
-    const rest = h.slice(end + 1);
-    if (rest !== "") { if (!rest.startsWith(":")) return false; port = rest.slice(1); }
-  } else {
-    const parts = h.split(":");
-    if (parts.length > 2) return false;
-    name = parts[0];
-    port = parts[1] ?? "";
-  }
-  if (!name || (port !== "" && !/^\d{1,5}$/.test(port))) return false;
+  const name = hostName(hostHeader);
+  if (!name) return false;
   return name === "127.0.0.1" || name === "localhost" || name === "::1" || ownIps.includes(name);
 }
 

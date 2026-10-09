@@ -44,7 +44,7 @@ test("erişim API'si girişsiz kapalı: okuma ve yazma 401; yanıtta özet/tuz/s
   await login(page);
   await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
   const v = await (await page.request.get("/api/access")).json();
-  expect(Object.keys(v).sort()).toEqual(["addresses", "enabled", "envPassword", "hasPassword", "lanActive", "runner"]);
+  expect(Object.keys(v).sort()).toEqual(["addresses", "buildMessage", "buildState", "enabled", "envPassword", "hasPassword", "lanActive", "runner"]);
   expect(v.envPassword).toBe(true);
 });
 
@@ -115,5 +115,33 @@ test("ayarlar API: boşluk/256+ karakterlik şifre 422; yabancı Host başlığ�
   for (const host of ["127.0.0.1:3100", "localhost:3100", "[::1]:3100"]) {
     const r = await page.request.put("/api/access", { data: { enabled: false }, headers: { host } });
     expect(r.status(), host).toBe(200);
+  }
+});
+
+test("ayarlar: başlatıcının durum dosyası derleme sürüyor/başarısız diyorsa Türkçe satır çıkar; dosya yoksa çıkmaz", async ({ page }) => {
+  const file = process.env.BV_E2E_STATE_FILE;
+  expect(file, "playwright.config.ts yolu ortama koymalı").toBeTruthy();
+  expect(path.resolve(file!).startsWith(path.resolve(os.tmpdir()))).toBe(true);           // repodaki .local değil
+  try {
+    fs.mkdirSync(path.dirname(file!), { recursive: true });
+    fs.writeFileSync(file!, JSON.stringify({ state: "building", host: "0.0.0.0", at: 1, message: "Panel derleniyor (ilk açılış 1-2 dk)…" }));
+    await login(page);
+    await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
+    await expect(page.getByTestId("build-state")).toContainText("Panel derleniyor (ilk açılış 1-2 dk)…");
+    const v = await (await page.request.get("/api/access")).json();
+    expect([v.buildState, v.buildMessage]).toEqual(["building", "Panel derleniyor (ilk açılış 1-2 dk)…"]);
+    fs.writeFileSync(file!, JSON.stringify({ state: "failed", host: "127.0.0.1", at: 2,
+      message: "Yerel ağ için derleme başarısız (kod 1); panel yalnızca bu bilgisayarda açık." }));
+    await page.reload();
+    await expect(page.getByTestId("build-state")).toContainText("Yerel ağ için derleme başarısız (kod 1)");
+    fs.writeFileSync(file!, JSON.stringify({ state: "listening", host: "127.0.0.1", at: 3, message: "" }));
+    await page.reload();
+    await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
+    await expect(page.getByTestId("build-state")).toHaveCount(0);
+    fs.rmSync(file!);
+    const none = await (await page.request.get("/api/access")).json();
+    expect([none.buildState, none.buildMessage]).toEqual([null, null]);
+  } finally {
+    fs.rmSync(file!, { force: true });
   }
 });

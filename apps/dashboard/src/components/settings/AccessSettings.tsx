@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 
-interface AccessView { enabled: boolean; hasPassword: boolean; envPassword: boolean; lanActive: boolean; runner: boolean; addresses: string[] }
+interface AccessView {
+  enabled: boolean; hasPassword: boolean; envPassword: boolean; lanActive: boolean; runner: boolean; addresses: string[];
+  /** Başlatıcının son durumu (tools/panel_run.mjs): derleme sürüyor ya da yerel ağ derlemesi/denetimi başarısız */
+  buildState: "building" | "failed" | "listening" | null; buildMessage: string | null;
+}
 
 /** Ayarlar → Telefondan erişim: panel şifresi, açma/kapama, telefon adresi ve QR kodu */
 export default function AccessSettings() {
@@ -62,6 +66,14 @@ export default function AccessSettings() {
         {v.enabled && <button type="button" onClick={() => save(false)} className="h-10 rounded-[10px] border border-line px-4 text-sm">Erişimi kapat</button>}
       </div>
       {msg && <p role="status" className={`rounded-xl px-3 py-2 text-sm ${msg.ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {v.buildState === "building" && (
+        <p data-testid="build-state" className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700">
+          {v.buildMessage || "Panel derleniyor (ilk açılış 1-2 dk)…"} Yerel ağ erişimi derleme bitince açılır.</p>
+      )}
+      {v.buildState === "failed" && (
+        <p data-testid="build-state" className="rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">
+          {v.buildMessage || "Yerel ağ için derleme başarısız; panel yalnızca bu bilgisayarda açık."}</p>
+      )}
       {v.lanActive && v.addresses.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-[220px_1fr] sm:items-center">
           {/* eslint-disable-next-line @next/next/no-img-element -- yerel üretilen QR (data URL) */}

@@ -8,7 +8,18 @@ export function newSecret(): string;
 export function accessFile(env: Record<string, string | undefined>, cwd: string): string;
 export function panelPlan(access: Access | null, env: Record<string, string | undefined>): { host: "127.0.0.1" | "0.0.0.0"; env: Record<string, string> };
 export function panelCommand(plan: { host: string }, opts?: { prod?: boolean }): { mode: "dev" | "start"; host: "127.0.0.1" | "0.0.0.0" };
-export function buildIsStale(dashDir: string): boolean;
+export const LAUNCHER_DIST: string;
+export const BUILD_MARKER: string;
+export function buildIsStale(dashDir: string, distDir?: string): boolean;
+export function middlewareReady(manifestText: string | null | undefined): boolean;
+export const LOCK_HEARTBEAT_MS: number;
+export const LOCK_STALE_MS: number;
+export const LOCK_FRESH_MS: number;
+export function lockDecision(existingPid: number | null | undefined, alive: boolean, ageMs?: number): "running" | "stale";
+export type PanelBuildState = "building" | "failed" | "listening";
+export function panelStateFile(env: Record<string, string | undefined>, cwd: string): string;
+export function panelState(text: string | null | undefined): { state: PanelBuildState; message: string } | null;
+export function isJsonContentType(value: string | null | undefined): boolean;
 export interface LoginThrottle {
   /** 0: deneme başlatıldı (bitince `end` çağır). >0: kilitli, beklenecek ms (scrypt çalıştırma). */
   begin(): number;

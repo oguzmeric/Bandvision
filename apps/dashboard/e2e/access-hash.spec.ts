@@ -59,7 +59,7 @@ test("özet kipi: doğru şifre oturum çerezi verir ve /watch açılır; çerez
   const acc = await page.request.get("/api/access");
   expect(acc.status()).toBe(200);
   const text = await acc.text();
-  expect(Object.keys(JSON.parse(text)).sort()).toEqual(["addresses", "enabled", "envPassword", "hasPassword", "lanActive", "runner"]);
+  expect(Object.keys(JSON.parse(text)).sort()).toEqual(["addresses", "buildMessage", "buildState", "enabled", "envPassword", "hasPassword", "lanActive", "runner"]);
   expect(JSON.parse(text).envPassword).toBe(false);
   expect(text).not.toContain(PASSWORD);
   await expect(page.getByRole("button", { name: "Çıkış" })).toBeVisible();      // canLogout: özet kipinde de var
@@ -89,6 +89,20 @@ test("özet kipi: sahte çerezler ve başka kipin çerezi reddedilir (kipler ara
     expect(html, ad).toContain("Panele giriş");                                     // giriş formuna yeniden yazılır
     expect(html, ad).not.toContain("Çıkış");
   }
+});
+
+test("özet kipi: giriş yalnızca application/json; text/plain ve form gövdesi 415 alır ve kısıta sayılmaz", async ({ request }) => {
+  const body = JSON.stringify({ password: "yanlis-sifre" });
+  for (let i = 0; i < 7; i++) {                                                  // kısıtın 5 hakkından fazla
+    for (const type of ["text/plain", "text/plain;charset=UTF-8", "application/x-www-form-urlencoded"]) {
+      const r = await request.post("/api/login", { data: Buffer.from(body), headers: { "content-type": type } });
+      expect(r.status(), type).toBe(415);
+      expect((await r.json()).error).toBe("Geçersiz istek.");
+    }
+  }
+  const ok = await request.post("/api/login", { data: { password: PASSWORD } });   // site dışı istekler kilitleyemedi
+  expect(ok.status()).toBe(200);
+  expect(ok.headers()["set-cookie"]).toContain("bv_session=");
 });
 
 test("özet kipi: art arda hatalı girişte 429 (doğru şifre bile kilit sürerken reddedilir), pencere bitince giriş yeniden olur", async ({ request }) => {

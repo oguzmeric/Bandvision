@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { MAX_PASSWORD, createLoginThrottle, verifyPasswordAsync } from "@/lib/accessCore.mjs";
+import { MAX_PASSWORD, createLoginThrottle, isJsonContentType, verifyPasswordAsync } from "@/lib/accessCore.mjs";
 import { SESSION_COOKIE, SESSION_MAX_AGE, authMode, expectedToken } from "@/lib/session";
 
 export const runtime = "nodejs";
@@ -34,8 +34,13 @@ async function readLimited(req: NextRequest, max: number): Promise<string | null
 }
 
 /** Giriş (POST, JSON {password}): doğruysa oturum çerezi; değilse kısa beklemeyle 401. Yönlendirmeyi tarayıcı yapar.
- * Sınırlar: gövde ≤ 4 KB, şifre ≤ 256 karakter (400, scrypt çalıştırılmadan); art arda hatalarda 429 (scrypt çalıştırılmadan). */
+ * Sınırlar: gövde türü yalnızca application/json (415; site dışı text/plain ve form istekleri ön kontrolsüz gelebilir,
+ * ortak kısıtı kilitleyebilirdi), gövde ≤ 4 KB, şifre ≤ 256 karakter (400, scrypt çalıştırılmadan); art arda hatalarda
+ * 429 (scrypt çalıştırılmadan). */
 export async function POST(req: NextRequest) {
+  if (!isJsonContentType(req.headers.get("content-type"))) {
+    return NextResponse.json({ error: "Geçersiz istek." }, { status: 415 });
+  }
   const mode = authMode();
   let given = "";
   try {

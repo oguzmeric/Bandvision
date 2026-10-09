@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { accessFile, hostAllowed, updateAccess, type Access } from "@/lib/accessCore.mjs";
+import { accessFile, hostAllowed, panelState, panelStateFile, updateAccess, type Access } from "@/lib/accessCore.mjs";
 
 // Bu uç nokta middleware'in arkasındadır: şifre kipi açıkken giriş ister. Şifre kipi kapalıyken panel yalnızca
 // bu bilgisayarda (127.0.0.1) açıldığı için uç nokta da yalnızca yerelden erişilebilir. Yanıtlara şifre ya da özeti girmez.
@@ -12,6 +12,10 @@ export const dynamic = "force-dynamic";
 function file(): string { return accessFile(process.env, process.cwd()); }
 function read(): Access | null {
   try { return JSON.parse(fs.readFileSync(file(), "utf8")) as Access; } catch { return null; }
+}
+/** Başlatıcının durum dosyası (tools/panel_run.mjs yazar): derleme sürüyor ya da başarısız oldu mu */
+function buildState() {
+  try { return panelState(fs.readFileSync(panelStateFile(process.env, process.cwd()), "utf8")); } catch { return null; }
 }
 /** Sanal bağdaştırıcılar (VMware, WSL, VPN…) ve 169.254.x.x sona atılır: QR gerçek ağı göstersin. */
 const SANAL = /vmware|virtual|vethernet|wsl|hyper-v|docker|vpn|tailscale|zerotier|bluetooth|loopback/i;
@@ -28,11 +32,14 @@ function addresses(): string[] {
   return ownAddresses().map((a) => `http://${a}:${port}`);
 }
 function view(a: Access | null) {
+  const build = buildState();
   return {
     enabled: Boolean(a?.enabled), hasPassword: Boolean(a?.hash), envPassword: Boolean(process.env.DASHBOARD_PASSWORD),
     /** Bu çalışan panel şu an yerel ağa açık mı: yalnızca başlatıcı 0.0.0.0'a bağlarken PANEL_LAN=1 verir */
     lanActive: process.env.PANEL_LAN === "1",
     runner: process.env.PANEL_RUNNER === "1", addresses: addresses(),
+    /** Başlatıcının son durumu: "building" (derleniyor), "failed" (yerel ağ derlemesi/denetimi başarısız), "listening" */
+    buildState: build?.state ?? null, buildMessage: build?.message ?? null,
   };
 }
 

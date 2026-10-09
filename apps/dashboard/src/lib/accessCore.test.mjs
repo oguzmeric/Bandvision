@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  MAX_PASSWORD, MIN_PASSWORD, accessFile, buildIsStale, createLoginThrottle, hashPassword, hostAllowed, newSecret,
-  panelCommand, panelPlan, updateAccess, verifyPassword, verifyPasswordAsync,
+  BUILD_MARKER, LAUNCHER_DIST, LOCK_FRESH_MS, LOCK_STALE_MS, MAX_PASSWORD, MIN_PASSWORD, accessFile, buildIsStale,
+  createLoginThrottle, hashPassword, hostAllowed, isJsonContentType, lockDecision, middlewareReady, newSecret,
+  panelCommand, panelPlan, panelState, panelStateFile, updateAccess, verifyPassword, verifyPasswordAsync,
 } from "./accessCore.mjs";
 
 test("şifre yalnızca özetiyle doğrulanır; düz şifre özette yok", () => {
@@ -162,7 +163,7 @@ test("panelCommand: yerel ağda (0.0.0.0) HER ZAMAN next start; yerelde dev, --p
   }
 });
 
-test("buildIsStale: derleme yok ya da kaynaktan eskiyse true (geçici dosyalarla)", () => {
+test("buildIsStale: başarı işareti yok ya da kaynaktan eskiyse true (geçici dosyalarla)", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bv-stale-"));
   try {
     const at = (rel, sec) => {
@@ -172,10 +173,11 @@ test("buildIsStale: derleme yok ya da kaynaktan eskiyse true (geçici dosyalarla
       fs.utimesSync(f, sec, sec);
     };
     const T = 1_700_000_000;
-    assert.equal(buildIsStale(dir), true);                                    // BUILD_ID yok
+    assert.equal(buildIsStale(dir), true);                                    // derleme yok
     at("src/app/page.tsx", T); at("src/lib/a.ts", T); at("public/logo.png", T);
     at("package.json", T); at("package-lock.json", T); at("next.config.ts", T);
-    at(".next/BUILD_ID", T + 100);
+    at(`${LAUNCHER_DIST}/BUILD_ID`, T + 100);
+    at(`${LAUNCHER_DIST}/${BUILD_MARKER}`, T + 100);
     for (const d of ["src/app", "src/lib", "src", "public"]) fs.utimesSync(path.join(dir, d), T, T);
     assert.equal(buildIsStale(dir), false);                                   // derleme hepsinden yeni
     for (const rel of ["src/lib/a.ts", "src/app/page.tsx", "public/logo.png", "package.json", "package-lock.json", "next.config.ts"]) {
@@ -189,7 +191,7 @@ test("buildIsStale: derleme yok ya da kaynaktan eskiyse true (geçici dosyalarla
     at("src/deep/nested/yeni.ts", T);
     for (const d of ["src/deep/nested", "src/deep", "src"]) fs.utimesSync(path.join(dir, d), T, T);
     assert.equal(buildIsStale(dir), false);
-    at(".next/BUILD_ID", T - 10);                                             // derleme kaynaklardan eski
+    at(`${LAUNCHER_DIST}/${BUILD_MARKER}`, T - 10);                           // işaret kaynaklardan eski
     assert.equal(buildIsStale(dir), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -309,4 +311,78 @@ test("updateAccess: açmak için tam özet (tuz+özet+sır) ya da ortam şifresi
   assert.ok(healed.next.enabled && /^[0-9a-f]{64}$/.test(healed.next.secret));
   // ortam şifresi varsa özet olmadan da açılır
   assert.ok(updateAccess({ enabled: false }, { enabled: true }, true).next.enabled);
+});
+
+// ---- Son düzeltme turu: başlatıcı (tek kopya kilidi, derleme işareti, middleware denetimi, durum dosyası), giriş
+
+test("buildIsStale: BUILD_ID olsa da başarı işareti yoksa (yarıda kesilmiş derleme) eski; işaret varsa güncel", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bv-marker-"));
+  try {
+    const T = 1_700_000_000;
+    const at = (rel, sec) => {
+      const f = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, "x");
+      fs.utimesSync(f, sec, sec);
+    };
+    at("src/app/page.tsx", T);
+    fs.utimesSync(path.join(dir, "src", "app"), T, T); fs.utimesSync(path.join(dir, "src"), T, T);
+    at(`${LAUNCHER_DIST}/BUILD_ID`, T + 100);                                  // derleme BUILD_ID yazdı, sonra öldürüldü
+    assert.equal(buildIsStale(dir), true);
+    at(`${LAUNCHER_DIST}/${BUILD_MARKER}`, T + 50);                            // başarı işareti (derleme başlangıcı)
+    assert.equal(buildIsStale(dir), false);
+    at(`${LAUNCHER_DIST}/${BUILD_MARKER}`, T - 1);                             // en yeni kaynaktan eski işaret
+    assert.equal(buildIsStale(dir), true);
+    at(".next/BUILD_ID", T + 500);                                             // başka (e2e/elle) derleme sayılmaz
+    at(".next/" + BUILD_MARKER, T + 500);
+    assert.equal(buildIsStale(dir), true);
+    assert.equal(buildIsStale(dir, ".next"), false);
+    fs.rmSync(path.join(dir, LAUNCHER_DIST, "BUILD_ID"));
+    at(`${LAUNCHER_DIST}/${BUILD_MARKER}`, T + 50);
+    assert.equal(buildIsStale(dir), true);                                     // işaret var ama derleme yok
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("lockDecision: canlı süreç ve taze kilit → çalışıyor; ölü süreç, bayat kilit ya da bozuk içerik → devral", () => {
+  assert.equal(lockDecision(1234, true), "running");
+  assert.equal(lockDecision(1234, true, LOCK_STALE_MS - 1), "running");
+  assert.equal(lockDecision(1234, false), "stale");                          // süreç yok: devral
+  assert.equal(lockDecision(1234, true, LOCK_STALE_MS + 1), "stale");         // PID yeniden kullanılmış (yeniden başlatma)
+  for (const bad of [null, undefined, NaN, 0, -5, 1.5]) {
+    assert.equal(lockDecision(bad, false, LOCK_FRESH_MS + 1), "stale", String(bad));
+    assert.equal(lockDecision(bad, false, 10), "running", `${bad}: başka başlatıcı tam şu an yazıyor`);
+  }
+});
+
+test("middlewareReady: derlemenin middleware listesi dolu olmalı; yok, boş ya da bozuksa yerel ağa açılmaz", () => {
+  const ok = { version: 3, middleware: { "/": { files: ["server/src/middleware.js"], name: "src/middleware", page: "/" } }, functions: {}, sortedMiddleware: ["/"] };
+  assert.equal(middlewareReady(JSON.stringify(ok)), true);
+  assert.equal(middlewareReady(JSON.stringify({ version: 3, middleware: {}, functions: {}, sortedMiddleware: [] })), false);
+  for (const bad of ["", "{", "null", "[]", JSON.stringify({ version: 3 }), JSON.stringify({ middleware: [] }), null, undefined]) {
+    assert.equal(middlewareReady(bad), false, String(bad));
+  }
+});
+
+test("panelState: durum dosyası yalnız bilinen durumları verir; bozuk ya da yoksa null", () => {
+  assert.deepEqual(panelState(JSON.stringify({ state: "building", host: "0.0.0.0", at: 1, message: "Panel derleniyor (ilk açılış 1-2 dk)…" })),
+    { state: "building", message: "Panel derleniyor (ilk açılış 1-2 dk)…" });
+  assert.deepEqual(panelState(JSON.stringify({ state: "failed", message: 42 })), { state: "failed", message: "" });
+  assert.equal(panelState(JSON.stringify({ state: "listening", message: "x".repeat(1000) })).message.length, 300);
+  for (const bad of ["", "{", "null", JSON.stringify({ state: "hacked" }), JSON.stringify([1]), undefined]) {
+    assert.equal(panelState(bad), null, String(bad));
+  }
+  assert.equal(panelStateFile({ PANEL_STATE_FILE: "/tmp/s.json" }, "/app"), "/tmp/s.json");
+  assert.match(panelStateFile({}, "/app"), /\.local[\\/]panel-state\.json$/);
+});
+
+test("isJsonContentType: giriş yalnızca application/json kabul eder (site dışı text/plain istekleri kısıtı kilitleyemesin)", () => {
+  for (const ok of ["application/json", "Application/JSON", "application/json; charset=utf-8", " application/json ;charset=UTF-8"]) {
+    assert.equal(isJsonContentType(ok), true, ok);
+  }
+  for (const bad of ["text/plain", "text/plain;charset=UTF-8", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x",
+    "application/jsonx", "application/json-patch+json", "", null, undefined]) {
+    assert.equal(isJsonContentType(bad), false, String(bad));
+  }
 });
