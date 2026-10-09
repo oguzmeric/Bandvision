@@ -83,13 +83,14 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
     return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [sourceId, channelId, quality, bump]);
 
-  // Kamera bağlı değilken (ya da durumu hiç alınamamışken) akış 30 sn'de bir baştan açılır
+  // Kamera bağlı değilken (ya da durumu hiç alınamamışken) akış 30 sn'de bir baştan açılır; silinmiş kamerada boşuna değil
   const live = cam?.state === "live";
+  const gone = cam?.message === GONE.message;
   useEffect(() => {
-    if (live) return;
+    if (live || gone) return;
     const t = setInterval(bump, STUCK_REBUMP_MS);
     return () => clearInterval(t);
-  }, [live, bump]);
+  }, [live, gone, bump]);
 
   const q = new URLSearchParams({ source: sourceId, quality, k: String(streamKey) });
   if (channelId) q.set("channel", channelId);

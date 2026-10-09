@@ -22,7 +22,7 @@ test("izleme (gerçek yığın): API ile şablon, birleşik akış gelir, tek ka
     name: "E2E izleme", layout: "2", tiles: [{ sourceId: src.id, channelId: null }, null] } })).json();
   try {
     await page.goto("/watch");
-    await page.getByRole("combobox", { name: "Şablon" }).selectOption(view.id);
+    await page.getByRole("combobox", { name: "Şablon", exact: true }).selectOption(view.id);
     await expect.poll(async () => page.getByAltText("E2E izleme canlı görüntü")
       .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
     await expect(page.getByTestId("watch-tile").first()).toContainText("İzleme klibi");
@@ -50,12 +50,12 @@ test("izleme (gerçek yığın): arayüzden şablon oluştur, akış gelir, sil"
     await ed.getByTestId("edit-tile").first().click();
     await ed.getByRole("button", { name: "Düzenleyici klibi" }).click();
     await ed.getByRole("button", { name: "Kaydet" }).click();
-    await expect(page.getByRole("combobox", { name: "Şablon" })).toContainText("Arayüz şablonu");
+    await expect(page.getByRole("combobox", { name: "Şablon", exact: true })).toContainText("Arayüz şablonu");
     await expect.poll(async () => page.getByAltText("Arayüz şablonu canlı görüntü")
       .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
     await page.getByRole("button", { name: "Düzenle" }).click();
     await page.getByRole("button", { name: "Şablonu sil" }).click();
-    await expect(page.getByRole("combobox", { name: "Şablon" })).not.toContainText("Arayüz şablonu");
+    await expect(page.getByRole("combobox", { name: "Şablon", exact: true })).not.toContainText("Arayüz şablonu");
   } finally {
     // test düşse de kaynak (ve ona bağlı şablon) kalmasın; sonraki testler "Henüz kaynak yok" bekleyebilir
     const views = await (await page.request.get("/api/live/views")).json() as Array<{ id: string; name: string }>;

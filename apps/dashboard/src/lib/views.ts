@@ -70,6 +70,20 @@ export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "i
   return { text: `Sayılan ${a.total ?? 0}`, tone: "info" };
 }
 
+/**
+ * Kopya adı: "<ad> (kopya)"; bu ad doluysa "<ad> (kopya) 2", "… 3". Sunucu sınırı 60 karakterdir (Unicode kod noktası):
+ * son ek her zaman tam kalır, taşan adın SONU kod noktasına göre (vekil çiftleri bölünmeden) kırpılır.
+ */
+export function copyName(name: string, taken: Iterable<string>, max = 60): string {
+  const used = new Set(taken);
+  for (let n = 1; ; n++) {
+    const tail = n === 1 ? " (kopya)" : ` (kopya) ${n}`;
+    const base = [...name].slice(0, Math.max(1, max - [...tail].length)).join("").trimEnd();
+    const candidate = `${base}${tail}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 /** Düzen değişince kutular sırasıyla korunur; sığmayanlar düşer (kaç kamera düştüğü uyarı için döner) */
 export function retile(tiles: Array<TileRef | null>, count: number): { tiles: Array<TileRef | null>; dropped: number } {
   const next = tiles.slice(0, count);

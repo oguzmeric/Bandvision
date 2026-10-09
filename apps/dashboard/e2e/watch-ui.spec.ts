@@ -8,6 +8,7 @@ const LAYOUTS = [
   { id: "1", name: "Tek", cols: 1, rows: 1, cells: [[0, 0, 1, 1]] },
   { id: "2", name: "2'li (yan yana)", cols: 2, rows: 1, cells: [[0, 0, 1, 1], [1, 0, 1, 1]] },
   { id: "4", name: "4'lü", cols: 2, rows: 2, cells: [[0, 0, 1, 1], [1, 0, 1, 1], [0, 1, 1, 1], [1, 1, 1, 1]] },
+  { id: "16", name: "16'lı", cols: 4, rows: 4, cells: Array.from({ length: 16 }, (_, i) => [i % 4, Math.floor(i / 4), 1, 1]) },
 ];
 const VIEW = { id: "v1", name: "Giriş katı", layout: "4", createdAt: 1, updatedAt: 1,
   tiles: [{ sourceId: "a", channelId: null }, { sourceId: "b", channelId: "2" }, { sourceId: "c", channelId: null }, null] };
@@ -45,7 +46,7 @@ async function login(page: Page) {
 test("izleme: şablon ızgarası, adlar, rozetler, hata ve alarm çerçevesi", async ({ page }) => {
   await mock(page, STATUS);
   await login(page);
-  await expect(page.getByRole("combobox", { name: "Şablon" })).toHaveValue("v1");
+  await expect(page.getByRole("combobox", { name: "Şablon", exact: true })).toHaveValue("v1");
   const tiles = page.getByTestId("watch-tile");
   await expect(tiles).toHaveCount(4);
   await expect(tiles.nth(0)).toContainText("Kapı");
@@ -74,7 +75,7 @@ test("izleme: çift tıkla tek kamera, Esc ile geri; telefon görünümü", asyn
   const box = await page.getByTestId("watch-grid").boundingBox();
   expect(box!.width).toBeLessThanOrEqual(375);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);   // yatay kaydırma yok
-  const sel = await page.getByRole("combobox", { name: "Şablon" }).boundingBox();
+  const sel = await page.getByRole("combobox", { name: "Şablon", exact: true }).boundingBox();
   expect(sel!.y + sel!.height).toBeLessThanOrEqual(box!.y);                                          // seçici ızgaranın üstünde
 });
 
@@ -203,7 +204,7 @@ test("izleme: şablon listesi alınamazsa uyarı çıkar ve yeniden denenir; 'He
   await login(page);
   await expect(page.getByText(DOWN)).toBeVisible();
   await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "Şablon" })).toHaveValue("v1", { timeout: 15_000 });   // ≈5 sn sonra
+  await expect(page.getByRole("combobox", { name: "Şablon", exact: true })).toHaveValue("v1", { timeout: 15_000 });   // ≈5 sn sonra
   await expect(page.getByText(DOWN)).toBeHidden();
   await expect(page.getByTestId("watch-tile")).toHaveCount(4);
 });
@@ -367,6 +368,11 @@ test("izleme: kısa masaüstü penceresi (fare) telefon yatay görünümü sayı
   await mock(page, STATUS);
   await login(page);
   await page.setViewportSize({ width: 740, height: 360 });             // yatay ve kısa, ama işaretçi ince (fare)
+  // Ortam gerçekten "yatay ve kısa, işaretçi ince" olsun ve değişiklik olayı işlensin; sonra kaplama olmadığı doğrulanır
+  await expect.poll(() => page.evaluate(() => window.matchMedia("(orientation: landscape) and (max-height: 500px)").matches)).toBe(true);
+  expect(await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches)).toBe(false);
+  await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await page.waitForTimeout(500);
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
   await expect(page.getByRole("heading", { name: "İzleme" })).toBeVisible();   // araç çubuğu gizlenmez
   expect((await page.getByTestId("watch-grid").boundingBox())!.y).toBeGreaterThan(0);
@@ -403,7 +409,7 @@ test("izleme: şablon değişince eski boyutla akış istenmez (tek istek, yeni 
   });
   await login(page);
   await expect(page.getByAltText("Giriş katı canlı görüntü")).toBeVisible();
-  await page.getByRole("combobox", { name: "Şablon" }).selectOption("v2");
+  await page.getByRole("combobox", { name: "Şablon", exact: true }).selectOption("v2");
   await expect(page.getByAltText("Yan yana canlı görüntü")).toBeVisible();
   await page.waitForTimeout(800);                                      // boyut durulma süresi geçsin
   expect(sizes).toHaveLength(1);                                       // eski (kareye yakın) boyutla bir istek daha gitmedi
@@ -442,7 +448,7 @@ test("izleme: yeni şablon — düzen seç, kamera ata (tıkla + listeden), sür
   await ed.getByRole("button", { name: "Kasa" }).click();
   await ed.getByTestId("edit-tile").nth(0).dragTo(ed.getByTestId("edit-tile").nth(1));   // yer değiştir
   await ed.getByRole("button", { name: "Kaydet" }).click();
-  expect(saved).toEqual({ name: "Kasa ve giriş", layout: "2",
+  await expect.poll(() => saved).toEqual({ name: "Kasa ve giriş", layout: "2",
     tiles: [{ sourceId: "nvr", channelId: "2" }, { sourceId: "a", channelId: null }] });
 });
 
@@ -551,7 +557,7 @@ test("izleme: ızgara akışı sekme görünürken 15 dk'da bir baştan açılı
 
 /** Düzenleyici testleri için sahte şablon deposu: GET/POST/PUT/DELETE views */
 async function mockStore(page: Page, initial: object[]) {
-  const store = [...initial] as Array<{ id: string }>;
+  const store = [...initial] as Array<{ id: string; layout?: string }>;
   const calls: Array<{ method: string; url: string; body: unknown }> = [];
   await page.route("**/api/live/views", async (r) => {
     const req = r.request();
@@ -581,17 +587,23 @@ async function mockStore(page: Page, initial: object[]) {
     }
     return r.fallback();
   });
+  // Yeni (v1 dışı) şablonların durum ve akışı; v1 için mock()'un yolları geçerli kalır
+  await page.route("**/api/live/views/*/status", (r) => {
+    const id = r.request().url().split("/").at(-2)!;
+    return id === "v1" ? r.fallback() : r.fulfill({ json: { id, layout: store.find((v) => v.id === id)?.layout ?? "4", tiles: [] } });
+  });
+  await page.route("**/api/live/views/*/stream**", (r) => (r.request().url().includes("/views/v1/")
+    ? r.fallback() : r.fulfill({ body: JPEG, contentType: "image/jpeg" })));
   return { store, calls };
 }
 
 test("izleme: Kopyala şablonu '(kopya)' adıyla çoğaltır ve ona geçer; çift tık tek kopya açar", async ({ page }) => {
   await mock(page, STATUS);
   const { calls } = await mockStore(page, [VIEW]);
-  await page.route("**/api/live/views/n2/status", (r) => r.fulfill({ json: { id: "n2", layout: "4", tiles: STATUS.tiles } }));
   await login(page);
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
   await page.getByRole("button", { name: "Kopyala" }).dblclick();
-  const sel = page.getByRole("combobox", { name: "Şablon" });
+  const sel = page.getByRole("combobox", { name: "Şablon", exact: true });
   await expect(sel).toContainText("Giriş katı (kopya)");
   await expect(sel).toHaveValue("n2");
   expect(calls).toHaveLength(1);
@@ -605,13 +617,13 @@ test("izleme: Tüm kanallardan şablon yeni şablonu kurar ve 16'dan fazlaysa s�
     { id: "nvr", kind: "recorder", name: "Ofis NVR", recorderBrand: "hikvision", hasPassword: true }] }));
   const { store } = await mockStore(page, [VIEW]);
   const tiles16 = Array.from({ length: 16 }, (_, i) => ({ sourceId: "nvr", channelId: String(i + 1) }));
+  let posted: unknown = null;
   await page.route("**/api/live/views/from-recorder", (r) => {
-    expect(r.request().postDataJSON()).toEqual({ sourceId: "nvr" });
+    posted = r.request().postDataJSON();
     const v = { id: "r1", name: "Ofis NVR", layout: "16", tiles: tiles16, createdAt: 6, updatedAt: 6, truncated: true, channelCount: 20 };
     store.push(v);
     return r.fulfill({ json: v });
   });
-  await page.route("**/api/live/views/r1/status", (r) => r.fulfill({ json: { id: "r1", layout: "16", tiles: [] } }));
   await login(page);
   const sel = page.getByRole("combobox", { name: "Şablon", exact: true });          // "Tüm kanallardan şablon" ile karışmasın
   const pick = page.getByRole("combobox", { name: "Tüm kanallardan şablon" });
@@ -619,6 +631,7 @@ test("izleme: Tüm kanallardan şablon yeni şablonu kurar ve 16'dan fazlaysa s�
   await expect(pick.locator("option")).toHaveText(["Tüm kanallardan şablon…", "Ofis NVR"]);
   await pick.selectOption("nvr");
   await expect(sel).toHaveValue("r1");
+  expect(posted).toEqual({ sourceId: "nvr" });
   await expect(page.getByText("İlk 16 kanal alındı (toplam 20).")).toBeVisible();
   await sel.selectOption("v1");   // başka şablona geçince bilgi kalkar
   await expect(page.getByText("İlk 16 kanal alındı")).toHaveCount(0);
@@ -645,7 +658,7 @@ test("izleme: şablonu düzenle (PUT), boşalt, Vazgeç; sunucu reddederse ileti
   await ed.getByTestId("edit-tile").nth(0).getByRole("button", { name: "Boşalt" }).click();
   await ed.getByLabel("Şablon adı").fill("Yeni ad");
   await ed.getByRole("button", { name: "Kaydet" }).click();
-  await expect(page.getByRole("combobox", { name: "Şablon" })).toContainText("Yeni ad");
+  await expect(page.getByRole("combobox", { name: "Şablon", exact: true })).toContainText("Yeni ad");
   expect(calls).toHaveLength(1);
   expect(calls[0].method).toBe("PUT");
   expect(calls[0].body).toEqual({ name: "Yeni ad", layout: "4",
@@ -660,4 +673,218 @@ test("izleme: şablonu düzenle (PUT), boşalt, Vazgeç; sunucu reddederse ileti
   await ed.getByRole("button", { name: "Şablonu sil" }).click();
   await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
   expect(calls.at(-1)).toMatchObject({ method: "DELETE" });
+});
+
+test("izleme: Kopyala 60 karakterlik adı bölmeden '… (kopya)' yapar; ad doluysa '(kopya) 2' ekler (60 sınırı içinde)", async ({ page }) => {
+  // 60 kod noktası; 52. karakter (indeks 51) bir emoji (UTF-16'da iki birim): slice(0, 52) vekil çiftini bölerdi
+  const long = `${"a".repeat(51)}😀${"b".repeat(8)}`;
+  expect([...long]).toHaveLength(60);
+  const view = { ...VIEW, name: long };
+  await mock(page, STATUS, view);
+  const { calls } = await mockStore(page, [view]);
+  await login(page);
+  const sel = page.getByRole("combobox", { name: "Şablon", exact: true });
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByRole("button", { name: "Kopyala" }).click();
+  await expect(sel).toHaveValue("n2");
+  expect((calls[0].body as { name: string }).name).toBe(`${"a".repeat(51)}😀 (kopya)`);       // 52 kod noktası + " (kopya)"
+  await sel.selectOption("v1");                                       // aynı şablonu yeniden kopyala: ad dolu
+  await page.getByRole("button", { name: "Kopyala" }).click();
+  await expect(sel).toHaveValue("n3");
+  const second = (calls[1].body as { name: string }).name;
+  expect(second).toBe(`${"a".repeat(50)} (kopya) 2`);
+  expect([...second].length).toBeLessThanOrEqual(60);
+  await sel.selectOption("v1");
+  await page.getByRole("button", { name: "Kopyala" }).click();
+  await expect(sel).toHaveValue("n4");
+  expect((calls[2].body as { name: string }).name).toBe(`${"a".repeat(50)} (kopya) 3`);
+});
+
+test("izleme: Kopyala kısa adı olduğu gibi bırakır ('Giriş katı (kopya)', sonra '(kopya) 2')", async ({ page }) => {
+  await mock(page, STATUS);
+  const { calls } = await mockStore(page, [VIEW]);
+  await login(page);
+  const sel = page.getByRole("combobox", { name: "Şablon", exact: true });
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByRole("button", { name: "Kopyala" }).click();
+  await expect(sel).toHaveValue("n2");
+  await sel.selectOption("v1");
+  await page.getByRole("button", { name: "Kopyala" }).click();
+  await expect(sel).toHaveValue("n3");
+  expect(calls.map((c) => (c.body as { name: string }).name)).toEqual(["Giriş katı (kopya)", "Giriş katı (kopya) 2"]);
+});
+
+test("izleme: düzenleyicide tıklayarak yer değiştirme (fare, Enter, Boşluk), boş kutuya taşıma, aynı kutuya tıklayınca seçim kalır", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/sources", (r) => r.fulfill({ json: [] }));
+  const { calls } = await mockStore(page, [VIEW]);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByRole("button", { name: "Düzenle" }).click();
+  const ed = page.getByRole("region", { name: "Şablon düzenleyici" });
+  const box = (n: number) => ed.getByRole("button", { name: `Kutu ${n}`, exact: true });   // Kutu 1..4
+  const label = (n: number) => ed.getByTestId("edit-tile").nth(n - 1);
+  await expect(box(4)).toHaveAttribute("aria-pressed", "true");                  // açılışta ilk BOŞ kutu seçili (dolu kutu taşınmasın)
+  // 1) Kutu 1'i seç, Kutu 2'ye tıkla: ikisi yer değiştirir, seçim hedefte (Kutu 2)
+  await box(1).click();
+  await expect(box(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(label(1)).toContainText("Yer değiştirmek için başka bir kutuya tıklayın");
+  await box(2).click();
+  await expect(label(1)).toContainText("Ofis NVR · Kasa");
+  await expect(label(2)).toContainText("Kapı");
+  await expect(box(2)).toHaveAttribute("aria-pressed", "true");
+  await expect(box(1)).toHaveAttribute("aria-pressed", "false");
+  // 2) aynı kutuya yeniden tıklamak seçimi korur, hiçbir şey kımıldamaz
+  await box(2).click();
+  await expect(box(2)).toHaveAttribute("aria-pressed", "true");
+  await expect(label(2)).toContainText("Kapı");
+  // 3) dolu Kutu 2 seçiliyken boş Kutu 4'e tıkla: kamera oraya taşınır, Kutu 2 boşalır
+  await box(4).click();
+  await expect(label(4)).toContainText("Kapı");
+  await expect(label(2)).toContainText("Boş");
+  await expect(box(4)).toHaveAttribute("aria-pressed", "true");
+  // 4) klavye: Kutu 1'e odaklan, Enter (Kutu 4 seçili ve dolu: Kutu 1 ile yer değiştirir)
+  await box(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(label(1)).toContainText("Kapı");
+  await expect(label(4)).toContainText("Ofis NVR · Kasa");
+  // 5) klavye: Kutu 3'e odaklan, Boşluk (Kutu 1 seçili ve dolu: Kutu 3 ile yer değiştirir)
+  await box(3).focus();
+  await page.keyboard.press(" ");
+  await expect(label(1)).toContainText("Arka kapı");
+  await expect(label(3)).toContainText("Kapı");
+  await ed.getByRole("button", { name: "Kaydet" }).click();
+  await expect.poll(() => calls.length).toBe(1);
+  expect(calls[0].body).toEqual({ name: "Giriş katı", layout: "4",
+    tiles: [{ sourceId: "c", channelId: null }, null, { sourceId: "a", channelId: null }, { sourceId: "b", channelId: "2" }] });
+});
+
+test("izleme: listeden kamera seçilince sıradaki BOŞ kutu seçilir (dolu kutu ezilmez); hepsi doluysa uyarır; adlar sunucu biçiminde", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/sources", (r) => r.fulfill({ json: [
+    { id: "a", kind: "camera", name: "Kapı", brand: "custom", hasPassword: false },
+    { id: "d", kind: "camera", name: "Depo", brand: "custom", hasPassword: false },
+    { id: "e", kind: "camera", name: "Ek kamera", brand: "custom", hasPassword: false },
+    { id: "nvr", kind: "recorder", name: "Ofis NVR", recorderBrand: "hikvision", hasPassword: true },
+    { id: "nvr2", kind: "recorder", name: "Depo NVR", recorderBrand: "hikvision", hasPassword: true }] }));
+  await page.route("**/api/live/sources/nvr/channels", (r) => r.fulfill({ json: [
+    { id: "1", name: "Giriş", number: 1, title: "Giriş", hasSubstream: true }] }));
+  await page.route("**/api/live/sources/nvr2/channels", (r) => r.fulfill({ json: [
+    { id: "1", name: "Giriş", number: 1, title: "Giriş", hasSubstream: true }] }));
+  await page.route("**/api/live/sources/*/snapshot**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  await login(page);
+  await page.getByRole("button", { name: "Yeni şablon" }).click();
+  const ed = page.getByRole("region", { name: "Şablon düzenleyici" });
+  const tile = (n: number) => ed.getByTestId("edit-tile").nth(n - 1);
+  const box = (n: number) => ed.getByRole("button", { name: `Kutu ${n}`, exact: true });
+  await ed.getByLabel("Şablon adı").fill("Boş kutu sırası");
+  await box(3).click();                                                           // 3. kutuyu seç
+  await ed.getByRole("button", { name: "Depo", exact: true }).click();            // 3'e yerleşir
+  await expect(tile(3)).toContainText("Depo");
+  await expect(box(4)).toHaveAttribute("aria-pressed", "true");                  // sıradaki boş kutu
+  await ed.getByRole("button", { name: "Kapı" }).click();                         // 4'e yerleşir
+  await expect(tile(4)).toContainText("Kapı");
+  await expect(box(1)).toHaveAttribute("aria-pressed", "true");                  // sarar: ilk boş kutu (1)
+  // iki kayıt cihazının aynı adlı kanalı kutularda ayırt edilir: "<cihaz> · <kanal>"
+  await ed.getByRole("button", { name: /^Ofis NVR/ }).click();
+  await ed.getByRole("button", { name: "Giriş" }).click();
+  await expect(tile(1)).toContainText("Ofis NVR · Giriş");
+  await ed.getByRole("button", { name: /^Depo NVR/ }).click();
+  await ed.getByRole("button", { name: "Giriş" }).last().click();
+  await expect(tile(2)).toContainText("Depo NVR · Giriş");
+  // hepsi dolu: seçili kutu yok, listeden seçim hiçbir kamerayı ezmez ve nedenini söyler
+  await expect(ed.getByTestId("edit-tile").getByRole("button", { pressed: true })).toHaveCount(0);
+  await ed.getByRole("button", { name: "Ek kamera" }).click();
+  await expect(ed.getByRole("status")).toContainText("Bütün kutular dolu");
+  await expect(tile(1)).toContainText("Ofis NVR · Giriş");
+  await expect(tile(3)).toContainText("Depo");
+  await expect(tile(4)).toContainText("Kapı");
+  await ed.getByRole("button", { name: "Boşalt" }).first().click();              // 1. kutuyu boşalt: o kutu seçilir, ek kamera oraya girer
+  await expect(box(1)).toHaveAttribute("aria-pressed", "true");
+  await ed.getByRole("button", { name: "Ek kamera" }).click();
+  await expect(tile(1)).toContainText("Ek kamera");
+  await expect(ed.getByRole("status")).toHaveCount(0);
+});
+
+test("izleme: kamera listesinden kutuya sürükle-bırak (kutu ve etiket yerleşir; kullanılan kamera ikinci kez sürüklenemez)", async ({ page }) => {
+  let saved: unknown = null;
+  await mock(page, STATUS);
+  await page.route("**/api/live/sources", (r) => r.fulfill({ json: [
+    { id: "a", kind: "camera", name: "Kapı", brand: "custom", hasPassword: false },
+    { id: "d", kind: "camera", name: "Depo", brand: "custom", hasPassword: false }] }));
+  await page.route("**/api/live/sources/*/snapshot**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  await page.route("**/api/live/views", async (r) => {
+    if (r.request().method() === "POST") {
+      saved = r.request().postDataJSON();
+      return r.fulfill({ json: { id: "v9", createdAt: 3, updatedAt: 3, ...(saved as object) } });
+    }
+    return r.fulfill({ json: [VIEW] });
+  });
+  await login(page);
+  await page.getByRole("button", { name: "Yeni şablon" }).click();
+  const ed = page.getByRole("region", { name: "Şablon düzenleyici" });
+  await ed.getByLabel("Şablon adı").fill("Sürükle");
+  await ed.getByRole("button", { name: "Depo" }).dragTo(ed.getByTestId("edit-tile").nth(2));   // listeden 3. kutuya
+  await expect(ed.getByTestId("edit-tile").nth(2)).toContainText("Depo");
+  await expect(ed.getByRole("button", { name: "Depo" })).toBeDisabled();
+  await ed.getByRole("button", { name: "Kapı" }).dragTo(ed.getByTestId("edit-tile").nth(0));
+  await expect(ed.getByTestId("edit-tile").nth(0)).toContainText("Kapı");
+  await ed.getByRole("button", { name: "Kaydet" }).click();
+  await expect.poll(() => saved).toEqual({ name: "Sürükle", layout: "4",
+    tiles: [{ sourceId: "a", channelId: null }, null, { sourceId: "d", channelId: null }, null] });
+});
+
+test("izleme: kamera listesi — kaynaklar alınamazsa 'Yeniden dene'; kanallar yükleniyor, boş cihaz, açıkken kapat-aç ikinci istek göndermez", async ({ page }) => {
+  await mock(page, STATUS);
+  let failSources = false;                                                          // yalnız düzenleyicideki liste isteği düşer
+  await page.route("**/api/live/sources", (r) => (failSources
+    ? r.fulfill({ status: 502, json: { detail: "Analiz sunucusuna ulaşılamıyor." } })
+    : r.fulfill({ json: [
+      { id: "bos", kind: "recorder", name: "Boş NVR", recorderBrand: "hikvision", hasPassword: true },
+      { id: "yavas", kind: "recorder", name: "Yavaş NVR", recorderBrand: "hikvision", hasPassword: true }] })));
+  await page.route("**/api/live/sources/bos/channels", (r) => r.fulfill({ json: [] }));
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  let slowCalls = 0;
+  await page.route("**/api/live/sources/yavas/channels", async (r) => {
+    slowCalls += 1;
+    await gate;
+    await r.fulfill({ json: [{ id: "7", name: "Rampa", number: 7, title: "Rampa", hasSubstream: true }] });
+  });
+  await page.route("**/api/live/sources/*/snapshot**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  await login(page);
+  await expect(page.getByRole("combobox", { name: "Tüm kanallardan şablon" })).toBeVisible();   // sayfanın kendi kaynak isteği tamam
+  failSources = true;
+  await page.getByRole("button", { name: "Yeni şablon" }).click();
+  const list = page.getByRole("complementary", { name: "Kameralar" });
+  await expect(list.getByRole("alert")).toContainText("Analiz sunucusuna ulaşılamıyor.");
+  await expect(list.getByText("Henüz kaynak yok")).toHaveCount(0);               // alınamadı, "kaynak yok" denmez
+  failSources = false;
+  await list.getByRole("button", { name: "Yeniden dene" }).click();
+  await list.getByRole("button", { name: /^Boş NVR/ }).click();
+  await expect(list.getByText("Bu kayıt cihazında kamera yok.")).toBeVisible();
+  await list.getByRole("button", { name: /^Yavaş NVR/ }).click();
+  await expect(list.getByText("Kanallar yükleniyor…")).toBeVisible();
+  await list.getByRole("button", { name: /^Yavaş NVR/ }).click();                // kapat
+  await list.getByRole("button", { name: /^Yavaş NVR/ }).click();                // istek sürerken yeniden aç
+  await expect(list.getByText("Kanallar yükleniyor…")).toBeVisible();
+  release();
+  await expect(list.getByRole("button", { name: "Rampa" })).toBeVisible();
+  expect(slowCalls).toBe(1);                                                       // ikinci istek gitmedi
+});
+
+test("izleme: silinmiş kamerada (404) tek kamera akışı 30 sn'de bir boşuna yeniden açılmaz", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/cameras/status**", (r) => r.fulfill({ status: 404, json: { detail: "Kaynak bulunamadı." } }));
+  const ks = await streamKeys(page, "**/api/live/cameras/stream**");
+  await page.clock.install();
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByTestId("watch-tile").nth(0).dblclick();
+  await expect(page.getByText("Kamera silinmiş.")).toBeVisible();
+  const n = ks.length;
+  await page.clock.runFor(95_000);                                    // 3 yeniden açma aralığı geçse de
+  await page.waitForTimeout(300);
+  expect(ks.length).toBe(n);
+  await expect(page.getByText("Kamera silinmiş.")).toBeVisible();
 });

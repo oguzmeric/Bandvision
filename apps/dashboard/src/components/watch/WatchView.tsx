@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ApiError, api, type Source } from "@/lib/live";
 import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import {
-  LAST_VIEW_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
+  copyName, LAST_VIEW_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
   type Problem, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
 import { refKey } from "./CameraList";
@@ -177,12 +177,12 @@ export default function WatchView() {
   const names = Object.fromEntries((status?.tiles ?? []).filter((t): t is TileStatus => !!t)
     .map((t) => [refKey({ sourceId: t.sourceId, channelId: t.channelId }), t.name]));
   const startEdit = (v: ViewTemplate | "new") => { setInfo(null); setError(null); setEditing(v); };
-  /** Şablonu kopyalar ("… (kopya)") ve yeni şablona geçer */
+  /** Şablonu kopyalar ("… (kopya)", ad doluysa "… (kopya) 2") ve yeni şablona geçer */
   const copy = async () => {
     if (!view || busy) return;
     setBusy(true); setInfo(null); setError(null);
     try {
-      const v = await api<ViewTemplate>("views", { method: "POST", json: { name: `${view.name} (kopya)`.slice(0, 60), layout: view.layout, tiles: view.tiles } });
+      const v = await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(view.name, views.map((x) => x.name)), layout: view.layout, tiles: view.tiles } });
       await reload(v.id);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
