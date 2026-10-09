@@ -908,8 +908,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         lay = smallest_for(len(used))
         tiles: list[dict[str, Any] | None] = [{"sourceId": src["id"], "channelId": c.id} for c in used]
         tiles += [None] * (len(lay.cells) - len(tiles))
-        base = f"{str(src.get('name') or '').strip() or 'Kayıt cihazı'} · tüm kanallar"
-        name = _unique_name(base, {v["name"] for v in manager.views.list()})[:60]
+        name = _recorder_view_name(str(src.get("name") or ""), {v["name"] for v in manager.views.list()})
         try:
             v = manager.views.create(name, lay.id, tiles)
         except ViewsBusy as e:
@@ -1172,6 +1171,23 @@ def _profile_from(body: dict[str, Any]) -> Profile:
         if not (0.0 <= L <= 100.0 and -128.0 <= a <= 127.0 and -128.0 <= b <= 127.0):
             raise HTTPException(422, "Personel rengi geçersiz: L 0–100, a ve b −128–127 arasında olmalı.")
     return p
+
+
+_VIEW_NAME_MAX = 60
+_ALL_CHANNELS = " · tüm kanallar"
+
+
+def _recorder_view_name(source_name: str, taken: set[str]) -> str:
+    """Kayıt cihazı şablonunun adı: "<kaynak adı> · tüm kanallar", doluysa sonuna " 2", " 3"... eklenir. Son ad en çok
+    60 karakterdir ve `taken` içinde yoktur; sınıra sığmak için kaynak adı kısaltılır, ek ve sıra numarası korunur."""
+    stem = source_name.strip() or "Kayıt cihazı"
+    n = 1
+    while True:
+        tail = _ALL_CHANNELS + ("" if n == 1 else f" {n}")
+        name = stem[:max(_VIEW_NAME_MAX - len(tail), 1)].rstrip() + tail
+        if name not in taken:
+            return name
+        n += 1
 
 
 def _unique_name(name: str, taken: set[str]) -> str:

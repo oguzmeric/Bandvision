@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 import pathlib
 import threading
 import time
@@ -25,9 +26,14 @@ class ViewsBusy(Exception):
     """Şablon dosyası şu an okunamıyor ya da yazılamıyor."""
 
 
+def _num(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _valid(rec: Any) -> bool:
     return (isinstance(rec, dict) and isinstance(rec.get("id"), str) and isinstance(rec.get("name"), str)
-            and layout_by_id(str(rec.get("layout"))) is not None and isinstance(rec.get("tiles"), list))
+            and isinstance(rec.get("layout"), str) and layout_by_id(rec["layout"]) is not None
+            and isinstance(rec.get("tiles"), list) and _num(rec.get("createdAt")) and _num(rec.get("updatedAt")))
 
 
 class ViewStore:
@@ -39,28 +45,48 @@ class ViewStore:
         self._unread = False
         self._views: list[dict[str, Any]] = self._load()
 
-    def _load(self) -> list[dict[str, Any]]:
-        r = read_json(self._file)
+    def _parse(self, r: JsonRead) -> list[dict[str, Any]] | None:
+        """Okunan dosyayı şablon listesine çevirir; `None`: dosya hâlâ okunamıyor (kilitli). Bozuk dosya (JSON çözülemedi
+        ya da liste değil) kenara alınır ve boş liste döner; geçersiz kayıtlar atlanır (sayısı günlüğe yazılır)."""
+        if r.status == "unreadable":
+            return None
         if r.status == "missing":
             return []
-        if r.status == "corrupt" or (r.status == "ok" and not isinstance(r.data, list)):
+        if r.status == "corrupt" or not isinstance(r.data, list):
             _LOG.error("Şablon dosyası bozuk; kenara alındı (%s)", self._file.name)
             quarantine(self._file)
             return []
-        if r.status == "unreadable":
+        good = [v for v in r.data if _valid(v)]
+        if len(good) != len(r.data):
+            _LOG.warning("Şablon dosyasında %d geçersiz kayıt atlandı", len(r.data) - len(good))
+        return good
+
+    def _load(self) -> list[dict[str, Any]]:
+        views = self._parse(read_json(self._file))
+        if views is None:
             _LOG.error("Şablon dosyası okunamadı (kilitli olabilir); yazmadan önce yeniden denenecek")
             self._unread = True
             return []
-        return [v for v in r.data if _valid(v)]
+        return views
 
     def _ensure_read(self) -> None:
+        """Yazmadan önce: açılışta okunamayan dosya yeniden okunur; hâlâ okunamıyorsa `ViewsBusy`."""
         if not self._unread:
             return
-        r = read_json(self._file)
-        if r.status == "unreadable":
+        views = self._parse(read_json(self._file))
+        if views is None:
             raise ViewsBusy("Şablon dosyası şu an okunamıyor; biraz sonra yeniden deneyin.")
         self._unread = False
-        self._views = [v for v in r.data if _valid(v)] if r.status == "ok" and isinstance(r.data, list) else []
+        self._views = views
+
+    def _refresh(self) -> None:
+        """Okumalarda: açılışta okunamayan dosya için tek, beklemesiz, hata fırlatmayan yeniden deneme."""
+        if not self._unread:
+            return
+        views = self._parse(read_json(self._file, ()))
+        if views is not None:
+            self._unread = False
+            self._views = views
 
     def _save(self) -> None:
         try:
@@ -70,10 +96,12 @@ class ViewStore:
 
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
+            self._refresh()
             return copy.deepcopy(self._views)
 
     def get(self, view_id: str) -> dict[str, Any] | None:
         with self._lock:
+            self._refresh()
             for v in self._views:
                 if v["id"] == view_id:
                     return copy.deepcopy(v)
