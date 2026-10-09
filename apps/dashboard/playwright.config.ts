@@ -12,6 +12,9 @@ const WEB_PORT = 3100;
 const DATA_DIR = path.join(os.tmpdir(), `bv-e2e-${process.pid}`);
 /** Testte panel şifreyle korunur (e2e/auth.spec.ts); gerçek şifre değildir. */
 export const PANEL_PASSWORD = "e2e-test-sifresi";
+/** Telefondan erişim ayarı (e2e/access.spec.ts) geçici klasöre yazılır; repodaki apps/dashboard/.local/ asla kullanılmaz.
+ * Test işçileri de bu dosyayı okuyabilsin diye yolu ortama koyarız (ilk değerlendirme ana süreçte olur). */
+const ACCESS_FILE = (process.env.BV_E2E_ACCESS_FILE ??= path.join(DATA_DIR, "panel-access.json"));
 
 export default defineConfig({
   testDir: "./e2e",
@@ -40,7 +43,9 @@ export default defineConfig({
       command: `npx next start -p ${WEB_PORT} -H 127.0.0.1`,
       url: `http://127.0.0.1:${WEB_PORT}/videos`,
       env: { ANALYZER_URL: `http://127.0.0.1:${ANALYZER_PORT}`, NEXT_TELEMETRY_DISABLED: "1",
-             DASHBOARD_PASSWORD: PANEL_PASSWORD },
+             DASHBOARD_PASSWORD: PANEL_PASSWORD,
+             // Telefondan erişim ayarı repoya (apps/dashboard/.local/) değil geçici klasöre yazılır
+             PANEL_ACCESS_FILE: ACCESS_FILE },
       reuseExistingServer: false,
       timeout: 60_000,
     },

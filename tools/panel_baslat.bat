@@ -32,7 +32,7 @@ if not exist "%DASH%\node_modules" (
 curl -s -m 2 http://127.0.0.1:8090/healthz >nul 2>&1
 if errorlevel 1 start "BandVision analiz" /min /d "%EDGE%" "%EDGE%\.venv\Scripts\python.exe" -m bantvision.analyzer --port 8090 --log "%LOGS%\analyzer.log"
 curl -s -m 2 -o nul http://127.0.0.1:3000/login >nul 2>&1
-if errorlevel 1 start "BandVision panel" /min /d "%DASH%" cmd /c "npm run dev 1>>"%LOGS%\panel.log" 2>&1"
+if errorlevel 1 start "BandVision panel" /min /d "%DASH%" cmd /c "node "%ROOT%\tools\panel_run.mjs" 1>>"%LOGS%\panel.log" 2>&1"
 
 echo BandVision paneli aciliyor...
 for /l %%i in (1,1,60) do (

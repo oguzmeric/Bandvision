@@ -1,12 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, panelPassword, sessionToken } from "@/lib/session";
+import { SESSION_COOKIE, authMode, expectedToken, sameToken } from "@/lib/session";
 
-/** Şifre tanımlıysa giriş yapılmamış istekler: sayfada aynı adreste giriş formu (yeniden yazma; tarayıcının kullandığı
- * ana makine adına dokunulmaz, proxy arkasında da çerez kaybolmaz), API'de 401. */
+/** Şifre kipi açıksa (DASHBOARD_PASSWORD ya da telefondan erişimin şifre özeti) giriş yapılmamış istekler: sayfada aynı
+ * adreste giriş formu (yeniden yazma; tarayıcının kullandığı ana makine adına dokunulmaz, proxy arkasında da çerez
+ * kaybolmaz), API'de 401. */
 export async function middleware(req: NextRequest) {
-  const pw = panelPassword();
-  if (!pw) return NextResponse.next();
-  if (req.cookies.get(SESSION_COOKIE)?.value === (await sessionToken(pw))) return NextResponse.next();
+  const mode = authMode();
+  if (!mode) return NextResponse.next();
+  if (sameToken(req.cookies.get(SESSION_COOKIE)?.value, await expectedToken(mode))) return NextResponse.next();
   if (req.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Giriş gerekli." }, { status: 401 });
   }

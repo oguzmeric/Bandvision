@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import { redirect } from "next/navigation";
-import { panelPassword, safeNext } from "@/lib/session";
+import { authMode, safeNext } from "@/lib/session";
 import LoginForm from "./LoginForm";
 
 export const metadata: Metadata = { title: "Giriş" };
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const { next } = await searchParams;
-  if (!panelPassword()) redirect(safeNext(next));            // şifre tanımlı değil: giriş gerekmez
+  if (!authMode()) redirect(safeNext(next));            // şifre kipi kapalı: giriş gerekmez
   return (
     <main className="grid min-h-screen place-items-center px-4">
       <div className="w-full max-w-sm rounded-2xl border border-line bg-white p-7 shadow-[0_12px_32px_rgba(29,26,46,0.06)]">
