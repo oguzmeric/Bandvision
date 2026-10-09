@@ -26,10 +26,12 @@ from . import recorders as rec
 from .alarms import AlarmStore
 from .clips import ClipWriter
 from .jsonfile import quarantine, read_json, write_json_atomic
+from .layouts import LAYOUTS, MAX_TILES, layout_by_id, smallest_for
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
+from .views import ViewsBusy, ViewStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -82,6 +84,26 @@ class NotifyIn(_Strict):
 
 class TestAlarmIn(_Strict):
     sessionId: str | None = None
+
+
+# Kaynak/kanal kimliği (TRASSIR GUID, kanal no, uuid): 1–120 karakter, yalnızca noktalardan oluşamaz ("." ve ".." yok).
+# pydantic'in düzenli ifade motoru bakış-ileri (?!...) desteklemez; aynı kural bu biçimle ve `max_length` ile ifade edilir.
+_REF = r"^\.*[A-Za-z0-9_:{}-][A-Za-z0-9._:{}-]*$"
+
+
+class TileIn(_Strict):
+    sourceId: str = Field(pattern=_REF, max_length=120)
+    channelId: str | None = Field(default=None, pattern=_REF, max_length=120)
+
+
+class ViewIn(_Strict):
+    name: str = Field(max_length=60)
+    layout: str = Field(max_length=4)
+    tiles: list[TileIn | None] = Field(max_length=MAX_TILES)
+
+
+class FromRecorderIn(_Strict):
+    sourceId: str = Field(pattern=_REF, max_length=120)
 
 
 def _load_detector() -> Any:
@@ -240,6 +262,7 @@ class LiveManager:
         self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
         root = data_dir or store.root.parent
         self.alarms = AlarmStore(root)
+        self.views = ViewStore(root)
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
         self.pose = SharedPose()
@@ -602,6 +625,19 @@ class LiveManager:
                     return c
         raise HTTPException(404, "Kamera kayıt cihazında bulunamadı.")
 
+    def camera_name(self, source_id: str, channel_id: str | None) -> str:
+        """Kutu etiketi: kaynak adı (+ kanal adı). Ağa çıkmaz: kanal adı önbellekte yoksa kanal kimliği yazılır."""
+        src = self.store.source(source_id)
+        if src is None:
+            return "Silinmiş kamera"
+        name = str(src.get("name") or "").strip() or "Kamera"
+        if not channel_id:
+            return name
+        for c in self._channels.get(source_id, []):
+            if c.id == channel_id:
+                return f"{name} · {c.title.strip()}"
+        return f"{name} · {channel_id}"
+
     def camera_url(self, src: dict[str, Any]) -> str:
         custom = str(src.get("customUrl", "")).strip()
         if (src.get("brand") == "custom" and os.environ.get("ANALYZER_ALLOW_FILE_SOURCES") == "1"
@@ -816,6 +852,69 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         except rec.RecorderError as e:
             raise _err(e) from e
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    # ---------------------------------------------------------------- çoklu izleme şablonları
+
+    @r.get("/view-layouts")
+    def view_layouts() -> list[dict[str, Any]]:
+        return [lay.to_dict() for lay in LAYOUTS]
+
+    @r.get("/views")
+    def views() -> list[dict[str, Any]]:
+        return manager.views.list()
+
+    @r.post("/views")
+    def create_view(body: ViewIn) -> dict[str, Any]:
+        name, layout, tiles = _view_body(body)
+        try:
+            return manager.views.create(name, layout, tiles)
+        except ViewsBusy as e:
+            raise HTTPException(503, str(e)) from e
+
+    @r.put("/views/{view_id}")
+    def update_view(view_id: str, body: ViewIn) -> dict[str, Any]:
+        name, layout, tiles = _view_body(body)
+        try:
+            v = manager.views.update(view_id, name, layout, tiles)
+        except ViewsBusy as e:
+            raise HTTPException(503, str(e)) from e
+        if v is None:
+            raise HTTPException(404, "Şablon bulunamadı.")
+        return v
+
+    @r.delete("/views/{view_id}", status_code=204)
+    def delete_view(view_id: str) -> Response:
+        try:
+            ok = manager.views.delete(view_id)
+        except ViewsBusy as e:
+            raise HTTPException(503, str(e)) from e
+        if not ok:
+            raise HTTPException(404, "Şablon bulunamadı.")
+        return Response(status_code=204)
+
+    @r.post("/views/from-recorder")
+    def view_from_recorder(body: FromRecorderIn) -> dict[str, Any]:
+        """Kayıt cihazının kanallarından şablon: kanal sayısına uyan en küçük düzen, en çok 16 kanal (fazlası bildirilir)."""
+        src = manager.source_or_404(body.sourceId)
+        if src["kind"] != "recorder":
+            raise HTTPException(400, "Bu kaynak bir kayıt cihazı değil.")
+        try:
+            chans = manager.channels(src)
+        except rec.RecorderError as e:
+            raise _err(e) from e
+        if not chans:
+            raise HTTPException(422, "Kayıt cihazında kamera bulunamadı.")
+        used = chans[:MAX_TILES]
+        lay = smallest_for(len(used))
+        tiles: list[dict[str, Any] | None] = [{"sourceId": src["id"], "channelId": c.id} for c in used]
+        tiles += [None] * (len(lay.cells) - len(tiles))
+        base = f"{str(src.get('name') or '').strip() or 'Kayıt cihazı'} · tüm kanallar"
+        name = _unique_name(base, {v["name"] for v in manager.views.list()})[:60]
+        try:
+            v = manager.views.create(name, lay.id, tiles)
+        except ViewsBusy as e:
+            raise HTTPException(503, str(e)) from e
+        return {**v, "truncated": len(chans) > MAX_TILES, "channelCount": len(chans)}
 
     # ---------------------------------------------------------------- canlı oturumlar
 
@@ -1083,6 +1182,23 @@ def _unique_name(name: str, taken: set[str]) -> str:
     while f"{name} {n}" in taken:
         n += 1
     return f"{name} {n}"[:80]
+
+
+def _view_body(body: ViewIn) -> tuple[str, str, list[dict[str, Any] | None]]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Şablon adı boş olamaz.")
+    lay = layout_by_id(body.layout)
+    if lay is None:
+        raise HTTPException(422, "Düzen bulunamadı.")
+    if len(body.tiles) != len(lay.cells):
+        raise HTTPException(422, f"Bu düzende {len(lay.cells)} kutu var; {len(body.tiles)} kutu gönderildi.")
+    tiles: list[dict[str, Any] | None] = [None if t is None else {"sourceId": t.sourceId, "channelId": t.channelId}
+                                          for t in body.tiles]
+    seen = [(t["sourceId"], t["channelId"]) for t in tiles if t]
+    if len(seen) != len(set(seen)):
+        raise HTTPException(422, "Aynı kamera bir şablonda yalnızca bir kez yer alabilir.")
+    return name, lay.id, tiles
 
 
 def _default_name(data: dict[str, Any]) -> str:
