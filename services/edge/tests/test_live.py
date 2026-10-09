@@ -2276,6 +2276,57 @@ def test_view_stream_ends_when_template_is_deleted_mid_stream(client: TestClient
     assert not reader.is_alive() and result["status"] == 200 and result["frames"] >= 1
 
 
+def _asgi_stream_until_disconnect(client: TestClient, path: str, query: bytes, parts_before_leaving: int) -> int:
+    """Akış uç noktasını doğrudan ASGI ile sürer (ağ yok): `parts_before_leaving` parça gelince istemci kopar
+    (Next vekilinin tarayıcı `<img>` kaynağını değiştirince yaptığı gibi). Gönderilen parça sayısını döner."""
+    import anyio
+
+    parts = 0
+
+    async def drive() -> None:
+        enough = anyio.Event()
+        asked = False
+
+        async def receive() -> dict[str, Any]:
+            nonlocal asked
+            if not asked:
+                asked = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await enough.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(msg: dict[str, Any]) -> None:
+            nonlocal parts
+            if msg["type"] == "http.response.body" and msg.get("body"):
+                parts += 1
+                if parts >= parts_before_leaving:
+                    enough.set()
+
+        scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+                 "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": query,
+                 "root_path": "", "headers": [(b"host", b"testserver")], "client": ("127.0.0.1", 50000),
+                 "server": ("testserver", 80)}
+        with anyio.fail_after(30):
+            await client.app(scope, receive, send)
+
+    client.portal.call(drive)
+    return parts
+
+
+def test_view_stream_releases_composer_subscription_as_soon_as_client_disconnects(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kopan istemcinin aboneliği HEMEN bırakılır (abone zaman aşımı beklenmez): eski şablonun birleştiricisi izleme
+    okuyucularına dokunmayı bırakır, yeni şablonun kutuları boşta okuyucuları çıkarabilir (şablon değişimi)."""
+    a, _b = _two_file_sources(client, monkeypatch)
+    v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",
+                                                 "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    parts = _asgi_stream_until_disconnect(client, f"/api/v1/live/views/{v['id']}/stream", b"w=320&h=180", 3)
+    comps = list(client.app.state.live.mosaics._comps.values())
+    assert parts >= 3 and len(comps) == 1
+    with comps[0]._cv:
+        assert comps[0]._subs == {}                                     # eskiden SUB_TTL_S (10 sn) sürerdi
+
+
 def test_view_stream_is_503_after_mosaics_stop(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     a, _b = _two_file_sources(client, monkeypatch)
     v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",

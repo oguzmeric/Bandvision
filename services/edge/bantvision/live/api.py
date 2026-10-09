@@ -10,13 +10,14 @@ import os
 import pathlib
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, ClassVar, Literal
 
 import cv2
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from ..core import Profile
 from ..core.model_download import failure_reason
@@ -106,6 +107,21 @@ class ViewIn(_Strict):
 
 class FromRecorderIn(_Strict):
     sourceId: str = Field(pattern=_REF, max_length=120)
+
+
+class _ClosingStream(StreamingResponse):
+    """Yanıt bitince — istemci koptuğunda da — gövde üreticisi HEMEN kapatılır (`finally` çalışır). Starlette kopuşta
+    üreticiyi kapatmaz, kapanış çöp toplayıcıya kalır: birleşik akışta abonelik `SUB_TTL_S` (10 sn) sürer, eski şablonun
+    birleştiricisi okuyuculara dokunmaya devam eder ve şablon değiştirilen duvarda yeni kutular o süre "Sınır aşıldı"
+    görür. Üretici zaman uyumsuz olmalı (`aclose`)."""
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _load_detector() -> Any:
@@ -960,11 +976,11 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         except LookupError as e:
             raise HTTPException(404, "Şablon bulunamadı.") from e
 
-        def frames() -> Iterator[bytes]:
+        async def frames() -> AsyncIterator[bytes]:
             seq, idle, sent = 0, time.monotonic(), 0
             try:
                 while limit is None or sent < limit:
-                    seq2, jpeg = comp.jpeg(tok, seq, timeout=2.0)
+                    seq2, jpeg = await run_in_threadpool(comp.jpeg, tok, seq, 2.0)
                     if comp.gone or comp.stopped:
                         return
                     if jpeg is None or seq2 == seq:
@@ -975,9 +991,10 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
                     sent += 1
                     yield _part(jpeg)
             finally:
-                manager.mosaics.release(comp, tok)
+                manager.mosaics.release(comp, tok)               # istemci kopunca da hemen (_ClosingStream)
 
-        return _mjpeg(frames())
+        return _ClosingStream(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
+                              headers={"Cache-Control": "no-store"})
 
     @r.get("/views/{view_id}/status")
     def view_status(view_id: str) -> dict[str, Any]:

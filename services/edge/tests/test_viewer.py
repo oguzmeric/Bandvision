@@ -12,7 +12,16 @@ from fastapi.testclient import TestClient
 
 from bantvision.analyzer import Settings, create_app
 from bantvision.live import viewer as viewer_mod
-from bantvision.live.viewer import IDLE_S, MAX_MAIN, MAX_SUB, REJECT_TTL_S, SourceGone, ViewHub
+from bantvision.live.viewer import (
+    EVICT_IDLE_S,
+    IDLE_S,
+    MAX_MAIN,
+    MAX_SUB,
+    REJECT_TTL_S,
+    SESSION_GRACE_S,
+    SourceGone,
+    ViewHub,
+)
 
 
 class FakeCap:
@@ -555,5 +564,146 @@ def test_session_frame_is_downscaled_once_per_sequence() -> None:
         assert hub.tile("a", "1").frame is not t1.frame                          # yeni kare
         sessions[("a", "1")] = FakeSession(np.full((1080, 1920, 3), 9, np.uint8), seq=6)
         assert hub.tile("a", "1").frame[0, 0, 0] == 9                            # başka oturum, aynı sıra: eski kare dönmez
+    finally:
+        hub.stop()
+
+
+# ------------------------------------------------------------ sınırda boşta okuyucu yer açar (şablon değişimi, I1)
+
+
+def _keys(hub: ViewHub, quality: str = "sub") -> set[str]:
+    return {k[0] for k in hub._viewers if k[2] == quality}
+
+
+def test_switching_16_tile_templates_evicts_idle_readers_once_older_than_3s() -> None:
+    clock = Clock()
+    hub, _ = make_hub(clock=clock)
+    try:
+        for i in range(MAX_SUB):                                                 # birinci şablon: 16 kamera
+            assert hub.tile(f"a{i}", None).message == ""
+        old = [hub._viewers[(f"a{i}", None, "sub")] for i in range(MAX_SUB)]
+        clock.t += EVICT_IDLE_S - 0.5                                            # eski okuyucular henüz yeni
+        t = hub.tile("b0", None)
+        assert t.state == "error" and "Sınır aşıldı" in t.message
+        clock.t += 1.0                                                           # artık 3 sn'den uzun süredir kullanılmıyor
+        for i in range(MAX_SUB):                                                 # ikinci şablon: her kutu okuyucusunu alır
+            t = hub.tile(f"b{i}", None)
+            assert t.state != "error" and t.message == "", (i, t.message)
+        assert _keys(hub) == {f"b{i}" for i in range(MAX_SUB)} and hub.open_count("sub") == MAX_SUB
+        wait(lambda: not any(v.is_alive() for v in old))                         # çıkarılan okuyucular durdu
+        assert hub.peek("b0", None).state != "error"                             # eski red kalmadı
+    finally:
+        hub.stop()
+
+
+def test_reader_still_in_use_is_never_evicted_and_lru_goes_first() -> None:
+    clock = Clock()
+    hub, _ = make_hub(clock=clock)
+    try:
+        for i in range(MAX_SUB):
+            hub.tile(f"a{i}", None)
+            clock.t += 0.01                                                      # a0 en eski, a15 en yeni
+        clock.t += EVICT_IDLE_S + 1
+        for i in range(8):                                                       # yarısı hâlâ izleniyor (dokunuldu)
+            hub.tile(f"a{i}", None)
+        got = [hub.tile(f"b{i}", None) for i in range(MAX_SUB)]
+        assert [t.state != "error" for t in got] == [True] * 8 + [False] * 8
+        assert all("Sınır aşıldı" in t.message for t in got[8:])
+        assert _keys(hub) == {f"a{i}" for i in range(8)} | {f"b{i}" for i in range(8)}
+    finally:
+        hub.stop()
+
+
+def test_main_limit_evicts_idle_net_view_but_not_one_in_use() -> None:
+    clock = Clock()
+    hub, _ = make_hub(clock=clock)
+    try:
+        hub.tile("m0", None, "main")
+        clock.t += 0.5
+        hub.tile("m1", None, "main")
+        clock.t += EVICT_IDLE_S + 0.1                                            # m0 ve m1 boşta (m0 daha eski)
+        assert hub.tile("n0", None, "main").message == ""
+        assert _keys(hub, "main") == {"m1", "n0"}                                # en eski (m0) çıkarıldı
+        clock.t += 1.0
+        hub.tile("n0", None, "main")                                             # n0 izleniyor
+        assert hub.tile("n1", None, "main").message == ""                        # m1 boşta: çıkarılır
+        t = hub.tile("n2", None, "main")                                         # n0, n1 yeni: kimse çıkarılmaz
+        assert t.state == "error" and "Sınır aşıldı" in t.message
+        assert _keys(hub, "main") == {"n0", "n1"} and hub.open_count("sub") == 0
+    finally:
+        hub.stop()
+
+
+def test_eviction_does_not_happen_for_a_request_that_cannot_open() -> None:
+    clock = Clock()
+    hub, _ = make_hub(clock=clock, gone={"silindi"})
+    try:
+        for i in range(MAX_SUB):
+            hub.tile(f"a{i}", None)
+        clock.t += EVICT_IDLE_S + 1
+        assert hub.tile("silindi", None).message == "Kamera silinmiş."
+        assert hub.open_count("sub") == MAX_SUB                                  # silinmiş kamera için kimse çıkarılmadı
+    finally:
+        hub.stop()
+
+
+# ------------------------------------------------------------ analiz oturumu önceliklidir (I2)
+
+
+def test_session_stuck_reconnecting_gets_the_connection_reader_closed_and_never_reopened() -> None:
+    clock = Clock()
+    sessions: dict[tuple[str, str | None], Any] = {}
+    hub, opened = make_hub(sessions=sessions, clock=clock)
+    try:
+        wait(lambda: hub.tile("a", "1").frame is not None)                      # ızgara izliyor: okuyucu canlı
+        reader = hub._viewers[("a", "1", "sub")]
+        s = FakeSession(frame=None, state="connecting")                          # analiz başlatıldı, ilk kare yok
+        sessions[("a", "1")] = s
+        assert hub.tile("a", "1").frame is not None and hub.open_count("sub") == 1   # kısa geçiş: görüntü sürer
+        s.status.state, s.status.message = "reconnecting", "Görüntü açılamadı; yeniden deneniyor."   # NVR reddetti
+        t = hub.tile("a", "1")
+        assert hub.open_count("sub") == 0                                        # okuyucu hemen bırakıldı
+        wait(lambda: not reader.is_alive())
+        assert t.state == "connecting" and t.frame is not None                   # son kare "bağlanıyor" ile kalır
+        for _ in range(3):
+            clock.t += IDLE_S
+            t = hub.tile("a", "1")
+            p = hub.peek("a", "1")
+        assert hub.open_count("sub") == 0 and opened == ["rtsp://a/1/sub"]      # oturum varken yeniden açılmadı
+        assert t.state == "connecting" and p.state == "connecting"
+    finally:
+        hub.stop()
+
+
+def test_session_without_first_frame_keeps_reader_at_most_grace_seconds() -> None:
+    clock = Clock()
+    sessions: dict[tuple[str, str | None], Any] = {}
+    hub, opened = make_hub(sessions=sessions, clock=clock)
+    try:
+        wait(lambda: hub.tile("a", None).frame is not None)
+        sessions[("a", None)] = FakeSession(frame=None, state="connecting")
+        hub.tile("a", None)
+        clock.t += SESSION_GRACE_S - 1
+        assert hub.tile("a", None).frame is not None and hub.open_count("sub") == 1
+        clock.t += 1.5                                                           # 5 sn doldu, oturum hâlâ bağlanıyor
+        t = hub.tile("a", None)
+        assert hub.open_count("sub") == 0 and t.state == "connecting" and t.frame is not None
+        s = sessions[("a", None)]
+        s.frame, s.status.state = np.zeros((480, 640, 3), np.uint8), "live"      # oturum bağlandı
+        t = hub.tile("a", None)
+        assert t.state == "live" and t.frame.shape[1] == 640 and opened == ["rtsp://a/None/sub"]
+    finally:
+        hub.stop()
+
+
+def test_session_in_error_drops_reader_even_from_status_poll() -> None:
+    sessions: dict[tuple[str, str | None], Any] = {}
+    hub, opened = make_hub(sessions=sessions)
+    try:
+        wait(lambda: hub.tile("a", None).frame is not None)
+        sessions[("a", None)] = FakeSession(frame=None, state="error")
+        p = hub.peek("a", None)                                                  # durum yoklaması da bırakır
+        assert hub.open_count("sub") == 0 and p.state == "error" and p.frame is not None
+        assert hub.tile("a", None).state == "error" and opened == ["rtsp://a/None/sub"]
     finally:
         hub.stop()

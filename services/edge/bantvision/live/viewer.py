@@ -3,9 +3,13 @@
 
 - Anahtar (kaynak, kanal, kalite). Aynı anahtar için tek okuyucu.
 - Kamerada analiz oturumu varsa onun son karesi kullanılır (NVR'a ikinci bağlantı yok). İzleme oturumlara dokunmaz.
-  Oturum kare vermeye başlayınca aynı anahtarın okuyucusu kapanır; oturum ilk karesini verene dek okuyucunun karesi,
-  okuyucu ilk karesini verene dek son gösterilen kare kullanılır (karo griye dönmez).
-- IDLE_S boyunca istenmeyen okuyucu kapanır. En çok MAX_SUB alt akış ve MAX_MAIN ana akış.
+  Oturum ÖNCELİKLİDİR: oturum kare vermeye başlayınca, yeniden bağlanıyor/hata bildirince ya da hub oturumu ilk
+  gördükten SESSION_GRACE_S sonra aynı anahtarın okuyucusu kapanır ve oturum sürdükçe yeniden açılmaz (bağlantı sınırı
+  2-3 olan NVR/kamerada okuyucu oturumun bağlantısını yemesin). O kısa geçişte okuyucunun karesi, sonra son gösterilen
+  kare kullanılır (karo griye dönmez).
+- IDLE_S boyunca istenmeyen okuyucu kapanır. En çok MAX_SUB alt akış ve MAX_MAIN ana akış. Sınırdayken aynı kalitede
+  EVICT_IDLE_S'den uzun süredir istenmeyen en eski okuyucu yeni isteğe yer açar (şablon değişince eski şablonun
+  okuyucuları 30 sn beklemez); çıkarılacak okuyucu yoksa istek "Sınır aşıldı" ile reddedilir.
 - Kopunca katlanarak bekler (1 → 30 sn); bekleme, akış en az GOOD_AFTER_S sn kare verdikten sonra sıfırlanır.
 - Kaynak silinir ya da düzenlenirse `drop(kaynak)` o kaynağın okuyucularını kapatır.
 - Verilen kareler salt okunurdur (yanlışlıkla üzerine çizen kod gürültüyle hata alır).
@@ -35,10 +39,14 @@ REAP_EVERY_S = 5.0
 BACKOFF_MAX_S = 30.0
 GOOD_AFTER_S = 5.0          # bekleme yalnızca akış bu kadar süre kare verdiyse sıfırlanır (tek kare yetmez)
 REJECT_TTL_S = 10.0         # reddedilen isteğin iletisi bu süre `peek()` ile görülür
+EVICT_IDLE_S = 3.0          # sınırdayken bu kadar süredir kullanılmayan okuyucu yeni isteğe yer açar (şablon değişimi)
+SESSION_GRACE_S = 5.0       # yeni analiz oturumu ilk karesini verene dek izleme okuyucusu en çok bu kadar tutulur
 CLOSE_WAIT_S = 3.0          # stop(): tüm okuyucular için ortak bekleme
 SWEEP_WAIT_S = 0.5
 DROP_WAIT_S = 1.0
 STOPPED_MSG = "İzleme durduruldu."
+# Oturum bunlardan birini bildirirse bağlanamıyordur: izleme okuyucusu beklemeden bırakılır (bağlantı oturuma kalsın)
+SESSION_TROUBLE = frozenset({"reconnecting", "error", "ended"})
 MAX_WIDTH: dict[str, int] = {"sub": 960, "main": 1920}
 LIMITS: dict[str, tuple[int, str]] = {
     "sub": (MAX_SUB, "Sınır aşıldı (en çok 16 kamera)."),
@@ -219,6 +227,7 @@ class ViewHub:
         self._viewers: dict[Key, CameraViewer] = {}
         self._rejected: dict[Key, tuple[TileFrame, float]] = {}    # son red (sınır, silinmiş kaynak) + geçerlilik sonu
         self._last: dict[Key, _Shown] = {}
+        self._session_seen: dict[Key, tuple[object, float, float]] = {}   # oturum, ilk görülme, son görülme
         self._stop = threading.Event()
         self._reaper_wanted = reaper
         self._reaper: threading.Thread | None = None               # ilk okuyucu açılınca başlar
@@ -268,18 +277,25 @@ class ViewHub:
         return TileFrame(shown.seq, shown.frame, "error" if t.state == "error" else "connecting", t.message, t.fps)
 
     def _session_tile(self, key: Key, s: Any, touch: bool) -> TileFrame:
+        """Oturum önceliklidir: okuyucu yalnızca yeni oturumun ilk karesine dek (en çok SESSION_GRACE_S, oturum sorun
+        bildirmiyorsa) tutulur; sonra bırakılır ve oturum sürdükçe yeniden açılmaz (`tile` oturum varken okuyucu açmaz)."""
         t = self._from_session(s, key)
-        if t.frame is not None:
-            self._remember(key, t, s)
-            if touch:                                        # oturum kare veriyor: ikinci bağlantı gereksiz
-                with self._lock:
-                    v = self._viewers.pop(key, None)
-                if v is not None:
-                    v.request_stop()
-            return t
-        with self._lock:                                     # oturumun ilk karesi gelene dek okuyucu sürer
-            v = self._viewers.get(key)
-        if v is not None:
+        state = str(getattr(getattr(s, "status", None), "state", ""))
+        now = self._clock()
+        with self._lock:
+            seen = self._session_seen.get(key)
+            first = seen[1] if seen is not None and seen[0] is s else now
+            self._session_seen[key] = (s, first, now)
+            grace = t.frame is None and state not in SESSION_TROUBLE and now - first < SESSION_GRACE_S
+            v = self._viewers.get(key) if grace else self._viewers.pop(key, None)
+        if not grace:
+            if v is not None:
+                v.request_stop()                             # bağlantı oturuma kalsın (bekleme yok; iş parçacığı kendisi biter)
+            if t.frame is not None:
+                self._remember(key, t, s)
+                return t
+            return self._or_last(key, t)
+        if v is not None:                                    # kısa geçiş: oturumun ilk karesi gelene dek okuyucu sürer
             if touch:
                 v.touch()
             snap = v.snapshot()
@@ -287,6 +303,19 @@ class ViewHub:
                 self._remember(key, snap, v)
                 return snap
         return self._or_last(key, t)
+
+    def _forget_session(self, key: Key) -> None:
+        """Oturum yok (ya da durdu): bir sonraki oturumun kısa geçişi baştan sayılır; durmuş oturuma referans kalmaz."""
+        if key in self._session_seen:
+            with self._lock:
+                self._session_seen.pop(key, None)
+
+    def _evictable(self, quality: str) -> CameraViewer | None:
+        """Sınırdayken yer açacak okuyucu: aynı kalitede EVICT_IDLE_S'den uzun süredir istenmeyenlerin en eskisi. Kilit
+        altında çağrılır. Kullanılan okuyucu (birleştirici ≤100 ms, kamera akışı 80 ms'de bir dokunur) asla seçilmez."""
+        now = self._clock()
+        idle = [v for k, v in self._viewers.items() if k[2] == quality and now - v.last_used > EVICT_IDLE_S]
+        return min(idle, key=lambda v: v.last_used) if idle else None
 
     def _reject(self, key: Key, t: TileFrame) -> TileFrame:
         """Reddi sakla: durum uç noktaları (`peek`) "bağlanıyor" yerine nedenini göstersin. Kilit altında çağrılır."""
@@ -307,6 +336,8 @@ class ViewHub:
         s = self._session(source_id, channel_id)
         if s is not None:
             return self._session_tile(key, s, touch=True)
+        self._forget_session(key)
+        evicted: CameraViewer | None = None
         with self._lock:
             if self._stop.is_set():                          # stop() ile yarışta yeni okuyucu açılmaz
                 return TileFrame(0, None, "error", STOPPED_MSG, 0.0)
@@ -314,18 +345,24 @@ class ViewHub:
             if v is None:
                 limit, msg = LIMITS[quality]
                 if sum(1 for k in self._viewers if k[2] == quality) >= limit:
-                    return self._reject(key, TileFrame(0, None, "error", msg, 0.0))
+                    evicted = self._evictable(quality)
+                    if evicted is None:                      # hepsi kullanılıyor: yer açılmaz
+                        return self._reject(key, TileFrame(0, None, "error", msg, 0.0))
                 try:
                     open_url, keep_alive = self._opener(source_id, channel_id, quality == "sub")
-                except SourceGone as e:
+                except SourceGone as e:                      # açılamayan istek için kimse çıkarılmaz
                     return self._reject(key, TileFrame(0, None, "error", str(e) or "Kamera silinmiş.", 0.0))
                 except Exception as e:  # noqa: BLE001 — kaynak ayarı geçersiz (ör. adres eksik)
                     return self._reject(key, TileFrame(0, None, "error", f"Kaynağa ulaşılamadı: {_detail(e)}", 0.0))
+                if evicted is not None:
+                    del self._viewers[evicted.key]
                 v = CameraViewer(key, open_url, keep_alive, self._capture, self._clock)
                 self._viewers[key] = v
                 self._rejected.pop(key, None)
                 self._ensure_reaper()
             v.touch()
+        if evicted is not None:
+            evicted.request_stop()                           # kilit dışında; iş parçacığı kendisi biter (bekleme yok)
         snap = v.snapshot()
         self._remember(key, snap, v)
         return self._or_last(key, snap)
@@ -336,6 +373,7 @@ class ViewHub:
         s = self._session(source_id, channel_id)
         if s is not None:
             return self._session_tile(key, s, touch=False)
+        self._forget_session(key)
         with self._lock:
             v = self._viewers.get(key)
             rejected = self._rejected.get(key)
@@ -353,7 +391,7 @@ class ViewHub:
         """Kaynak silindi ya da düzenlendi: o kaynağın okuyucuları kapanır, bir sonraki `tile()` güncel ayarla açar."""
         with self._lock:
             gone = [self._viewers.pop(k) for k in [k for k in self._viewers if k[0] == source_id]]
-            for table in (self._rejected, self._last):
+            for table in (self._rejected, self._last, self._session_seen):
                 for k in [k for k in table if k[0] == source_id]:
                     del table[k]
         _stop_viewers(gone, time.monotonic() + DROP_WAIT_S)
@@ -368,6 +406,8 @@ class ViewHub:
                 del self._last[k]
             for k in [k for k, x in self._rejected.items() if x[1] <= now]:
                 del self._rejected[k]
+            for k in [k for k, x in self._session_seen.items() if now - x[2] > IDLE_S]:
+                del self._session_seen[k]
         _stop_viewers(gone, time.monotonic() + SWEEP_WAIT_S)
         return len(gone)
 
@@ -385,6 +425,7 @@ class ViewHub:
             self._viewers.clear()
             self._rejected.clear()
             self._last.clear()
+            self._session_seen.clear()
             reaper = self._reaper
         deadline = time.monotonic() + CLOSE_WAIT_S
         _stop_viewers(gone, deadline)
