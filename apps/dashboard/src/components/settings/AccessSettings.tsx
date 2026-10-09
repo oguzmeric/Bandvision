@@ -21,13 +21,20 @@ export default function AccessSettings() {
   }, [v]);
   const save = async (enabled: boolean) => {
     if (pw && pw !== pw2) return setMsg({ ok: false, text: "Şifreler aynı değil." });
-    const res = await fetch("/api/access", { method: "PUT", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled, password: pw || null }) });
-    const body = await res.json();
-    if (!res.ok) return setMsg({ ok: false, text: body.detail ?? "Kaydedilemedi." });
-    setPw(""); setPw2(""); setV(body);
-    setMsg({ ok: true, text: body.runner ? "Kaydedildi. Panel birkaç saniye içinde yeniden başlıyor; sayfayı sonra yenileyin."
-                                          : "Kaydedildi. Geçerli olması için paneli masaüstü kısayoluyla yeniden başlatın." });
+    try {
+      const res = await fetch("/api/access", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled, password: pw || null }) });
+      const body = await res.json();
+      if (!res.ok) return setMsg({ ok: false, text: body.detail ?? "Kaydedilemedi." });
+      setPw(""); setPw2(""); setV(body);
+      setMsg({ ok: true, text: body.runner
+        ? (enabled ? "Kaydedildi. Panel yeniden başlıyor; yerel ağ kipi için üretim derlemesi gerekirse 1-2 dakika sürebilir. Sayfayı sonra yenileyin."
+                   : "Kaydedildi. Panel birkaç saniye içinde yeniden başlıyor; sayfayı sonra yenileyin.")
+        : "Kaydedildi. Geçerli olması için paneli masaüstü kısayoluyla yeniden başlatın." });
+    } catch {
+      // Panel kaydın hemen ardından yeniden başlar: bağlantının kopması beklenen bir durum
+      setMsg({ ok: false, text: "Panel yeniden başlıyor olabilir; birkaç saniye sonra sayfayı yenileyin." });
+    }
   };
   if (!v) return null;
   return (

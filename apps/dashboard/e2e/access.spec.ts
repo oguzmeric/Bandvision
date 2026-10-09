@@ -65,18 +65,22 @@ test("ayar dosyası geçici klasörde; yalnızca scrypt özeti saklanır, yeni �
   expect(a.hash).toMatch(/^[0-9a-f]{64}$/);
   expect(a.secret).toMatch(/^[0-9a-f]{64}$/);
 
-  // yalnızca kapatma/açma: şifre ve sır aynı kalır
+  // kapalıdan açığa geçiş: şifre aynı, oturum sırrı yenilenir; açıkken yalnızca Kaydet sırrı korur; kapatmak sırrı değiştirmez
   expect((await page.request.put("/api/access", { data: { enabled: true } })).status()).toBe(200);
   const b = JSON.parse(fs.readFileSync(file!, "utf8")) as typeof a;
   expect(b.enabled).toBe(true);
-  expect(b.secret).toBe(a.secret);
+  expect(b.secret).not.toBe(a.secret);
   expect(b.hash).toBe(a.hash);
+  expect((await page.request.put("/api/access", { data: { enabled: true } })).status()).toBe(200);
+  expect((JSON.parse(fs.readFileSync(file!, "utf8")) as typeof a).secret).toBe(b.secret);
+  expect((await page.request.put("/api/access", { data: { enabled: false } })).status()).toBe(200);
+  expect((JSON.parse(fs.readFileSync(file!, "utf8")) as typeof a).secret).toBe(b.secret);
 
   // yeni şifre: özet, tuz ve oturum sırrı değişir; düz şifre yine dosyada yok
   expect((await page.request.put("/api/access", { data: { enabled: false, password: "baska-sifre-456" } })).status()).toBe(200);
   const raw3 = fs.readFileSync(file!, "utf8");
   const c = JSON.parse(raw3) as typeof a;
-  expect(c.secret).not.toBe(a.secret);
+  expect(c.secret).not.toBe(b.secret);
   expect(c.hash).not.toBe(a.hash);
   expect(c.salt).not.toBe(a.salt);
   expect(raw3).not.toContain("baska-sifre-456");
@@ -90,4 +94,26 @@ test("kenar çubuğunda Ayarlar bağlantısı var; ayarlar sayfası açılır", 
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByRole("heading", { name: "Ayarlar" })).toBeVisible();
   await expect(page.getByText("Telefondan erişim", { exact: true })).toBeVisible();
+});
+
+test("ayarlar API: boşluk/256+ karakterlik şifre 422; yabancı Host başlığıyla (DNS yeniden bağlama) yazma 403", async ({ page }) => {
+  await login(page);
+  await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
+  const blank = await page.request.put("/api/access", { data: { enabled: false, password: "          " } });
+  expect(blank.status()).toBe(422);
+  expect((await blank.json()).detail).toContain("en az 8");
+  const long = await page.request.put("/api/access", { data: { enabled: false, password: "a".repeat(257) } });
+  expect(long.status()).toBe(422);
+  expect((await long.json()).detail).toContain("256");
+
+  for (const host of ["evil.example.com", "127.0.0.1.evil.example.com:3100", "0.0.0.0:3100"]) {
+    const r = await page.request.put("/api/access", { data: { enabled: false }, headers: { host } });
+    expect(r.status(), host).toBe(403);
+    expect((await r.json()).detail).toBe("Geçersiz adres.");
+  }
+  // geri döngü adları ve doğru Host ile yazma sürer
+  for (const host of ["127.0.0.1:3100", "localhost:3100", "[::1]:3100"]) {
+    const r = await page.request.put("/api/access", { data: { enabled: false }, headers: { host } });
+    expect(r.status(), host).toBe(200);
+  }
 });

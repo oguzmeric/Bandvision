@@ -26,7 +26,9 @@ export default function LoginForm({ next }: { next: string }) {
         window.location.assign(next);
         return;
       }
-      setError(r.status === 401 ? "Şifre yanlış." : "Giriş yapılamadı, tekrar dene.");
+      setError(r.status === 401 ? "Şifre yanlış."
+        : r.status === 429 ? "Çok fazla hatalı deneme; biraz sonra yeniden deneyin."
+        : "Giriş yapılamadı, tekrar dene.");
     } catch {
       setError("Sunucuya ulaşılamadı.");
     }

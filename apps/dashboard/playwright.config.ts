@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import os from "node:os";
 import path from "node:path";
+import { hashPassword, newSecret } from "./src/lib/accessCore.mjs";
 
 /**
  * Uçtan uca: gerçek analiz sunucusu (Python referans çekirdeği) + derlenmiş panel.
@@ -9,9 +10,14 @@ import path from "node:path";
 const PYTHON = process.env.PYTHON ?? "python";
 const ANALYZER_PORT = 8091;
 const WEB_PORT = 3100;
+/** İkinci panel: telefondan erişimin ŞİFRE ÖZETİ kipi (DASHBOARD_PASSWORD yok; e2e/access-hash.spec.ts) */
+const HASH_PORT = 3101;
 const DATA_DIR = path.join(os.tmpdir(), `bv-e2e-${process.pid}`);
 /** Testte panel şifreyle korunur (e2e/auth.spec.ts); gerçek şifre değildir. */
 export const PANEL_PASSWORD = "e2e-test-sifresi";
+/** Özet kipi sunucusunun giriş şifresi (e2e/access-hash.spec.ts aynısını kullanır); gerçek şifre değildir. */
+export const HASH_MODE_PASSWORD = "ozet-kipi-test-sifresi";
+const HASH_MODE = hashPassword(HASH_MODE_PASSWORD);
 /** Telefondan erişim ayarı (e2e/access.spec.ts) geçici klasöre yazılır; repodaki apps/dashboard/.local/ asla kullanılmaz.
  * Test işçileri de bu dosyayı okuyabilsin diye yolu ortama koyarız (ilk değerlendirme ana süreçte olur). */
 const ACCESS_FILE = (process.env.BV_E2E_ACCESS_FILE ??= path.join(DATA_DIR, "panel-access.json"));
@@ -46,6 +52,16 @@ export default defineConfig({
              DASHBOARD_PASSWORD: PANEL_PASSWORD,
              // Telefondan erişim ayarı repoya (apps/dashboard/.local/) değil geçici klasöre yazılır
              PANEL_ACCESS_FILE: ACCESS_FILE },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      // Şifre özeti kipi: DASHBOARD_PASSWORD boş; başlatıcının verdiği özet + oturum sırrı ortamda (yalnızca 127.0.0.1)
+      command: `npx next start -p ${HASH_PORT} -H 127.0.0.1`,
+      url: `http://127.0.0.1:${HASH_PORT}/login`,
+      env: { ANALYZER_URL: `http://127.0.0.1:${ANALYZER_PORT}`, NEXT_TELEMETRY_DISABLED: "1",
+             DASHBOARD_PASSWORD: "", PANEL_PASSWORD_HASH: HASH_MODE.hash, PANEL_PASSWORD_SALT: HASH_MODE.salt,
+             PANEL_SESSION_SECRET: newSecret(), PANEL_ACCESS_FILE: path.join(DATA_DIR, "panel-access-hash.json") },
       reuseExistingServer: false,
       timeout: 60_000,
     },

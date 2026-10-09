@@ -22,8 +22,8 @@ if errorlevel 1 (
   echo Canli sayim paketleri kuruluyor ^(bir kez^)...
   "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
 )
-if not exist "%DASH%\node_modules" (
-  echo Panel paketleri kuruluyor ^(ilk sefer^)...
+if not exist "%DASH%\node_modules\qrcode" (
+  echo Panel paketleri kuruluyor ^(ilk sefer ya da yeni paket^)...
   pushd "%DASH%"
   call npm install || goto :hata
   popd

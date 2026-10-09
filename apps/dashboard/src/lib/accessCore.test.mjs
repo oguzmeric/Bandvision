@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { MIN_PASSWORD, accessFile, hashPassword, newSecret, panelPlan, updateAccess, verifyPassword } from "./accessCore.mjs";
+import {
+  MAX_PASSWORD, MIN_PASSWORD, accessFile, buildIsStale, createLoginThrottle, hashPassword, hostAllowed, newSecret,
+  panelCommand, panelPlan, updateAccess, verifyPassword, verifyPasswordAsync,
+} from "./accessCore.mjs";
 
 test("şifre yalnızca özetiyle doğrulanır; düz şifre özette yok", () => {
   const { salt, hash } = hashPassword("ofis-sifre-1");
@@ -120,11 +126,187 @@ test("updateAccess: yalnızca enabled === true açar; şifre değişince oturum 
   assert.equal(kept.hash, a.hash);
   const again = updateAccess(kept, { enabled: true }, false).next;                         // şifre hâlâ dosyada: yeniden açılır
   assert.equal(again.enabled, true);
-  assert.equal(again.secret, a.secret);
+  assert.notEqual(again.secret, a.secret);                                                 // kapalıdan açığa geçişte sır yenilenir
+  assert.equal(again.hash, a.hash);
+  const stay = updateAccess(again, { enabled: true }, false).next;                         // zaten açıkken Kaydet: sır korunur
+  assert.equal(stay.secret, again.secret);
   const changed = updateAccess(a, { enabled: true, password: "baska-sifre-456" }, false).next;
   assert.notEqual(changed.secret, a.secret);                                               // yeni şifre: eski oturumlar düşer
   assert.notEqual(changed.hash, a.hash);
   assert.notEqual(changed.salt, a.salt);
   assert.ok(verifyPassword("baska-sifre-456", changed.salt, changed.hash));
   assert.ok(!verifyPassword("uzun-sifre-123", changed.salt, changed.hash));
+});
+
+// ---- Düzeltme turu 1 ----
+
+test("panelCommand: yerel ağda (0.0.0.0) HER ZAMAN next start; yerelde dev, --prod ise start", () => {
+  assert.deepEqual(panelCommand({ host: "0.0.0.0" }), { mode: "start", host: "0.0.0.0" });
+  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { prod: false }), { mode: "start", host: "0.0.0.0" });
+  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { prod: true }), { mode: "start", host: "0.0.0.0" });
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }), { mode: "dev", host: "127.0.0.1" });
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { prod: false }), { mode: "dev", host: "127.0.0.1" });
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { prod: true }), { mode: "start", host: "127.0.0.1" });
+  // panelPlan ile birleşimi: hiçbir durumda dev + 0.0.0.0 çıkmaz
+  const { salt, hash } = hashPassword("ofis-sifre-1");
+  const secret = newSecret();
+  for (const access of [null, { enabled: true }, { enabled: true, salt, hash, secret }, { enabled: false, salt, hash, secret }]) {
+    for (const env of [{}, { DASHBOARD_PASSWORD: "ortam-sifresi" }]) {
+      for (const prod of [false, true]) {
+        const plan = panelPlan(access, env);
+        const cmd = panelCommand(plan, { prod });
+        assert.ok(!(cmd.mode === "dev" && cmd.host === "0.0.0.0"), JSON.stringify({ access, env, prod }));
+        assert.equal(cmd.host, plan.host);
+      }
+    }
+  }
+});
+
+test("buildIsStale: derleme yok ya da kaynaktan eskiyse true (geçici dosyalarla)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bv-stale-"));
+  try {
+    const at = (rel, sec) => {
+      const f = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      if (!fs.existsSync(f)) fs.writeFileSync(f, "x");
+      fs.utimesSync(f, sec, sec);
+    };
+    const T = 1_700_000_000;
+    assert.equal(buildIsStale(dir), true);                                    // BUILD_ID yok
+    at("src/app/page.tsx", T); at("src/lib/a.ts", T); at("public/logo.png", T);
+    at("package.json", T); at("package-lock.json", T); at("next.config.ts", T);
+    at(".next/BUILD_ID", T + 100);
+    for (const d of ["src/app", "src/lib", "src", "public"]) fs.utimesSync(path.join(dir, d), T, T);
+    assert.equal(buildIsStale(dir), false);                                   // derleme hepsinden yeni
+    for (const rel of ["src/lib/a.ts", "src/app/page.tsx", "public/logo.png", "package.json", "package-lock.json", "next.config.ts"]) {
+      at(rel, T + 200);
+      assert.equal(buildIsStale(dir), true, `${rel} yeni`);
+      at(rel, T);
+      assert.equal(buildIsStale(dir), false, `${rel} eski`);
+    }
+    at("src/deep/nested/yeni.ts", T + 300);                                   // iç içe yeni dosya
+    assert.equal(buildIsStale(dir), true);
+    at("src/deep/nested/yeni.ts", T);
+    for (const d of ["src/deep/nested", "src/deep", "src"]) fs.utimesSync(path.join(dir, d), T, T);
+    assert.equal(buildIsStale(dir), false);
+    at(".next/BUILD_ID", T - 10);                                             // derleme kaynaklardan eski
+    assert.equal(buildIsStale(dir), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifyPasswordAsync: eşzamanlı sürümle aynı sonuç; 256 karakterden uzun şifre hiç denenmez", async () => {
+  const { salt, hash } = hashPassword("ofis-sifre-1");
+  assert.equal(await verifyPasswordAsync("ofis-sifre-1", salt, hash), true);
+  assert.equal(await verifyPasswordAsync("ofis-sifre-2", salt, hash), false);
+  assert.equal(await verifyPasswordAsync("ofis-sifre-1", undefined, hash), false);
+  assert.equal(await verifyPasswordAsync("ofis-sifre-1", salt, "zz"), false);
+  assert.equal(MAX_PASSWORD, 256);
+  const h2 = hashPassword("a".repeat(MAX_PASSWORD));
+  assert.equal(await verifyPasswordAsync("a".repeat(MAX_PASSWORD), h2.salt, h2.hash), true);
+  assert.equal(await verifyPasswordAsync("a".repeat(MAX_PASSWORD + 1), h2.salt, h2.hash), false);
+  assert.equal(verifyPassword("a".repeat(MAX_PASSWORD + 1), h2.salt, h2.hash), false);
+  // olay döngüsü bloklanmaz: scrypt sürerken zamanlayıcı çalışabilir
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 5);
+  await Promise.all(Array.from({ length: 4 }, () => verifyPasswordAsync("ofis-sifre-2", salt, hash)));
+  clearInterval(timer);
+  assert.ok(ticks >= 1, `ticks=${ticks}`);
+});
+
+test("giriş kısıtı: 5 hatadan sonra kilit, pencere ikiye katlanır (en çok 5 dk), başarı sıfırlar", () => {
+  let clock = 0;
+  const t = createLoginThrottle({ now: () => clock });
+  for (let i = 0; i < 5; i++) { assert.equal(t.begin(), 0, `deneme ${i + 1} serbest`); t.end(false); }
+  assert.equal(t.begin(), 10_000);                    // 5. hatadan sonra 10 sn kilit; scrypt çalıştırılmaz
+  clock = 9_999; assert.equal(t.begin(), 1);
+  clock = 10_000; assert.equal(t.begin(), 0);         // pencere bitti: tek deneme
+  assert.equal(t.begin(), 1000, "kilit açılınca da tek eşzamanlı deneme");
+  t.end(false);                                       // 6. hata -> 20 sn
+  clock = 10_001; assert.equal(t.begin(), 19_999);
+  const windows = [10_000, 20_000];
+  let lockedAt = 10_000;
+  for (let i = 0; i < 6; i++) {                       // 40, 80, 160, 300 (üst sınır), 300, 300
+    const wait = windows[windows.length - 1];
+    clock = lockedAt + wait; assert.equal(t.begin(), 0);
+    t.end(false);
+    lockedAt = clock;
+    windows.push(Math.min(wait * 2, 300_000));
+    assert.equal(t.begin(), windows[windows.length - 1]);
+  }
+  assert.deepEqual(windows, [10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000]);
+  clock = lockedAt + 300_000; assert.equal(t.begin(), 0);
+  t.end(true);                                        // başarı: her şey sıfırlanır
+  for (let i = 0; i < 5; i++) { assert.equal(t.begin(), 0); t.end(false); }
+  assert.equal(t.begin(), 10_000);                    // yeniden ilk pencere
+});
+
+test("giriş kısıtı: serbest haktan fazla eşzamanlı deneme başlatılamaz", () => {
+  const t = createLoginThrottle({ now: () => 0 });
+  const waits = Array.from({ length: 10 }, () => t.begin());
+  assert.equal(waits.filter((w) => w === 0).length, 5);
+  assert.equal(waits.filter((w) => w > 0).length, 5);
+  for (let i = 0; i < 5; i++) t.end(false);           // 5 hata -> kilit
+  assert.ok(t.begin() > 0);
+});
+
+test("giriş kısıtı: başarılı girişler hata sayacını sıfırlar (kilit tetiklenmez)", () => {
+  const t = createLoginThrottle({ now: () => 0 });
+  for (let round = 0; round < 10; round++) {
+    for (let i = 0; i < 4; i++) { assert.equal(t.begin(), 0); t.end(false); }
+    assert.equal(t.begin(), 0); t.end(true);
+  }
+  assert.equal(t.begin(), 0);
+});
+
+test("hostAllowed: yalnızca geri döngü adları ve bu bilgisayarın kendi IPv4 adresleri", () => {
+  const own = ["192.168.1.109", "172.21.176.1"];
+  for (const h of ["127.0.0.1", "127.0.0.1:3000", "localhost", "localhost:3100", "LOCALHOST:3000", "[::1]", "[::1]:3000",
+    "192.168.1.109:3000", "172.21.176.1", " 127.0.0.1:3000 "]) assert.equal(hostAllowed(h, own), true, h);
+  for (const h of ["", "evil.com", "evil.com:3000", "127.0.0.1.evil.com", "localhost.evil.com:3000", "evil.com:127.0.0.1",
+    "192.168.1.110:3000", "0.0.0.0:3000", "10.0.0.5", "[::2]", "[::1", "[::1]x", "127.0.0.1:abc", "127.0.0.1:3000:1",
+    "::1", "attacker@127.0.0.1", "127.0.0.1/", undefined, null, 42]) {
+    assert.equal(hostAllowed(h, own), false, String(h));
+  }
+  assert.equal(hostAllowed("192.168.1.109:3000", []), false);                 // kendi adres listesi boşsa yalnızca geri döngü
+  assert.equal(hostAllowed("127.0.0.1"), true);
+});
+
+test("updateAccess: boşluktan oluşan ya da 256'dan uzun şifre reddedilir; kırpılmış uzunluk sayılır", () => {
+  assert.equal(updateAccess(null, { enabled: false, password: "        " }, false).status, 422);          // 8 boşluk
+  assert.equal(updateAccess(null, { enabled: false, password: "   abcdefg  " }, false).status, 422);      // kırpılınca 7
+  assert.match(updateAccess(null, { enabled: false, password: "        " }, false).error, /en az 8.*boşluk/);
+  assert.equal(updateAccess(null, { enabled: false, password: "a".repeat(257) }, false).status, 422);
+  assert.match(updateAccess(null, { enabled: false, password: "a".repeat(257) }, false).error, /256/);
+  assert.ok(updateAccess(null, { enabled: false, password: "a".repeat(256) }, false).next.hash);
+  const ok = updateAccess(null, { enabled: false, password: "  abcdefgh  " }, false).next;                // kırpılınca 8: geçer
+  assert.ok(verifyPassword("  abcdefgh  ", ok.salt, ok.hash));                                           // yazıldığı gibi doğrulanır
+});
+
+test("updateAccess: kapalıdan açığa her geçişte oturum sırrı yenilenir; açıkken Kaydet sırrı korur", () => {
+  const a = updateAccess(null, { enabled: false, password: "uzun-sifre-123" }, false).next;
+  const on1 = updateAccess(a, { enabled: true }, false).next;
+  assert.notEqual(on1.secret, a.secret);
+  const keep = updateAccess(on1, { enabled: true }, false).next;
+  assert.equal(keep.secret, on1.secret);
+  const off = updateAccess(keep, { enabled: false }, false).next;
+  assert.equal(off.secret, keep.secret);                                       // kapatmak sırrı değiştirmez
+  const on2 = updateAccess(off, { enabled: true }, false).next;
+  assert.notEqual(on2.secret, on1.secret);                                     // yeniden açılış: yeni sır
+  assert.equal(on2.hash, on1.hash);
+});
+
+test("updateAccess: açmak için tam özet (tuz+özet+sır) ya da ortam şifresi gerekir", () => {
+  const { salt, hash } = hashPassword("ofis-sifre-1");
+  for (const cur of [{ enabled: false, hash }, { enabled: false, salt }, { enabled: false, salt: "", hash: "" }, { enabled: false }]) {
+    const r = updateAccess(cur, { enabled: true }, false);
+    assert.equal(r.status, 422, JSON.stringify(cur));
+    assert.match(r.error, /önce panel şifresi belirleyin/);
+  }
+  // tuz+özet var, sır eksik (elle düzenlenmiş dosya): sır üretilir, tam özet olur, açılır
+  const healed = updateAccess({ enabled: false, salt, hash }, { enabled: true }, false);
+  assert.ok(healed.next.enabled && /^[0-9a-f]{64}$/.test(healed.next.secret));
+  // ortam şifresi varsa özet olmadan da açılır
+  assert.ok(updateAccess({ enabled: false }, { enabled: true }, true).next.enabled);
 });

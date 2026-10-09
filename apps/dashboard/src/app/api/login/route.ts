@@ -1,27 +1,67 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
-import { verifyPassword } from "@/lib/accessCore.mjs";
+import { MAX_PASSWORD, createLoginThrottle, verifyPasswordAsync } from "@/lib/accessCore.mjs";
 import { SESSION_COOKIE, SESSION_MAX_AGE, authMode, expectedToken } from "@/lib/session";
 
 export const runtime = "nodejs";
+
+/** İstek gövdesi üst sınırı: giriş isteği birkaç yüz bayttır */
+const MAX_BODY = 4096;
+/** Hatalı denemeler için ortak kısıt (uzak adres güvenilir olmadığından istemciye bakılmaz): 5 hatadan sonra kilit */
+const throttle = createLoginThrottle();
 
 function same(a: string, b: string): boolean {
   const x = Buffer.from(a), y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-/** Giriş (POST, JSON {password}): doğruysa oturum çerezi; değilse kısa beklemeyle 401. Yönlendirmeyi tarayıcı yapar. */
+/** Gövdeyi en çok `max` bayta kadar okur; büyükse null (kalanı okunmadan bırakılır). */
+async function readLimited(req: NextRequest, max: number): Promise<string | null> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > max) return null;
+  const reader = req.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) { await reader.cancel().catch(() => undefined); return null; }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Giriş (POST, JSON {password}): doğruysa oturum çerezi; değilse kısa beklemeyle 401. Yönlendirmeyi tarayıcı yapar.
+ * Sınırlar: gövde ≤ 4 KB, şifre ≤ 256 karakter (400, scrypt çalıştırılmadan); art arda hatalarda 429 (scrypt çalıştırılmadan). */
 export async function POST(req: NextRequest) {
   const mode = authMode();
   let given = "";
   try {
-    given = String(((await req.json()) as { password?: unknown }).password ?? "");
+    const text = await readLimited(req, MAX_BODY);
+    if (text === null) throw new Error("gövde çok büyük");
+    given = String(((JSON.parse(text) as { password?: unknown }).password) ?? "");
   } catch {
     return NextResponse.json({ error: "Geçersiz istek." }, { status: 400 });
   }
-  const valid = mode?.kind === "env" ? same(given, mode.password)
-    : mode?.kind === "hash" ? verifyPassword(given, mode.salt, mode.hash) : false;
-  if (!mode || !valid) {
+  if (given.length > MAX_PASSWORD) return NextResponse.json({ error: "Geçersiz istek." }, { status: 400 });
+  if (!mode) {
+    await new Promise((r) => setTimeout(r, 600));
+    return NextResponse.json({ error: "Şifre yanlış." }, { status: 401 });
+  }
+  const wait = throttle.begin();
+  if (wait > 0) {
+    return NextResponse.json({ error: "Çok fazla hatalı deneme; biraz sonra yeniden deneyin." },
+      { status: 429, headers: { "Retry-After": String(Math.ceil(wait / 1000)) } });
+  }
+  let ok = false;
+  try {
+    ok = mode.kind === "env" ? same(given, mode.password) : await verifyPasswordAsync(given, mode.salt, mode.hash);
+  } finally {
+    throttle.end(ok);
+  }
+  if (!ok) {
     await new Promise((r) => setTimeout(r, 600));                // deneme yanılmayı yavaşlat
     return NextResponse.json({ error: "Şifre yanlış." }, { status: 401 });
   }
