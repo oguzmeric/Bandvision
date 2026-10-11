@@ -1,12 +1,15 @@
 import SwiftUI
 import UIKit
 
-/// Sekmeler: Canlı · Genel bakış · Öğret · Ayarlar. Kamera ve sayım sekme değişse de sürer.
+/// Sekmeler: Canlı · İzleme · Genel bakış · Öğret · Ayarlar. Kamera ve sayım sekme değişse de sürer.
 /// Açılışta logo animasyonu; ilk açılışta kurulum sihirbazı (kamera ancak sihirbaz bitince açılır).
 struct RootView: View {
     @StateObject private var vm = CountingViewModel()
     @AppStorage("bs.onboarded") private var onboarded = false
     @State private var showSplash = !RootView.isUITest
+    private enum Tab: Hashable { case live, watch, overview, teach, settings }
+    /// İzleme'den "Bu kamerayı say" Canlı'ya, "Ayarlar'a git" Ayarlar'a geçirir
+    @State private var tab: Tab = .live
 
     /// UI testleri animasyonu beklemez
     private nonisolated static var isUITest: Bool {
@@ -42,16 +45,23 @@ struct RootView: View {
     }
 
     private var tabs: some View {
-        TabView {
+        TabView(selection: $tab) {
             ContentView(vm: vm)
                 .tabItem { Label("Canlı", systemImage: "viewfinder") }
+                .tag(Tab.live)
+            WatchView(vm: vm, onCountCamera: { tab = .live }, onOpenSettings: { tab = .settings })
+                .tabItem { Label("İzleme", systemImage: "square.grid.2x2") }
+                .tag(Tab.watch)
             OverviewView(vm: vm, teach: vm.teach)
                 .tabItem { Label("Genel bakış", systemImage: "chart.bar.fill") }
+                .tag(Tab.overview)
             TeachView(vm: vm, teach: vm.teach)
                 .tabItem { Label("Öğret", systemImage: "plus.viewfinder") }
+                .tag(Tab.teach)
             SettingsView(vm: vm, settings: vm.settings, logger: vm.logger, showsDone: false)
                 .onDisappear { vm.applySettings() }
                 .tabItem { Label("Ayarlar", systemImage: "slider.horizontal.3") }
+                .tag(Tab.settings)
         }
         .preferredColorScheme(.dark)
         #if DEBUG || UITEST
