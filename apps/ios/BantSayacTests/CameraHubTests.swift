@@ -29,6 +29,21 @@ final class FakeSubscriber: HubSubscriber, @unchecked Sendable {
     func hubStatus(_ status: TileStatus) { statuses.append(status) }
 }
 
+/// İlk durum bildirimi sırasında bir olay tetikler (abone eklenirken başka iş parçacığından gelen durumu taklit eder)
+final class RacingSubscriber: HubSubscriber, @unchecked Sendable {
+    private(set) var statuses: [TileStatus] = []
+    var lastStatus: TileStatus? { statuses.last }
+    var onFirstStatus: (() -> Void)?
+    func hubFrame(_ frame: CVPixelBuffer) {}
+    func hubStatus(_ status: TileStatus) {
+        if let hook = onFirstStatus {
+            onFirstStatus = nil
+            hook()
+        }
+        statuses.append(status)
+    }
+}
+
 func makeTestFrame() -> CVPixelBuffer {
     var pb: CVPixelBuffer?
     CVPixelBufferCreate(kCFAllocatorDefault, 4, 4, kCVPixelFormatType_32BGRA, nil, &pb)
@@ -152,10 +167,10 @@ final class CameraHubTests: XCTestCase {
         XCTAssertNil(opened[sub(1)])
         XCTAssertNil(opened[main(1)])
         let f = makeTestFrame()
-        hub.externalFrame(f)
+        hub.externalFrame(f, token: hub.externalToken)
         XCTAssertTrue(a.frames.last === f)
         XCTAssertTrue(b.frames.last === f)
-        hub.externalStatus(.playing)
+        hub.externalStatus(.playing, token: hub.externalToken)
         XCTAssertEqual(a.lastStatus, .playing)
         XCTAssertEqual(hub.openCount.sub + hub.openCount.main, 0)
     }
@@ -168,7 +183,7 @@ final class CameraHubTests: XCTestCase {
         XCTAssertEqual(opened[sub(1)]?.first?.stopped, 1)
         XCTAssertEqual(hub.openCount.sub, 0)
         let f = makeTestFrame()
-        hub.externalFrame(f)
+        hub.externalFrame(f, token: hub.externalToken)
         XCTAssertTrue(a.frames.last === f)
     }
 
@@ -237,6 +252,100 @@ final class CameraHubTests: XCTestCase {
         hub.unsubscribe(sub(1), a)
         hub.closeIdle()
         XCTAssertEqual(opened[sub(1)]?.first?.stopped, 1)
+    }
+
+    func testExternalSwitchDropsStaleFrames() {
+        let hub = makeHub()
+        let a = FakeSubscriber(), b = FakeSubscriber()
+        hub.subscribe(sub(1), a)
+        hub.subscribe(sub(2), b)
+        hub.setExternal(ref(1))
+        let t1 = hub.externalToken
+        hub.setExternal(ref(2))
+        let t2 = hub.externalToken
+        XCTAssertNotEqual(t1, t2)
+        let before = hub.status(sub(2))
+        let fA = makeTestFrame(), fB = makeTestFrame()
+        // Durdurulan eski sayım kaynağının geç gelen kare ve durumu yeni kameranın kutusuna karışmaz
+        hub.externalFrame(fA, token: t1)
+        hub.externalStatus(.playing, token: t1)
+        XCTAssertTrue(b.frames.isEmpty)
+        XCTAssertEqual(hub.status(sub(2)), before)
+        hub.externalFrame(fB, token: t2)
+        XCTAssertTrue(b.frames.last === fB)
+        // Kutu kapanınca saklanan son kare de yeni kameranınki (eski kaynağınki değil)
+        hub.unsubscribe(sub(2), b)
+        clock = 6
+        hub.sweep()
+        let c = FakeSubscriber()
+        hub.subscribe(sub(2), c)
+        XCTAssertTrue(c.frames.first === fB, "son kare yeni kameranın karesi olmalı")
+        XCTAssertFalse(c.frames.contains { $0 === fA })
+    }
+
+    func testStoppedStreamLateCallbacksAreIgnored() throws {
+        let hub = makeHub()
+        let a = FakeSubscriber()
+        hub.subscribe(sub(1), a)
+        let first = try XCTUnwrap(opened[sub(1)]?.first)
+        hub.retry(sub(1))                                  // ilk bağlantı durdu, ikincisi açıldı
+        let second = try XCTUnwrap(opened[sub(1)]?.last)
+        XCTAssertFalse(first === second)
+        let late = makeTestFrame()
+        first.emit(late)
+        first.emit(.playing)
+        XCTAssertTrue(a.frames.isEmpty)
+        XCTAssertEqual(a.lastStatus, .connecting)
+        let fresh = makeTestFrame()
+        second.emit(fresh)
+        second.emit(.playing)
+        XCTAssertTrue(a.frames.last === fresh)
+        XCTAssertEqual(a.lastStatus, .playing)
+    }
+
+    func testCountingTakeoverIgnoresOwnStreamLateFrames() throws {
+        let hub = makeHub()
+        let a = FakeSubscriber()
+        hub.subscribe(sub(1), a)
+        let own = try XCTUnwrap(opened[sub(1)]?.first)
+        hub.setExternal(ref(1))
+        own.emit(makeTestFrame())
+        own.emit(.offline)
+        XCTAssertTrue(a.frames.isEmpty)
+        XCTAssertEqual(a.lastStatus, .connecting)
+    }
+
+    func testStatusRacingAheadOfSubscribeIsNotLost() {
+        let hub = makeHub()
+        let racer = RacingSubscriber()
+        // Abone eklenirken (ilk durum verilirken) bağlantı "canlı" bildirir: bayat "Bağlanıyor…" onu ezmemeli
+        racer.onFirstStatus = { [unowned self] in self.opened[self.sub(1)]?.first?.emit(.playing) }
+        hub.subscribe(sub(1), racer)
+        XCTAssertEqual(racer.lastStatus, .playing)
+    }
+
+    func testCountingSwitchFreesCapacityForWaitingTile() {
+        let hub = makeHub()
+        let subs = (1...17).map { _ in FakeSubscriber() }
+        for n in 1...17 { hub.subscribe(sub(n), subs[n - 1]) }
+        XCTAssertEqual(subs[16].lastStatus, .limit)
+        hub.setExternal(ref(1))                            // 1. kamera sayımın akışına geçti, kendi bağlantısını bıraktı
+        XCTAssertEqual(opened[sub(1)]?.first?.stopped, 1)
+        XCTAssertEqual(opened[sub(17)]?.count, 1)
+        XCTAssertEqual(subs[16].lastStatus, .connecting)
+        XCTAssertEqual(hub.openCount.sub, 16)
+    }
+
+    func testDeviceResetFreesCapacityForWaitingTile() {
+        let hub = makeHub()
+        let subs = (1...17).map { _ in FakeSubscriber() }
+        for n in 1...17 { hub.subscribe(sub(n), subs[n - 1]) }
+        rejections[ref(1)] = .deleted                      // 1. kamera artık bağlantı kullanmaz
+        hub.reset(sourceId: "nvr")
+        XCTAssertEqual(subs[0].lastStatus, .deleted)
+        XCTAssertEqual(opened[sub(17)]?.count, 1)
+        XCTAssertNotEqual(subs[16].lastStatus, .limit)
+        XCTAssertEqual(hub.openCount.sub, 16)
     }
 }
 

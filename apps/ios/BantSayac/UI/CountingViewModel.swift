@@ -62,6 +62,8 @@ final class CountingViewModel: ObservableObject {
     @Published private(set) var countCamera: CameraRef? = CountingViewModel.loadCountCamera()
     @Published private(set) var networkState: NetworkCameraState?
     private var networkSource: NetworkCameraSource?
+    /// `networkSource` başlarken İzleme dağıtıcısının verdiği kuşak jetonu (durum bildirimi bununla gider)
+    private var networkToken = 0
     private let frameGate = FrameGate()
     /// UI testi: yayın bitince yeniden bağlanma (gerçek kullanımda her zaman true)
     private var networkReconnect = true
@@ -688,9 +690,11 @@ final class CountingViewModel: ObservableObject {
         let gate = frameGate
         let hub = self.hub
         hub.setExternal(ref)
+        let token = hub.externalToken                     // durdurulan eski kaynağın geç kareleri bu jetonla düşer
+        networkToken = token
         source.onFrame = { pb, ts in
-            hub.externalFrame(pb)                         // İzleme'de bu kameranın kutusu sayımın karesini gösterir
-            gate.submit(pb, ts: ts, to: processor)
+            gate.submit(pb, ts: ts, to: processor)        // önce sayım (yalnızca kuyruğa alır), sonra kutular
+            hub.externalFrame(pb, token: token)           // İzleme'de bu kameranın kutusu sayımın karesini gösterir
         }
         // ViewModel uygulama boyunca yaşar; durum bildirimi için güçlü referans güvenli (ve Sendable)
         source.onState = { [self] state in
@@ -712,7 +716,7 @@ final class CountingViewModel: ObservableObject {
     private func networkStateChanged(_ state: NetworkCameraState, source: NetworkCameraSource) {
         guard networkSource === source else { return }
         networkState = state
-        hub.externalStatus(TileStatus(counting: state))
+        hub.externalStatus(TileStatus(counting: state), token: networkToken)
     }
 
     // MARK: - Kalite kontrol

@@ -88,11 +88,14 @@ enum HubOpen {
 }
 
 /// Bir okuyucunun aboneleri, son karesi ve durumu (kilitli: kareler çözücü iş parçacığından gelir).
+/// `epoch`: her yeni bağlantıda (ve eskisi durdurulunca) artar; durdurulmuş bağlantının geç gelen kare ve durumu
+/// `epoch:` ile verilince düşer. Sayım beslemesi (`ExternalFeed`) epoch'suz çağırır; o kuşak jetonuyla korunur.
 final class HubFanout: @unchecked Sendable {
     private let lock = NSLock()
     private var subscribers: [ObjectIdentifier: HubSubscriber] = [:]
     private var frame: CVPixelBuffer?
     private var status: TileStatus = .connecting
+    private var epoch = 0
 
     var isEmpty: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -109,6 +112,14 @@ final class HubFanout: @unchecked Sendable {
         return status
     }
 
+    /// Yeni bağlantı açılırken ya da eskisi durdurulurken çağrılır; dönen değer yeni bağlantının geri çağrılarına verilir.
+    @discardableResult
+    func nextEpoch() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        epoch += 1
+        return epoch
+    }
+
     /// Abone eklenir; son kare (yoksa `fallback`) ve durum hemen verilir.
     func add(_ subscriber: HubSubscriber, fallback: CVPixelBuffer?) {
         lock.lock()
@@ -118,6 +129,9 @@ final class HubFanout: @unchecked Sendable {
         lock.unlock()
         if let f { subscriber.hubFrame(f) }
         subscriber.hubStatus(st)
+        // Abone kilit dışında verilirken kayıtlıydı: yeni durum ona önce ulaşmış ve bayat `st` onu ezmiş olabilir
+        let latest = currentStatus
+        if latest != st { subscriber.hubStatus(latest) }
     }
 
     /// Dönüş: hiç abone kalmadı mı
@@ -128,16 +142,20 @@ final class HubFanout: @unchecked Sendable {
         return subscribers.isEmpty
     }
 
-    func deliver(_ f: CVPixelBuffer) {
+    /// `epoch` verilmişse ve güncel değilse (bağlantı durdurulmuş ya da yenilenmiş) kare düşer.
+    func deliver(_ f: CVPixelBuffer, epoch e: Int? = nil) {
         lock.lock()
+        if let e, e != epoch { lock.unlock(); return }
         frame = f
         let subs = Array(subscribers.values)
         lock.unlock()
         for s in subs { s.hubFrame(f) }
     }
 
-    func setStatus(_ st: TileStatus) {
+    /// `epoch` verilmişse ve güncel değilse durum düşer.
+    func setStatus(_ st: TileStatus, epoch e: Int? = nil) {
         lock.lock()
+        if let e, e != epoch { lock.unlock(); return }
         guard st != status else { lock.unlock(); return }
         status = st
         let subs = Array(subscribers.values)
@@ -146,11 +164,14 @@ final class HubFanout: @unchecked Sendable {
     }
 }
 
-/// Sayımın akışından gelen kareler (çözücü iş parçacığı) sayılan kameranın kutularına
+/// Sayımın akışından gelen kareler (çözücü iş parçacığı) sayılan kameranın kutularına.
+/// `generation`: sayılan kamera her değiştiğinde artar; durdurulan eski kaynağın geç gelen kare ve durumu,
+/// kendi jetonuyla geldiği için yeni kameranın kutularına karışmaz.
 final class ExternalFeed: @unchecked Sendable {
     private let lock = NSLock()
     private var fans: [HubFanout] = []
     private var status: TileStatus = .connecting
+    private var generation = 0
 
     var currentStatus: TileStatus {
         lock.lock(); defer { lock.unlock() }
@@ -165,17 +186,29 @@ final class ExternalFeed: @unchecked Sendable {
         lock.lock(); fans.removeAll { $0 === fan }; lock.unlock()
     }
 
-    func reset() {
-        lock.lock(); fans = []; status = .connecting; lock.unlock()
+    /// Kutuları ve durumu sıfırlar, yeni kuşak başlatır. Dönüş: yeni kaynağın kare ve durum çağrılarında vereceği jeton.
+    func reset() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        fans = []
+        status = .connecting
+        generation += 1
+        return generation
     }
 
-    func frame(_ f: CVPixelBuffer) {
-        lock.lock(); let current = fans; lock.unlock()
+    func frame(_ f: CVPixelBuffer, token: Int) {
+        lock.lock()
+        guard token == generation else { lock.unlock(); return }
+        let current = fans
+        lock.unlock()
         for fan in current { fan.deliver(f) }
     }
 
-    func setStatus(_ st: TileStatus) {
-        lock.lock(); status = st; let current = fans; lock.unlock()
+    func setStatus(_ st: TileStatus, token: Int) {
+        lock.lock()
+        guard token == generation else { lock.unlock(); return }
+        status = st
+        let current = fans
+        lock.unlock()
         for fan in current { fan.setStatus(st) }
     }
 }
@@ -219,6 +252,8 @@ final class CameraHub {
     private var lastFrames: [CameraRef: (frame: UncheckedSendable<CVPixelBuffer>, at: Double)] = [:]
     private var external: CameraRef?
     private nonisolated let feed = ExternalFeed()
+    /// Şu anki sayılan kameranın kuşak jetonu: sayım kaynağı kare ve durumunu bununla bildirir (bayat kaynak düşer)
+    private(set) var externalToken = 0
     private let opener: (HubKey) -> HubOpen
     private let now: () -> Double
 
@@ -266,7 +301,7 @@ final class CameraHub {
     func retry(_ key: HubKey) {
         guard let reader = readers[key] else { return }
         if case .external = reader.source { return }
-        if case .stream(let s) = reader.source { s.stop() }
+        stopStream(reader)
         reader.source = .waiting
         open(reader)
     }
@@ -279,10 +314,11 @@ final class CameraHub {
                 discard(reader)
                 continue
             }
-            if case .stream(let s) = reader.source { s.stop() }
+            stopStream(reader)
             reader.source = .waiting
             open(reader)
         }
+        promoteWaiting()                                   // reddedilen/silinen kutular yer açmış olabilir
     }
 
     /// Saniyede bir: süresi dolan boştaki okuyucular kapanır, bekleyenler açılır, eski son kareler bırakılır.
@@ -305,7 +341,7 @@ final class CameraHub {
         guard ref != external else { return }
         let old = external
         external = ref
-        feed.reset()
+        externalToken = feed.reset()
         for reader in Array(readers.values) {
             if reader.key.ref == old {                     // eski sayım kamerası: kendi bağlantısına döner
                 if reader.fan.isEmpty {
@@ -319,18 +355,20 @@ final class CameraHub {
                     discard(reader)
                     continue
                 }
-                if case .stream(let s) = reader.source { s.stop() }
+                stopStream(reader)
                 reader.source = .external
                 reader.fan.setStatus(feed.currentStatus)
                 feed.add(reader.fan)
             }
         }
+        promoteWaiting()                                   // sayıma geçen kutunun kendi bağlantısı yer açmış olabilir
     }
 
-    /// Sayımın çözücü iş parçacığından her kare
-    nonisolated func externalFrame(_ frame: CVPixelBuffer) { feed.frame(frame) }
+    /// Sayımın çözücü iş parçacığından her kare. `token`: kaynağın başladığı andaki `externalToken`;
+    /// sayılan kamera değiştiyse eski kaynağın geç gelen karesi düşer.
+    nonisolated func externalFrame(_ frame: CVPixelBuffer, token: Int) { feed.frame(frame, token: token) }
 
-    func externalStatus(_ status: TileStatus) { feed.setStatus(status) }
+    func externalStatus(_ status: TileStatus, token: Int) { feed.setStatus(status, token: token) }
 
     // MARK: - İç
 
@@ -357,11 +395,19 @@ final class CameraHub {
             reader.fan.setStatus(status)
         case .stream(let stream):
             reader.source = .stream(stream)
-            reader.fan.setStatus(.connecting)
             let fan = reader.fan
-            stream.start(onFrame: { frame in fan.deliver(frame) },
-                         onStatus: { status in fan.setStatus(status) })
+            let epoch = fan.nextEpoch()                    // eski bağlantının geç gelen kare/durumu bundan sonra düşer
+            fan.setStatus(.connecting)
+            stream.start(onFrame: { frame in fan.deliver(frame, epoch: epoch) },
+                         onStatus: { status in fan.setStatus(status, epoch: epoch) })
         }
+    }
+
+    /// Okuyucunun açık bağlantısını durdurur; durmuş bağlantının geç gelen kare ve durumu artık yok sayılır.
+    private func stopStream(_ reader: Reader) {
+        guard case .stream(let s) = reader.source else { return }
+        s.stop()
+        reader.fan.nextEpoch()
     }
 
     private func hasCapacity(_ quality: TileQuality) -> Bool {
@@ -390,7 +436,7 @@ final class CameraHub {
 
     private func discard(_ reader: Reader) {
         switch reader.source {
-        case .stream(let s): s.stop()
+        case .stream: stopStream(reader)
         case .external: feed.remove(reader.fan)
         case .waiting, .rejected: break
         }
