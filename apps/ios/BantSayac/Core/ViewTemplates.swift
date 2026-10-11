@@ -75,12 +75,30 @@ final class TemplateStore: ObservableObject {
     init(directory: URL = AppFiles.directory, now: @escaping () -> Double = { Date().timeIntervalSince1970 }) {
         file = JSONFile(url: directory.appendingPathComponent("views.json"))
         self.now = now
+        // Katalog yoksa hiçbir kayıt doğrulanamaz: dosyaya dokunulmaz (ilk kayıt tüm şablonları silerdi)
+        guard !ViewLayouts.catalog.isEmpty else {
+            readOnly = true
+            problem = "Düzen kataloğu yüklenemedi; şablonlar değiştirilemiyor."
+            return
+        }
         switch file.load(Stored.self) {
         case .missing:
             break
         case .loaded(let stored):
-            templates = stored.templates.filter { t in
+            // Geçersiz kayıt (bilinmeyen düzen, kutu sayısı uyuşmaz) sessizce atılmaz: dosyanın kopyası
+            // kenara alınır, sonra geçerli kayıtlar yüklenir (sonraki kayıt dosyayı yeniden yazar).
+            let valid = stored.templates.filter { t in
                 ViewLayouts.layout(t.layout).map { $0.tileCount == t.tiles.count } ?? false
+            }
+            templates = valid
+            let invalid = stored.templates.count - valid.count
+            if invalid > 0 {
+                if let copy = file.backupCopy() {
+                    problem = "\(invalid) şablon okunamadı; dosyanın kopyası kenara alındı (\(copy))."
+                } else {
+                    readOnly = true
+                    problem = "\(invalid) şablon okunamadı; değişiklikler kaydedilmeyecek."
+                }
             }
         case .corrupt(let moved):
             if let moved {

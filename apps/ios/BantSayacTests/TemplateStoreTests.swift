@@ -87,8 +87,42 @@ final class TemplateStoreTests: XCTestCase {
         XCTAssertNotNil(store.problem)
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
         XCTAssertTrue(names.contains { $0.hasPrefix("views.corrupt-") }, "bozuk dosya kenara alınmalı: \(names)")
+        let quarantined = try XCTUnwrap(names.first { $0.hasPrefix("views.corrupt-") })
+        XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent(quarantined), encoding: .utf8), "{bozuk",
+                       "kenara alınan dosya özgün baytları taşımalı")
         XCTAssertNoThrow(try store.create(name: "Yeni", layout: "1", tiles: [nil]))
         XCTAssertNil(store.problem)
+    }
+
+    /// Geçersiz kayıt (bilinmeyen düzen) sessizce atılmaz: dosyanın kopyası kenara alınır, sonraki kayıt onu silmez.
+    func testUnknownLayoutRecordIsQuarantinedNotDropped() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let original = """
+        {"templates":[\
+        {"createdAt":1,"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","layout":"1","name":"Geçerli","tiles":[null],"updatedAt":1},\
+        {"createdAt":2,"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","layout":"5","name":"Bilinmeyen","tiles":[null],"updatedAt":2}],\
+        "version":1}
+        """
+        try Data(original.utf8).write(to: dir.appendingPathComponent("views.json"))
+
+        let store = TemplateStore(directory: dir)
+        XCTAssertEqual(store.templates.map(\.name), ["Geçerli"])
+        XCTAssertNotNil(store.problem)
+        let copies = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("views.corrupt-") }
+        XCTAssertEqual(copies.count, 1, "özgün dosyanın kopyası kenara alınmalı: \(copies)")
+        let copyURL = dir.appendingPathComponent(try XCTUnwrap(copies.first))
+        XCTAssertEqual(try String(contentsOf: copyURL, encoding: .utf8), original)
+        XCTAssertTrue(try String(contentsOf: copyURL, encoding: .utf8).contains("\"layout\":\"5\""))
+
+        // Sonraki kayıt canlı dosyayı yeniden yazar; kenardaki kopya yerinde kalır
+        XCTAssertNoThrow(try store.create(name: "Yeni", layout: "1", tiles: [nil]))
+        XCTAssertNil(store.problem)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copyURL.path))
+        XCTAssertTrue(try String(contentsOf: copyURL, encoding: .utf8).contains("\"layout\":\"5\""))
+        let reloaded = TemplateStore(directory: dir)
+        XCTAssertEqual(reloaded.templates.count, 2)
+        XCTAssertNil(reloaded.problem)
     }
 
     func testRetileKeepsOrderAndCountsDropped() throws {

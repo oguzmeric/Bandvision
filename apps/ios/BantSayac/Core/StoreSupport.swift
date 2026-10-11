@@ -24,9 +24,7 @@ struct JSONFile: Sendable {
         do {
             return .loaded(try JSONDecoder().decode(T.self, from: Data(contentsOf: url)))
         } catch {
-            let base = url.deletingPathExtension().lastPathComponent
-            let target = url.deletingLastPathComponent()
-                .appendingPathComponent("\(base).corrupt-\(Int(Date().timeIntervalSince1970)).json")
+            let target = sideURL()
             do {
                 try FileManager.default.moveItem(at: url, to: target)
                 return .corrupt(movedTo: target.lastPathComponent)
@@ -34,6 +32,33 @@ struct JSONFile: Sendable {
                 return .corrupt(movedTo: nil)
             }
         }
+    }
+
+    /// Dosyanın kopyasını yanına `<ad>.corrupt-<unix saniye>.json` olarak alır; özgün dosya yerinde kalır.
+    /// Kısmen okunabilen dosyada (bazı kayıtlar geçersiz) kayıtlar üzerine yazılmadan önce çağrılır.
+    /// Dönen değer kopyanın dosya adı; kopya alınamadıysa nil (dosyaya yazılmamalı).
+    func backupCopy() -> String? {
+        let target = sideURL()
+        do {
+            try FileManager.default.copyItem(at: url, to: target)
+            return target.lastPathComponent
+        } catch {
+            return nil
+        }
+    }
+
+    /// Kenara alınan dosyanın adı; aynı saniyede ikinci kez alınırsa "-2", "-3" … eklenir (var olan kopyanın üzerine yazılmaz).
+    private func sideURL() -> URL {
+        let base = url.deletingPathExtension().lastPathComponent
+        let stamp = Int(Date().timeIntervalSince1970)
+        let dir = url.deletingLastPathComponent()
+        var target = dir.appendingPathComponent("\(base).corrupt-\(stamp).json")
+        var n = 2
+        while FileManager.default.fileExists(atPath: target.path) {
+            target = dir.appendingPathComponent("\(base).corrupt-\(stamp)-\(n).json")
+            n += 1
+        }
+        return target
     }
 
     func save<T: Encodable>(_ value: T) throws {
