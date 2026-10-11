@@ -114,19 +114,21 @@ final class BantSayacUITests: XCTestCase {
         if done.exists { done.tap() }
     }
 
-    /// Temiz ayarlarla açar (kamera izni istenmez), Ayarlar → Ağ kamerası → Kayıt cihazı → marka.
+    /// Temiz ayarlarla açar (kamera izni istenmez), Ayarlar → Cihazlar → Kayıt cihazı ekle → marka.
     private func openRecorderForm(brand: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["BS_TEST_FORMS"] = "1"
         app.launch()
         app.tabBars.buttons["Ayarlar"].tap()
-        let link = element(app, "networkCameraLink")
+        let link = element(app, "devicesLink")
         XCTAssertTrue(link.waitForExistence(timeout: 10))
         link.tap()
-        let kind = element(app, "deviceKind")
-        XCTAssertTrue(kind.waitForExistence(timeout: 10))
-        kind.buttons["Kayıt cihazı"].tap()
-        element(app, "recorderBrand").buttons[brand].tap()
+        let add = element(app, "addRecorder")
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        add.tap()
+        let brandPicker = element(app, "recorderBrand")
+        XCTAssertTrue(brandPicker.waitForExistence(timeout: 10))
+        brandPicker.buttons[brand].tap()
         return app
     }
 
@@ -187,6 +189,10 @@ final class BantSayacUITests: XCTestCase {
             print("KAYIT CİHAZI uyarı: \(warning.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))")
             warning.buttons["Tamam"].tap()
         }
+        // Kaydedince Cihazlar listesine dönülür; sayım için kamera seçili değildi: sayım bu kamerayla başlar
+        let device = element(app, "device.NVR 1")
+        XCTAssertTrue(device.waitForExistence(timeout: 10), "cihaz listede yok")
+        app.navigationBars.buttons["Ayarlar"].tap()
         let live = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Canlı ·")).firstMatch
         let playing = live.waitForExistence(timeout: 60)
         if !playing {
@@ -196,6 +202,8 @@ final class BantSayacUITests: XCTestCase {
         }
         XCTAssertTrue(playing, "kaydettikten sonra yayın başlamadı")
         print("KAYIT CİHAZI yayın: \(live.label)")
+        XCTAssertTrue(element(app, "countCameraLink").label.contains("NVR 1 · \(camera)"),
+                      "sayılan kamera: \(element(app, "countCameraLink").label)")
     }
 
     /// TRASSIR: SDK oturumu (HTTPS, kendinden imzalı), kanal listesi (kayıp kanal gösterilmez), jetonlu RTSP (555).
