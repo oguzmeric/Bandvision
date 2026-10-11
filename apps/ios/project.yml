@@ -13,7 +13,11 @@ targets:
   BantSayac:
     type: application
     platform: iOS
-    sources: [BantSayac]
+    sources:
+      - BantSayac
+      # Düzen kataloğu sözleşmeden doğrudan (kopya yok): docs/02-contracts.md §8
+      - path: ../../contracts/view-layouts.json
+        buildPhase: resources
     info:
       path: BantSayac/Info.plist
       properties:
@@ -47,7 +51,11 @@ targets:
     # Birim testleri: kayıt cihazı yanıt ayrıştırıcıları, ayarların eski kayıtlarla uyumu
     type: bundle.unit-test
     platform: iOS
-    sources: [BantSayacTests]
+    sources:
+      - BantSayacTests
+      # Sözleşme örneği: iPhone şablon biçimini okuyabiliyor mu
+      - path: ../../contracts/examples/view-template-4.json
+        buildPhase: resources
     dependencies:
       - target: BantSayac
     settings:
