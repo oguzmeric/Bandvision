@@ -3,13 +3,21 @@ import Security
 @testable import BantSayac
 
 /// Bellekte şifre deposu (Keychain yerine). `failWrites`: imzasız simülatördeki gibi yazma hatası.
+/// `reads`: depodan kaç kez okunduğu (önbellek sınaması).
 final class MemoryCredentials: CredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
+    private var readCount = 0
     var failWrites = false
+
+    var reads: Int {
+        lock.lock(); defer { lock.unlock() }
+        return readCount
+    }
 
     func password(account: String) -> String {
         lock.lock(); defer { lock.unlock() }
+        readCount += 1
         return values[account] ?? ""
     }
 
@@ -94,6 +102,20 @@ final class DeviceStoreTests: XCTestCase {
         XCTAssertNil(store.device("b"))
         XCTAssertEqual(creds.password(account: DeviceStore.account("b")), "")
         XCTAssertEqual(store.password(for: "b"), "")
+    }
+
+    func testPasswordReadFromStoreIsCachedUntilSavedOrDeleted() {
+        let creds = MemoryCredentials()
+        creds.setPassword("pa", account: DeviceStore.account("a"))      // Keychain'de önceden kayıtlı
+        let store = DeviceStore(directory: tempDir(), credentials: creds)
+        XCTAssertEqual(store.password(for: "a"), "pa")
+        XCTAssertEqual(store.password(for: "a"), "pa")
+        XCTAssertEqual(creds.reads, 1, "ikinci okuma Keychain'e gitmemeli")
+        store.save(NetworkDevice(id: "a", name: "A", config: cameraConfig()), password: "yeni")
+        XCTAssertEqual(store.password(for: "a"), "yeni")
+        XCTAssertEqual(creds.reads, 1)
+        store.delete("a")
+        XCTAssertEqual(store.password(for: "a"), "")
     }
 
     func testKeychainFailureKeepsSessionPasswordAndWarns() {

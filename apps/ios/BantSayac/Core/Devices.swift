@@ -92,7 +92,8 @@ final class DeviceStore: ObservableObject {
     private let credentials: CredentialStore
     /// Bozuk dosya kenara alınamadı: üzerine yazılmaz
     private var readOnly = false
-    /// Bu oturumda girilen şifreler: Keychain yazılamasa da (imzasız simülatör) bağlantı çalışır
+    /// Bu oturumda girilen ya da Keychain'den bir kez okunan şifreler: Keychain yazılamasa da (imzasız simülatör)
+    /// bağlantı çalışır, İzleme her kutuda Keychain'e gitmez
     private var sessionPasswords: [String: String] = [:]
     /// Kayıt cihazı istemcisi cihaz başına bir tane (TRASSIR: tek oturum); ayar ya da şifre değişince yenilenir
     private var clients: [String: (identity: String, client: RecorderClient)] = [:]
@@ -140,9 +141,13 @@ final class DeviceStore: ObservableObject {
 
     func device(_ id: String) -> NetworkDevice? { devices.first { $0.id == id } }
 
-    /// Kayıtlı şifre: önce bu oturumda girilen, yoksa Keychain
+    /// Kayıtlı şifre: önce bu oturumda girilen, yoksa Keychain (ilk okuma önbelleğe alınır: İzleme her kutu açılışında
+    /// sorar; `save` üzerine yazar, `delete` siler)
     func password(for id: String) -> String {
-        sessionPasswords[id] ?? credentials.password(account: Self.account(id))
+        if let cached = sessionPasswords[id] { return cached }
+        let stored = credentials.password(account: Self.account(id))
+        sessionPasswords[id] = stored
+        return stored
     }
 
     /// Ekler ya da günceller. Ad kırpılır (en çok 40); boşsa "Kamera 1" / "NVR 1"; başka cihazda varsa " (2)".
