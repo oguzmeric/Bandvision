@@ -1,9 +1,15 @@
 import SwiftUI
 import ImageIO
 
-/// Ayarlar → Görüntü kaynağı bölümü.
+/// Ayarlar → Görüntü kaynağı: kaynak, sayılan kamera ve cihaz listesi.
 struct VideoSourceSection: View {
     @ObservedObject var vm: CountingViewModel
+    @ObservedObject var devices: DeviceStore
+
+    init(vm: CountingViewModel) {
+        _vm = ObservedObject(wrappedValue: vm)
+        _devices = ObservedObject(wrappedValue: vm.devices)
+    }
 
     var body: some View {
         Section {
@@ -11,33 +17,60 @@ struct VideoSourceSection: View {
                 ForEach(VideoSourceKind.allCases) { Text($0.title).tag($0) }
             }
             NavigationLink {
-                NetworkCameraForm(vm: vm)
+                CountCameraPicker(vm: vm)
             } label: {
-                HStack {
-                    Text("Ağ kamerası")
-                    Spacer()
-                    Text(vm.networkConfig.summary).foregroundStyle(.secondary).lineLimit(1)
+                LabeledContent("Sayılan kamera") {
+                    Text(vm.countCameraSummary).lineLimit(1)
                 }
             }
-            .accessibilityIdentifier("networkCameraLink")
+            .accessibilityIdentifier("countCameraLink")
+            NavigationLink {
+                DeviceListView(vm: vm)
+            } label: {
+                LabeledContent("Cihazlar") {
+                    Text(devices.devices.isEmpty ? "Yok" : "\(devices.devices.count)")
+                }
+            }
+            .accessibilityIdentifier("devicesLink")
             if vm.sourceKind == .network, let state = vm.networkState {
                 Text(state.text).font(.caption).foregroundStyle(state.isPlaying ? .green : .orange)
             }
         } header: {
             Text("Görüntü kaynağı")
         } footer: {
-            Text("Ağ kamerası: telefon, IP kameranın ya da kayıt cihazındaki (NVR/XVR) bir kameranın yayınını alır ve aynı sayım/kalite kontrolünü yapar. Telefon cihaza ağ üzerinden ulaşabilmeli (aynı yerel ağ ya da VPN). Uygulama açık ve telefon şarjda kalmalı.")
+            Text("Ağ kamerası: telefon, IP kameranın ya da kayıt cihazındaki (NVR/XVR) bir kameranın yayınını alır ve aynı sayım/kalite kontrolünü yapar. Cihazları bir kez ekle; sayılacak kamerayı ve İzleme şablonlarındaki kameraları bu listeden seç. Telefon cihaza ağ üzerinden ulaşabilmeli (aynı yerel ağ ya da VPN). Uygulama açık ve telefon şarjda kalmalı.")
         }
     }
 }
 
-/// Ağ kamerası ya da kayıt cihazı ayarları, kamera seçimi, bağlantı sınaması ve kaydetme.
+/// Ayarlar → Görüntü kaynağı → Sayılan kamera
+struct CountCameraPicker: View {
+    @ObservedObject var vm: CountingViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        CameraPickerView(devices: vm.devices, selected: vm.countCamera) { ref in
+            guard let ref else { return }
+            vm.selectCountCamera(ref)
+            vm.setSource(.network)
+            dismiss()
+        }
+        .navigationTitle("Sayılan kamera")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Bir cihazın (IP kamera ya da kayıt cihazı) ayarları, kanal listesi, bağlantı sınaması ve kaydı.
 struct NetworkCameraForm: View {
     @ObservedObject var vm: CountingViewModel
     @Environment(\.dismiss) private var dismiss
+    private let deviceID: String
+    private let isNew: Bool
+    /// Kaydedince seçili kamera her zaman sayıma alınır (sihirbaz); değilse yalnızca sayım kamerası yoksa
+    private let selectsForCounting: Bool
+    @State private var name: String
     @State private var config: NetworkCameraConfig
-    @State private var cameraPassword: String
-    @State private var recorderPassword: String
+    @State private var password: String
     @State private var portText: String
     @State private var httpPortText: String
     @State private var rtspPortText: String
@@ -46,7 +79,7 @@ struct NetworkCameraForm: View {
     @State private var errorText: String?
     @State private var saveWarning: String?
     // Kayıt cihazı kamera listesi
-    @State private var channels: [RecorderChannel] = []
+    @State private var channels: [RecorderChannel]
     @State private var listing = false
     @State private var channelError: String?
     @State private var search = ""
@@ -56,15 +89,23 @@ struct NetworkCameraForm: View {
     @StateObject private var thumbnails = ChannelThumbnailLoader()
     @FocusState private var focused: Bool
 
-    /// `initialKind`: sihirbazdan açılınca kamera ya da kayıt cihazı önceden seçili gelir
-    init(vm: CountingViewModel, initialKind: NetworkDeviceKind? = nil) {
+    /// `device`: düzenlenecek cihaz (nil: yeni, türü `initialKind`).
+    init(vm: CountingViewModel, device: NetworkDevice? = nil, initialKind: NetworkDeviceKind = .camera,
+         selectsForCounting: Bool = false) {
         _vm = ObservedObject(wrappedValue: vm)
-        // Başlangıç değerleri burada: onAppear'da atansaydı "cihaz değişti" kuralı kayıtlı kamera seçimini silerdi.
-        var c = vm.networkConfig
-        if let initialKind { c.kind = initialKind }
+        deviceID = device?.id ?? NetworkDevice.newID()
+        isNew = device == nil
+        self.selectsForCounting = selectsForCounting
+        // Başlangıç değerleri burada: onAppear'da atansaydı "cihaz değişti" kuralı kanal listesini silerdi.
+        var c = device?.config ?? NetworkCameraConfig()
+        if device == nil { c.kind = initialKind }
+        let pw = device.map { vm.devices.password(for: $0.id) } ?? ""
         _config = State(initialValue: c)
-        _cameraPassword = State(initialValue: vm.storedPassword(for: .camera))
-        _recorderPassword = State(initialValue: vm.storedPassword(for: .recorder))
+        _name = State(initialValue: device?.name ?? "")
+        _password = State(initialValue: pw)
+        _channels = State(initialValue: device.map { vm.devices.channels[$0.id] ?? [] } ?? [])
+        _listClient = State(initialValue: device != nil && c.kind == .recorder && c.recorderReady
+                            ? NetworkStreamPlan.recorderClient(c, password: pw) : nil)
         _portText = State(initialValue: String(c.port))
         _httpPortText = State(initialValue: c.recorderHTTPPort.map(String.init) ?? "")
         _rtspPortText = State(initialValue: c.recorderRTSPPort.map(String.init) ?? "")
@@ -78,7 +119,7 @@ struct NetworkCameraForm: View {
             } message: {
                 Text(saveWarning ?? "")
             }
-            .navigationTitle("Ağ kamerası")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
@@ -88,13 +129,18 @@ struct NetworkCameraForm: View {
             }
     }
 
+    private var title: String {
+        if !isNew { return "Cihazı düzenle" }
+        return config.kind == .camera ? "Kamera ekle" : "Kayıt cihazı ekle"
+    }
+
     private var warningShown: Binding<Bool> {
         Binding(get: { saveWarning != nil }, set: { if !$0 { saveWarning = nil } })
     }
 
     private var formContent: some View {
         Form {
-            kindSection
+            nameSection
             if config.kind == .camera {
                 cameraSections
             } else {
@@ -137,29 +183,25 @@ struct NetworkCameraForm: View {
         thumbnails.reset()
     }
 
-    private var kindSection: some View {
+    private var nameSection: some View {
         Section {
-            Picker("Cihaz türü", selection: $config.kind) {
-                ForEach(NetworkDeviceKind.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("deviceKind")
+            TextField(config.kind == .camera ? "Ad (ör. Bant kamerası)" : "Ad (ör. Ofis NVR)", text: $name)
+                .focused($focused)
+                .accessibilityIdentifier("deviceName")
+        } header: {
+            Text("Ad")
         } footer: {
-            Text(kindFooter)
+            Text(config.kind == .camera
+                 ? "Ağa doğrudan bağlı kamera. Ad boş kalırsa \"Kamera 1\" gibi bir ad verilir."
+                 : "Kameralar bir kayıt cihazına (NVR/XVR) bağlıysa: cihazı bir kez ekle; kameraları sayım ve İzleme'de listeden seç. Ad boş kalırsa \"NVR 1\" gibi bir ad verilir.")
         }
-    }
-
-    private var kindFooter: String {
-        config.kind == .camera
-            ? "Kamera ağa doğrudan bağlıysa."
-            : "Kameralar bir kayıt cihazına (NVR/XVR) bağlıysa: cihazı bir kez ekle, kamerayı listeden seç."
     }
 
     private var substreamSection: some View {
         Section {
             Toggle("Alt akış (önerilir)", isOn: $config.substream)
         } footer: {
-            Text("Sayım için alt akış (ör. 640×360) yeterli; ağı, pili ve ısınmayı azaltır.")
+            Text("Sayım için alt akış (ör. 640×360) yeterli; ağı, pili ve ısınmayı azaltır. İzleme ızgarası her zaman alt akışı, tek kamera ana akışı kullanır.")
         }
     }
 
@@ -168,12 +210,14 @@ struct NetworkCameraForm: View {
             Button {
                 save()
             } label: {
-                Label("Kaydet ve bu kamerayı kullan", systemImage: "checkmark")
+                Label("Kaydet", systemImage: "checkmark")
             }
-            .disabled(!config.isComplete)
+            .disabled(!canSave)
             .accessibilityIdentifier("saveNetworkCamera")
         }
     }
+
+    private var canSave: Bool { config.kind == .camera ? config.rtspURL != nil : config.recorderReady }
 
     // MARK: - Kamera
 
@@ -221,7 +265,7 @@ struct NetworkCameraForm: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($focused)
-            SecureField("Şifre", text: $cameraPassword)
+            SecureField("Şifre", text: $password)
                 .focused($focused)
         } header: {
             Text("Giriş")
@@ -302,7 +346,7 @@ struct NetworkCameraForm: View {
                 .autocorrectionDisabled()
                 .focused($focused)
                 .accessibilityIdentifier("recorderUser")
-            SecureField("Şifre", text: $recorderPassword)
+            SecureField("Şifre", text: $password)
                 .focused($focused)
                 .accessibilityIdentifier("recorderPassword")
         } header: {
@@ -320,9 +364,9 @@ struct NetworkCameraForm: View {
                 channelRow(channel)
             }
         } header: {
-            Text(channels.isEmpty ? "Kamera" : "Kameralar (\(channels.count))")
+            Text(channels.isEmpty ? "Kameralar" : "Kameralar (\(channels.count))")
         } footer: {
-            Text(channels.isEmpty ? "" : "Bantı gören kameraya dokun.")
+            Text(channels.isEmpty ? "" : "Dokunduğun kamera bağlantı testinde kullanılır; sayım için henüz kamera seçilmediyse sayım da bu kamerayla başlar.")
         }
     }
 
@@ -349,10 +393,6 @@ struct NetworkCameraForm: View {
                 .accessibilityElement(children: .combine)       // simge + metin tek öğe: metin okunur
                 .accessibilityIdentifier("channelError")
             Text(recorderHelp).font(.caption).foregroundStyle(.secondary)
-        }
-        if channels.isEmpty, let selected = config.recorderChannel {
-            Label("Seçili: \(selected.title)", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
         }
         if channels.count > 8 {
             TextField("Kamera ara (ad ya da kanal no)", text: $search)
@@ -393,8 +433,7 @@ struct NetworkCameraForm: View {
         .task(id: channel.id) {
             // Yalnızca ekranda görünen satırlar yükler; aynı anda en fazla 3 istek (64–128 kanallı cihazlar)
             guard let client = listClient else { return }
-            await thumbnails.load(channel, client: client, username: config.recorderUsername,
-                                  password: recorderPassword)
+            await thumbnails.load(channel, client: client, username: config.recorderUsername, password: password)
         }
     }
 
@@ -418,7 +457,7 @@ struct NetworkCameraForm: View {
         thumbnails.reset()
         listRequest += 1
         let mine = listRequest
-        let client = NetworkStreamPlan.recorderClient(config, password: recorderPassword)
+        let client = NetworkStreamPlan.recorderClient(config, password: password)
         listClient = client
         Task { @MainActor in
             do {
@@ -477,10 +516,10 @@ struct NetworkCameraForm: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } footer: {
+            Text(config.kind == .recorder && config.recorderChannel == nil ? "Test için listeden bir kamera seç." : "")
         }
     }
-
-    private var password: String { config.kind == .camera ? cameraPassword : recorderPassword }
 
     private func test() {
         guard let plan = NetworkStreamPlan.make(config, password: password) else { return }
@@ -500,9 +539,18 @@ struct NetworkCameraForm: View {
 
     private func save() {
         focused = false
-        let warning = vm.saveNetworkConfig(config, password: password)
-        vm.setSource(.network)
-        if let warning {
+        let selected = config.recorderChannel
+        let saved = vm.devices.save(NetworkDevice(id: deviceID, name: name, config: config), password: password)
+        if config.kind == .recorder { vm.devices.setChannels(channels, for: deviceID) }
+        vm.deviceSaved(deviceID)
+        let ref: CameraRef? = config.kind == .camera
+            ? CameraRef(sourceId: deviceID, channelId: nil)
+            : selected.map { CameraRef(sourceId: deviceID, channelId: $0.id) }
+        if let ref, selectsForCounting || vm.countCamera == nil {
+            vm.selectCountCamera(ref)
+            vm.setSource(.network)
+        }
+        if let warning = saved.warning {
             saveWarning = warning                    // sessizce geçme: kullanıcıya göster, sonra kapat
         } else {
             dismiss()
@@ -512,7 +560,7 @@ struct NetworkCameraForm: View {
 
 // MARK: - Kamera listesi küçük resimleri
 
-private struct ChannelThumbnail: View {
+struct ChannelThumbnail: View {
     let image: CGImage?
     let failed: Bool
 
