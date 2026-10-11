@@ -217,7 +217,17 @@ struct NetworkCameraForm: View {
         }
     }
 
-    private var canSave: Bool { config.kind == .camera ? config.rtspURL != nil : config.recorderReady }
+    /// Sihirbazda kayıt cihazı kamera seçilmeden kaydedilmez (sayıma alınacak kamera belli olmalı)
+    private var canSave: Bool {
+        if config.kind == .camera { return config.rtspURL != nil }
+        return config.recorderReady && (!selectsForCounting || config.recorderChannel != nil)
+    }
+
+    /// Sayılan kamera yok ya da seçili kameranın cihazı silinmiş
+    private var noCountedCamera: Bool {
+        guard let counted = vm.countCamera else { return true }
+        return vm.devices.lookup(counted) == .deleted
+    }
 
     // MARK: - Kamera
 
@@ -366,8 +376,19 @@ struct NetworkCameraForm: View {
         } header: {
             Text(channels.isEmpty ? "Kameralar" : "Kameralar (\(channels.count))")
         } footer: {
-            Text(channels.isEmpty ? "" : "Dokunduğun kamera bağlantı testinde kullanılır; sayım için henüz kamera seçilmediyse sayım da bu kamerayla başlar.")
+            Text(channelsFooter)
         }
+    }
+
+    private var channelsFooter: String {
+        var lines: [String] = []
+        if !channels.isEmpty {
+            lines.append("Dokunduğun kamera bağlantı testinde kullanılır; sayım için henüz kamera seçilmediyse sayım da bu kamerayla başlar (sayım sürerken kaynak değiştirilmez).")
+        }
+        if selectsForCounting && config.kind == .recorder && config.recorderChannel == nil {
+            lines.append("Sayım için listeden bir kamera seç.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private var listButton: some View {
@@ -540,15 +561,18 @@ struct NetworkCameraForm: View {
     private func save() {
         focused = false
         let selected = config.recorderChannel
+        let noCounted = noCountedCamera
         let saved = vm.devices.save(NetworkDevice(id: deviceID, name: name, config: config), password: password)
-        if config.kind == .recorder { vm.devices.setChannels(channels, for: deviceID) }
+        // Boş liste saklı önbelleği silmesin: kimlik (adres/port/kullanıcı) değişince liste boşalır, yeniden listelenene dek eski kalır
+        if config.kind == .recorder && !channels.isEmpty { vm.devices.setChannels(channels, for: deviceID) }
         vm.deviceSaved(deviceID)
         let ref: CameraRef? = config.kind == .camera
             ? CameraRef(sourceId: deviceID, channelId: nil)
             : selected.map { CameraRef(sourceId: deviceID, channelId: $0.id) }
-        if let ref, selectsForCounting || vm.countCamera == nil {
+        if let ref, selectsForCounting || noCounted {
             vm.selectCountCamera(ref)
-            vm.setSource(.network)
+            // Sayım sürerken kaynak değiştirilmez (iPhone kamerasıyla sayan kullanıcı kayıt cihazı eklerken kesilmesin)
+            if selectsForCounting || !vm.isRunning { vm.setSource(.network) }
         }
         if let warning = saved.warning {
             saveWarning = warning                    // sessizce geçme: kullanıcıya göster, sonra kapat
