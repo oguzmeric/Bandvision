@@ -636,11 +636,11 @@ final class CountingViewModel: ObservableObject {
         if countCamera?.sourceId == id && sourceKind == .network && !isVideoMode { startNetwork() }
     }
 
-    /// Cihaz silinir; sayım bu cihazdaysa durur ve kamera seçimi kalkar.
+    /// Cihaz silinir; sayılan kamera bu cihazdaysa seçim kalkar, sayım da bu cihazdan sayıyorsa (ağ kaynağı) durur.
     func deleteDevice(_ id: String) {
         devices.delete(id)
         guard countCamera?.sourceId == id else { return }
-        setRunning(false)
+        if sourceKind == .network && !isVideoMode { setRunning(false) }
         selectCountCamera(nil)
     }
 
