@@ -29,7 +29,8 @@ targets:
         # Kayıt cihazlarının web API'si (Hikvision/Dahua) yerel ağda çoğunlukla düz HTTP; yalnızca yerel ağ serbest
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Yatay yalnızca İzleme sekmesinde serbest (App/OrientationLock.swift); diğer ekranlar dikey kalır
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UIRequiresFullScreen: true
         # Açılış ekranı: logo, logonun zemin rengiyle (yapay bekletme yok; uygulama hazır olunca kapanır)
         UILaunchScreen:
