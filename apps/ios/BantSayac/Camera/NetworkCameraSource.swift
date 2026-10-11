@@ -49,6 +49,8 @@ final class NetworkCameraSource: @unchecked Sendable {
     var onState: (@Sendable (NetworkCameraState) -> Void)?
     /// Çözücü iş parçacığında; çağıran işleme hattına aktarmaktan (ve geride kalınca kare atlamaktan) sorumlu
     var onFrame: (@Sendable (CVPixelBuffer, Double) -> Void)?
+    /// Kendi kuyruğunda, `onState`'ten hemen önce: bağlantı sorununun türü (izleme kutusu metni)
+    var onProblem: (@Sendable (StreamProblem) -> Void)?
     /// Yayın açıkken 5 sn'de bir çağrılır (TRASSIR jetonunu canlı tutmak için)
     var keepAlive: (@Sendable (URL) async -> Void)?
 
@@ -101,7 +103,7 @@ final class NetworkCameraSource: @unchecked Sendable {
         switch result {
         case .failure(let error):
             let fatal = (error as? RecorderError) == .unauthorized
-            retry(reason: error.localizedDescription, fatal: fatal)
+            retry(reason: error.localizedDescription, fatal: fatal, problem: .of(error))
         case .success(let url):
             open(url)
         }
@@ -133,11 +135,12 @@ final class NetworkCameraSource: @unchecked Sendable {
         currentURL = nil
         decoder.reset()
         retry(reason: failure?.errorDescription ?? "Bağlantı kapandı",
-              fatal: failure == .unauthorized || failure == .badURL)
+              fatal: failure == .unauthorized || failure == .badURL, problem: .of(failure))
     }
 
     /// Yalnızca `queue` üzerinde. Şifre hatası gibi kalıcı sorunlarda yeniden denenmez.
-    private func retry(reason: String, fatal: Bool) {
+    private func retry(reason: String, fatal: Bool, problem: StreamProblem) {
+        onProblem?(problem)
         guard reconnect, !fatal else {
             onState?(.ended(reason))
             return
