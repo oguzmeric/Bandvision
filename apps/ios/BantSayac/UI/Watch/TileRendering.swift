@@ -30,6 +30,7 @@ enum SampleBuffers {
 
 /// Hub'dan gelen kareyi kutunun görüntü katmanına verir ve kare sayar. Kareler çözücü iş parçacığından gelir;
 /// katmana kendi sırasında verilir. Son kare saklanır: katman yeniden kurulunca (döndürme) hemen görünür.
+/// Karesi olmayan bir sink'e katman bağlanınca katmandaki önceki kameranın görüntüsü silinir.
 final class TileSink: HubSubscriber, @unchecked Sendable {
     private let lock = NSLock()
     private var layer: AVSampleBufferDisplayLayer?
@@ -47,13 +48,18 @@ final class TileSink: HubSubscriber, @unchecked Sendable {
         self.layer = layer
         let frame = last
         lock.unlock()
-        if let frame { show(frame, on: layer) }
+        if let frame { show(frame, on: layer) } else { clearPicture(on: layer) }
     }
 
     func detach(_ layer: AVSampleBufferDisplayLayer) {
         lock.lock()
         if self.layer === layer { self.layer = nil }
         lock.unlock()
+    }
+
+    /// Saklanan son kareyi bırakır (kutu bırakılınca bellek tutulmasın; hub kendi karesini yeniden aboneliğe verir)
+    func clearLast() {
+        lock.lock(); last = nil; lock.unlock()
     }
 
     /// Son çağrıdan beri gelen kare sayısı
@@ -83,13 +89,29 @@ final class TileSink: HubSubscriber, @unchecked Sendable {
     private func show(_ frame: CVPixelBuffer, on layer: AVSampleBufferDisplayLayer) {
         guard let sample = SampleBuffers.make(frame) else { return }
         let job = UncheckedSendable(value: (layer, sample))
-        queue.async {
+        queue.async { [self] in
             let (layer, sample) = job.value
+            guard isAttached(to: layer) else { return }              // katman bırakıldıysa (ya da başka kameraya geçtiyse) kare atlanır
             let renderer = layer.sampleBufferRenderer
             if renderer.status == .failed { renderer.flush() }
             guard renderer.isReadyForMoreMediaData else { return }   // geride kaldıysa kare atlanır
             renderer.enqueue(sample)
         }
+    }
+
+    /// Katmandaki önceki görüntüyü siler (yeniden kullanılan kutu, başka kameranın son karesini göstermesin)
+    private func clearPicture(on layer: AVSampleBufferDisplayLayer) {
+        let job = UncheckedSendable(value: layer)
+        queue.async { [self] in
+            let layer = job.value
+            guard isAttached(to: layer) else { return }
+            layer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        }
+    }
+
+    private func isAttached(to layer: AVSampleBufferDisplayLayer) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return self.layer === layer
     }
 }
 
