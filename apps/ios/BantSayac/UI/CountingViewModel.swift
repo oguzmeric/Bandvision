@@ -602,7 +602,8 @@ final class CountingViewModel: ObservableObject {
         startCamera()
     }
 
-    private static let countCameraKey = "bs.countCamera"
+    /// `loadCountCamera` nonisolated olduğu için anahtar hesaplanan özellik (sınıf ana aktöre bağlı)
+    nonisolated private static var countCameraKey: String { "bs.countCamera" }
 
     nonisolated private static func loadCountCamera() -> CameraRef? {
         guard let data = UserDefaults.standard.data(forKey: countCameraKey) else { return nil }
