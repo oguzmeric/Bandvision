@@ -34,7 +34,7 @@ struct OnboardingView: View {
             .background(Color("LaunchBackground").ignoresSafeArea())
             .sheet(item: $networkFormKind) { kind in
                 NavigationStack {
-                    NetworkCameraForm(vm: vm, initialKind: kind)
+                    NetworkCameraForm(vm: vm, initialKind: kind, selectsForCounting: true)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Kapat") { networkFormKind = nil }
@@ -47,8 +47,8 @@ struct OnboardingView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             productID = productID ?? vm.profile.id
-            if vm.sourceKind == .network {
-                source = vm.networkConfig.kind == .recorder ? .recorder : .camera
+            if vm.sourceKind == .network, let device = vm.countDevice {
+                source = device.kind == .recorder ? .recorder : .camera
             }
         }
     }
@@ -113,7 +113,8 @@ struct OnboardingView: View {
     }
 
     private var networkReady: Bool {
-        vm.networkConfig.isComplete && vm.networkConfig.kind == (source == .recorder ? .recorder : .camera)
+        guard let ref = vm.countCamera, case .ok(let config) = vm.devices.lookup(ref) else { return false }
+        return config.kind == (source == .recorder ? .recorder : .camera)
     }
 
     private func advance() {
@@ -190,7 +191,7 @@ struct OnboardingView: View {
                 Button {
                     networkFormKind = source == .recorder ? .recorder : .camera
                 } label: {
-                    Label(networkReady ? "Ayarlandı: \(vm.networkConfig.summary)" : "Bağlantıyı ayarla",
+                    Label(networkReady ? "Ayarlandı: \(vm.countCameraSummary)" : "Bağlantıyı ayarla",
                           systemImage: networkReady ? "checkmark.circle.fill" : "gearshape")
                 }
                 .buttonStyle(.bordered)
