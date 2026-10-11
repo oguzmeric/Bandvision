@@ -56,4 +56,4 @@ jobs:
           set -o pipefail
           xcodebuild test -project BantSayac.xcodeproj -scheme BantSayac -only-testing:BantSayacTests \
             -destination "id=$UDID" CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES 2>&1 | tee unit.log \
-            | grep -E "Test Case .*(passed|failed)|error:|\*\* TEST" | tail -60
+            | grep -E "Test Case .*(passed|failed)|error:|\*\* TEST" | tail -400
