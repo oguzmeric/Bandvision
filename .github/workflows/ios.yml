@@ -1,9 +1,9 @@
 name: ios
 on:
   push:
-    paths: ["apps/ios/**", ".github/workflows/ios.yml"]
+    paths: ["apps/ios/**", ".github/workflows/ios.yml", "contracts/view-layouts.json", "contracts/examples/view-template-*.json"]
   pull_request:
-    paths: ["apps/ios/**", ".github/workflows/ios.yml"]
+    paths: ["apps/ios/**", ".github/workflows/ios.yml", "contracts/view-layouts.json", "contracts/examples/view-template-*.json"]
   workflow_dispatch:
 
 jobs:
