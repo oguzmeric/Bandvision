@@ -56,6 +56,8 @@ final class CountingViewModel: ObservableObject {
         VideoSourceKind(rawValue: UserDefaults.standard.string(forKey: "bs.source") ?? "") ?? .phone
     /// Ağ cihazları (kamera ve kayıt cihazları) ve şifreleri; sayım ve İzleme ortak listesi
     let devices: DeviceStore
+    /// İzleme görüntü dağıtıcısı: kamera başına tek bağlantı; sayılan kamera sayımın akışından beslenir
+    let hub: CameraHub
     /// Sayılan ağ kamerası (cihaz + kanal); nil: seçilmedi
     @Published private(set) var countCamera: CameraRef? = CountingViewModel.loadCountCamera()
     @Published private(set) var networkState: NetworkCameraState?
@@ -97,7 +99,9 @@ final class CountingViewModel: ObservableObject {
         self.logger = CountLogger()
         self.processor = FrameProcessor(queue: camera.processingQueue)
         self.staffFeedback = StaffTeachFeedback()
-        self.devices = DeviceStore()
+        let devices = DeviceStore()
+        self.devices = devices
+        self.hub = CameraHub(opener: { key in devices.hubOpen(key) })
         self.profile = store.selectedProfile
 
         processor.setProfile(profile)
@@ -631,23 +635,27 @@ final class CountingViewModel: ObservableObject {
         if sourceKind == .network && !isVideoMode { startNetwork() }
     }
 
-    /// Cihaz kaydedildi: sayılan kamera bu cihazdaysa yeni ayarla yeniden bağlanır.
+    /// Cihaz kaydedildi: İzleme kutuları yeni ayarla açılır; sayılan kamera bu cihazdaysa sayım da yeniden bağlanır.
     func deviceSaved(_ id: String) {
+        hub.reset(sourceId: id)
         if countCamera?.sourceId == id && sourceKind == .network && !isVideoMode { startNetwork() }
     }
 
-    /// Cihaz silinir; sayılan kamera bu cihazdaysa seçim kalkar, sayım da bu cihazdan sayıyorsa (ağ kaynağı) durur.
+    /// Cihaz silinir; İzleme kutuları "Kamera silinmiş" olur; sayılan kamera bu cihazdaysa seçim kalkar,
+    /// sayım da bu cihazdan sayıyorsa (ağ kaynağı) durur.
     func deleteDevice(_ id: String) {
         devices.delete(id)
+        hub.reset(sourceId: id)
         guard countCamera?.sourceId == id else { return }
         if sourceKind == .network && !isVideoMode { setRunning(false) }
         selectCountCamera(nil)
     }
 
     private func startNetwork() {
-        stopNetwork()
+        stopNetwork(keepHubFeed: true)
         camera.stop()
         guard let ref = countCamera else {
+            hub.setExternal(nil)
             networkState = .ended("Sayılacak kamera seçilmedi (Ayarlar → Görüntü kaynağı)")
             return
         }
@@ -656,14 +664,17 @@ final class CountingViewModel: ObservableObject {
         case .ok(let c):
             config = c
         case .deleted:
+            hub.setExternal(nil)
             networkState = .ended("Kamera silinmiş (Ayarlar → Görüntü kaynağı)")
             return
         case .channelMissing:
+            hub.setExternal(nil)
             networkState = .ended("Kanal kayıt cihazında bulunamadı (Ayarlar → Görüntü kaynağı)")
             return
         }
         guard let plan = NetworkStreamPlan.make(config, password: devices.password(for: ref.sourceId),
                                                 client: devices.recorderClient(for: ref.sourceId)) else {
+            hub.setExternal(nil)
             networkState = .ended("Ağ kamerası ayarlanmadı (Ayarlar → Görüntü kaynağı)")
             return
         }
@@ -675,7 +686,12 @@ final class CountingViewModel: ObservableObject {
         source.reconnect = networkReconnect
         let processor = self.processor
         let gate = frameGate
-        source.onFrame = { pb, ts in gate.submit(pb, ts: ts, to: processor) }
+        let hub = self.hub
+        hub.setExternal(ref)
+        source.onFrame = { pb, ts in
+            hub.externalFrame(pb)                         // İzleme'de bu kameranın kutusu sayımın karesini gösterir
+            gate.submit(pb, ts: ts, to: processor)
+        }
         // ViewModel uygulama boyunca yaşar; durum bildirimi için güçlü referans güvenli (ve Sendable)
         source.onState = { [self] state in
             Task { @MainActor in self.networkStateChanged(state, source: source) }
@@ -685,15 +701,18 @@ final class CountingViewModel: ObservableObject {
         source.start()
     }
 
-    private func stopNetwork() {
+    /// `keepHubFeed`: hemen yeni sayım bağlantısı açılacak (İzleme kutuları kendi bağlantısına dönüp geri gelmesin)
+    private func stopNetwork(keepHubFeed: Bool = false) {
         networkSource?.stop()
         networkSource = nil
         networkState = nil
+        if !keepHubFeed { hub.setExternal(nil) }
     }
 
     private func networkStateChanged(_ state: NetworkCameraState, source: NetworkCameraSource) {
         guard networkSource === source else { return }
         networkState = state
+        hub.externalStatus(TileStatus(counting: state))
     }
 
     // MARK: - Kalite kontrol
