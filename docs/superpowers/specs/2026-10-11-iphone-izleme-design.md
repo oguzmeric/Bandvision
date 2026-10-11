@@ -80,6 +80,7 @@ Liste uygulamanın Application Support klasöründe atomik yazılan bir JSON dos
 - Seçici kameraları cihaz adının altında gruplar. Kayıt cihazında kanallar ad ve küçük resimle gelir; küçük resim bugünkü `snapshot` ile alınır.
 - Seçim `bs.countCamera` (`{sourceId, channelId}`) olarak saklanır. `bs.source` (phone/network) bugünkü gibi kalır.
 - Kurulum sihirbazındaki ağ kamerası adımı da bir cihaz ekler ve onu seçer.
+- Sayım için henüz kamera seçilmemişse, kaydedilen cihazın formunda seçilen kamera sayım kamerası olur (sihirbazda her zaman).
 
 **Geçiş (ilk açılışta bir kez).** `bs.netcam` doluysa:
 - ondan bir cihaz kurulur. Ad, türe göre "Kamera 1" ya da "NVR 1" olur.
@@ -148,17 +149,18 @@ Liste uygulamanın Application Support klasöründe atomik yazılan bir JSON dos
 - **Kayıt cihazı oturumu.** Her cihaz için tek bir `RecorderClient` kullanılır. TRASSIR'da tek oturum (sid) açılır; kanal başına yalnızca görüntü jetonu alınır. Hikvision ve Dahua'da adres doğrudan kurulur.
 - **Sınırlar.**
   - Aynı anda en çok 16 alt akış ve 1 ana akış açık olur. Sayımın kendi bağlantısı bu sayıya girmez.
-  - Sınır dolunca, 3 sn'den uzun süredir kullanılmayan aynı nitelikteki okuyucu çıkarılır. Çıkarılacak okuyucu yoksa kutuda "Sınır aşıldı" yazar.
+  - Sınır dolunca abonesi kalmamış (boşta bekleyen) aynı nitelikteki en eski okuyucu hemen çıkarılır; şablon geçişinde "Sınır aşıldı" görünmez. Çıkarılacak okuyucu yoksa kutuda "Sınır aşıldı" yazar.
 
 **Yaşam döngüsü.**
 - Okuyucular yalnızca İzleme sekmesi ekrandayken ve uygulama öndeyken açıktır.
-- Sekme değişince, ekran kilitlenince ya da uygulama arka plana gidince **5 sn** beklenir, sonra okuyucular kapanır. Kısa gidip gelmelerde yeniden bağlanılmaz.
+- Sekme değişince **5 sn** beklenir, sonra okuyucular kapanır. Kısa gidip gelmelerde yeniden bağlanılmaz.
+- Ekran kilitlenince ya da uygulama arka plana gidince okuyucular hemen kapanır: iOS uygulamayı askıya aldığı için bekleme sayacı işlemez. Denetim Merkezi gibi kısa kesintilerde (uygulama etkin değil ama ön planda) akışlar sürer.
 - Tek kamera açıkken görünmeyen kutuların okuyucuları da 5 sn sonra kapanır. Izgaraya dönünce son kareler hemen görünür ve okuyucular yeniden açılır.
 - Şablon değişince iki şablonda da olan kameraların okuyucuları kesilmez.
 - Sayım bu kuraldan bağımsızdır; bugünkü gibi sekme değişse de sürer.
 
 **Yeniden bağlanma.**
-- Bekleme 1, 2, 4… sn diye büyür, en çok 30 sn olur. 10 sn sorunsuz akıştan sonra sıfırlanır.
+- Bekleme 1, 2, 4… sn diye büyür, en çok 30 sn olur. İlk kare gelince sıfırlanır (mevcut `NetworkCameraSource` davranışı).
 - Kimlik hatasında yeniden denenmez. Kutuda "Şifre hatalı" yazar; kutuya dokununca ya da cihaz düzenlenince yeniden denenir.
 
 **Isınma.** `ProcessInfo.thermalState` `.serious` ya da üstü olunca ekranın üstünde "Telefon ısındı, daha küçük bir şablon önerilir" uyarısı çıkar. Akışlar kendiliğinden kesilmez.
