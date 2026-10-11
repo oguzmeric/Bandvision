@@ -231,9 +231,12 @@ final class DeviceStore: ObservableObject {
 
     /// Eski sürümlerin tek kamera/NVR ayarını (`bs.netcam` + Keychain "camera"/"recorder") listeye taşır.
     /// Bir kez çalışır (`bs.devicesMigrated`); eski anahtarlar bir sürüm boyunca silinmez.
+    /// Cihaz dosyası salt okunursa (bozuk dosya kenara alınamadı) bayrak konmadan nil döner: cihaz kaydedilemeyeceği
+    /// için taşıma sonraki açılışta, dosya sorunu geçince denenir.
     /// Dönüş: sayımın kullanacağı kamera (eski ayarda seçili olan).
     func migrateLegacy(defaults: UserDefaults = .standard) -> CameraRef? {
         guard !defaults.bool(forKey: Self.migratedKey) else { return nil }
+        guard !readOnly else { return nil }
         defaults.set(true, forKey: Self.migratedKey)
         guard let data = defaults.data(forKey: "bs.netcam"),
               let legacy = try? JSONDecoder().decode(NetworkCameraConfig.self, from: data) else { return nil }

@@ -201,6 +201,35 @@ final class DeviceStoreTests: XCTestCase {
         XCTAssertTrue(names.contains { $0.hasPrefix("devices.corrupt-") }, "\(names)")
     }
 
+    /// Cihaz dosyası salt okunursa taşıma bayrak konmadan ertelenir; dosya sorunu geçince sonraki açılışta taşınır.
+    func testMigrationIsPostponedWhileReadOnly() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("[[[".utf8).write(to: dir.appendingPathComponent("devices.json"))
+        // Klasör yazılamaz: bozuk dosya kenara alınamaz, depo salt okunur kalır
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let defaults = tempDefaults()
+        defaults.set(try JSONEncoder().encode(cameraConfig()), forKey: "bs.netcam")
+
+        let store = DeviceStore(directory: dir, credentials: MemoryCredentials())
+        XCTAssertNotNil(store.problem)
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertEqual(names, ["devices.json"], "kenara alma başarısız olmalı (salt okunur kurulum): \(names)")
+
+        XCTAssertNil(store.migrateLegacy(defaults: defaults))
+        XCTAssertFalse(defaults.bool(forKey: DeviceStore.migratedKey), "bayrak konmamalı")
+        XCTAssertTrue(store.devices.isEmpty)
+
+        // Sonraki açılış, dosya sorunu geçmiş: eski ayar taşınır
+        let healthy = DeviceStore(directory: tempDir(), credentials: MemoryCredentials())
+        XCTAssertNotNil(healthy.migrateLegacy(defaults: defaults))
+        XCTAssertEqual(healthy.devices.count, 1)
+    }
+
     /// Geçersiz kayıt (ayarsız kayıt cihazı) sessizce atılmaz: dosyanın kopyası kenara alınır, sonraki kayıt onu silmez.
     func testInvalidDeviceRecordIsCopiedAsideNotDropped() throws {
         let dir = tempDir()
