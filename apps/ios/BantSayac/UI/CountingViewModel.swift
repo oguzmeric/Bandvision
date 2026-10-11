@@ -1,7 +1,6 @@
 import Foundation
 import SwiftUI
 import Combine
-import Security
 
 /// Video dosyasından sayım oturumu (manuel test). Sayımlar canlı oturumun kaydına/webhook'una karışmaz.
 struct VideoRun: Equatable {
@@ -55,11 +54,12 @@ final class CountingViewModel: ObservableObject {
     // Görüntü kaynağı: iPhone kamerası ya da ağ kamerası (RTSP)
     @Published private(set) var sourceKind: VideoSourceKind =
         VideoSourceKind(rawValue: UserDefaults.standard.string(forKey: "bs.source") ?? "") ?? .phone
-    @Published private(set) var networkConfig = NetworkCameraConfig.load()
+    /// Ağ cihazları (kamera ve kayıt cihazları) ve şifreleri; sayım ve İzleme ortak listesi
+    let devices: DeviceStore
+    /// Sayılan ağ kamerası (cihaz + kanal); nil: seçilmedi
+    @Published private(set) var countCamera: CameraRef? = CountingViewModel.loadCountCamera()
     @Published private(set) var networkState: NetworkCameraState?
     private var networkSource: NetworkCameraSource?
-    /// Kaydedilen şifreler bellekte de tutulur: Keychain yazılamasa bile oturum boyunca bağlantı çalışır
-    private var networkPasswords: [NetworkDeviceKind: String] = [:]
     private let frameGate = FrameGate()
     /// UI testi: yayın bitince yeniden bağlanma (gerçek kullanımda her zaman true)
     private var networkReconnect = true
@@ -97,6 +97,7 @@ final class CountingViewModel: ObservableObject {
         self.logger = CountLogger()
         self.processor = FrameProcessor(queue: camera.processingQueue)
         self.staffFeedback = StaffTeachFeedback()
+        self.devices = DeviceStore()
         self.profile = store.selectedProfile
 
         processor.setProfile(profile)
@@ -172,6 +173,12 @@ final class CountingViewModel: ObservableObject {
                 self?.thermalState = ProcessInfo.processInfo.thermalState
             }
             .store(in: &cancellables)
+
+        // Eski sürümün tek kamera/NVR ayarı bir kez listeye taşınır; sayım aynı kamerayla sürer
+        if let migrated = devices.migrateLegacy(), countCamera == nil {
+            countCamera = migrated
+            Self.saveCountCamera(migrated)
+        }
     }
 
     // MARK: - Kamera
@@ -520,14 +527,15 @@ final class CountingViewModel: ObservableObject {
     func runUITestNetwork(url: String, username: String, password: String, expectedArea: Double?) {
         if let area = expectedArea { profile.expectedArea = area }
         networkReconnect = false
+        devices.removeAll()
         var config = NetworkCameraConfig()
         config.brand = .custom
         config.customURL = url
         config.username = username
-        networkConfig = config
-        networkPasswords[.camera] = password
-        let status = CameraCredentialStore.setPassword(password, for: .camera)
-        if status != errSecSuccess { testHookError = "Keychain kaydı başarısız (durum \(status))" }
+        let saved = devices.save(NetworkDevice(id: NetworkDevice.newID(), name: "Test kamerası", config: config),
+                                 password: password)
+        if let warning = saved.warning { testHookError = warning }
+        countCamera = CameraRef(sourceId: saved.device.id, channelId: nil)
         sourceKind = .network
         startNetwork()
         processor.startBackgroundLearning()          // klip boş bantla başlar (§5)
@@ -537,12 +545,14 @@ final class CountingViewModel: ObservableObject {
     /// UI testi (ayar ekranları): önceki testten kalan ağ ayarı ve şifreler silinir, kamera açılmaz.
     func prepareUITestForms() {
         networkReconnect = true                           // gerçek kullanım gibi: koparsa yeniden bağlanır
-        networkPasswords = [:]
-        networkConfig = NetworkCameraConfig()
-        networkConfig.save()
+        devices.removeAll()
+        countCamera = nil
+        Self.saveCountCamera(nil)
+        UserDefaults.standard.removeObject(forKey: "bs.netcam")
+        UserDefaults.standard.set(true, forKey: DeviceStore.migratedKey)
         sourceKind = .phone                               // kaydedince ağ kaynağına geçiş de sınansın
         UserDefaults.standard.set(VideoSourceKind.phone.rawValue, forKey: "bs.source")
-        for kind in NetworkDeviceKind.allCases { CameraCredentialStore.setPassword("", for: kind) }
+        for kind in NetworkDeviceKind.allCases { KeychainCredentials().setPassword("", account: kind.rawValue) }
     }
 
     /// UI testi teşhisi: ağ kaynağı ve kapı sayaçları
@@ -592,28 +602,67 @@ final class CountingViewModel: ObservableObject {
         startCamera()
     }
 
-    /// Ayarları ve şifreyi kaydeder; ağ kamerası seçiliyse yeni ayarlarla yeniden bağlanır.
-    /// Dönüş: şifre güvenli depoya (Keychain) yazılamadıysa kullanıcıya gösterilecek uyarı.
-    @discardableResult
-    func saveNetworkConfig(_ config: NetworkCameraConfig, password: String) -> String? {
-        networkConfig = config
-        config.save()
-        networkPasswords[config.kind] = password
-        let status = CameraCredentialStore.setPassword(password, for: config.kind)
-        if sourceKind == .network && !isVideoMode { startNetwork() }
-        return status == errSecSuccess ? nil
-            : "Şifre güvenli depoya kaydedilemedi (kod \(status)). Bu oturumda kullanılır; uygulama yeniden açılınca tekrar girmen gerekebilir."
+    private static let countCameraKey = "bs.countCamera"
+
+    nonisolated private static func loadCountCamera() -> CameraRef? {
+        guard let data = UserDefaults.standard.data(forKey: countCameraKey) else { return nil }
+        return try? JSONDecoder().decode(CameraRef.self, from: data)
     }
 
-    /// Kayıtlı şifre: önce bu oturumda girilen, yoksa Keychain
-    func storedPassword(for kind: NetworkDeviceKind) -> String {
-        networkPasswords[kind] ?? CameraCredentialStore.password(for: kind)
+    private static func saveCountCamera(_ ref: CameraRef?) {
+        if let ref, let data = try? JSONEncoder().encode(ref) {
+            UserDefaults.standard.set(data, forKey: countCameraKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: countCameraKey)
+        }
+    }
+
+    /// Sayılan kameranın cihazı (sihirbaz)
+    var countDevice: NetworkDevice? { countCamera.flatMap { devices.device($0.sourceId) } }
+
+    /// "Ofis NVR · Bant 1" / "Seçilmedi"
+    var countCameraSummary: String { devices.summary(for: countCamera) }
+
+    /// Sayılacak kamerayı seçer (nil: seçim kalkar); ağ kaynağındaysa yeniden bağlanır.
+    func selectCountCamera(_ ref: CameraRef?) {
+        countCamera = ref
+        Self.saveCountCamera(ref)
+        if sourceKind == .network && !isVideoMode { startNetwork() }
+    }
+
+    /// Cihaz kaydedildi: sayılan kamera bu cihazdaysa yeni ayarla yeniden bağlanır.
+    func deviceSaved(_ id: String) {
+        if countCamera?.sourceId == id && sourceKind == .network && !isVideoMode { startNetwork() }
+    }
+
+    /// Cihaz silinir; sayım bu cihazdaysa durur ve kamera seçimi kalkar.
+    func deleteDevice(_ id: String) {
+        devices.delete(id)
+        guard countCamera?.sourceId == id else { return }
+        setRunning(false)
+        selectCountCamera(nil)
     }
 
     private func startNetwork() {
         stopNetwork()
         camera.stop()
-        guard let plan = NetworkStreamPlan.make(networkConfig, password: storedPassword(for: networkConfig.kind)) else {
+        guard let ref = countCamera else {
+            networkState = .ended("Sayılacak kamera seçilmedi (Ayarlar → Görüntü kaynağı)")
+            return
+        }
+        let config: NetworkCameraConfig
+        switch devices.lookup(ref) {
+        case .ok(let c):
+            config = c
+        case .deleted:
+            networkState = .ended("Kamera silinmiş (Ayarlar → Görüntü kaynağı)")
+            return
+        case .channelMissing:
+            networkState = .ended("Kanal kayıt cihazında bulunamadı (Ayarlar → Görüntü kaynağı)")
+            return
+        }
+        guard let plan = NetworkStreamPlan.make(config, password: devices.password(for: ref.sourceId),
+                                                client: devices.recorderClient(for: ref.sourceId)) else {
             networkState = .ended("Ağ kamerası ayarlanmadı (Ayarlar → Görüntü kaynağı)")
             return
         }
