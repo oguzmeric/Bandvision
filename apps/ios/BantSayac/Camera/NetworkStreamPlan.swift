@@ -8,8 +8,8 @@ struct NetworkStreamPlan {
     let password: String
     let keepAlive: (@Sendable (URL) async -> Void)?
 
-    /// Ayarlar eksikse nil.
-    static func make(_ config: NetworkCameraConfig, password: String) -> NetworkStreamPlan? {
+    /// Ayarlar eksikse nil. `client`: cihazın paylaşılan kayıt cihazı istemcisi (TRASSIR'da tek oturum); nil ise yenisi.
+    static func make(_ config: NetworkCameraConfig, password: String, client: RecorderClient? = nil) -> NetworkStreamPlan? {
         switch config.kind {
         case .camera:
             guard let url = config.rtspURL else { return nil }
@@ -19,7 +19,7 @@ struct NetworkStreamPlan {
             return NetworkStreamPlan(resolver: { url }, username: user, password: pass, keepAlive: nil)
         case .recorder:
             guard config.recorderReady, let channel = config.recorderChannel else { return nil }
-            let client = recorderClient(config, password: password)
+            let client = client ?? recorderClient(config, password: password)
             let substream = config.substream
             return NetworkStreamPlan(resolver: { try await client.streamURL(channel, substream: substream) },
                                      username: config.recorderUsername, password: password,

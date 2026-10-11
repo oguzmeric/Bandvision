@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// Görüntü kaynağı: iPhone'un kendi kamerası ya da ağdaki IP kamera (RTSP).
 enum VideoSourceKind: String, Codable, CaseIterable, Identifiable {
@@ -145,36 +144,5 @@ struct NetworkCameraConfig: Codable, Equatable {
 
     func save() {
         if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
-    }
-}
-
-/// Ağ kamerası ve kayıt cihazı şifreleri iPhone Keychain'de (cihaz kilidi açıldıktan sonra erişilebilir,
-/// yedekle taşınmaz). Hesap: "camera" (doğrudan kamera, eski sürümlerle aynı) ve "recorder".
-enum CameraCredentialStore {
-    private static let service = "com.oguzmeric.bantsayac.netcam"
-
-    static func password(for kind: NetworkDeviceKind = .camera) -> String {
-        let account = kind.rawValue
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service, kSecAttrAccount as String: account,
-                                    kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
-    /// Kaydeder; başarısızsa Keychain durum kodunu döndürür (sessizce yutulmaz).
-    @discardableResult
-    static func setPassword(_ password: String, for kind: NetworkDeviceKind = .camera) -> OSStatus {
-        let account = kind.rawValue
-        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                   kSecAttrService as String: service, kSecAttrAccount as String: account]
-        SecItemDelete(base as CFDictionary)
-        guard !password.isEmpty else { return errSecSuccess }
-        var add = base
-        add[kSecValueData as String] = Data(password.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(add as CFDictionary, nil)
     }
 }
