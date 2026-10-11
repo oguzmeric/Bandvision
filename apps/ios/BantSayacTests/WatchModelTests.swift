@@ -60,6 +60,7 @@ final class WatchModelTests: XCTestCase {
         XCTAssertEqual(opened.count, 4)
         XCTAssertTrue(opened.keys.allSatisfy { $0.quality == .sub })
         XCTAssertEqual(env.model.tiles.map(\.title), ["Kamera 1", "Kamera 2", "Kamera 3", "Kamera 4"])
+        XCTAssertTrue(env.model.tiles.allSatisfy { $0.status == .connecting }, "abone olunca durum hemen alınır, .idle görünmez")
     }
 
     func testLeavingTabClosesAfterGrace() throws {
@@ -71,9 +72,11 @@ final class WatchModelTests: XCTestCase {
         clock = 4
         env.model.tick()
         XCTAssertEqual(env.hub.openCount.sub, 4)
+        XCTAssertEqual(env.model.openCount.sub, 4, "teşhis sayısı her saniye yenilenir")
         clock = 5
         env.model.tick()
         XCTAssertEqual(env.hub.openCount.sub, 0)
+        XCTAssertEqual(env.model.openCount.sub, 0)
     }
 
     func testBackgroundClosesImmediately() throws {
@@ -103,6 +106,23 @@ final class WatchModelTests: XCTestCase {
         clock = 5
         env.model.tick()
         XCTAssertEqual(env.hub.openCount.sub, 4)
+    }
+
+    /// Sınırda (16 alt akış) şablon değişince ortak kamera boşta sayılıp çıkarılmaz; yeni kamera boşalan yeri alır.
+    func testTemplateSwitchAtCapacityKeepsSharedCameras() throws {
+        let env = makeEnv(channels: 17)
+        let a = try env.templates.create(name: "A", layout: "16", tiles: refs(Array(1...16)))
+        let b = try env.templates.create(name: "B", layout: "2", tiles: refs([17, 1]))
+        env.model.select(a.id)
+        env.model.setVisible(true)
+        XCTAssertEqual(env.hub.openCount.sub, 16)
+        env.model.select(b.id)
+        let shared = HubKey(ref: CameraRef(sourceId: "nvr", channelId: "1"), quality: .sub)
+        XCTAssertEqual(opened[shared]?.count, 1, "ortak kamera yeniden açılmamalı")
+        XCTAssertEqual(opened[shared]?.first?.stopped, 0, "ortak kamera kapatılmamalı")
+        let added = HubKey(ref: CameraRef(sourceId: "nvr", channelId: "17"), quality: .sub)
+        XCTAssertEqual(opened[added]?.count, 1)
+        XCTAssertEqual(env.model.tiles.map(\.status), [.connecting, .connecting], "kutularda \"Sınır aşıldı\" görünmemeli")
     }
 
     func testSingleCameraUsesMainStreamAndPausesGrid() throws {

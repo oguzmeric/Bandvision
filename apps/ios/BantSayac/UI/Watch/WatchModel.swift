@@ -51,12 +51,16 @@ final class TileModel: ObservableObject, Identifiable {
         guard !subscribed, let key else { return }
         subscribed = true
         hub.subscribe(key, sink)
+        // Durum hemen alınır: sink'ten gelen durum ana iş parçacığına sonradan atlar, o ana dek `.idle` görünmesin
+        status = hub.status(key) ?? status
     }
 
     func unsubscribe(_ hub: CameraHub) {
         guard subscribed, let key else { return }
         subscribed = false
         hub.unsubscribe(key, sink)
+        // Hub kendi son karesini tutar ve yeniden aboneliğe verir; bırakılan kutu bellek tutmasın
+        sink.clearLast()
     }
 
     func collectStats() {
@@ -79,6 +83,8 @@ final class WatchModel: ObservableObject {
     @Published private(set) var single: TileModel?
     @Published var diagnostics = false
     @Published private(set) var thermalWarning = false
+    /// Açık bağlantı sayısı (teşhis satırı; saniyede bir güncellenir)
+    @Published private(set) var openCount: (sub: Int, main: Int) = (0, 0)
 
     private var visible = false
     private var foreground = true
@@ -120,10 +126,19 @@ final class WatchModel: ObservableObject {
     }
 
     /// Kutular şablonun güncel haliyle kurulur; ortak kameraların bağlantısı sürer (hub aynı okuyucuyu verir).
+    /// Sıra önemli: önce ortak kameraların yeni kutuları abone olur (okuyucu boşta kalmaz, sınırda çıkarılmaz),
+    /// sonra eski kutular bırakılır, en son kalan yeni kutular abone olur (boşalan yerleri kullanır).
     func rebuildTiles() {
         let old = tiles
-        tiles = (current?.tiles ?? []).enumerated().map { index, ref in
+        let fresh = (current?.tiles ?? []).enumerated().map { index, ref in
             TileModel(id: index, ref: ref, title: ref.map { devices.title(for: $0) } ?? "")
+        }
+        tiles = fresh
+        if visible && foreground && single == nil {
+            let oldKeys = Set(old.compactMap(\.key))
+            for tile in fresh {
+                if let key = tile.key, oldKeys.contains(key) { tile.subscribe(hub) }
+            }
         }
         for tile in old { tile.unsubscribe(hub) }
         applyActive()
@@ -148,6 +163,8 @@ final class WatchModel: ObservableObject {
         hub.sweep()
         for tile in tiles { tile.collectStats() }
         single?.collectStats()
+        let counts = hub.openCount
+        if counts.sub != openCount.sub || counts.main != openCount.main { openCount = counts }
         let warm = thermal().rawValue >= ProcessInfo.ThermalState.serious.rawValue
         if warm != thermalWarning { thermalWarning = warm }
     }
@@ -183,6 +200,7 @@ final class WatchModel: ObservableObject {
         if list.isEmpty {
             guard let client = devices.recorderClient(for: device.id) else { throw RecorderError.noChannels }
             list = try await client.channels()
+            guard !list.isEmpty else { throw RecorderError.noChannels }
             devices.setChannels(list, for: device.id)
         }
         let template = try templates.createFromRecorder(name: device.name, deviceId: device.id, channels: list)
