@@ -45,6 +45,7 @@ struct SingleCameraView: View {
             }
             .padding()
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("singleCamera")
     }
 }

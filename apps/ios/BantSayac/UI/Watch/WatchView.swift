@@ -75,20 +75,27 @@ struct WatchView: View {
 
     // MARK: - İçerik
 
+    private var showsGrid: Bool { !model.devices.devices.isEmpty && model.current != nil }
+
+    /// Uyarılar (ısı, bozuk şablon dosyası, bilgi) her durumda görünür: cihaz yok, şablon yok ya da ızgara
     @ViewBuilder private var content: some View {
-        if model.devices.devices.isEmpty {
-            emptyDevices
-        } else if model.current == nil {
-            emptyTemplates
-        } else {
-            VStack(spacing: 6) {
-                if !isLandscape { header }
-                if model.thermalWarning { banner("Telefon ısındı, daha küçük bir şablon önerilir.", icon: "thermometer.high", color: .orange) }
-                if let problem = model.templates.problem { banner(problem, icon: "exclamationmark.triangle", color: .red) }
-                if let notice { banner(notice, icon: "info.circle", color: .blue) }
+        VStack(spacing: 6) {
+            if showsGrid && !isLandscape { header }
+            banners
+            if model.devices.devices.isEmpty {
+                emptyDevices
+            } else if model.current == nil {
+                emptyTemplates
+            } else {
                 grid
             }
         }
+    }
+
+    @ViewBuilder private var banners: some View {
+        if model.thermalWarning { banner("Telefon ısındı, daha küçük bir şablon önerilir.", icon: "thermometer.high", color: .orange) }
+        if let problem = model.templates.problem { banner(problem, icon: "exclamationmark.triangle", color: .red) }
+        if let notice { banner(notice, icon: "info.circle", color: .blue) }
     }
 
     private var header: some View {
@@ -107,6 +114,7 @@ struct WatchView: View {
         .padding(.horizontal)
         .contentShape(Rectangle())
         .onLongPressGesture { model.diagnostics.toggle() }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("watchHeader")
     }
 
@@ -194,6 +202,7 @@ struct WatchView: View {
             Menu {
                 ForEach(model.templates.templates) { template in
                     Button {
+                        notice = nil
                         model.select(template.id)
                     } label: {
                         if template.id == model.currentID {
@@ -244,7 +253,7 @@ struct WatchView: View {
         Task {
             do {
                 let total = try await model.createFromRecorder(device)
-                notice = total > ViewLayouts.maxTiles ? "\(total) kanaldan 16'sı eklendi." : nil
+                notice = total > ViewLayouts.maxTiles ? "\(total) kanaldan \(ViewLayouts.maxTiles)'sı eklendi." : nil
             } catch {
                 notice = error.localizedDescription
             }
@@ -258,7 +267,8 @@ struct WatchView: View {
 
     private func countRequested(_ tile: TileModel) {
         guard let ref = tile.ref else { return }
-        if vm.isRunning, vm.countCamera != ref {
+        // Süren sayım başka bir kamerada ya da başka bir kaynakta (telefon kamerası, video) ise önce sorulur
+        if vm.isRunning && (vm.sourceKind != .network || vm.isVideoMode || vm.countCamera != ref) {
             confirmCount = tile
         } else {
             switchCounting(to: ref)
@@ -296,10 +306,6 @@ private struct TileView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             VStack {
-                HStack {
-                    Spacer()
-                    CountBadge(vm: vm, ref: tile.ref)
-                }
                 Spacer()
                 HStack {
                     Text(tile.title)
@@ -327,6 +333,10 @@ private struct TileView: View {
         .accessibilityValue("\(tile.status.text ?? "canlı") · kare \(tile.frames)")
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("tile.\(tile.id)")
+        // Rozet kutunun erişilebilirlik öğesinin dışında: `countBadge` ayrı bir öğe olarak sorgulanabilir
+        .overlay(alignment: .topTrailing) {
+            CountBadge(vm: vm, ref: tile.ref).padding(4)
+        }
     }
 }
 
