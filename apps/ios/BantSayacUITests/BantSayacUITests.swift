@@ -349,11 +349,18 @@ final class BantSayacUITests: XCTestCase {
         let singleFlowing = waitForFrames(single, timeout: 60)
         print("KAYIT CİHAZI izleme: tek kamera: \(single.label) | \(String(describing: single.value))")
         require(app, singleFlowing, "tek kamera kare almadı: \(String(describing: single.value))")
+        require(app, single.label == "Kapı", "yanlış kamera açıldı: \(single.label)")
         element(app, "countThisCamera").tap()
         let state = element(app, "networkState")
         let counting = waitForLabel(state, containing: "Canlı", timeout: 60)
         print("KAYIT CİHAZI izleme: sayım durumu: \(state.label)")
         require(app, counting, "sayım yeni kamerada başlamadı: \(state.label)")
+        // Sayılan kamera gerçekten değişti mi: Ayarlar'daki bağlantı etiketi (durum "Canlı" eski kameradan da gelebilir)
+        require(app, selectTab(app, "Ayarlar"), "Ayarlar sekmesi seçilemedi")
+        let link = element(app, "countCameraLink")
+        require(app, link.waitForExistence(timeout: 10), "sayılan kamera bağlantısı yok")
+        print("KAYIT CİHAZI izleme: sayılan kamera: \(link.label)")
+        require(app, link.label.contains("NVR 1 · Kapı"), "sayılan kamera değişmedi: \(link.label)")
     }
 
     /// Yan çevirince yalnızca İzleme sekmesinde çubuklar gizlenir (tam ekran ızgara); diğer sekmeler dikey kalır.
