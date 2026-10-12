@@ -313,7 +313,7 @@ final class BantSayacUITests: XCTestCase {
         fill(element(app, "recorderPassword"), nvr.password)
         pickTestAndSave(app, camera: "Bant 1", expectedOthers: ["Kapı", "Depo", "Kanal 4"], absent: [])
 
-        app.tabBars.buttons["İzleme"].tap()
+        require(app, selectTab(app, "İzleme"), "İzleme sekmesi seçilemedi")
         let fromRecorder = element(app, "emptyFromRecorder")
         require(app, fromRecorder.waitForExistence(timeout: 10), "boş şablon ekranı yok")
         fromRecorder.tap()
