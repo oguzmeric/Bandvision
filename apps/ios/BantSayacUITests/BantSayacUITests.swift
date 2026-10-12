@@ -257,11 +257,25 @@ final class BantSayacUITests: XCTestCase {
     // MARK: - İzleme (çoklu kamera ızgarası)
 
     /// Kutunun erişilebilirlik değeri "… · kare N": N kutuya verilen kare sayısıdır (abone olunca son kare bir kez
-    /// tekrarlanır), bu yüzden N ≥ 2 olunca kare gerçekten akıyor demektir.
+    /// tekrarlanır), bu yüzden N ≥ 2 olunca kare gerçekten akıyor demektir. SwiftUI sayıyı bölgeye göre biçimler
+    /// ("3,666"); binlik ayracı (virgül, nokta, boşluk) kabul edilir.
     private func waitForFrames(_ el: XCUIElement, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "value MATCHES %@", ".*kare ([2-9]|[1-9][0-9]+)$")
+        let predicate = NSPredicate(format: "value MATCHES %@", ".*kare ([2-9]|[1-9][0-9.,\u{00A0}\u{202F} ]+)$")
         return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: el)],
                                 timeout: timeout) == .completed
+    }
+
+    /// Sekme çubuğundan sekmeye geçer. Yön değişiminin ya da çubuk animasyonunun ortasındaki dokunuş boşa gidebilir:
+    /// düğme dokunulabilir olunca dokunur, seçilene dek yeniden dener.
+    private func selectTab(_ app: XCUIApplication, _ name: String) -> Bool {
+        let button = app.tabBars.buttons[name]
+        let selected = NSPredicate(format: "isSelected == true")
+        for _ in 0..<5 {
+            if button.waitForExistence(timeout: 5), button.isHittable { button.tap() }
+            let done = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: selected, object: button)], timeout: 3)
+            if done == .completed { return true }
+        }
+        return false
     }
 
     private func waitUntilGone(_ el: XCUIElement, timeout: TimeInterval) -> Bool {
@@ -360,7 +374,7 @@ final class BantSayacUITests: XCTestCase {
         require(app, tabBar.waitForExistence(timeout: 10), "dikeye dönünce sekme çubuğu geri gelmedi")
 
         // Canlı sekmesi dikey kalır: yan çevirmek çubuğu gizlemez
-        app.tabBars.buttons["Canlı"].tap()
+        require(app, selectTab(app, "Canlı"), "Canlı sekmesi seçilemedi")
         XCUIDevice.shared.orientation = .landscapeLeft
         sleep(3)
         require(app, tabBar.exists, "Canlı sekmesinde yan çevirince sekme çubuğu kayboldu")
