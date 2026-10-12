@@ -13,6 +13,11 @@ final class BantSayacUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Yatay deneyen test yarıda kalsa da sonraki testler dikey başlasın (simülatör yönü testler arasında kalır)
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     private func clipMeta() throws -> ClipMeta {
         let bundle = Bundle(for: BantSayacUITests.self)
         let url = try XCTUnwrap(bundle.url(forResource: "ui_test_clip", withExtension: "json"))
@@ -247,6 +252,119 @@ final class BantSayacUITests: XCTestCase {
         fill(element(app, "recorderRTSPPort"), nvr.rtspPort)
         fill(element(app, "recorderPassword"), nvr.password)
         pickTestAndSave(app, camera: "Bant 1", expectedOthers: ["Kapı", "Depo", "Kanal 4"], absent: [])
+    }
+
+    // MARK: - İzleme (çoklu kamera ızgarası)
+
+    /// Kutunun erişilebilirlik değeri "… · kare N": N kutuya verilen kare sayısıdır (abone olunca son kare bir kez
+    /// tekrarlanır), bu yüzden N ≥ 2 olunca kare gerçekten akıyor demektir.
+    private func waitForFrames(_ el: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "value MATCHES %@", ".*kare ([2-9]|[1-9][0-9]+)$")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: el)],
+                                timeout: timeout) == .completed
+    }
+
+    private func waitUntilGone(_ el: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "exists == false")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: el)],
+                                timeout: timeout) == .completed
+    }
+
+    /// Hata teşhisi: ekranın erişilebilirlik ağacı ve görüntüsü (CI günlüğünde "=== EKRAN" ile aranır)
+    private func dumpScreen(_ app: XCUIApplication, _ name: String) {
+        print("=== EKRAN (\(name)) ===")
+        print(app.debugDescription)
+        print("=== SON ===")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// Koşul sağlanmazsa ekran dökümü alınır, sonra test düşer (`continueAfterFailure = false`)
+    private func require(_ app: XCUIApplication, _ condition: Bool, _ message: @autoclosure () -> String,
+                         file: StaticString = #filePath, line: UInt = #line) {
+        guard !condition else { return }
+        dumpScreen(app, "hata-ekrani")
+        XCTFail(message(), file: file, line: line)
+    }
+
+    /// Dahua kayıt cihazını ekler (Bant 1 sayılan kamera olur), İzleme sekmesinde "NVR'dan şablon" ile 4'lü ızgarayı kurar.
+    private func addDahuaAndOpenWatch(_ nvr: MockRecorder) -> XCUIApplication {
+        let app = openRecorderForm(brand: "Dahua")
+        fill(element(app, "recorderHost"), nvr.host)
+        app.buttons["Portlar"].tap()
+        fill(element(app, "recorderHTTPPort"), nvr.httpPort)
+        fill(element(app, "recorderRTSPPort"), nvr.rtspPort)
+        fill(element(app, "recorderPassword"), nvr.password)
+        pickTestAndSave(app, camera: "Bant 1", expectedOthers: ["Kapı", "Depo", "Kanal 4"], absent: [])
+
+        app.tabBars.buttons["İzleme"].tap()
+        let fromRecorder = element(app, "emptyFromRecorder")
+        require(app, fromRecorder.waitForExistence(timeout: 10), "boş şablon ekranı yok")
+        fromRecorder.tap()
+        require(app, element(app, "tile.0").waitForExistence(timeout: 10), "şablon kurulmadı: kutu 0 yok")
+        return app
+    }
+
+    /// Dahua kayıt cihazı → NVR'dan 4'lü şablon → kutularda kare akar (sayılan kamera sayımın akışını paylaşır)
+    /// → tek kamera (ana akış) → "Bu kamerayı say" Canlı sekmesinde bu kamerayı sayar.
+    func testWatchGridFromRecorderAndCountCamera() throws {
+        let nvr = try mockRecorder()
+        let app = addDahuaAndOpenWatch(nvr)
+        for i in 0..<4 {
+            let tile = element(app, "tile.\(i)")
+            require(app, tile.waitForExistence(timeout: 10), "kutu \(i) yok")
+            let flowing = waitForFrames(tile, timeout: 60)
+            print("İZLEME kutu \(i): \(tile.label) | \(String(describing: tile.value))")
+            require(app, flowing, "kutu \(i) kare almadı: \(String(describing: tile.value))")
+        }
+        // Kutu 0 ("Bant 1") sayılan kameradır: ağ sayımı sürerken rozeti görünür
+        let badge = element(app, "countBadge")
+        require(app, badge.waitForExistence(timeout: 15), "sayılan kameranın rozeti yok")
+        print("İZLEME rozet: \(badge.label)")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "izleme-4lu"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        element(app, "tile.1").tap()
+        let single = element(app, "singleVideo")
+        require(app, single.waitForExistence(timeout: 10), "tek kamera açılmadı")
+        let singleFlowing = waitForFrames(single, timeout: 60)
+        print("İZLEME tek kamera: \(single.label) | \(String(describing: single.value))")
+        require(app, singleFlowing, "tek kamera kare almadı: \(String(describing: single.value))")
+        element(app, "countThisCamera").tap()
+        let state = element(app, "networkState")
+        let counting = waitForLabel(state, containing: "Canlı", timeout: 60)
+        print("İZLEME sayım durumu: \(state.label)")
+        require(app, counting, "sayım yeni kamerada başlamadı: \(state.label)")
+    }
+
+    /// Yan çevirince yalnızca İzleme sekmesinde çubuklar gizlenir (tam ekran ızgara); diğer sekmeler dikey kalır.
+    func testWatchLandscapeHidesBarsOnlyOnWatchTab() throws {
+        let nvr = try mockRecorder()
+        let app = addDahuaAndOpenWatch(nvr)
+        let tabBar = app.tabBars.firstMatch
+        require(app, tabBar.exists, "dikeyde sekme çubuğu yok")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let hidden = waitUntilGone(tabBar, timeout: 10)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "izleme-yatay"
+        shot.lifetime = .keepAlways
+        add(shot)
+        require(app, hidden, "İzleme'de yan çevirince sekme çubuğu gizlenmedi")
+
+        XCUIDevice.shared.orientation = .portrait
+        require(app, tabBar.waitForExistence(timeout: 10), "dikeye dönünce sekme çubuğu geri gelmedi")
+
+        // Canlı sekmesi dikey kalır: yan çevirmek çubuğu gizlemez
+        app.tabBars.buttons["Canlı"].tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        sleep(3)
+        require(app, tabBar.exists, "Canlı sekmesinde yan çevirince sekme çubuğu kayboldu")
+        XCUIDevice.shared.orientation = .portrait
     }
 
     // MARK: - Kurulum sihirbazı ve çokgen ROI
