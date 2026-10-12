@@ -46,6 +46,8 @@ Biçim: `rtsp://kullanıcı:şifre@IP:554<yol>`. Şifrede özel karakter varsa U
 ## 3c. Kayıt cihazı üzerinden bağlantı (NVR/XVR)
 Sahada kameraların çoğu kayıt cihazına bağlıdır; telefon (iPhone uygulaması, `04-ios-app.md` §1g) kayıt cihazına bağlanıp kamerayı listeden seçer.
 
+iPhone'da cihazlar bir kez eklenir (Ayarlar → Görüntü kaynağı → Cihazlar): birden çok kayıt cihazı ve doğrudan kamera olabilir. Sayılacak kamera ve İzleme sekmesindeki şablonların kameraları bu listeden seçilir; "NVR'dan şablon" kayıt cihazının kanallarıyla tek dokunuşta ızgara kurar. İzleme ızgarası kutu başına alt akışla bağlanır: kayıt cihazının eşzamanlı uzak izleme sınırı 16 kutuyu kaldırmayabilir (kutuda "NVR bağlantı sınırına ulaştı").
+
 | Kayıt cihazı | Uygulamaya girilen | Portlar (varsayılan) | Cihazda yapılacak |
 |---|---|---|---|
 | TRASSIR | IP, kullanıcı, şifre | SDK 8080 (HTTPS), görüntü 555 | Ayarlar → Web sunucusu (SDK): **SDK** işaretli, SDK şifresi dolu; kullanıcının kanalları izleme yetkisi |

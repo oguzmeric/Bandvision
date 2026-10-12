@@ -77,6 +77,10 @@ Ayarlar'a bir webhook URL'si girilirse olaylar 5 sn'de bir POST edilir; ağ yoks
 
 n8n Webhook düğümü, Supabase Edge Function ya da kendi FastAPI uç noktan doğrudan alabilir. Dakikalık özet Ayarlar → Rapor'dan CSV olarak paylaşılır (Excel için `;` ayraçlı).
 
+## Cihazlar ve İzleme
+
+Ayarlar → Görüntü kaynağı → **Cihazlar**'a IP kameralar ve kayıt cihazları (NVR/XVR) bir kez eklenir; sayılacak kamera **Sayılan kamera**'dan seçilir. **İzleme** sekmesi kameraları şablonlu ızgarada (2, 3, 4, 6, 8, 9, 12, 16'lı) canlı gösterir; görüntü doğrudan cihazlardan gelir ve telefondan çıkmaz. Ayrıntı: `docs/04-ios-app.md` §1j.
+
 ## Bilinen sınırlar
 
 - Arka plan farkına dayanır: kamera sabit, ışık stabil olmalı. Kamera oynarsa "Boş bandı öğren"i tekrarla.

@@ -125,7 +125,7 @@ Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`ban
 `done` ise `result`, `failed` ise `error` zorunlu. Örnekler: `examples/analysis-job-*.json`.
 
 ## 8. Çoklu izleme — `view-layouts.json`, `view-template.schema.json`
-Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (web ve ileride iPhone). Tasarım: `superpowers/specs/2026-10-08-coklu-izleme-design.md`.
+Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (web ve iPhone). Tasarım: `superpowers/specs/2026-10-08-coklu-izleme-design.md`.
 
 **Düzen kataloğu** (`view-layouts.json`, şema: `view-layouts.schema.json`, `version: 1`). Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y, w, h], …]}`.
 - Hücre `(x, y, w, h)` birim ızgarada verilir; **hücre sırası kutu sırasıdır** (şablondaki `tiles[i]`, `cells[i]` hücresine konur).
@@ -151,8 +151,10 @@ Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (w
 - `tiles` uzunluğu düzenin hücre sayısına eşittir. Her öğe `null` (boş kutu) ya da `{sourceId, channelId}` olur; tek kamerada (kanalsız kaynak) `channelId` `null`'dır.
 - Aynı kamera (`sourceId` + `channelId`) bir şablonda en fazla bir kez yer alır.
 - Şema yalnızca biçimi denetler. `tiles` uzunluğunun düzenle uyumu ve kameranın tekrarsızlığı alanlar arası kurallardır; şablonu kaydeden taraf (web'de analiz sunucusu) denetler.
-- Kamera kimlikleri **platforma özgüdür**: web'de analiz sunucusunun kaynak kimliği kullanılır, iPhone kendi kimliklerini kullanacak. Biçim ortaktır.
+- Kamera kimlikleri **platforma özgüdür**: web'de analiz sunucusunun kaynak kimliği, iPhone'da cihaz kimliği (UUID) ve kayıt cihazının kanal kimliği (TRASSIR GUID'i ya da kanal numarası; doğrudan kamerada `null`). Biçim ortaktır; şablonlar platformlar arasında eşitlenmez.
 
 Örnekler: `examples/view-template-*.json` (önek `view-template` → `view-template.schema.json`). `view-layouts.json` bir örnek değil veri dosyasıdır; `tools/validate_contracts.py` içindeki `DATA_FILES` ile kendi şemasına karşı doğrulanır.
 
 **Python kataloğu** `services/edge/bantvision/live/layouts.py` aynı düzenleri taşır; `services/edge/tests/test_layouts.py` onu `view-layouts.json` ile birebir eşitlik için karşılaştırır. Düzen eklemek ya da değiştirmek için önce `view-layouts.json` ve şemadaki `id` listesi, sonra Python kataloğu ve diğer uygulamalar aynı değişiklikte güncellenir. Geometri değişmezleri (tam kaplama, çakışmasızlık, kutu sayısı) `tools/tests/test_contracts.py` içinde.
+
+**iPhone** `view-layouts.json`'ı kopya olmadan uygulama paketine kaynak olarak ekler (`apps/ios/project.yml`); `BantSayacTests/ViewLayoutsTests` düzen kimliklerini, kutu sayılarını ve `smallestFor`'un web'deki `smallest_for` ile aynı sonucu verdiğini sınar; `TemplateStoreTests` `examples/view-template-4.json`'ı okur ve kanalsız kutuda `channelId: null` yazıldığını denetler.

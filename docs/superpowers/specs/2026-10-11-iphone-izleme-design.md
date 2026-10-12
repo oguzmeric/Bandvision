@@ -1,6 +1,6 @@
 # iPhone çoklu kamera izleme (cihaz listesi + şablonlu ızgara) — tasarım
 
-Tarih: 2026-10-11 · Durum: tasarım onaylandı, uygulanmadı · Çoklu izlemenin alt proje B'si (iPhone). Alt proje A (web) `2026-10-08-coklu-izleme-design.md`'de; düzen ve şablon sözleşmesi oradan gelir.
+Tarih: 2026-10-11 · Durum: uygulandı (ölçüm bekliyor; docs/12-durum.md §5h) · Çoklu izlemenin alt proje B'si (iPhone). Alt proje A (web) `2026-10-08-coklu-izleme-design.md`'de; düzen ve şablon sözleşmesi oradan gelir.
 
 ## Amaç
 iPhone uygulamasında kameraları NVR duvarı gibi tek ekranda, şablonlu bir ızgarada **canlı izlemek**.
