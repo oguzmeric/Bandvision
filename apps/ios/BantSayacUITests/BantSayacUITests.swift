@@ -324,19 +324,20 @@ final class BantSayacUITests: XCTestCase {
     /// Dahua kayıt cihazı → NVR'dan 4'lü şablon → kutularda kare akar (sayılan kamera sayımın akışını paylaşır)
     /// → tek kamera (ana akış) → "Bu kamerayı say" Canlı sekmesinde bu kamerayı sayar.
     func testWatchGridFromRecorderAndCountCamera() throws {
+        // Yazdırılan satırlar "KAYIT CİHAZI" önekini taşır: ios-uitest.yml günlük süzgeci yalnızca bunları gösterir
         let nvr = try mockRecorder()
         let app = addDahuaAndOpenWatch(nvr)
         for i in 0..<4 {
             let tile = element(app, "tile.\(i)")
             require(app, tile.waitForExistence(timeout: 10), "kutu \(i) yok")
             let flowing = waitForFrames(tile, timeout: 60)
-            print("İZLEME kutu \(i): \(tile.label) | \(String(describing: tile.value))")
+            print("KAYIT CİHAZI izleme: kutu \(i): \(tile.label) | \(String(describing: tile.value))")
             require(app, flowing, "kutu \(i) kare almadı: \(String(describing: tile.value))")
         }
         // Kutu 0 ("Bant 1") sayılan kameradır: ağ sayımı sürerken rozeti görünür
         let badge = element(app, "countBadge")
         require(app, badge.waitForExistence(timeout: 15), "sayılan kameranın rozeti yok")
-        print("İZLEME rozet: \(badge.label)")
+        print("KAYIT CİHAZI izleme: rozet: \(badge.label)")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "izleme-4lu"
         shot.lifetime = .keepAlways
@@ -346,12 +347,12 @@ final class BantSayacUITests: XCTestCase {
         let single = element(app, "singleVideo")
         require(app, single.waitForExistence(timeout: 10), "tek kamera açılmadı")
         let singleFlowing = waitForFrames(single, timeout: 60)
-        print("İZLEME tek kamera: \(single.label) | \(String(describing: single.value))")
+        print("KAYIT CİHAZI izleme: tek kamera: \(single.label) | \(String(describing: single.value))")
         require(app, singleFlowing, "tek kamera kare almadı: \(String(describing: single.value))")
         element(app, "countThisCamera").tap()
         let state = element(app, "networkState")
         let counting = waitForLabel(state, containing: "Canlı", timeout: 60)
-        print("İZLEME sayım durumu: \(state.label)")
+        print("KAYIT CİHAZI izleme: sayım durumu: \(state.label)")
         require(app, counting, "sayım yeni kamerada başlamadı: \(state.label)")
     }
 
