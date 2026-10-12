@@ -219,10 +219,16 @@ final class WatchModel: ObservableObject {
         select(saved.id)
     }
 
+    /// Verilen şablonu siler; silinen seçiliyse ilk kalan şablon seçilir, değilse seçim değişmez.
+    func deleteTemplate(_ id: String) throws {
+        let wasCurrent = id == currentID
+        try templates.delete(id)
+        if wasCurrent { select(templates.templates.first?.id) }
+    }
+
     func deleteCurrent() throws {
         guard let id = currentID else { return }
-        try templates.delete(id)
-        select(templates.templates.first?.id)
+        try deleteTemplate(id)
     }
 
     // MARK: - İç

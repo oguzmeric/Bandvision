@@ -194,4 +194,16 @@ final class WatchModelTests: XCTestCase {
         try env.model.deleteCurrent()
         XCTAssertNil(env.model.current)
     }
+
+    func testDeletingAnotherTemplateKeepsSelection() throws {
+        let env = makeEnv()
+        let first = try env.templates.create(name: "A", layout: "1", tiles: refs([1]))
+        let second = try env.templates.create(name: "B", layout: "1", tiles: refs([2]))
+        env.model.select(first.id)
+        try env.model.deleteTemplate(second.id)
+        XCTAssertEqual(env.model.current?.id, first.id, "seçili olmayan şablon silinince seçim değişmez")
+        XCTAssertEqual(env.templates.templates.map(\.id), [first.id])
+        try env.model.deleteTemplate(first.id)
+        XCTAssertNil(env.model.current)
+    }
 }

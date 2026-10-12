@@ -179,7 +179,7 @@ struct TemplateEditor: View {
 
     private func delete() {
         do {
-            try model.deleteCurrent()
+            try model.deleteTemplate(draft.id)
             dismiss()
         } catch {
             self.error = error.localizedDescription
