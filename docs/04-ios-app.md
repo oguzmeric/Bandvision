@@ -25,7 +25,7 @@ Eşzamanlılık modeli: kamera kareleri `processingQueue`'da gelir; `FrameProces
 - Masaüstü karşılığı: `python -m bantvision.video` (README). Sayısı bilinen test videoları: `tools/make_test_video.py`.
 
 ## 1c. Kalite kontrol A1: sekmeler, ürün kartları, örnekle öğretme
-Sekmeler: **Canlı · Genel bakış · Öğret · Ayarlar** (`UI/RootView.swift`). Kamera ve sayım sekme değişse de sürer.
+Sekmeler: **Canlı · İzleme · Genel bakış · Öğret · Ayarlar** (`UI/RootView.swift`). Kamera ve sayım sekme değişse de sürer.
 - **Kırpıntı:** ürün çizgiyi ilk geçtiğinde (`CountEvent.isFirstCrossing`) lekenin kutusu %15 payla tam çözünürlüklü kareden kırpılır, JPEG (uzun kenar ≤ 256 px) olarak `FrameProcessor.onCrop` ile gelir. `CountEvent` artık `trackId` ve `bbox` taşır.
 - **Kartlar** (`Core/Inspection.swift`, `UI/OverviewView.swift`): son 50 ürün bellekte; fotoğraf, Geçti/Kaldı, saat, kısa kimlik (`hexID`, Python işaretli videoyla aynı), güven %. Dokununca büyük görünüm ve öğretme. Sayaç sıfırlanınca kartlar da sıfırlanır.
 - **Öğretme** (`Core/Teach.swift`, `UI/TeachView.swift`): profile özel kusur türleri; örnekler `Application Support/teach/<profil-id>/` (index.json, jpg, Vision feature print arşivi). Karar `AppearanceClassifier`: en yakın 5 örneğin 1/uzaklık ağırlıklı oyu; yalnızca iyi örnek varsa anomali modu (en yakın iyiye uzaklık, iyilerin kendi aralarındaki tipik uzaklığın 1,8 katını aşarsa "Beklenmedik"). Hazır olma: ≥ 3 iyi + bir kusur türünde ≥ 2 örnek, ya da ≥ 5 iyi. Vision işleri kendi kuyruğunda; sayımı yavaşlatmaz.
