@@ -191,14 +191,14 @@ def test_view_layout_ids_are_the_agreed_set() -> None:
     assert [d["id"] for d in _layouts()] == ["1", "2", "3", "4", "6", "8", "9", "12", "16"]
 
 
-def test_layout_enums_in_both_schemas_equal_the_catalog_ids() -> None:
-    """Düzen kimlikleri iki şemada da sayılır (şablonun `layout`'u, kataloğun `id`'si): katalogla birebir aynı olmalı.
-    Yeni düzen eklenip şemalardan biri unutulursa kaydedilen şablon sözleşme dışında kalırdı."""
-    def schema(name: str) -> Any:
-        return json.loads((vc.CONTRACTS / name).read_text(encoding="utf-8"))
-
-    ids = [d["id"] for d in _layouts()]
-    template = schema("view-template.schema.json")["properties"]["layout"]["enum"]
-    catalog = schema("view-layouts.schema.json")["properties"]["layouts"]["items"]["properties"]["id"]["enum"]
-    assert template == ids, "view-template.schema.json layout enum ≠ view-layouts.json kimlikleri"
-    assert catalog == ids, "view-layouts.schema.json id enum ≠ view-layouts.json kimlikleri"
+def test_template_layout_accepts_catalog_and_grid_ids() -> None:
+    """Şablonun `layout`'u katalog kimliklerini ve `<satır>x<sütun>` biçimini kabul eder (çarpım sınırını analiz sunucusu denetler);
+    kataloğun kendi `id` listesi katalogla birebir aynı kalır."""
+    base = json.loads((vc.CONTRACTS / "examples" / "view-template-4.json").read_text(encoding="utf-8"))
+    for ok in [d["id"] for d in _layouts()] + ["6x8", "1x1", "16x16"]:
+        assert vc.errors_for({**base, "layout": ok}, "view-template.schema.json") == [], ok
+    for bad in ["17x2", "5", "0x3", "6X8", "06x8", "6x", ""]:
+        assert vc.errors_for({**base, "layout": bad}, "view-template.schema.json") != [], bad
+    catalog = json.loads((vc.CONTRACTS / "view-layouts.schema.json").read_text(encoding="utf-8"))
+    ids = catalog["properties"]["layouts"]["items"]["properties"]["id"]["enum"]
+    assert ids == [d["id"] for d in _layouts()]

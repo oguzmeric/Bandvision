@@ -1,0 +1,8 @@
+{"id": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "name": "Depo 6×8", "layout": "6x8",
+ "tiles": [{"sourceId": "src-nvr", "channelId": "1"}, {"sourceId": "src-nvr", "channelId": "2"},
+           {"sourceId": "src-nvr", "channelId": "3"}, {"sourceId": "src-cam", "channelId": null},
+           null, null, null, null, null, null, null, null, null, null, null, null,
+           null, null, null, null, null, null, null, null, null, null, null, null,
+           null, null, null, null, null, null, null, null, null, null, null, null,
+           null, null, null, null, null, null, null, null],
+ "createdAt": 1791500000.0, "updatedAt": 1791500100.0}

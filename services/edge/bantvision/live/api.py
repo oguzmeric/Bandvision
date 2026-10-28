@@ -38,6 +38,7 @@ from .viewer import SourceGone, ViewHub
 from .views import ViewsBusy, ViewStore
 
 _LOG = logging.getLogger(__name__)
+RECORDER_MAX_TILES = 16   # "kayıt cihazından" şablon en çok 16 kanal alır (katalogdaki en büyük düzen)
 
 
 class _Strict(BaseModel):
@@ -956,7 +957,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise _err(e) from e
         if not chans:
             raise HTTPException(422, "Kayıt cihazında kamera bulunamadı.")
-        used = chans[:MAX_TILES]
+        used = chans[:RECORDER_MAX_TILES]
         lay = smallest_for(len(used))
         tiles: list[dict[str, Any] | None] = [{"sourceId": src["id"], "channelId": c.id} for c in used]
         tiles += [None] * (len(lay.cells) - len(tiles))
@@ -965,7 +966,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             v = manager.views.create(name, lay.id, tiles)
         except ViewsBusy as e:
             raise HTTPException(503, str(e)) from e
-        return {**v, "truncated": len(chans) > MAX_TILES, "channelCount": len(chans)}
+        return {**v, "truncated": len(chans) > RECORDER_MAX_TILES, "channelCount": len(chans)}
 
     def _mjpeg(parts: Iterator[bytes]) -> StreamingResponse:
         return StreamingResponse(parts, media_type="multipart/x-mixed-replace; boundary=frame",

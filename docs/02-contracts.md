@@ -147,12 +147,14 @@ Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (w
 "Eşit" düzenlerde hücreler soldan sağa, yukarıdan aşağıya `[x, y, 1, 1]` sırasıyla dizilir.
 
 **Şablon** (`view-template.schema.json`): `{id, name, layout, tiles, createdAt, updatedAt}`.
-- `name` 1–60 karakter; `layout` yukarıdaki düzen kimliklerinden biri; `createdAt` / `updatedAt` Unix saniyesi.
+- `name` 1–60 karakter; `layout` yukarıdaki düzen kimliklerinden biri ya da **N×M kimliği** (aşağıda); `createdAt` / `updatedAt` Unix saniyesi.
 - `tiles` uzunluğu düzenin hücre sayısına eşittir. Her öğe `null` (boş kutu) ya da `{sourceId, channelId}` olur; tek kamerada (kanalsız kaynak) `channelId` `null`'dır.
 - Aynı kamera (`sourceId` + `channelId`) bir şablonda en fazla bir kez yer alır.
 - Şema yalnızca biçimi denetler. `tiles` uzunluğunun düzenle uyumu ve kameranın tekrarsızlığı alanlar arası kurallardır; şablonu kaydeden taraf (web'de analiz sunucusu) denetler.
 - Kamera kimlikleri **platforma özgüdür**: web'de analiz sunucusunun kaynak kimliği kullanılır, iPhone kendi kimliklerini kullanacak. Biçim ortaktır.
 
+**N×M kimliği:** `"<satır>x<sütun>"` (ör. `"6x8"`, küçük harf `x`, baştaki sıfır yok). Satır ve sütun 1–16, **satır×sütun ≤ 128** (en çok 128 kutu; `tiles` en çok 128 öğe). Hücreler eşit `[x, y, 1, 1]`, satır sırasıyla dizilir; kutu oranı 16:9 varsayılır. `"4x4"` geçerlidir ve `"16"` ile aynı geometridir. Şema yalnızca biçimi (1–16 × 1–16) denetler; 128 çarpım sınırını analiz sunucusu uygular (`layouts.parse_grid`). Katalog (`view-layouts.json`) değişmez; N×M düzenleri katalogda listelenmez. iPhone N×M kimliğini okumaz; yalnızca web paneli ve analiz sunucusu kullanır. Örnek: `examples/view-template-nxm.json`.
+
 Örnekler: `examples/view-template-*.json` (önek `view-template` → `view-template.schema.json`). `view-layouts.json` bir örnek değil veri dosyasıdır; `tools/validate_contracts.py` içindeki `DATA_FILES` ile kendi şemasına karşı doğrulanır.
 
-**Python kataloğu** `services/edge/bantvision/live/layouts.py` aynı düzenleri taşır; `services/edge/tests/test_layouts.py` onu `view-layouts.json` ile birebir eşitlik için karşılaştırır. Düzen eklemek ya da değiştirmek için önce `view-layouts.json` ve şemadaki `id` listesi, sonra Python kataloğu ve diğer uygulamalar aynı değişiklikte güncellenir. Geometri değişmezleri (tam kaplama, çakışmasızlık, kutu sayısı) `tools/tests/test_contracts.py` içinde.
+**Python kataloğu** `services/edge/bantvision/live/layouts.py` aynı düzenleri taşır (N×M kimliklerini `layout_by_id` anında üretir; `smallest_for` yalnızca katalog düzenlerini döndürür); `services/edge/tests/test_layouts.py` onu `view-layouts.json` ile birebir eşitlik için karşılaştırır. Düzen eklemek ya da değiştirmek için önce `view-layouts.json` ve şemadaki `id` listesi, sonra Python kataloğu ve diğer uygulamalar aynı değişiklikte güncellenir. Geometri değişmezleri (tam kaplama, çakışmasızlık, kutu sayısı) `tools/tests/test_contracts.py` içinde.

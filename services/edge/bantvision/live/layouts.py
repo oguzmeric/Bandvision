@@ -2,6 +2,7 @@
 dosyayla eşitliği denetler). Hücre (x, y, w, h) birim ızgarada; sıra kutu sırasıdır; tuval herhangi boyutta olabilir."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,15 +41,33 @@ LAYOUTS: tuple[Layout, ...] = (
     Layout("16", "16'lı", 4, 4, _grid(4, 4)),
 )
 _BY_ID = {lay.id: lay for lay in LAYOUTS}
-MAX_TILES = 16
+MAX_TILES = 128   # bir şablondaki en çok kutu (N×M için satır×sütun sınırı)
+_GRID_RE = re.compile(r"([1-9]|1[0-6])x([1-9]|1[0-6])")
+
+
+def parse_grid(layout_id: str) -> tuple[int, int] | None:
+    """`"<satır>x<sütun>"` kimliğini (satır, sütun) olarak çözer; satır/sütun 1–16, çarpım ≤ MAX_TILES. Aksi halde None."""
+    m = _GRID_RE.fullmatch(layout_id)
+    if m is None:
+        return None
+    rows, cols = int(m.group(1)), int(m.group(2))
+    return (rows, cols) if rows * cols <= MAX_TILES else None
 
 
 def layout_by_id(layout_id: str) -> Layout | None:
-    return _BY_ID.get(layout_id)
+    """Katalog kimliği ya da N×M kimliği (eşit hücreler, satır sırasıyla)."""
+    lay = _BY_ID.get(layout_id)
+    if lay is not None:
+        return lay
+    grid = parse_grid(layout_id)
+    if grid is None:
+        return None
+    rows, cols = grid
+    return Layout(layout_id, f"{rows}×{cols}", cols, rows, _grid(cols, rows))
 
 
 def smallest_for(n: int) -> Layout:
-    """`n` kameranın sığdığı en küçük düzen (16'dan fazlası için 16)."""
+    """`n` kameranın sığdığı en küçük katalog düzeni (16'dan fazlası için 16)."""
     for lay in LAYOUTS:
         if len(lay.cells) >= n:
             return lay

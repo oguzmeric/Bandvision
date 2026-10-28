@@ -8,9 +8,12 @@
   "properties": {
     "id": {"type": "string", "minLength": 1, "maxLength": 80},
     "name": {"type": "string", "minLength": 1, "maxLength": 60},
-    "layout": {"enum": ["1", "2", "3", "4", "6", "8", "9", "12", "16"]},
+    "layout": {"anyOf": [
+      {"enum": ["1", "2", "3", "4", "6", "8", "9", "12", "16"]},
+      {"type": "string", "pattern": "^([1-9]|1[0-6])x([1-9]|1[0-6])$"}
+    ]},
     "tiles": {
-      "type": "array", "minItems": 1, "maxItems": 16,
+      "type": "array", "minItems": 1, "maxItems": 128,
       "items": {
         "oneOf": [
           {"type": "null"},
