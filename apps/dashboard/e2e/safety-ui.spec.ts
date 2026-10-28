@@ -789,7 +789,7 @@ test("Bu tarayıcıda: güvensiz adreste (başka bilgisayardan http) masaüstü 
   expect(await page.evaluate(() => localStorage.getItem("bv.alarm.desktop"))).toBeNull();
 });
 
-test("Alarmlar sayfası (sahte API): kenar çubuğunda Bildirimler'den önce; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
+test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı izleme'den sonra; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;
   const mk = (id: string, type: string, camera: string, firedAt: number, over: Partial<FakeAlarm> = {}): FakeAlarm => ({

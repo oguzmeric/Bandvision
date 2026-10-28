@@ -15,7 +15,7 @@ export default function PanelLayout({ children }: Readonly<{ children: React.Rea
       <Sidebar canLogout={authMode() !== null} />
       {/* Alarm şeridi main içinde yapışkan (sticky): main'in hiçbir atası overflow kırpmamalı. AlarmCenter alarmları
           tek yoklamayla alır; şerit ve alarm penceresi aynı veriyi gösterir. Durum şeridi en altta yapışkan. */}
-      <div className="flex min-w-0 flex-col">
+      <div data-panel-content="" className="flex min-w-0 flex-col">
         <main className="min-w-0 flex-1 px-5 py-6 md:px-9 md:py-7">
           <AlarmCenter>
             <Suspense fallback={null}><AlarmBanner /></Suspense>

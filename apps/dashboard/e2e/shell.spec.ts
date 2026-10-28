@@ -77,12 +77,18 @@ test("menü: her öğe kendi sayfasını açar ve yalnızca o öğe seçili gör
 test("menü: gri öğeler tıklanınca 'yakında' der, sayfa değişmez", async ({ page }) => {
   await login(page, "/alarms");
   const nav = menu(page);
+  const live = page.getByTestId("nav-status");
+  await expect(live).toHaveCount(1);                                   // tek duyuru bölgesi, baştan var ve boş
+  await expect(live).toHaveAttribute("role", "status");
+  await expect(live).toHaveText("");
   for (const i of SOON) {
     const item = nav.locator(`button[data-label="${i.label}"]`);
     await expect(item).toHaveAttribute("data-soon", "");
+    await expect(item).toHaveAccessibleDescription("yakında");        // ekran okuyucu tıklamadan da duyar
     await expect(item).not.toContainText("yakında");
     await item.click();
     await expect(item).toContainText("yakında");
+    await expect(live).toHaveText(`${i.label}: yakında`);
     await expect(page).toHaveURL(/\/alarms$/);
     await expect(nav.locator("a", { hasText: i.label })).toHaveCount(0);   // bağlantı değil
   }
@@ -186,6 +192,11 @@ test.describe("telefon (390×844)", () => {
     await button.click();
     await expect(nav).toBeVisible();
     await expect(button).toHaveAttribute("aria-expanded", "true");
+    // odak menünün ilk öğesinde; arkadaki içerik etkisiz, sayfa kaydırılamaz
+    await expect(nav.getByRole("link", { name: "Canlı izleme", exact: true })).toBeFocused();
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("aria-modal", "true");
+    await expect(page.locator("[data-panel-content]")).toHaveAttribute("inert", "");
+    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("hidden");
     // içeriğin üstünde: menünün ortasındaki nokta menüye ait (altındaki sayfa başlığı değil)
     const nb = (await nav.boundingBox())!;
     expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest("nav[aria-label='Ana menü']"),
@@ -201,10 +212,21 @@ test.describe("telefon (390×844)", () => {
     // Escape ve dış tıklama da kapatır
     await button.click();
     await expect(nav).toBeVisible();
+    await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest("nav[aria-label='Ana menü']"))).toBe(true);
     await page.keyboard.press("Escape");
     await expect(nav).toBeHidden();
+    await expect(button).toBeFocused();                                  // odak Menü düğmesine döner
+    await expect(page.locator("[data-panel-content]")).not.toHaveAttribute("inert", "");
+    expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe("");
     await button.click();
     await page.getByTestId("menu-backdrop").click({ position: { x: 370, y: 400 } });
+    await expect(nav).toBeHidden();
+    await expect(button).toBeFocused();
+    // Geri ile gezinme de çekmeceyi kapatır
+    await button.click();
+    await expect(nav).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL(/\/about$/);
     await expect(nav).toBeHidden();
     await expect(strip(page)).toContainText("Analiz sunucusu:");
   });

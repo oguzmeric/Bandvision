@@ -3,13 +3,17 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NAV, isCurrent, type NavItem } from "@/lib/nav";
 
 /** Kapalı grupların başlıkları (JSON dizi); her tarayıcıda ayrı hatırlanır */
 const COLLAPSED_KEY = "bv.nav.collapsed";
 /** Gri öğeye tıklanınca "yakında" yazısı bu kadar görünür */
 const SOON_MS = 3000;
+/** Dar ekran (md altı): menü çekmece olarak açılır */
+const NARROW = "(max-width: 767.98px)";
+/** Sağdaki içerik sütunu (layout.tsx): çekmece açıkken etkisiz (inert) */
+const CONTENT_SELECTOR = "[data-panel-content]";
 
 function loadCollapsed(): string[] {
   try {
@@ -28,7 +32,7 @@ function saveCollapsed(titles: string[]): void {
   }
 }
 
-const ITEM = "block w-full rounded-[2px] border px-2 py-1 pl-6 text-left text-[13px] leading-5";
+const ITEM = "block w-full rounded-[2px] border py-1 pl-6 pr-2 text-left text-[13px] leading-5";
 
 /**
  * Soldaki yazılı, gruplu menü (TRASSIR gibi; taslak duzen.html): üstte logo, gruplar açılır-kapanır, altta Çıkış.
@@ -41,16 +45,52 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
   const [open, setOpen] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
   const soonTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const asideRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const openRef = useRef(false);
+  /** Kapanınca odak "Menü" düğmesine dönsün mü (odak çekmecenin içindeydi) */
+  const restoreFocus = useRef(false);
+  openRef.current = open;
+
+  /** Çekmeceyi kapatır; odak içindeyse kapanınca "Menü" düğmesine döner */
+  const close = useCallback(() => {
+    if (!openRef.current) return;
+    restoreFocus.current = !!asideRef.current?.contains(document.activeElement);
+    setOpen(false);
+  }, []);
 
   // Depo yalnızca tarayıcıda okunur (sunucu çıktısıyla uyum için ilk çizimde tüm gruplar açık)
   useEffect(() => setCollapsed(loadCollapsed()), []);
   useEffect(() => () => clearTimeout(soonTimer.current), []);
+  // Her gezinmede (bağlantı, Geri/İleri, router.push) çekmece kapanır
+  const paramsKey = params.toString();
+  useEffect(() => close(), [pathname, paramsKey, close]);
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    if (!open) {
+      if (restoreFocus.current) menuButtonRef.current?.focus();
+      restoreFocus.current = false;
+      return;
+    }
+    // Açılınca: odak ilk menü öğesine; içerik etkisiz (Tab ile arkaya geçilmez); sayfa kaydırması kilitli (dar ekran)
+    asideRef.current?.querySelector<HTMLElement>("li a, li button")?.focus();
+    const content = document.querySelector(CONTENT_SELECTOR);
+    content?.setAttribute("inert", "");
+    const html = document.documentElement;
+    const prevOverflow = html.style.overflow;
+    html.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+    // Pencere genişleyip masaüstü düzenine geçerse çekmece kapanır (içerik etkisiz kalmasın)
+    const narrow = window.matchMedia(NARROW);
+    const onWiden = () => { if (!narrow.matches) close(); };
+    narrow.addEventListener("change", onWiden);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      narrow.removeEventListener("change", onWiden);
+      content?.removeAttribute("inert");
+      html.style.overflow = prevOverflow;
+    };
+  }, [open, close]);
 
   const toggle = (title: string) => {
     const next = collapsed.includes(title) ? collapsed.filter((t) => t !== title) : [...collapsed, title];
@@ -66,18 +106,20 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
   const renderItem = (item: NavItem) => {
     if (item.href === null || item.soon) {
       return (
-        // aria-disabled değil: tıklanabilir olmalı (tıklanınca "yakında" der)
-        <button type="button" data-label={item.label} data-soon="" onClick={() => showSoon(item.label)}
+        // aria-disabled değil: tıklanabilir olmalı (tıklanınca "yakında" der). Ekran okuyucu "yakında"yı açıklamadan
+        // her zaman duyar; tıklamadaki duyuru tek, hep var olan durum bölgesinden gelir (aşağıda)
+        <button type="button" data-label={item.label} data-soon="" aria-describedby="bv-soon-desc"
+                onClick={() => showSoon(item.label)}
                 className={`${ITEM} cursor-default border-transparent text-pl-faint`}>
           {item.label}
-          {soon === item.label && <span role="status" className="ml-1.5 text-[11px] italic">yakında</span>}
+          {soon === item.label && <span aria-hidden="true" className="ml-1.5 text-[11px] italic">yakında</span>}
         </button>
       );
     }
     const current = isCurrent(item.href, pathname, params);
     return (
       <Link href={item.href} data-label={item.label} aria-current={current ? "page" : undefined}
-            onClick={() => setOpen(false)}
+            onClick={close}
             className={`${ITEM} ${current
               ? "border-pl-sel-line bg-pl-sel text-pl-ink"
               : "border-transparent text-pl-ink hover:bg-pl-head"}`}>
@@ -90,7 +132,8 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
     <>
       {/* Dar ekran: üst çubuk (logo + Menü düğmesi) */}
       <div className="flex items-center gap-2 border-b border-pl-line bg-pl-side px-3 py-2 md:hidden">
-        <button type="button" aria-expanded={open} aria-controls="bv-menu" onClick={() => setOpen((v) => !v)}
+        <button ref={menuButtonRef} type="button" aria-expanded={open} aria-controls="bv-menu"
+                onClick={() => (open ? close() : setOpen(true))}
                 className="pl-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"
                className="h-4 w-4" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -101,14 +144,20 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
 
       {/* Dar ekranda menü açıkken arka plan: tıklanınca kapanır */}
       {open && (
-        <div data-testid="menu-backdrop" aria-hidden="true" onClick={() => setOpen(false)}
+        <div data-testid="menu-backdrop" aria-hidden="true" onClick={close}
+             onMouseDown={(e) => e.preventDefault()} /* odak çekmecede kalsın: kapanınca Menü düğmesine döner */
              className="fixed inset-0 z-50 bg-black/30 md:hidden" />
       )}
 
-      <aside id="bv-menu" data-testid="sidebar"
+      <span id="bv-soon-desc" className="sr-only">yakında</span>
+      <div role="status" data-testid="nav-status" className="sr-only">{soon ? `${soon}: yakında` : ""}</div>
+
+      {/* Dar ekranda açık çekmece kipsiz değil: içerik etkisiz (inert), ekran okuyucuya iletişim kutusu */}
+      <aside id="bv-menu" data-testid="sidebar" ref={asideRef}
+             role={open ? "dialog" : undefined} aria-modal={open ? true : undefined} aria-label={open ? "Menü" : undefined}
              className={`${open ? "fixed inset-y-0 left-0 z-50 flex w-[230px] max-w-[85vw]" : "hidden"} flex-col border-r
                          border-pl-line bg-pl-side md:sticky md:top-0 md:bottom-auto md:h-screen md:z-auto md:flex md:w-auto md:max-w-none`}>
-        <Link href="/videos" aria-label="BandVision ana sayfa" onClick={() => setOpen(false)}
+        <Link href="/videos" aria-label="BandVision ana sayfa" onClick={close}
               className="flex items-center gap-2 border-b border-pl-line px-3 py-2.5">
           <Image src="/brand/logo-mark.png" alt="" width={30} height={23} priority />
           <span className="text-[15px] font-semibold text-pl-ink">Band<span className="text-pl-accent">Vision</span></span>

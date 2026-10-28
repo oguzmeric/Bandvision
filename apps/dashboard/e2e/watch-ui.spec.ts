@@ -226,7 +226,7 @@ test("izleme: tek kamerada durum yazılır; yoklama koptuktan sonra düzelirse a
   await expect(page.getByRole("heading", { name: "Kapı" })).toBeVisible();
   await expect(page.getByText("Bağlanıyor…")).toBeVisible();
   await expect(page.getByText("Bağlantı yok — Kamera yanıt vermiyor.")).toBeVisible();
-  await expect(page.getByRole("status")).toHaveCount(0);                  // canlı: yazı kalkar
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);                  // canlı: yazı kalkar
   expect(ks).toContain("1");                                              // 502'den sonra düzelince akış baştan açıldı
 });
 
@@ -489,7 +489,7 @@ test("izleme: tek kamera bağlı değilken akış 30 sn'de bir baştan açılır
     await page.waitForTimeout(100);
   }
   expect(ks.length).toBeGreaterThan(m);
-  await expect(page.getByRole("status")).toHaveCount(0);             // canlı: yazı kalkar
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);             // canlı: yazı kalkar
   const k = ks.length;
   await page.clock.runFor(61_000);                                   // canlıyken yeniden açma yok
   await page.waitForTimeout(300);
@@ -505,7 +505,7 @@ test("izleme: tek kamerada yoklama kopunca 'ulaşılamıyor', 401'de 'oturum dol
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
   await page.getByTestId("watch-tile").nth(0).dblclick();
   await expect(page.getByRole("heading", { name: "Kapı" })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveCount(0);             // canlı
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);             // canlı
   mode = 502;
   await expect(page.getByText(DOWN)).toBeVisible();                  // üst üste 3 hatadan sonra; eski "canlı" kalmaz
   mode = 401;
@@ -516,7 +516,7 @@ test("izleme: tek kamerada yoklama kopunca 'ulaşılamıyor', 401'de 'oturum dol
   await expect(page.getByText("Kamera silinmiş.")).toBeVisible();
   await expect(page.getByText(AUTH)).toBeHidden();
   mode = "live";
-  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);
 });
 
 test("izleme: şablon yoklaması 3 ardışık hatadan sonra uyarır; 401 ile sunucu yok ayrılır; düzelince kalkar", async ({ page }) => {

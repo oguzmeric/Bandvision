@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
+/** Panel oturum çerezinin adı (src/lib/session.ts SESSION_COOKIE) */
+const SESSION_COOKIE = "bv_session";
+
 /** Telefondan erişim (Ayarlar). e2e'de DASHBOARD_PASSWORD tanımlıdır: ortam şifresi kipi sınanır.
  * Şifre özeti kipinin girişi/planı accessCore.test.mjs ile sınanır. Ayar dosyası geçici klasördedir (playwright.config.ts). */
 
@@ -18,7 +21,7 @@ test("ayarlar: ortam şifresi varken telefondan erişim açılır/kapanır; şif
   await page.getByRole("button", { name: "Giriş yap" }).click();
   await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
   await page.getByRole("button", { name: "Telefondan erişimi aç" }).click();
-  await expect(page.getByRole("status")).toContainText("yeniden başlatın");
+  await expect(page.getByRole("main").getByRole("status")).toContainText("yeniden başlatın");
   const v = await (await page.request.get("/api/access")).json();
   expect(v.enabled).toBe(true);
   expect(JSON.stringify(v)).not.toContain("e2e-test-sifresi");
@@ -29,7 +32,11 @@ test("ayarlar: ortam şifresi varken telefondan erişim açılır/kapanır; şif
 test("ayarlar API: kısa şifre ve şifresiz açma reddedilir; şifre dosyada düz yazılmaz", async ({ page }) => {
   await page.goto("/settings");
   await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+  // Giriş yanıtı (oturum çerezi) gelmeden API'ye istek gönderilmez: aksi hâlde istek çerezsiz gidip 401 alabilir
+  const loggedIn = page.waitForResponse((r) => r.url().endsWith("/api/login") && r.request().method() === "POST");
   await page.getByRole("button", { name: "Giriş yap" }).click();
+  expect((await loggedIn).ok()).toBe(true);
+  await expect.poll(async () => (await page.context().cookies()).some((c) => c.name === SESSION_COOKIE)).toBe(true);
   const short = await page.request.put("/api/access", { data: { enabled: false, password: "kisa" } });
   expect(short.status()).toBe(422);
   expect((await short.json()).detail).toContain("en az 8");
