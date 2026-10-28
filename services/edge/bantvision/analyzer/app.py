@@ -9,8 +9,10 @@ import contextlib
 import importlib.metadata
 import json
 import logging
+import os
 import pathlib
 import secrets
+import subprocess
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -69,8 +71,22 @@ class OptionsIn(_Strict):
     bgRange: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
+def _git_commit() -> str:
+    """Kısa git özeti: ortamda BV_COMMIT varsa o, yoksa paket klasöründe `git rev-parse --short HEAD` (hata → "?")."""
+    env = os.environ.get("BV_COMMIT", "").strip()
+    if env:
+        return env
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=pathlib.Path(__file__).parent,
+                             capture_output=True, text=True, timeout=2, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    return out or "?"
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    commit = _git_commit()                                  # açılışta bir kez (Hakkında)
     started = time.monotonic()                              # çalışma süresi (durum şeridi)
     store = JobStore(settings)
     worker = Worker(store)
@@ -163,7 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except importlib.metadata.PackageNotFoundError:
             version = "?"
         return {"cpuPercent": round(psutil.cpu_percent(interval=None), 1),
-                "uptimeS": int(time.monotonic() - started), "version": version}
+                "uptimeS": int(time.monotonic() - started), "version": version, "commit": commit}
 
     @app.post("/api/v1/jobs", status_code=202, dependencies=[Auth])
     async def create_job(file: Annotated[UploadFile, File()],

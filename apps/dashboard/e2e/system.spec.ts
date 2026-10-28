@@ -13,4 +13,6 @@ test("sistem durumu: giriş yoksa 401, girişle analiz sunucusu 'up' ve ölçüm
   expect(typeof body.uptimeS).toBe("number");
   expect(typeof body.analyzerVersion).toBe("string");
   expect(typeof body.panelVersion).toBe("string");
+  expect(typeof body.analyzerCommit).toBe("string");
+  expect(typeof body.panelCommit).toBe("string");
 });

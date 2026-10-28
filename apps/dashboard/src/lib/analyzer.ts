@@ -22,7 +22,7 @@ const logged = new Map<string, { at: number; skipped: number }>();
 
 /** Aynı hata ileti başına dakikada bir günlüğe yazılır: analiz sunucusu kapalıyken panel 2 sn'de bir yoklar,
  * günlük dolmasın. Atlanan sayısı bir sonraki satıra eklenir. */
-function logRateLimited(err: unknown): void {
+export function logRateLimited(err: unknown, what = "analiz sunucusuna ulaşılamadı"): void {
   const cause = err instanceof Error && err.cause instanceof Error ? ` (${err.cause.message})` : "";
   const key = (err instanceof Error ? `${err.name}: ${err.message}` : String(err)) + cause;
   const now = Date.now();
@@ -33,7 +33,7 @@ function logRateLimited(err: unknown): void {
   }
   if (logged.size >= 50) logged.clear();                         // değişken iletilerle sınırsız büyümesin
   logged.set(key, { at: now, skipped: 0 });
-  console.error(`analiz sunucusuna ulaşılamadı${prev?.skipped ? ` (bu arada ${prev.skipped} istek daha)` : ""}:`, err);
+  console.error(`${what}${prev?.skipped ? ` (bu arada ${prev.skipped} istek daha)` : ""}:`, err);
 }
 
 /** Analiz sunucusuna ulaşılamazsa anlaşılır bir 502 yanıtı. */

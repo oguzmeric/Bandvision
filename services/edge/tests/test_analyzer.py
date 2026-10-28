@@ -197,7 +197,14 @@ def test_system_status_shape(tmp_path: pathlib.Path) -> None:
         r = c.get("/api/v1/system/status", headers={"Authorization": "Bearer gizli"})
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"cpuPercent", "uptimeS", "version"}
+        assert set(body) == {"cpuPercent", "uptimeS", "version", "commit"}
         assert isinstance(body["cpuPercent"], float) and 0.0 <= body["cpuPercent"] <= 100.0
         assert isinstance(body["uptimeS"], int) and body["uptimeS"] >= 0
         assert isinstance(body["version"], str) and body["version"]
+        assert isinstance(body["commit"], str) and body["commit"]
+
+
+def test_system_status_commit_from_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BV_COMMIT", "abc1234")
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        assert c.get("/api/v1/system/status").json()["commit"] == "abc1234"
