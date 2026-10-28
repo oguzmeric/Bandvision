@@ -2395,7 +2395,7 @@ def test_view_stream_is_503_when_template_has_too_many_sizes(client: TestClient,
 def test_view_accepts_grid_layout_ids(client: TestClient, layout: str, n: int) -> None:
     r = client.post("/api/v1/live/views", json={"name": "Izgara", "layout": layout, "tiles": [None] * n})
     assert r.status_code == 200, r.text
-    got = client.get(f"/api/v1/live/views/{r.json()['id']}").json()
+    got = next(v for v in client.get("/api/v1/live/views").json() if v["id"] == r.json()["id"])
     assert got["layout"] == layout and len(got["tiles"]) == n
 
 
