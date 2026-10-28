@@ -2389,3 +2389,16 @@ def test_view_stream_is_503_when_template_has_too_many_sizes(client: TestClient,
     assert r.status_code == 503 and r.json()["detail"] == "Bu şablon için çok fazla farklı boyutta izleyici var."
     r = client.get(f"/api/v1/live/views/{v['id']}/stream?w=320&h=240&limit=1")    # aynı boyut paylaşılır
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize(("layout", "n"), [("10x12", 120), ("6x8", 48), ("1x1", 1)])
+def test_view_accepts_grid_layout_ids(client: TestClient, layout: str, n: int) -> None:
+    r = client.post("/api/v1/live/views", json={"name": "Izgara", "layout": layout, "tiles": [None] * n})
+    assert r.status_code == 200, r.text
+    got = client.get(f"/api/v1/live/views/{r.json()['id']}").json()
+    assert got["layout"] == layout and len(got["tiles"]) == n
+
+
+def test_view_rejects_grid_over_128_tiles(client: TestClient) -> None:
+    r = client.post("/api/v1/live/views", json={"name": "Büyük", "layout": "12x12", "tiles": [None] * 128})
+    assert r.status_code == 422 and r.json()["detail"] == "Düzen bulunamadı."

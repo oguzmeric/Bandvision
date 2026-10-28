@@ -103,7 +103,7 @@ class TileIn(_Strict):
 
 class ViewIn(_Strict):
     name: str = Field(max_length=60)
-    layout: str = Field(max_length=4)
+    layout: str = Field(max_length=5)
     tiles: list[TileIn | None] = Field(max_length=MAX_TILES)
 
 
