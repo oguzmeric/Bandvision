@@ -189,3 +189,15 @@ def test_people_options_validate_against_contract() -> None:
     assert o.countAnchor == "center"
     with pytest.raises(ValueError):
         OptionsIn.model_validate({"preset": "people", "countAnchor": "ayak"})
+
+
+def test_system_status_shape(tmp_path: pathlib.Path) -> None:
+    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+        assert c.get("/api/v1/system/status").status_code == 401
+        r = c.get("/api/v1/system/status", headers={"Authorization": "Bearer gizli"})
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {"cpuPercent", "uptimeS", "version"}
+        assert isinstance(body["cpuPercent"], float) and 0.0 <= body["cpuPercent"] <= 100.0
+        assert isinstance(body["uptimeS"], int) and body["uptimeS"] >= 0
+        assert isinstance(body["version"], str) and body["version"]

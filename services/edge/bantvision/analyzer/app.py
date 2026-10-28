@@ -6,6 +6,7 @@ ANALYZER_TOKEN, ANALYZER_CORS_ORIGINS, ANALYZER_FFMPEG).
 from __future__ import annotations
 
 import contextlib
+import importlib.metadata
 import json
 import logging
 import pathlib
@@ -16,6 +17,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
 import cv2
+import psutil
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,6 +71,7 @@ class OptionsIn(_Strict):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    started = time.monotonic()                              # çalışma süresi (durum şeridi)
     store = JobStore(settings)
     worker = Worker(store)
     stop_cleanup = threading.Event()
@@ -151,6 +154,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {"ok": True, "retentionDays": settings.retention_days, "maxUploadMb": settings.max_upload_mb}
+
+    @app.get("/api/v1/system/status", dependencies=[Auth])
+    def system_status() -> dict[str, Any]:
+        # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır
+        try:
+            version = importlib.metadata.version("bantvision")
+        except importlib.metadata.PackageNotFoundError:
+            version = "?"
+        return {"cpuPercent": round(psutil.cpu_percent(interval=None), 1),
+                "uptimeS": int(time.monotonic() - started), "version": version}
 
     @app.post("/api/v1/jobs", status_code=202, dependencies=[Auth])
     async def create_job(file: Annotated[UploadFile, File()],
