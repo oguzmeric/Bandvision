@@ -42,49 +42,51 @@ export default function AccessSettings() {
   };
   if (!v) return null;
   return (
-    <section className="card grid max-w-[640px] gap-3 p-5">
-      <p className="eyebrow">Telefondan erişim</p>
-      <p className="text-sm text-muted">Açıkken panel ofis ağındaki telefon ve bilgisayarlardan açılır ve herkesten (bu bilgisayar dahil) şifre ister.</p>
+    <section className="pl-section max-w-[760px]">
+      <h2>Telefondan erişim</h2>
+      <p className="py-1 text-pl-muted">Açıkken panel ofis ağındaki telefon ve bilgisayarlardan açılır ve herkesten (bu bilgisayar dahil) şifre ister.</p>
       {v.envPassword
-        ? <p className="text-[13px] text-faint">Panel şifresi bu bilgisayarın ayarında (DASHBOARD_PASSWORD) tanımlı.</p>
+        ? <p className="py-1 text-pl-faint">Panel şifresi bu bilgisayarın ayarında (DASHBOARD_PASSWORD) tanımlı.</p>
         : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="text-sm font-medium">{v.hasPassword ? "Yeni panel şifresi" : "Panel şifresi"}
-              <input aria-label="Panel şifresi" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
-                     className="mt-1.5 h-10 w-full rounded-[10px] border border-line bg-white px-3 text-sm" />
-            </label>
-            <label className="text-sm font-medium">Şifre (tekrar)
-              <input aria-label="Şifre (tekrar)" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)}
-                     className="mt-1.5 h-10 w-full rounded-[10px] border border-line bg-white px-3 text-sm" />
-            </label>
-            <p className="text-[12px] text-faint sm:col-span-2">En az 8 karakter. Şifre bu bilgisayarda yalnızca özeti olarak saklanır.</p>
-          </div>
+          <>
+            <div className="pl-row">
+              <label htmlFor="access-pw">{v.hasPassword ? "Yeni panel şifresi" : "Panel şifresi"}</label>
+              <input id="access-pw" aria-label="Panel şifresi" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
+                     className="pl-input h-8 w-full max-w-[320px]" />
+            </div>
+            <div className="pl-row">
+              <label htmlFor="access-pw2">Şifre (tekrar)</label>
+              <input id="access-pw2" aria-label="Şifre (tekrar)" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)}
+                     className="pl-input h-8 w-full max-w-[320px]" />
+            </div>
+            <p className="py-1 text-[12px] text-pl-faint">En az 8 karakter. Şifre bu bilgisayarda yalnızca özeti olarak saklanır.</p>
+          </>
         )}
-      <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => save(true)} className="brand-gradient h-10 rounded-[10px] px-4 text-sm font-semibold text-white">
+      <div className="flex flex-wrap gap-2 pt-1.5">
+        <button type="button" onClick={() => save(true)} className="pl-btn pl-btn-primary h-8">
           {v.enabled ? "Kaydet" : "Telefondan erişimi aç"}</button>
-        {v.enabled && <button type="button" onClick={() => save(false)} className="h-10 rounded-[10px] border border-line px-4 text-sm">Erişimi kapat</button>}
+        {v.enabled && <button type="button" onClick={() => save(false)} className="pl-btn h-8">Erişimi kapat</button>}
       </div>
-      {msg && <p role="status" className={`rounded-xl px-3 py-2 text-sm ${msg.ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-[#bfe8d3] bg-ok-50 text-ok-600" : "border-[#f3c2c7] bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
       {v.buildState === "building" && (
-        <p data-testid="build-state" className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
           {v.buildMessage || "Panel derleniyor (ilk açılış 1-2 dk)…"} Yerel ağ erişimi derleme bitince açılır.</p>
       )}
       {v.buildState === "failed" && (
-        <p data-testid="build-state" className="rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-1.5 text-[13px] text-nok-600">
           {v.buildMessage || "Yerel ağ için derleme başarısız; panel yalnızca bu bilgisayarda açık."}</p>
       )}
       {v.lanActive && v.addresses.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-[220px_1fr] sm:items-center">
+        <div className="mt-2 grid gap-2 border-t border-pl-head pt-2 sm:grid-cols-[220px_1fr] sm:items-center">
           {/* eslint-disable-next-line @next/next/no-img-element -- yerel üretilen QR (data URL) */}
-          {qr && <img src={qr} alt="Telefonla okutun" width={220} height={220} />}
-          <div className="text-sm">
+          {qr && <img src={qr} alt="Telefonla okutun" width={220} height={220} className="border border-pl-line-soft" />}
+          <div>
             <p>Telefonun kamerasıyla QR&apos;ı okutun ya da tarayıcıya yazın:</p>
             <ul className="mt-1 font-mono text-[13px]">{v.addresses.map((a) => <li key={a}>{a}</li>)}</ul>
           </div>
         </div>
       )}
-      <p className="text-[12px] text-faint">İlk açılışta Windows güvenlik duvarı &quot;özel ağda izin ver&quot; diye sorabilir; izin verin. Bağlantı ofis ağında şifrelenmemiş http&apos;dir; dışarıdan erişim ayrıca kurulmalıdır.</p>
+      <p className="mt-2 text-[12px] text-pl-faint">İlk açılışta Windows güvenlik duvarı &quot;özel ağda izin ver&quot; diye sorabilir; izin verin. Bağlantı ofis ağında şifrelenmemiş http&apos;dir; dışarıdan erişim ayrıca kurulmalıdır.</p>
     </section>
   );
 }

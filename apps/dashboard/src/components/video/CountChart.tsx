@@ -29,7 +29,7 @@ export function parseCounts(text: string): Series[] {
   const pts = rows.map((c) => c.map(Number))
     .filter((c) => c.length >= 4 && c.every(Number.isFinite))
     .map((c) => [c[0], c[3]] as [number, number]);
-  return [{ label: "adet", color: "#6d3bf0", points: pts }];
+  return [{ label: "adet", color: "#2c5aa0", points: pts }];
 }
 
 export default function CountChart({ jobId, seconds }: { jobId: string; seconds?: number }) {
@@ -48,8 +48,8 @@ export default function CountChart({ jobId, seconds }: { jobId: string; seconds?
   }, [jobId]);
 
   if (failed) return null;
-  if (!series) return <div className="h-[120px] animate-pulse rounded-xl bg-canvas" />;
-  if (series.every((s) => s.points.length === 0)) return <p className="text-sm text-muted">Bu videoda sayım olmadı.</p>;
+  if (!series) return <div className="h-[120px] animate-pulse rounded-[2px] bg-pl-side" />;
+  if (series.every((s) => s.points.length === 0)) return <p className="text-[13px] text-pl-muted">Bu videoda sayım olmadı.</p>;
 
   const W = 420, H = 120, P = 6;
   const lastT = Math.max(...series.map((s) => s.points.at(-1)?.[0] ?? 0));
@@ -79,8 +79,8 @@ export default function CountChart({ jobId, seconds }: { jobId: string; seconds?
           <>
             <defs>
               <linearGradient id="cc" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0" stopColor="#6d3bf0" stopOpacity="0.22" />
-                <stop offset="1" stopColor="#6d3bf0" stopOpacity="0" />
+                <stop offset="0" stopColor="#2c5aa0" stopOpacity="0.22" />
+                <stop offset="1" stopColor="#2c5aa0" stopOpacity="0" />
               </linearGradient>
             </defs>
             <path d={`${drawn[0].d} L${x(tMax)},${H - P} L${x(0)},${H - P} Z`} fill="url(#cc)" />
@@ -90,7 +90,7 @@ export default function CountChart({ jobId, seconds }: { jobId: string; seconds?
           <path key={s.label} d={s.d} fill="none" stroke={s.color} strokeWidth={2.2} strokeLinejoin="round" />
         ))}
       </svg>
-      <figcaption className="mt-1 flex justify-between text-[11px] text-faint">
+      <figcaption className="mt-1 flex justify-between text-[11px] text-pl-faint">
         <span>0 sn</span>
         <span className="flex items-center gap-2">
           {!single && drawn.map((s) => (

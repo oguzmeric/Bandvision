@@ -27,7 +27,7 @@ function CountingLink({ session }: { session: LiveSession }) {
   const warn = health !== null && !health.healthy;
   return (
     <Link href={`/live?s=${session.id}`} title={warn ? health.reason ?? undefined : undefined}
-          className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-[#f7d9b5] bg-warn-50 text-warn-700" : "border-[#bfe8d3] bg-ok-50 text-ok-600"}`}>
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-[#f7d9b5] bg-warn-50 text-warn-700" : "border-[#bfe8d3] bg-ok-50 text-ok-600"}`}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
       {!safety ? "Sayılıyor" : warn ? "Uyarı" : "Nöbette"}
     </Link>
@@ -50,28 +50,27 @@ function RecorderChannels({ source, sessions, onStart }: {
 
   const shown = (channels ?? []).filter((c) => c.title.toLocaleLowerCase("tr").includes(query.toLocaleLowerCase("tr")));
   return (
-    <div className="mt-4">
-      <div className="mb-3 flex items-center gap-2">
+    <div className="mt-2.5">
+      <div className="mb-2 flex items-center gap-2">
         <input aria-label="Kamera ara" placeholder="Kamera ara" value={query} onChange={(e) => setQuery(e.target.value)}
-               className="h-9 flex-1 rounded-[10px] border border-line bg-white px-3 text-sm outline-none focus:border-brand-500" />
-        <button type="button" onClick={() => load(true)} className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-medium hover:border-brand-100">Yenile</button>
+               className="pl-input h-8 flex-1" />
+        <button type="button" onClick={() => load(true)} className="pl-btn h-8">Yenile</button>
       </div>
-      {error && <p role="alert" className="rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
-      {channels === null && !error && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="aspect-video animate-pulse rounded-xl bg-canvas" />)}</div>}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {error && <p role="alert" className="rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {channels === null && !error && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="aspect-video animate-pulse rounded-[2px] bg-pl-side" />)}</div>}
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {shown.map((c) => (
-          <div key={c.id} className="rounded-2xl border border-line bg-white p-2.5">
+          <div key={c.id} className="rounded-[2px] border border-pl-line-soft bg-white p-1.5">
             <Thumb src={`/api/live/sources/${source.id}/snapshot?channel=${encodeURIComponent(c.id)}`} alt={c.title} />
-            <div className="mt-2 flex items-center justify-between gap-2 px-0.5">
+            <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{c.title}</p>
-                {c.number !== null && <p className="text-xs text-faint">Kanal {c.number}</p>}
+                <p className="truncate text-[13px] font-medium">{c.title}</p>
+                {c.number !== null && <p className="text-xs text-pl-faint">Kanal {c.number}</p>}
               </div>
               {(() => {
                 const active = sessions.find((x) => x.sourceId === source.id && x.channelId === c.id);
                 return active ? <CountingLink session={active} /> : (
-                  <button type="button" onClick={() => onStart(c)}
-                          className="h-8 shrink-0 rounded-[9px] bg-brand-500 px-3 text-[12.5px] font-semibold text-white hover:bg-brand-600">
+                  <button type="button" onClick={() => onStart(c)} className="pl-btn pl-btn-primary h-7 shrink-0 text-[12.5px]">
                     Canlı sayım
                   </button>
                 );
@@ -80,7 +79,7 @@ function RecorderChannels({ source, sessions, onStart }: {
           </div>
         ))}
       </div>
-      {channels && channels.length > 0 && shown.length === 0 && <p className="text-sm text-muted">Aramayla eşleşen kamera yok.</p>}
+      {channels && channels.length > 0 && shown.length === 0 && <p className="text-[13px] text-pl-muted">Aramayla eşleşen kamera yok.</p>}
     </div>
   );
 }
@@ -113,60 +112,59 @@ export default function CamerasView() {
   }
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[380px_minmax(0,1fr)]">
+    <div className="grid items-start gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
       <div className="min-w-0">
         <SourceForm key={editing?.id ?? "new"} editing={editing}
                     onCancel={editing ? () => setEditing(null) : undefined}
                     onSaved={(s) => { setEditing(null); load(); if (s.kind === "recorder") setOpen(s.id); }} />
-        <p className="mt-3 px-1 text-xs text-faint">
+        <p className="px-1 text-xs text-pl-faint">
           Görüntü yalnızca bu bilgisayarda işlenir. Bilgisayar kameralarla aynı ağda olmalı (ofis ağı ya da VPN).
         </p>
       </div>
-      <section className="min-w-0" aria-labelledby="sources-title">
-        <p id="sources-title" className="eyebrow mb-2">Kaynaklar</p>
-        {error && <p role="alert" className="mb-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
-        {sources === null && !error && <div className="h-24 animate-pulse rounded-2xl bg-white/70" />}
+      <section className="pl-section mb-0 min-w-0" aria-labelledby="sources-title">
+        <h2 id="sources-title">Kaynaklar</h2>
+        {error && <p role="alert" className="mb-2 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+        {sources === null && !error && <div className="h-24 animate-pulse rounded-[2px] bg-pl-side" />}
         {sources?.length === 0 && (
-          <div className="card grid min-h-[200px] place-items-center p-8 text-center text-muted">
+          <div className="grid min-h-[160px] place-items-center p-6 text-center text-pl-muted">
             <div>
-              <p className="font-medium text-ink">Henüz kaynak yok</p>
-              <p className="mt-1 text-sm">Soldan kayıt cihazını (NVR) ya da IP kamerayı ekle; kameralar burada listelenir.</p>
+              <p className="font-medium text-pl-ink">Henüz kaynak yok</p>
+              <p className="mt-1 text-[13px]">Soldan kayıt cihazını (NVR) ya da IP kamerayı ekle; kameralar burada listelenir.</p>
             </div>
           </div>
         )}
-        <div className="grid gap-3">
+        <div className="grid">
           {sources?.map((s) => (
-            <article key={s.id} className="card p-4" data-testid="source-card">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+            <article key={s.id} className="border-b border-pl-line-soft py-2.5 first:pt-0.5 last:border-b-0" data-testid="source-card">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-500">
+                    <span className="rounded-[2px] border border-pl-sel-line bg-pl-sel px-1.5 text-[11px] font-semibold text-pl-accent">
                       {s.kind === "recorder" ? "Kayıt cihazı" : "IP kamera"}
                     </span>
                     <h3 className="truncate font-semibold">{s.name}</h3>
                   </div>
-                  <p className="mt-0.5 truncate text-[13px] text-muted">{describe(s)}{s.hasPassword ? " · şifre kayıtlı" : ""}</p>
+                  <p className="mt-0.5 truncate text-[12.5px] text-pl-muted">{describe(s)}{s.hasPassword ? " · şifre kayıtlı" : ""}</p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {s.kind === "recorder" ? (
                     <button type="button" onClick={() => setOpen(open === s.id ? null : s.id)} aria-expanded={open === s.id}
-                            className="h-9 rounded-[10px] bg-brand-500 px-3 text-[13px] font-semibold text-white hover:bg-brand-600">
+                            className="pl-btn pl-btn-primary h-8">
                       {open === s.id ? "Kameraları gizle" : "Kameraları göster"}
                     </button>
                   ) : sessions.find((x) => x.sourceId === s.id) ? (
                     <CountingLink session={sessions.find((x) => x.sourceId === s.id)!} />
                   ) : (
-                    <button type="button" onClick={() => setStarting({ source: s, channel: null })}
-                            className="h-9 rounded-[10px] bg-brand-500 px-3 text-[13px] font-semibold text-white hover:bg-brand-600">
+                    <button type="button" onClick={() => setStarting({ source: s, channel: null })} className="pl-btn pl-btn-primary h-8">
                       Canlı sayım
                     </button>
                   )}
-                  <button type="button" onClick={() => setEditing(s)} className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-medium hover:border-brand-100">Düzenle</button>
-                  <button type="button" onClick={() => remove(s)} className="h-9 rounded-[10px] border border-line px-3 text-[13px] font-medium text-nok-600 hover:border-nok-50">Sil</button>
+                  <button type="button" onClick={() => setEditing(s)} className="pl-btn h-8">Düzenle</button>
+                  <button type="button" onClick={() => remove(s)} className="pl-btn h-8 text-nok-600">Sil</button>
                 </div>
               </div>
               {s.kind === "camera" && (
-                <div className="mt-3 max-w-[360px]"><Thumb src={`/api/live/sources/${s.id}/snapshot`} alt={s.name} /></div>
+                <div className="mt-2 max-w-[360px]"><Thumb src={`/api/live/sources/${s.id}/snapshot`} alt={s.name} /></div>
               )}
               {s.kind === "recorder" && open === s.id && (
                 <RecorderChannels source={s} sessions={sessions} onStart={(c) => setStarting({ source: s, channel: c })} />

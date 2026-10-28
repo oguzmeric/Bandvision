@@ -223,7 +223,7 @@ export default function RoiEditor({ src, aspect, value, onChange, twoWay = false
   }
 
   return (
-    <div ref={box} className="relative w-full select-none overflow-hidden rounded-2xl bg-[#111]"
+    <div ref={box} className="relative w-full select-none overflow-hidden rounded-[2px] bg-[#111]"
          style={{ aspectRatio: String(aspect) }} data-testid="roi-editor">
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element -- canlı akış/kare, Next görüntü iyileştirmesi uygun değil

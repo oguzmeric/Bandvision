@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
-/* BandVision paneli — açık tema (docs/brand/web-panel-taslak.html): lavanta zemin, beyaz kartlar, mor-pembe vurgu */
+/* BandVision paneli. Lavanta/mor renkler (canvas, line, ink, brand…) yalnızca giriş ve izleme sayfasında kaldı;
+   panel sayfaları aşağıdaki gri-mavi pl-* renklerini ve .pl-* sınıflarını kullanır. */
 @theme {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
@@ -40,26 +41,20 @@
   --color-pl-accent: #2c5aa0;
 }
 
+/* Düz beyaz zemin (sade arayüz); eski lavanta geçişli zemin kaldırıldı */
 html,
 body {
-  background: linear-gradient(180deg, var(--color-canvas) 0%, var(--color-canvas-2) 100%);
-  color: var(--color-ink);
+  background: var(--color-pl-bg);
+  color: var(--color-pl-ink);
   min-height: 100%;
 }
 
+/* .card ve .brand-gradient yalnızca giriş sayfası ve izleme sayfası (yeniden yapılana dek) için duruyor */
 .card {
   background: var(--color-card);
   border: 1px solid var(--color-line);
   border-radius: 18px;
   box-shadow: 0 1px 2px rgb(29 26 46 / 0.04), 0 8px 24px rgb(29 26 46 / 0.04);
-}
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--color-faint);
 }
 
 .brand-gradient {
@@ -142,6 +137,16 @@ body {
   }
   .pl-btn:hover:not(:disabled) {
     background: var(--color-pl-head);
+  }
+  /* Ana eylem (Kaydet, Başlat, Ekle…): dolu gri-mavi */
+  .pl-btn-primary {
+    border-color: var(--color-pl-accent);
+    background: var(--color-pl-accent);
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .pl-btn-primary:hover:not(:disabled) {
+    background: #244b86;
   }
   .pl-btn:disabled {
     opacity: 0.5;

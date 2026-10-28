@@ -50,15 +50,17 @@ export default function GeometryDialog({ file, initial, twoWay, allowAngled, onS
 
   return (
     <dialog ref={dialog} onClose={onClose} aria-labelledby="geom-title"
-            className="m-auto w-[min(1100px,96vw)] rounded-3xl border border-line bg-white p-0 text-ink shadow-2xl backdrop:bg-black/40">
-      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+            className="m-auto w-[min(1100px,96vw)] rounded-[3px] border border-pl-line bg-white p-0 text-[13px] text-pl-ink backdrop:bg-black/30">
+      <div className="border-b border-pl-line bg-pl-head px-4 py-2">
+        <p id="geom-title" className="text-[14px] font-semibold">Alanı ve sayım çizgisini ayarla</p>
+        <p className="text-[12.5px] text-pl-muted">
+          Sarı alan sayılacak bölge, turuncu çizgi sayım çizgisi; ok {twoWay ? "giriş" : "akış"} yönünü gösterir.
+        </p>
+      </div>
+      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
-          <p id="geom-title" className="text-lg font-semibold">Alanı ve sayım çizgisini ayarla</p>
-          <p className="mb-3 text-[13px] text-muted">
-            Sarı alan sayılacak bölge, turuncu çizgi sayım çizgisi; ok {twoWay ? "giriş" : "akış"} yönünü gösterir.
-          </p>
           {frame.error ? (
-            <p className="rounded-xl bg-warn-50 px-3 py-2 text-sm text-warn-700">{frame.error}</p>
+            <p className="rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-2 text-[13px] text-warn-700">{frame.error}</p>
           ) : (
             <RoiEditor src={frame.src} aspect={frame.aspect} value={g} onChange={setG} twoWay={twoWay} />
           )}
@@ -66,18 +68,16 @@ export default function GeometryDialog({ file, initial, twoWay, allowAngled, onS
         <div className="flex flex-col">
           <GeometryControls value={g} onChange={setG} aspect={frame.aspect} twoWay={twoWay} allowAngled={allowAngled} />
           {twoWay && (
-            <p className="mt-3 rounded-xl bg-brand-50 px-3 py-2 text-[12px] text-brand-600">
+            <p className="mt-3 rounded-[2px] border border-pl-sel-line bg-pl-sel px-2.5 py-1.5 text-[12px] text-pl-ink">
               Çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy — kapı eşiğine değil.
             </p>
           )}
-          <div className="mt-auto flex gap-2 pt-5">
-            <button type="button" onClick={() => setG(DEFAULT_GEOMETRY)}
-                    className="h-10 rounded-[10px] border border-line px-3 text-sm font-medium hover:border-brand-100">Sıfırla</button>
-            <button type="button" onClick={() => dialog.current?.close()}
-                    className="h-10 flex-1 rounded-[10px] border border-line text-sm font-medium hover:border-brand-100">Vazgeç</button>
+          <div className="mt-auto flex gap-2 pt-4">
+            <button type="button" onClick={() => setG(DEFAULT_GEOMETRY)} className="pl-btn h-8">Sıfırla</button>
+            <button type="button" onClick={() => dialog.current?.close()} className="pl-btn h-8 flex-1 justify-center">Vazgeç</button>
             <button type="button" disabled={!!frame.error}
                     onClick={() => { onSave(g); dialog.current?.close(); }}
-                    className="brand-gradient h-10 flex-1 rounded-[10px] text-sm font-semibold text-white disabled:opacity-50">Kaydet</button>
+                    className="pl-btn pl-btn-primary h-8 flex-1 justify-center">Kaydet</button>
           </div>
         </div>
       </div>

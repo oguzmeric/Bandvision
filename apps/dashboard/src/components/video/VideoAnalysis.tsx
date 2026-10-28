@@ -19,28 +19,28 @@ export default function VideoAnalysis() {
   const job = jobs?.find((j) => j.id === selected) ?? null;
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[380px_minmax(0,1fr)]">
+    <div className="grid items-start gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
       <div className="min-w-0">
         <UploadCard onCreated={(j) => { setSelected(j.id); wake(); }} />
-        <div className="mt-5">
-          <p className="eyebrow">Son analizler</p>
+        <section className="pl-section mb-0">
+          <h2>Son analizler</h2>
           {error && (
-            <p role="alert" className="mt-2 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>
+            <p role="alert" className="mb-2 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>
           )}
           {jobs === null && !error ? (
-            <div className="mt-2 h-16 animate-pulse rounded-xl bg-white/70" />
+            <div className="h-16 animate-pulse rounded-[2px] bg-pl-side" />
           ) : (
             <JobList jobs={jobs ?? []} selected={selected} onSelect={setSelected} />
           )}
-        </div>
+        </section>
       </div>
       {job ? (
         <JobDetail key={job.id} job={job} onDeleted={() => { setSelected(null); wake(); }} />
       ) : (
-        <section className="card grid min-h-[320px] place-items-center p-8 text-center text-muted">
+        <section className="pl-section mb-0 grid min-h-[240px] place-items-center p-8 text-center text-pl-muted">
           <div>
-            <p className="font-medium text-ink">Sonuçlar burada görünecek</p>
-            <p className="mt-1 text-sm">Soldan bir video yükle ya da listeden bir analiz seç.</p>
+            <p className="font-medium text-pl-ink">Sonuçlar burada görünecek</p>
+            <p className="mt-1 text-[13px]">Soldan bir video yükle ya da listeden bir analiz seç.</p>
           </div>
         </section>
       )}

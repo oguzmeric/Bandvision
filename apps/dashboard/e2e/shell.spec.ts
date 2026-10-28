@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import pkg from "../package.json";
 
 /**
@@ -246,6 +246,29 @@ test.describe("telefon (390×844)", () => {
     await page.reload();
     await page.getByRole("button", { name: "Menü" }).click();
     await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toBeFocused();
+  });
+
+  // İzleme (/watch) ayrı yeniden yapılıyor; o sayfanın telefon görünümü kendi testinde
+  const PAGES: { path: string; ready: (page: Page) => Locator }[] = [
+    { path: "/live", ready: (p) => p.locator("main h1") },
+    { path: "/live?tur=kisi", ready: (p) => p.getByRole("heading", { level: 1, name: "Kişi sayımı" }) },
+    { path: "/cameras", ready: (p) => p.getByRole("heading", { name: "Kaynaklar" }) },
+    { path: "/alarms", ready: (p) => p.getByTestId("alarm-counts") },
+    { path: "/notifications", ready: (p) => p.getByRole("button", { name: "Deneme mesajı gönder" }) },
+    { path: "/settings", ready: (p) => p.getByRole("main").getByText("Telefondan erişim", { exact: true }) },
+    { path: "/videos", ready: (p) => p.getByRole("button", { name: "Analizi başlat" }) },
+    { path: "/about", ready: (p) => p.getByTestId("about-analyzer").filter({ hasNotText: "Yükleniyor" }) },
+  ];
+
+  test("panel sayfalarında yatay taşma yok (390 px)", async ({ page }) => {
+    await login(page, "/about");
+    for (const { path, ready } of PAGES) {
+      await page.goto(path);
+      await expect(ready(page), path).toBeVisible();
+      // yükleniyor iskeletleri gitti: ölçülen, verisi gelmiş sayfa
+      await expect(page.locator("main div.animate-pulse:not(.absolute)"), path).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), path).toBeLessThanOrEqual(390);
+    }
   });
 
   test("'yakında' duyurusu ve açıklaması açık çekmecenin (kipli kutunun) içinde", async ({ page }) => {

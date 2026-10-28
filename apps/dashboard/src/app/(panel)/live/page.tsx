@@ -17,7 +17,7 @@ export default async function LivePage({ searchParams }: Props) {
                   text={kind
                     ? "Bu türdeki açık analizler. Kamerada yeni analiz başlatmak için “Yeni analiz”."
                     : "Kayıt cihazındaki ya da IP kameradaki görüntü bu bilgisayarda sayılır. Alanı ve çizgiyi görüntü üstünde ayarla; telefondaki ile aynı algoritma."} />
-      <Suspense fallback={<div className="h-64 animate-pulse rounded-3xl bg-white/70" />}>
+      <Suspense fallback={<div className="h-64 animate-pulse rounded-[3px] border border-pl-line-soft bg-pl-side" />}>
         <LiveView />
       </Suspense>
     </div>

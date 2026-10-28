@@ -57,26 +57,26 @@ export default function AttentionSettings() {
   }
 
   return (
-    <section className="card mt-5 grid max-w-[420px] gap-3 p-5" aria-label="Bu tarayıcıda">
-      <p className="eyebrow">Bu tarayıcıda</p>
-      <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" aria-label="Masaüstü bildirimi" className="mt-0.5 h-4 w-4 accent-brand-500" checked={desktop}
+    <section className="pl-section max-w-[760px]" aria-label="Bu tarayıcıda">
+      <h2>Bu tarayıcıda</h2>
+      <label className="flex items-start gap-2 border-b border-pl-head pb-2">
+        <input type="checkbox" aria-label="Masaüstü bildirimi" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={desktop}
                onChange={(e) => void toggleDesktop(e.target.checked)} />
         <span>Masaüstü bildirimi
-          <span className="block text-[11.5px] text-faint">Panel sekmesi arka plandayken yeni alarm Windows bildirimiyle gelir; tıklayınca alarm penceresi açılır.</span>
+          <span className="block text-[11.5px] text-pl-faint">Panel sekmesi arka plandayken yeni alarm Windows bildirimiyle gelir; tıklayınca alarm penceresi açılır.</span>
         </span>
       </label>
-      <div className="flex items-start gap-2 text-sm">
-        <input id="alarm-sound" type="checkbox" aria-label="Sesli uyarı" className="mt-0.5 h-4 w-4 accent-brand-500" checked={sound}
+      <div className="flex items-start gap-2 border-b border-pl-head py-2">
+        <input id="alarm-sound" type="checkbox" aria-label="Sesli uyarı" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={sound}
                onChange={(e) => toggleSound(e.target.checked)} />
         <label htmlFor="alarm-sound" className="flex-1">Sesli uyarı
-          <span className="block text-[11.5px] text-faint">Yeni alarmda kısa iki tonlu bip (en çok 10 saniyede bir). Alarm varsayılan olarak sessizdir.</span>
+          <span className="block text-[11.5px] text-pl-faint">Yeni alarmda kısa iki tonlu bip (en çok 10 saniyede bir). Alarm varsayılan olarak sessizdir.</span>
         </label>
-        <button type="button" onClick={() => playBeep(true)} className="h-8 rounded-[9px] border border-line px-2.5 text-[12.5px] font-medium hover:border-brand-100">Dene</button>
+        <button type="button" onClick={() => playBeep(true)} className="pl-btn h-7 text-[12.5px]">Dene</button>
       </div>
-      <p className="text-[11.5px] text-faint">Onaylanmamış alarm varken sekme başlığı «🚨 ALARM — kamera adı» ile yanıp söner (her zaman açık).
+      <p className="mt-2 text-[11.5px] text-pl-faint">Onaylanmamış alarm varken sekme başlığı «🚨 ALARM — kamera adı» ile yanıp söner (her zaman açık).
         Bu ayarlar yalnızca bu tarayıcıda saklanır.</p>
-      {msg && <p role="status" className={`rounded-xl px-3 py-2 text-[13px] ${msg.ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-[#bfe8d3] bg-ok-50 text-ok-600" : "border-[#f3c2c7] bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
     </section>
   );
 }

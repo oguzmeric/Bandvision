@@ -42,7 +42,7 @@ export default function Thumb({ src, alt }: { src: string; alt: string }) {
   }, [src]);
   const done = (ok: boolean) => { setState(ok ? "ok" : "error"); release.current?.(); release.current = null; };
   return (
-    <div className="relative aspect-video overflow-hidden rounded-xl bg-[#111]">
+    <div className="relative aspect-video overflow-hidden rounded-[2px] bg-[#111]">
       {(state === "loading" || state === "ok") && (
         // eslint-disable-next-line @next/next/no-img-element -- kamera küçük resmi (yerel sunucudan)
         <img src={src} alt={alt} onLoad={() => done(true)} onError={() => done(false)}

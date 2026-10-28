@@ -56,15 +56,15 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
   }
 
   return (
-    <section className="card p-4" aria-label="Güvenlik">
-      <p className="flex items-center gap-2 font-semibold"><span className={`h-2 w-2 rounded-full ${stateDot(session.state)}`} aria-hidden="true" />İzleniyor</p>
+    <section className="pl-section mb-0 pb-2.5" aria-label="Güvenlik">
+      <h2 className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${stateDot(session.state)}`} aria-hidden="true" />İzleniyor</h2>
       {session.state !== "live" ? (
-        <p className={`mt-1 text-[12.5px] ${session.state === "error" ? "text-nok-600" : "text-muted"}`} data-testid="safety-state">
+        <p className={`text-[12.5px] ${session.state === "error" ? "text-nok-600" : "text-pl-muted"}`} data-testid="safety-state">
           Kamera: {STATE_LABELS[session.state]}{session.message ? ` — ${session.message}` : ""}
         </p>
       ) : !health.healthy && health.reason && (
         // gerçek neden (model yükleniyor/yüklenemedi, görüntü işlenemiyor…); model hatasında sunucunun Türkçe iletisi
-        <p className={`mt-1 text-[12.5px] ${loading ? "text-muted" : "text-nok-600"}`} data-testid="safety-reason">
+        <p className={`text-[12.5px] ${loading ? "text-pl-muted" : "text-nok-600"}`} data-testid="safety-reason">
           {health.reason}{loading ? "…" : ""}{modelFailed ? " · 1 dakika sonra yeniden denenir." : ""}
         </p>
       )}
@@ -73,31 +73,30 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
           {active.map((a) => <li key={`${a.trackId}-${a.type}`}>{ALARM_LABELS[a.type]}: {a.seconds.toFixed(1)} sn</li>)}
         </ul>
       )}
-      <p className="mb-1.5 mt-4 text-xs font-medium text-muted">Son alarmlar</p>
-      {alarms.length === 0 ? <p className="text-[13px] text-faint">Henüz alarm yok.</p> : (
-        <ul className="grid gap-2">
+      <p className="mb-1 mt-3 text-xs font-medium text-pl-muted">Son alarmlar</p>
+      {alarms.length === 0 ? <p className="text-[13px] text-pl-faint">Henüz alarm yok.</p> : (
+        <ul className="grid border border-pl-line-soft">
           {alarms.map((a) => (
-            <li key={a.id}>
+            <li key={a.id} className="border-b border-pl-line-soft last:border-b-0">
               <button type="button" onClick={() => setViewing(a.id)} title="Kaydı izle"
-                      className="flex w-full items-center gap-2.5 rounded-xl border border-line p-2 text-left transition hover:border-brand-100 hover:bg-brand-50/40">
+                      className="flex w-full items-center gap-2.5 p-1.5 text-left hover:bg-pl-sel">
                 <span className="relative shrink-0">
                   {a.image
                     // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
-                    ? <img src={alarmImageUrl(a.id)} alt="" className="h-12 w-16 rounded-lg object-cover" />
-                    : <span className="grid h-12 w-16 place-items-center rounded-lg bg-canvas text-lg" aria-hidden="true">🚨</span>}
+                    ? <img src={alarmImageUrl(a.id)} alt="" className="h-12 w-16 rounded-[2px] object-cover" />
+                    : <span className="grid h-12 w-16 place-items-center rounded-[2px] bg-pl-side text-lg" aria-hidden="true">🚨</span>}
                   {a.clip && <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] text-white" aria-hidden="true">▶</span>}
                 </span>
                 <span className="min-w-0 text-[13px]">
                   <b>{ALARM_LABELS[a.type]}</b> · {new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}
-                  <span className="block text-[11.5px] text-faint">{a.falseAlarm ? "Yanlış alarm · " : ""}{NOTIFY_LABELS[a.notify]}</span>
+                  <span className="block text-[11.5px] text-pl-faint">{a.falseAlarm ? "Yanlış alarm · " : ""}{NOTIFY_LABELS[a.notify]}</span>
                 </span>
               </button>
             </li>
           ))}
         </ul>
       )}
-      <button type="button" onClick={testAlarm}
-              className="mt-3 h-9 w-full rounded-[10px] border border-line text-[13px] font-medium hover:border-brand-100">
+      <button type="button" onClick={testAlarm} className="pl-btn mt-2.5 h-8 w-full justify-center">
         Deneme alarmı
       </button>
       {test && test.id === session.id && (
@@ -115,14 +114,14 @@ export function SafetySettings({ value, onChange }: { value: SafetyConfig | unde
   const v = value ?? SAFETY_DEFAULTS;
   const rule = (k: "handsUp" | "lying", label: string, min: number, max: number) => (
     <div className="grid gap-1">
-      <label className="flex items-center gap-2 text-sm font-medium">
-        <input type="checkbox" className="h-4 w-4 accent-brand-500" checked={v[k].enabled}
+      <label className="flex items-center gap-2 text-[13px] font-medium">
+        <input type="checkbox" className="h-4 w-4 accent-pl-accent" checked={v[k].enabled}
                onChange={(e) => onChange({ ...v, [k]: { ...v[k], enabled: e.target.checked } })} />
         {label}
       </label>
       <label className="text-[13px]">{label} süresi: <b>{v[k].seconds} sn</b>
         <input type="range" aria-label={`${label} süresi`} min={min} max={max} step={1} value={v[k].seconds} disabled={!v[k].enabled}
-               className="mt-1 w-full accent-brand-500" onChange={(e) => onChange({ ...v, [k]: { ...v[k], seconds: Number(e.target.value) } })} />
+               className="mt-1 w-full accent-pl-accent" onChange={(e) => onChange({ ...v, [k]: { ...v[k], seconds: Number(e.target.value) } })} />
       </label>
     </div>
   );
@@ -130,10 +129,10 @@ export function SafetySettings({ value, onChange }: { value: SafetyConfig | unde
     <div role="group" aria-label="Güvenlik kuralları" className="grid gap-3">
       {rule("handsUp", "Eller yukarı", 3, 5)}
       {rule("lying", "Yerde yatan kişi", 5, 30)}
-      <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-500" checked={v.sendImage} onChange={(e) => onChange({ ...v, sendImage: e.target.checked })} />
+      <label className="flex items-start gap-2 text-[13px]">
+        <input type="checkbox" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={v.sendImage} onChange={(e) => onChange({ ...v, sendImage: e.target.checked })} />
         <span>Olay resmini Telegram&apos;a gönder
-          <span className="block text-[11.5px] text-faint">Kapalıyken yalnızca kamera adı ve saat gider. Resimler bu bilgisayarda 7 gün saklanır.</span>
+          <span className="block text-[11.5px] text-pl-faint">Kapalıyken yalnızca kamera adı ve saat gider. Resimler bu bilgisayarda 7 gün saklanır.</span>
         </span>
       </label>
     </div>
