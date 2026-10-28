@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Canlı sayım" };
 export default function LivePage() {
   return (
     <div className="mx-auto max-w-[1400px]">
-      <PageHeader eyebrow="CANLI SAYIM" title="Kameradan canlı sayım"
+      <PageHeader title="Kameradan canlı sayım"
                   text="Kayıt cihazındaki ya da IP kameradaki görüntü bu bilgisayarda sayılır. Alanı ve çizgiyi görüntü üstünde ayarla; telefondaki ile aynı algoritma." />
       <Suspense fallback={<div className="h-64 animate-pulse rounded-3xl bg-white/70" />}>
         <LiveView />

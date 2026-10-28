@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Kameralar" };
 export default function CamerasPage() {
   return (
     <div className="mx-auto max-w-[1400px]">
-      <PageHeader eyebrow="KAMERALAR" title="Kameralar ve kayıt cihazları"
+      <PageHeader title="Kameralar ve kayıt cihazları"
                   text="Kayıt cihazını (TRASSIR, Hikvision, Dahua) ya da IP kamerayı ekle; kameralar küçük resimleriyle listelenir. Birini seçip canlı sayımı başlat." />
       <CamerasView />
     </div>

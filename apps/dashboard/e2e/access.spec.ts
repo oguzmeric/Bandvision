@@ -88,12 +88,12 @@ test("ayar dosyası geçici klasörde; yalnızca scrypt özeti saklanır, yeni �
   expect(raw3).not.toContain("e2e-test-sifresi");
 });
 
-test("kenar çubuğunda Ayarlar bağlantısı var; ayarlar sayfası açılır", async ({ page }) => {
+test("kenar çubuğunda Telefondan erişim bağlantısı var; ayarlar sayfası açılır", async ({ page }) => {
   await login(page, "/videos");
-  await page.getByRole("link", { name: "Ayarlar" }).click();
+  await page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Telefondan erişim", exact: true }).click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(page.getByRole("heading", { name: "Ayarlar" })).toBeVisible();
-  await expect(page.getByText("Telefondan erişim", { exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByText("Telefondan erişim", { exact: true })).toBeVisible();
 });
 
 test("ayarlar API: boşluk/256+ karakterlik şifre 422; yabancı Host başlığıyla (DNS yeniden bağlama) yazma 403", async ({ page }) => {

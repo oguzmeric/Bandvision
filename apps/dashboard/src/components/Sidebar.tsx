@@ -2,71 +2,153 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { NAV, isCurrent, type NavItem } from "@/lib/nav";
 
-type NavItem = { href: string; label: string; icon: React.ReactNode; soon?: boolean };
+/** Kapalı grupların başlıkları (JSON dizi); her tarayıcıda ayrı hatırlanır */
+const COLLAPSED_KEY = "bv.nav.collapsed";
+/** Gri öğeye tıklanınca "yakında" yazısı bu kadar görünür */
+const SOON_MS = 3000;
 
-const icon = (d: string) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"
-       strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
-    <path d={d} />
-  </svg>
-);
+function loadCollapsed(): string[] {
+  try {
+    const v: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
-const NAV: NavItem[] = [
-  { href: "/live", label: "Canlı sayım", icon: icon("M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4M3.5 3.5a12 12 0 0 0 0 17M20.5 3.5a12 12 0 0 1 0 17") },
-  { href: "/cameras", label: "Kameralar", icon: icon("M3 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H3zM16 11l5-3v8l-5-3M6 11h.01") },
-  { href: "/watch", label: "İzleme", icon: icon("M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z") },
-  // siren (kubbe, taban, ışık çizgileri); kalkan simgesi "Kalite"de kullanılıyor
-  { href: "/alarms", label: "Alarmlar", icon: icon("M7 18v-6a5 5 0 0 1 10 0v6M5 18h14v3H5zM12 12v3M12 2v2M4.2 5.2l1.4 1.4M19.8 5.2l-1.4 1.4M2 12h2M20 12h2") },
-  { href: "/notifications", label: "Bildirimler", icon: icon("M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0") },
-  { href: "/settings", label: "Ayarlar", icon: icon("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z") },
-  { href: "/videos", label: "Video analizi", icon: icon("M4 6h11a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM17 10l5-3v10l-5-3") },
-  { href: "/quality", label: "Kalite (NOK)", icon: icon("M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7zM9 12l2 2 4-4"), soon: true },
-  { href: "/reports", label: "Raporlar", icon: icon("M4 20V10M10 20V4M16 20v-7M22 20H2"), soon: true },
-];
+function saveCollapsed(titles: string[]): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(titles));
+  } catch {
+    // depolama yok: yalnızca bu sayfa açıkken hatırlanır
+  }
+}
 
+const ITEM = "block w-full rounded-[2px] border px-2 py-1 pl-6 text-left text-[13px] leading-5";
+
+/**
+ * Soldaki yazılı, gruplu menü (TRASSIR gibi; taslak duzen.html): üstte logo, gruplar açılır-kapanır, altta Çıkış.
+ * Masaüstünde 230 px sütun; dar ekranda (md altı) üstteki "Menü" düğmesinin arkasına katlanır ve içeriğin üstünde açılır.
+ */
 export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) {
-  const path = usePathname();
-  return (
-    <aside className="sticky top-0 flex h-screen flex-col items-center gap-2.5 border-r border-line bg-white py-4">
-      <Link href="/videos" aria-label="BandVision ana sayfa" className="mb-4">
-        <Image src="/brand/logo-mark.png" alt="BandVision" width={46} height={36} priority />
-      </Link>
-      <nav className="flex flex-col items-center gap-2.5" aria-label="Ana menü">
-        {NAV.map((item) => {
-          const active = path?.startsWith(item.href);
-          const base = "grid h-10 w-10 place-items-center rounded-xl transition";
-          if (item.soon) {
-            return (
-              <span key={item.href} title={`${item.label} (yakında)`} aria-disabled="true"
-                    className={`${base} cursor-not-allowed text-faint/60`}>
-                {item.icon}
-                <span className="sr-only">{item.label} (yakında)</span>
-              </span>
-            );
-          }
-          return (
-            <Link key={item.href} href={item.href} title={item.label} aria-current={active ? "page" : undefined}
-                  className={`${base} ${active
-                    ? "bg-brand-500 text-white shadow-[0_6px_14px_rgba(109,59,240,0.25)]"
-                    : "text-muted hover:bg-brand-50 hover:text-brand-500"}`}>
-              {item.icon}
-              <span className="sr-only">{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-      {canLogout && (
-        <button type="button" title="Çıkış" aria-label="Çıkış"
-                onClick={async () => {
-                  await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
-                  window.location.assign("/login");          // göreli: ana makine adı değişmez
-                }}
-                className="mt-auto grid h-10 w-10 place-items-center rounded-xl text-muted transition hover:bg-brand-50 hover:text-brand-500">
-          {icon("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9")}
+  const pathname = usePathname() ?? "";
+  const params = useSearchParams();
+  const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const [soon, setSoon] = useState<string | null>(null);
+  const soonTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Depo yalnızca tarayıcıda okunur (sunucu çıktısıyla uyum için ilk çizimde tüm gruplar açık)
+  useEffect(() => setCollapsed(loadCollapsed()), []);
+  useEffect(() => () => clearTimeout(soonTimer.current), []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const toggle = (title: string) => {
+    const next = collapsed.includes(title) ? collapsed.filter((t) => t !== title) : [...collapsed, title];
+    setCollapsed(next);
+    saveCollapsed(next);
+  };
+  const showSoon = (label: string) => {
+    clearTimeout(soonTimer.current);
+    setSoon(label);
+    soonTimer.current = setTimeout(() => setSoon(null), SOON_MS);
+  };
+
+  const renderItem = (item: NavItem) => {
+    if (item.href === null || item.soon) {
+      return (
+        // aria-disabled değil: tıklanabilir olmalı (tıklanınca "yakında" der)
+        <button type="button" data-label={item.label} data-soon="" onClick={() => showSoon(item.label)}
+                className={`${ITEM} cursor-default border-transparent text-pl-faint`}>
+          {item.label}
+          {soon === item.label && <span role="status" className="ml-1.5 text-[11px] italic">yakında</span>}
         </button>
+      );
+    }
+    const current = isCurrent(item.href, pathname, params);
+    return (
+      <Link href={item.href} data-label={item.label} aria-current={current ? "page" : undefined}
+            onClick={() => setOpen(false)}
+            className={`${ITEM} ${current
+              ? "border-pl-sel-line bg-pl-sel text-pl-ink"
+              : "border-transparent text-pl-ink hover:bg-pl-head"}`}>
+        {item.label}
+      </Link>
+    );
+  };
+
+  return (
+    <>
+      {/* Dar ekran: üst çubuk (logo + Menü düğmesi) */}
+      <div className="flex items-center gap-2 border-b border-pl-line bg-pl-side px-3 py-2 md:hidden">
+        <button type="button" aria-expanded={open} aria-controls="bv-menu" onClick={() => setOpen((v) => !v)}
+                className="pl-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"
+               className="h-4 w-4" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+          Menü
+        </button>
+        <span className="text-[15px] font-semibold text-pl-ink">Band<span className="text-pl-accent">Vision</span></span>
+      </div>
+
+      {/* Dar ekranda menü açıkken arka plan: tıklanınca kapanır */}
+      {open && (
+        <div data-testid="menu-backdrop" aria-hidden="true" onClick={() => setOpen(false)}
+             className="fixed inset-0 z-50 bg-black/30 md:hidden" />
       )}
-    </aside>
+
+      <aside id="bv-menu" data-testid="sidebar"
+             className={`${open ? "fixed inset-y-0 left-0 z-50 flex w-[230px] max-w-[85vw]" : "hidden"} flex-col border-r
+                         border-pl-line bg-pl-side md:sticky md:top-0 md:bottom-auto md:h-screen md:z-auto md:flex md:w-auto md:max-w-none`}>
+        <Link href="/videos" aria-label="BandVision ana sayfa" onClick={() => setOpen(false)}
+              className="flex items-center gap-2 border-b border-pl-line px-3 py-2.5">
+          <Image src="/brand/logo-mark.png" alt="" width={30} height={23} priority />
+          <span className="text-[15px] font-semibold text-pl-ink">Band<span className="text-pl-accent">Vision</span></span>
+        </Link>
+        <nav aria-label="Ana menü" className="min-h-0 flex-1 overflow-y-auto py-1.5">
+          {NAV.map((group, gi) => {
+            const isCollapsed = collapsed.includes(group.title);
+            const listId = `bv-nav-${gi}`;
+            return (
+              <div key={group.title} data-nav-group="">
+                <button type="button" aria-expanded={!isCollapsed} aria-controls={listId} onClick={() => toggle(group.title)}
+                        className="flex w-full items-center gap-1 px-2 pb-1 pt-2 text-left text-sm font-bold text-pl-ink hover:text-pl-accent">
+                  <svg viewBox="0 0 12 12" aria-hidden="true"
+                       className={`h-3 w-3 shrink-0 text-pl-muted transition-transform ${isCollapsed ? "-rotate-90" : ""}`}>
+                    <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth={1.6} />
+                  </svg>
+                  {group.title}
+                </button>
+                <ul id={listId} hidden={isCollapsed} className="px-1">
+                  {group.items.map((item) => <li key={item.label}>{renderItem(item)}</li>)}
+                </ul>
+              </div>
+            );
+          })}
+        </nav>
+        {canLogout && (
+          <button type="button"
+                  onClick={async () => {
+                    await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
+                    window.location.assign("/login");          // göreli: ana makine adı değişmez
+                  }}
+                  className="flex items-center gap-2 border-t border-pl-line px-3 py-2 text-left text-[13px] text-pl-ink hover:bg-pl-head">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"
+                 strokeLinejoin="round" className="h-4 w-4 text-pl-muted" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+            </svg>
+            Çıkış
+          </button>
+        )}
+      </aside>
+    </>
   );
 }

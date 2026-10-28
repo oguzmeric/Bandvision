@@ -24,9 +24,11 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   await login(page);
   await expect(page.getByText("Henüz kaynak yok")).toBeVisible();
 
-  // Kenar çubuğu: canlı sayım ve kameralar açık (yakında değil)
-  await expect(page.getByRole("link", { name: "Canlı sayım" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Kameralar" })).toBeVisible();
+  // Kenar çubuğu: canlı sayım (Analizler: ürün/kişi/güvenlik) ve kameralar açık (yakında değil)
+  const nav = page.getByRole("navigation", { name: "Ana menü" });
+  for (const name of ["Ürün sayımı", "Kişi sayımı", "Güvenlik alarmı (poz)", "Kameralar ve kayıt cihazları"]) {
+    await expect(nav.getByRole("link", { name, exact: true })).toBeVisible();
+  }
 
   // IP kamera (özel RTSP adresi yerine test klibi)
   await page.getByRole("radio", { name: "IP kamera" }).click();
@@ -138,7 +140,7 @@ test("kişi sayımı: personel rengi öğret, örnek görünür, sil", async ({ 
   await dialog.getByRole("button", { name: "Başlat", exact: true }).click();
   await expect(page.getByTestId("live-state")).toContainText("Canlı", { timeout: 30_000 });
 
-  await page.getByRole("button", { name: "Ayarla" }).click();
+  await page.getByRole("button", { name: "Ayarla", exact: true }).click();
   const staff = page.getByRole("group", { name: "Personel rengi" });
   await expect(staff.getByText("Kapalı — tüm geçişler sayılır.")).toBeVisible();
   await staff.getByRole("button", { name: "Personel rengini öğret" }).click();

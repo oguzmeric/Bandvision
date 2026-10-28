@@ -1,26 +1,11 @@
-import { execFileSync } from "node:child_process";
 import { analyzerHeaders, analyzerUrl, logRateLimited } from "@/lib/analyzer";
 import { classify, parseStatus } from "@/lib/systemStatus.mjs";
-import pkg from "../../../../package.json";
+import { PANEL_VERSION, getPanelCommit } from "@/lib/panelVersion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TIMEOUT_MS = 5000;
-
-/** Panelin kısa git özeti: ortamda BV_COMMIT varsa o, yoksa süreç başına bir kez `git rev-parse --short HEAD` ("?" olabilir). */
-let panelCommit: string | undefined;
-function getPanelCommit(): string {
-  if (panelCommit !== undefined) return panelCommit;
-  const env = process.env.BV_COMMIT?.trim();
-  if (env) return (panelCommit = env);
-  try {
-    panelCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { timeout: 2000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || "?";
-  } catch {
-    panelCommit = "?";
-  }
-  return panelCommit;
-}
 
 /**
  * Durum şeridi için sistem özeti: analiz sunucusunun işlemci yükü ve çalışma süresi + sürümler.
@@ -58,7 +43,7 @@ export async function GET(req: Request): Promise<Response> {
       uptimeS: s.uptimeS,
       analyzerVersion: s.version,
       analyzerCommit: s.commit,
-      panelVersion: pkg.version,
+      panelVersion: PANEL_VERSION,
       panelCommit: getPanelCommit(),
     });
   } catch (err) {

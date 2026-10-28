@@ -24,6 +24,20 @@
   --color-nok-600: #d93a4a;
   --color-warn-50: #fcf3e2;
   --color-warn-700: #b7791f;
+
+  /* Sade arayüz (TRASSIR'a yakın gri-mavi; taslak duzen.html): menü, durum şeridi ve .pl-* sınıfları */
+  --color-pl-bg: #ffffff;
+  --color-pl-side: #f6f7f9;
+  --color-pl-head: #eef0f3;
+  --color-pl-line: #c9ced6;
+  --color-pl-line-soft: #e1e4e8;
+  --color-pl-ctl: #b9bfc8;
+  --color-pl-ink: #1d2330;
+  --color-pl-muted: #4a5261;
+  --color-pl-faint: #9aa1ad;
+  --color-pl-sel: #dbe9fb;
+  --color-pl-sel-line: #9ec3f0;
+  --color-pl-accent: #2c5aa0;
 }
 
 html,
@@ -50,4 +64,103 @@ body {
 
 .brand-gradient {
   background: linear-gradient(90deg, var(--color-brand-500), var(--color-accent-500));
+}
+
+/* Sade görünümün yapı taşları: 1 px kenarlık, gölge yok, 2–4 px köşe. Bileşen katmanında: Tailwind sınıfları ezebilir. */
+@layer components {
+  /* Başlıklı, kenarlıklı bölüm: <section class="pl-section"><h2>Başlık</h2>…</section> */
+  .pl-section {
+    background: var(--color-pl-bg);
+    border: 1px solid var(--color-pl-line);
+    border-radius: 3px;
+    padding: 0 10px 8px;
+    margin-bottom: 12px;
+    color: var(--color-pl-ink);
+    font-size: 13px;
+  }
+  .pl-section > h2 {
+    margin: 0 -10px 8px;
+    padding: 6px 10px;
+    background: var(--color-pl-head);
+    border-bottom: 1px solid var(--color-pl-line);
+    border-radius: 3px 3px 0 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  /* Form satırı: solda etiket, sağda değer ya da denetim; dar ekranda alt alta */
+  .pl-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px 12px;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--color-pl-head);
+  }
+  .pl-row:last-child {
+    border-bottom: 0;
+  }
+  .pl-row > :first-child {
+    color: var(--color-pl-muted);
+  }
+  @media (min-width: 640px) {
+    .pl-row {
+      grid-template-columns: 220px minmax(0, 1fr);
+    }
+  }
+
+  .pl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    color: var(--color-pl-ink);
+  }
+  .pl-table th,
+  .pl-table td {
+    border: 1px solid var(--color-pl-line-soft);
+    padding: 4px 8px;
+    text-align: left;
+    vertical-align: middle;
+  }
+  .pl-table th {
+    background: var(--color-pl-head);
+    font-weight: 600;
+  }
+
+  .pl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--color-pl-ctl);
+    background: #f7f8fa;
+    color: var(--color-pl-ink);
+    padding: 3px 10px;
+    border-radius: 2px;
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+  .pl-btn:hover:not(:disabled) {
+    background: var(--color-pl-head);
+  }
+  .pl-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pl-input {
+    border: 1px solid var(--color-pl-ctl);
+    background: #ffffff;
+    color: var(--color-pl-ink);
+    padding: 3px 6px;
+    border-radius: 2px;
+    font-size: 13px;
+    line-height: 1.4;
+    min-width: 0;
+  }
+  .pl-btn:focus-visible,
+  .pl-input:focus-visible {
+    outline: 2px solid var(--color-pl-sel-line);
+    outline-offset: 1px;
+  }
 }

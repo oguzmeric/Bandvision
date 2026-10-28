@@ -82,7 +82,7 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toBeHidden();
   await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toBeHidden();
-  await page.getByRole("button", { name: "Ayarla" }).click();
+  await page.getByRole("button", { name: "Ayarla", exact: true }).click();
   await expect(page.getByRole("group", { name: "Güvenlik kuralları" })).toBeVisible();
   await expect(page.getByLabel("Eller yukarı süresi")).toHaveValue("3");
   await page.getByRole("button", { name: "İptal" }).click();

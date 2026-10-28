@@ -104,7 +104,7 @@ test("izleme: alarmlı kutuya tıklayınca alarm penceresi açılır", async ({ 
 test("izleme: kutu düğmeleri (Tam ekran, Canlı sayıma git) ve kenar çubuğu girişi", async ({ page }) => {
   await mock(page, STATUS);
   await login(page);
-  await expect(page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "İzleme" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Canlı izleme", exact: true })).toHaveAttribute("aria-current", "page");
   const tiles = page.getByTestId("watch-tile");
   await expect(tiles.nth(0)).toContainText("Kapı");
   // analizi olan kutu o oturuma, olmayan Kameralar sayfasına götürür

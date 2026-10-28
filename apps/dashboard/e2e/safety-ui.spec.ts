@@ -74,7 +74,7 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
   await expect(page.getByRole("button", { name: "Başlat" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sıfırla" })).toHaveCount(0);
   await expect(page.getByTestId("live-count")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Ayarla" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ayarla", exact: true })).toBeVisible();
   await expect(card).toContainText("Alarm");                    // son 5 dakikada alarm
   await expect(card).not.toContainText("duruyor");
 
@@ -817,10 +817,11 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda Bildirimler'den önce; s�
   await page.route(/\/api\/live\/alarms\/[^/]+\/clip\.webm$/, () => new Promise<void>(() => undefined));  // yükleniyor kalır
 
   await page.goto("/notifications");
-  // kenar çubuğu: "Alarmlar", "Bildirimler"den hemen önce
+  // kenar çubuğu: "Alarmlar", İzleme grubunda "Canlı izleme"den hemen sonra
   const nav = page.getByRole("navigation", { name: "Ana menü" });
-  const labels = await nav.locator("a, span[aria-disabled]").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
-  expect(labels.indexOf("Bildirimler") - labels.indexOf("Alarmlar")).toBe(1);
+  const labels = await nav.locator("a, button[data-soon]").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
+  expect(labels.indexOf("Alarmlar") - labels.indexOf("Canlı izleme")).toBe(1);
+  expect(labels.indexOf("Canlı izleme")).toBe(0);
   // onaylanmamış l1 alarm penceresini açar (her sayfada): küçültülür
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();
   await nav.getByRole("link", { name: "Alarmlar" }).click();
