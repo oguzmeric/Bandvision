@@ -230,4 +230,36 @@ test.describe("telefon (390×844)", () => {
     await expect(nav).toBeHidden();
     await expect(strip(page)).toContainText("Analiz sunucusu:");
   });
+
+  test("ilk grup kapalıyken menü açılınca odak çekmecenin içinde (görünür ilk öğe)", async ({ page }) => {
+    await login(page, "/about");
+    await page.evaluate(() => localStorage.setItem("bv.nav.collapsed", JSON.stringify(["İzleme"])));
+    await page.reload();
+    await page.getByRole("button", { name: "Menü" }).click();
+    const nav = menu(page);
+    await expect(nav).toBeVisible();
+    await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toHaveAttribute("aria-expanded", "false");
+    await expect(nav.getByRole("link", { name: "Ürün sayımı", exact: true })).toBeFocused();   // Analizler'in ilk öğesi
+    expect(await page.evaluate(() => !!document.activeElement?.closest("[data-testid='sidebar']"))).toBe(true);
+    // tüm gruplar kapalıyken: ilk grup başlığı
+    await page.evaluate(() => localStorage.setItem("bv.nav.collapsed", JSON.stringify(["İzleme", "Analizler", "Donanım", "Sistem"])));
+    await page.reload();
+    await page.getByRole("button", { name: "Menü" }).click();
+    await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toBeFocused();
+  });
+
+  test("'yakında' duyurusu ve açıklaması açık çekmecenin (kipli kutunun) içinde", async ({ page }) => {
+    await login(page, "/about");
+    await page.getByRole("button", { name: "Menü" }).click();
+    const dialog = page.getByRole("dialog", { name: "Menü" });
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    const live = dialog.getByTestId("nav-status");
+    await expect(live).toHaveAttribute("role", "status");
+    await expect(live).toHaveText("");
+    const item = dialog.locator('button[data-label="Lisans"]');
+    await expect(item).toHaveAccessibleDescription("yakında");
+    await expect(dialog.locator("#bv-soon-desc")).toHaveCount(1);
+    await item.click();
+    await expect(live).toHaveText("Lisans: yakında");
+  });
 });

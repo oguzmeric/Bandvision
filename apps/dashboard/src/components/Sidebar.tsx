@@ -71,8 +71,11 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
       restoreFocus.current = false;
       return;
     }
-    // Açılınca: odak ilk menü öğesine; içerik etkisiz (Tab ile arkaya geçilmez); sayfa kaydırması kilitli (dar ekran)
-    asideRef.current?.querySelector<HTMLElement>("li a, li button")?.focus();
+    // Açılınca: odak ilk görünür menü öğesine (kapalı gruptaki öğe odak alamaz), hiç yoksa ilk grup başlığına;
+    // içerik etkisiz (Tab ile arkaya geçilmez); sayfa kaydırması kilitli
+    const visible = (sel: string) => [...(asideRef.current?.querySelectorAll<HTMLElement>(sel) ?? [])]
+      .find((el) => el.offsetParent !== null);
+    (visible("nav li a, nav li button") ?? visible("nav button"))?.focus();
     const content = document.querySelector(CONTENT_SELECTOR);
     content?.setAttribute("inert", "");
     const html = document.documentElement;
@@ -142,17 +145,15 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
         <span className="text-[15px] font-semibold text-pl-ink">Band<span className="text-pl-accent">Vision</span></span>
       </div>
 
-      {/* Dar ekranda menü açıkken arka plan: tıklanınca kapanır */}
+      {/* Dar ekranda menü açıkken arka plan: tıklanınca kapanır. Fare basışında odak çekmecede kalır (kapanınca Menü
+          düğmesine dönebilsin) */}
       {open && (
         <div data-testid="menu-backdrop" aria-hidden="true" onClick={close}
-             onMouseDown={(e) => e.preventDefault()} /* odak çekmecede kalsın: kapanınca Menü düğmesine döner */
+             onMouseDown={(e) => e.preventDefault()}
              className="fixed inset-0 z-50 bg-black/30 md:hidden" />
       )}
 
-      <span id="bv-soon-desc" className="sr-only">yakında</span>
-      <div role="status" data-testid="nav-status" className="sr-only">{soon ? `${soon}: yakında` : ""}</div>
-
-      {/* Dar ekranda açık çekmece kipsiz değil: içerik etkisiz (inert), ekran okuyucuya iletişim kutusu */}
+      {/* Dar ekranda açık çekmece kipli (modal) iletişim kutusudur: arkadaki içerik etkisiz (inert) */}
       <aside id="bv-menu" data-testid="sidebar" ref={asideRef}
              role={open ? "dialog" : undefined} aria-modal={open ? true : undefined} aria-label={open ? "Menü" : undefined}
              className={`${open ? "fixed inset-y-0 left-0 z-50 flex w-[230px] max-w-[85vw]" : "hidden"} flex-col border-r
@@ -162,6 +163,9 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
           <Image src="/brand/logo-mark.png" alt="" width={30} height={23} priority />
           <span className="text-[15px] font-semibold text-pl-ink">Band<span className="text-pl-accent">Vision</span></span>
         </Link>
+        {/* Gri öğelerin açıklaması ve tıklama duyurusu çekmecenin içinde: kipli kutu açıkken dışarısı ekran okuyucuya gizli */}
+        <span id="bv-soon-desc" className="sr-only">yakında</span>
+        <div role="status" data-testid="nav-status" className="sr-only">{soon ? `${soon}: yakında` : ""}</div>
         <nav aria-label="Ana menü" className="min-h-0 flex-1 overflow-y-auto py-1.5">
           {NAV.map((group, gi) => {
             const isCollapsed = collapsed.includes(group.title);
