@@ -27,15 +27,16 @@ from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .alarms import AlarmStore
 from .clips import ClipWriter
+from .drafts import DraftStore
 from .jsonfile import quarantine, read_json, write_json_atomic
-from .layouts import LAYOUTS, MAX_TILES, layout_by_id, smallest_for
+from .layouts import LAYOUTS, MAX_TILES, smallest_for
 from .mosaic import MosaicHub, MosaicStopped, TooManySizes
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
 from .session import LiveSession, open_capture
 from .store import CATALOG, LiveStore, make_preset
 from .viewer import SourceGone, ViewHub
-from .views import ViewsBusy, ViewStore
+from .views import ViewsBusy, ViewStore, check_layout_tiles
 
 _LOG = logging.getLogger(__name__)
 RECORDER_MAX_TILES = 16   # "kayıt cihazından" şablon en çok 16 kanal alır (katalogdaki en büyük düzen)
@@ -103,6 +104,11 @@ class TileIn(_Strict):
 
 class ViewIn(_Strict):
     name: str = Field(max_length=60)
+    layout: str = Field(max_length=5)
+    tiles: list[TileIn | None] = Field(max_length=MAX_TILES)
+
+
+class DraftIn(_Strict):
     layout: str = Field(max_length=5)
     tiles: list[TileIn | None] = Field(max_length=MAX_TILES)
 
@@ -284,7 +290,10 @@ class LiveManager:
         self.alarms = AlarmStore(root)
         self.views = ViewStore(root)
         self.viewers = ViewHub(self._view_opener, self._session_for)
-        self.mosaics = MosaicHub(self.views.get, self.viewers)
+        self.drafts = DraftStore()                         # kaydedilmemiş şablonlar: yalnızca bellekte
+        self.mosaics = MosaicHub(lambda vid: self.drafts.get(vid) or self.views.get(vid), self.viewers)
+        self._drafts_stop = threading.Event()
+        self._drafts_reaper: threading.Thread | None = None
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
         self.pose = SharedPose()
@@ -562,6 +571,22 @@ class LiveManager:
     def stop_background(self) -> None:
         """Sunucu kapanırken: kilitli watch.json denemesi durur (kapanıştan sonra oturum açmaz)."""
         self._watch_stop.set()
+        self._drafts_stop.set()
+
+    def ensure_drafts_reaper(self) -> None:
+        """Taslak ilk açılınca başlar: boşta kalan taslakları (10 dk) siler."""
+        with self._lock:
+            if self._drafts_reaper is not None or self._drafts_stop.is_set():
+                return
+            self._drafts_reaper = threading.Thread(target=self._reap_drafts, name="taslak-temizlik", daemon=True)
+            self._drafts_reaper.start()
+
+    def _reap_drafts(self) -> None:
+        while not self._drafts_stop.wait(30.0):
+            try:
+                self.drafts.sweep()
+            except Exception:  # noqa: BLE001 — temizlik iş parçacığı ölmesin
+                _LOG.exception("Taslak temizliği başarısız")
 
     def _restore(self, records: list[dict[str, Any]]) -> int:
         restored = 0
@@ -916,6 +941,32 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def views() -> list[dict[str, Any]]:
         return manager.views.list()
 
+    # Taslaklar `/views/{view_id}` yollarından ÖNCE tanımlanır (aksi halde "drafts" bir şablon kimliği sanılır)
+    @r.post("/views/drafts", status_code=201)
+    def create_draft(body: DraftIn) -> dict[str, Any]:
+        try:
+            d = manager.drafts.create(body.layout, _tile_dicts(body.tiles))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        manager.ensure_drafts_reaper()
+        return d
+
+    @r.put("/views/drafts/{draft_id}")
+    def update_draft(draft_id: str, body: DraftIn) -> dict[str, Any]:
+        try:
+            d = manager.drafts.update(draft_id, body.layout, _tile_dicts(body.tiles))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        if d is None:
+            raise HTTPException(404, "Taslak bulunamadı.")
+        return d
+
+    @r.delete("/views/drafts/{draft_id}", status_code=204)
+    def delete_draft(draft_id: str) -> Response:
+        if not manager.drafts.delete(draft_id):
+            raise HTTPException(404, "Taslak bulunamadı.")
+        return Response(status_code=204)
+
     @r.post("/views")
     def create_view(body: ViewIn) -> dict[str, Any]:
         name, layout, tiles = _view_body(body)
@@ -1009,7 +1060,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.get("/views/{view_id}/status")
     def view_status(view_id: str) -> dict[str, Any]:
-        view = manager.views.get(view_id)
+        view = manager.drafts.get(view_id) or manager.views.get(view_id)
         if view is None:
             raise HTTPException(404, "Şablon bulunamadı.")
         tiles: list[dict[str, Any] | None] = []
@@ -1355,17 +1406,16 @@ def _view_body(body: ViewIn) -> tuple[str, str, list[dict[str, Any] | None]]:
     name = body.name.strip()
     if not name:
         raise HTTPException(422, "Şablon adı boş olamaz.")
-    lay = layout_by_id(body.layout)
-    if lay is None:
-        raise HTTPException(422, "Düzen bulunamadı.")
-    if len(body.tiles) != len(lay.cells):
-        raise HTTPException(422, f"Bu düzende {len(lay.cells)} kutu var; {len(body.tiles)} kutu gönderildi.")
-    tiles: list[dict[str, Any] | None] = [None if t is None else {"sourceId": t.sourceId, "channelId": t.channelId}
-                                          for t in body.tiles]
-    seen = [(t["sourceId"], t["channelId"]) for t in tiles if t]
-    if len(seen) != len(set(seen)):
-        raise HTTPException(422, "Aynı kamera bir şablonda yalnızca bir kez yer alabilir.")
-    return name, lay.id, tiles
+    tiles = _tile_dicts(body.tiles)
+    try:
+        layout = check_layout_tiles(body.layout, tiles)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    return name, layout, tiles
+
+
+def _tile_dicts(tiles: list[TileIn | None]) -> list[dict[str, Any] | None]:
+    return [None if t is None else {"sourceId": t.sourceId, "channelId": t.channelId} for t in tiles]
 
 
 def _default_name(data: dict[str, Any]) -> str:

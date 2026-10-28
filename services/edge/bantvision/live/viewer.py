@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -34,7 +35,16 @@ from .session import open_capture
 _LOG = logging.getLogger(__name__)
 Quality = Literal["sub", "main"]
 Key = tuple[str, str | None, str]
-MAX_SUB = 16
+def _env_max_sub() -> int:
+    """`BV_WATCH_MAX_SUB`: aynı anda en çok kaç alt akış okuyucusu (tam sayı ≥ 1; yoksa/geçersizse 128)."""
+    try:
+        n = int(os.environ.get("BV_WATCH_MAX_SUB", ""))
+    except ValueError:
+        return 128
+    return n if n >= 1 else 128
+
+
+MAX_SUB = _env_max_sub()
 MAX_MAIN = 2
 IDLE_S = 30.0
 REAP_EVERY_S = 5.0
@@ -52,7 +62,7 @@ STOPPED_MSG = "İzleme durduruldu."
 SESSION_TROUBLE = frozenset({"reconnecting", "error", "ended"})
 MAX_WIDTH: dict[str, int] = {"sub": 960, "main": 1920}
 LIMITS: dict[str, tuple[int, str]] = {
-    "sub": (MAX_SUB, "Sınır aşıldı (en çok 16 kamera)."),
+    "sub": (MAX_SUB, f"Sınır aşıldı (en çok {MAX_SUB} kamera)."),
     "main": (MAX_MAIN, "Sınır aşıldı (aynı anda en çok 2 net görüntü)."),
 }
 Opener = Callable[[str, str | None, bool], tuple[Callable[[], str], Callable[[str], None] | None]]
@@ -224,7 +234,8 @@ class ViewHub:
 
     def __init__(self, opener: Opener, find_session: Callable[[str, str | None], Any],
                  capture: Callable[[str], Any] = open_capture, clock: Callable[[], float] = time.monotonic,
-                 reaper: bool = True) -> None:
+                 reaper: bool = True, limits: dict[str, tuple[int, str]] | None = None) -> None:
+        self._limits = LIMITS if limits is None else limits    # (en çok okuyucu, sınır iletisi); testler değiştirebilir
         self._opener, self._find_session, self._capture, self._clock = opener, find_session, capture, clock
         self._lock = threading.Lock()
         self._viewers: dict[Key, CameraViewer] = {}
@@ -365,7 +376,7 @@ class ViewHub:
                 failed = self._open_failed.get(key)
                 if failed is not None and failed[1] > self._clock():
                     return failed[0]                         # açıcı az önce reddetti: JSON yeniden okunmaz
-                limit, msg = LIMITS[quality]
+                limit, msg = self._limits[quality]
                 if sum(1 for k in self._viewers if k[2] == quality) >= limit:
                     evicted = self._evictable(quality)
                     if evicted is None:                      # hepsi kullanılıyor: yer açılmaz (bu red önbelleğe girmez)

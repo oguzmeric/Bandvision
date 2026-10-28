@@ -16,12 +16,14 @@ from bantvision.live.viewer import (
     EVICT_IDLE_S,
     IDLE_S,
     MAX_MAIN,
-    MAX_SUB,
     REJECT_TTL_S,
     SESSION_GRACE_S,
     SourceGone,
     ViewHub,
 )
+
+MAX_SUB = 16                         # sınır mantığı küçük (16) bir sınırla sınanır; varsayılan 128 ayrı test
+LIMITS_16 = {"sub": (MAX_SUB, "Sınır aşıldı (en çok 16 kamera)."), "main": viewer_mod.LIMITS["main"]}
 
 
 class FakeCap:
@@ -90,7 +92,8 @@ def make_hub(caps: Any = None, sessions: dict[tuple[str, str | None], Any] | Non
         opened.append(url)
         return caps(url) if caps else FakeCap()
 
-    hub = ViewHub(opener, lambda s, c: (sessions or {}).get((s, c)), capture=capture, clock=clock, reaper=reaper)
+    hub = ViewHub(opener, lambda s, c: (sessions or {}).get((s, c)), capture=capture, clock=clock, reaper=reaper,
+                   limits=LIMITS_16)
     return hub, opened
 
 
@@ -303,7 +306,7 @@ def test_open_url_error_shows_detail_without_status_prefix(monkeypatch: pytest.M
             raise Boom()                                                         # ilk bağlanışta kayıt cihazı sustu
         return open_url, None
 
-    hub = ViewHub(opener, lambda s, c: None, capture=lambda url: FakeCap(), reaper=False)
+    hub = ViewHub(opener, lambda s, c: None, capture=lambda url: FakeCap(), reaper=False, limits=LIMITS_16)
     try:
         assert hub.tile("hemen", None).message == "Kaynağa ulaşılamadı: Kayıt cihazı yanıt vermedi."
         hub.tile("sonra", None)
@@ -749,7 +752,8 @@ def _counting_hub(clock: Any, gone: set[str]) -> tuple[ViewHub, dict[str, int]]:
             raise SourceGone("Kamera silinmiş.")
         return (lambda: f"rtsp://{source_id}/{channel_id}"), None
 
-    hub = ViewHub(opener, lambda s, c: None, capture=lambda url: FakeCap(), clock=clock, reaper=False)
+    hub = ViewHub(opener, lambda s, c: None, capture=lambda url: FakeCap(), clock=clock, reaper=False,
+                   limits=LIMITS_16)
     return hub, calls
 
 
@@ -797,3 +801,8 @@ def test_limit_rejection_is_not_cached() -> None:
         assert t.state != "error" and hub.open_count("sub") == 1
     finally:
         hub.stop()
+
+
+def test_default_sub_limit_is_128_and_message_follows_it() -> None:
+    assert viewer_mod.MAX_SUB == 128 and viewer_mod.MAX_MAIN == 2
+    assert viewer_mod.LIMITS["sub"] == (128, "Sınır aşıldı (en çok 128 kamera).")

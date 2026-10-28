@@ -19,7 +19,7 @@ from .jsonfile import JsonRead, quarantine, read_json, write_json_atomic
 from .layouts import layout_by_id
 
 _LOG = logging.getLogger(__name__)
-__all__ = ["JsonRead", "ViewStore", "ViewsBusy", "read_json"]
+__all__ = ["JsonRead", "ViewStore", "ViewsBusy", "check_layout_tiles", "read_json"]
 
 
 class ViewsBusy(Exception):
@@ -28,6 +28,19 @@ class ViewsBusy(Exception):
 
 def _num(x: Any) -> bool:
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def check_layout_tiles(layout: str, tiles: list[dict[str, Any] | None]) -> str:
+    """Şablon ve taslak için ortak denetim: düzen kimliğini döndürür; geçersizse `ValueError` (Türkçe ileti)."""
+    lay = layout_by_id(layout)
+    if lay is None:
+        raise ValueError("Düzen bulunamadı.")
+    if len(tiles) != len(lay.cells):
+        raise ValueError(f"Bu düzende {len(lay.cells)} kutu var; {len(tiles)} kutu gönderildi.")
+    seen = [(t["sourceId"], t.get("channelId")) for t in tiles if t]
+    if len(seen) != len(set(seen)):
+        raise ValueError("Aynı kamera bir şablonda yalnızca bir kez yer alabilir.")
+    return lay.id
 
 
 def _valid(rec: Any) -> bool:

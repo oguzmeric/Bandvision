@@ -2239,16 +2239,17 @@ def test_view_and_camera_status_report_stored_limit_rejection(client: TestClient
     from bantvision.live import viewer
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    monkeypatch.setitem(viewer.LIMITS, "sub", (0, "Sınır aşıldı (en çok 16 kamera)."))
+    msg = f"Sınır aşıldı (en çok {viewer.MAX_SUB} kamera)."
+    monkeypatch.setitem(viewer.LIMITS, "sub", (0, msg))
     a = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
                                                         name="Depo")).json()["id"]
     v = client.post("/api/v1/live/views", json={"name": "Bir", "layout": "1",
                                                  "tiles": [{"sourceId": a, "channelId": None}]}).json()
     client.app.state.live.viewers.tile(a, None)                      # reddedilir, okuyucu açılmaz
     t0 = client.get(f"/api/v1/live/views/{v['id']}/status").json()["tiles"][0]
-    assert t0["state"] == "error" and t0["message"] == "Sınır aşıldı (en çok 16 kamera)." and t0["name"] == "Depo"
+    assert t0["state"] == "error" and t0["message"] == msg and t0["name"] == "Depo"
     cam = client.get(f"/api/v1/live/cameras/status?source={a}").json()
-    assert cam["state"] == "error" and cam["message"] == "Sınır aşıldı (en çok 16 kamera)."
+    assert cam["state"] == "error" and cam["message"] == msg
     assert cam["name"] == "Depo" and cam["analysis"] is None
     assert client.app.state.live.viewers.open_count("sub") == 0
 
@@ -2402,3 +2403,73 @@ def test_view_accepts_grid_layout_ids(client: TestClient, layout: str, n: int) -
 def test_view_rejects_grid_over_128_tiles(client: TestClient) -> None:
     r = client.post("/api/v1/live/views", json={"name": "Büyük", "layout": "12x12", "tiles": [None] * 128})
     assert r.status_code == 422 and r.json()["detail"] == "Düzen bulunamadı."
+
+
+def _file_sources(client: TestClient, monkeypatch: pytest.MonkeyPatch, n: int) -> list[str]:
+    """Her biri ayrı kamera sayılan n dosya kaynağı (aynı klip, farklı ad)."""
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    return [client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                            name=f"K{i}")).json()["id"] for i in range(n)]
+
+
+def test_draft_stream_and_status_use_draft(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    a, b = _file_sources(client, monkeypatch, 2)
+    base = "/api/v1/live/views"
+    r = client.post(f"{base}/drafts", json={"layout": "2", "tiles": [{"sourceId": a, "channelId": None}, None]})
+    assert r.status_code == 201, r.text
+    d = r.json()
+    assert d["id"].startswith("draft-") and d["name"] == "Taslak"
+    assert client.get(base).json() == []                                   # taslak şablon listesine girmez
+    r = client.get(f"{base}/{d['id']}/stream?w=640&h=360&limit=1")
+    assert r.status_code == 200 and r.content.count(b"Content-Type: image/jpeg") == 1
+    st = client.get(f"{base}/{d['id']}/status").json()
+    assert [t and t["sourceId"] for t in st["tiles"]] == [a, None]
+    r = client.put(f"{base}/drafts/{d['id']}", json={"layout": "4", "tiles": [
+        {"sourceId": a, "channelId": None}, {"sourceId": b, "channelId": None}, None, None]})
+    assert r.status_code == 200 and r.json()["layout"] == "4"
+    st = client.get(f"{base}/{d['id']}/status").json()
+    assert [t and t["sourceId"] for t in st["tiles"]] == [a, b, None, None]
+    assert client.put(f"{base}/drafts/{d['id']}", json={"layout": "zz", "tiles": []}).status_code == 422
+    assert client.delete(f"{base}/drafts/{d['id']}").status_code == 204
+    assert client.get(f"{base}/{d['id']}/status").status_code == 404
+    assert client.get(f"{base}/{d['id']}/stream?limit=1").status_code == 404
+    assert client.put(f"{base}/drafts/{d['id']}", json={"layout": "1", "tiles": [None]}).status_code == 404
+    assert client.delete(f"{base}/drafts/{d['id']}").status_code == 404
+
+
+def test_draft_rejects_bad_body(client: TestClient) -> None:
+    base = "/api/v1/live/views/drafts"
+    r = client.post(base, json={"layout": "4", "tiles": [None]})
+    assert r.status_code == 422 and r.json()["detail"] == "Bu düzende 4 kutu var; 1 kutu gönderildi."
+    r = client.post(base, json={"layout": "zz", "tiles": []})
+    assert r.status_code == 422 and r.json()["detail"] == "Düzen bulunamadı."
+    assert client.post(base, json={"layout": "1", "tiles": [None], "name": "x"}).status_code == 422
+
+
+def test_reader_limit_env(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live import viewer
+
+    ids = _file_sources(client, monkeypatch, 48)
+    msg = "Sınır aşıldı (en çok 4 kamera)."
+    monkeypatch.setitem(viewer.LIMITS, "sub", (4, msg))
+    tiles = [{"sourceId": i, "channelId": None} for i in ids]
+    d = client.post("/api/v1/live/views/drafts", json={"layout": "6x8", "tiles": tiles}).json()
+    live = client.app.state.live
+    for t in tiles:
+        live.viewers.tile(t["sourceId"], None)
+    st = client.get(f"/api/v1/live/views/{d['id']}/status").json()
+    limited = [t for t in st["tiles"] if t["message"] == msg]
+    assert len(limited) == 44 and len(st["tiles"]) - len(limited) == 4
+    assert live.viewers.open_count("sub") == 4
+    r = client.post("/api/v1/live/views", json={"name": "Büyük", "layout": "6x8", "tiles": tiles})
+    assert r.status_code == 200                                            # kaydetmek sınırdan etkilenmez
+
+
+@pytest.mark.parametrize(("raw", "want"), [("4", 4), ("1", 1), ("0", 128), ("-3", 128), ("abc", 128), ("", 128)])
+def test_max_sub_env_parsing(monkeypatch: pytest.MonkeyPatch, raw: str, want: int) -> None:
+    from bantvision.live import viewer
+
+    monkeypatch.setenv("BV_WATCH_MAX_SUB", raw)
+    assert viewer._env_max_sub() == want
+    monkeypatch.delenv("BV_WATCH_MAX_SUB")
+    assert viewer._env_max_sub() == 128
