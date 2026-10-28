@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { parseKind } from "@/lib/analysisKind";
 import { api, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
 import SourceForm from "./SourceForm";
 import Thumb from "./Thumb";
@@ -84,6 +86,7 @@ function RecorderChannels({ source, sessions, onStart }: {
 }
 
 export default function CamerasView() {
+  const kind = parseKind(useSearchParams().get("tur"));      // /cameras?tur=kisi: başlatma penceresi o türün profilleriyle açılır
   const [sources, setSources] = useState<Source[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -177,7 +180,7 @@ export default function CamerasView() {
                             substream={starting.source.substream}
                             streamChoice={starting.source.kind === "recorder" ? (starting.channel?.hasSubstream ?? true) : starting.source.brand !== "custom"}
                             title={`${starting.source.name}${starting.channel ? ` · ${starting.channel.title}` : ""}`}
-                            onClose={() => setStarting(null)} />
+                            kind={kind} onClose={() => setStarting(null)} />
       )}
     </div>
   );

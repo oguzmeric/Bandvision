@@ -160,3 +160,102 @@ test("kişi sayımı: personel rengi öğret, örnek görünür, sil", async ({ 
   await page.getByRole("link", { name: "Kameralara git" }).click();
   await page.getByTestId("source-card").filter({ hasText: "Giriş kamerası" }).getByRole("button", { name: "Sil" }).click();
 });
+
+/** Sahte oturum: yalnızca süzme için gereken alanlar (sayım yöntemi `countMode`) */
+function fakeSession(id: string, name: string, countMode: string | undefined) {
+  return {
+    id, name, state: "live", message: "", fps: 8, width: 1280, height: 720, counting: true, total: 0, totalOut: 0,
+    staffIn: 0, staffOut: 0, twoWay: countMode === "detect", ratePerMinute: 0, calibrating: null, calibrationMessage: "",
+    sourceId: null, channelId: null, profileId: null, substream: null,
+    profile: { id: `p-${id}`, name: `Profil ${name}`, roi: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, linePosition: 0.5,
+               direction: "down", diffThreshold: 30, expectedArea: 0, splitTouching: false, ...(countMode ? { countMode } : {}) },
+  };
+}
+
+test("analiz süzmesi (sahte API): ?tur= oturumları ve başlatma profillerini türe göre süzer", async ({ page }) => {
+  await login(page);
+  const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  const sessions = [
+    fakeSession("u1", "Bant A", undefined),                  // sayım yöntemi yok = ürün (blob)
+    fakeSession("u2", "Bant B", "linescan"),
+    fakeSession("k1", "Giriş kapısı", "detect"),
+    fakeSession("g1", "Kuyumcu", "safety"),
+  ];
+  const profile = (id: string, name: string, countMode: string) => ({ ...fakeSession(id, name, countMode).profile, id, name });
+  await page.route("**/api/live/sessions", (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: sessions }) : route.continue());
+  await page.route("**/api/live/sessions/*/stream*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route("**/api/live/alarms*", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/live/sources", (route) => route.fulfill({ json: [{
+    id: "src1", kind: "camera", name: "Kapı kamerası", brand: "custom", host: "", port: 554, channel: 1, substream: false, customUrl: "x",
+    recorderBrand: "trassir", httpPort: null, rtspPort: null, username: "", hasPassword: false, createdAt: 1,
+  }] }));
+  await page.route("**/api/live/sources/*/snapshot*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route("**/api/live/profiles", (route) => route.fulfill({ json: [
+    profile("pb", "Yumurta", "blob"), profile("pk", "Mağaza girişi", "detect"), profile("pg", "Kuyumcu güvenliği", "safety"),
+  ] }));
+  await page.route("**/api/live/catalog", (route) => route.fulfill({ json: [
+    { id: "belt", title: "Bant ürünleri", subtitle: "", available: true, presets: [] },
+    { id: "people", title: "Kişi sayımı", subtitle: "", available: true, presets: [] },
+    { id: "safety", title: "Güvenlik alarmı", subtitle: "", available: true, presets: [] },
+  ] }));
+
+  const cards = page.getByTestId("session-card");
+  const nav = page.getByRole("navigation", { name: "Ana menü" });
+
+  // kişi: yalnızca detect oturumları, başlık "Kişi sayımı", menüde o öğe seçili
+  await page.goto("/live?tur=kisi");
+  await expect(page.getByRole("heading", { level: 1, name: "Kişi sayımı" })).toBeVisible();
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toContainText("Giriş kapısı");
+  await expect(nav.getByRole("link", { name: "Kişi sayımı", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("link", { name: "Ürün sayımı", exact: true })).not.toHaveAttribute("aria-current", "page");
+
+  // ürün: blob (sayım yöntemi yok) ve linescan birlikte; ?s= süzmeye uymuyorsa ilk uygun oturum seçilir
+  await page.goto("/live?tur=urun&s=k1");
+  await expect(page.getByRole("heading", { level: 1, name: "Ürün sayımı" })).toBeVisible();
+  await expect(cards).toHaveCount(2);
+  await expect(page.getByRole("tab", { selected: true })).toContainText("Bant A");
+
+  // güvenlik
+  await page.goto("/live?tur=guvenlik");
+  await expect(page.getByRole("heading", { level: 1, name: "Güvenlik alarmı" })).toBeVisible();
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toContainText("Kuyumcu");
+
+  // süzmesiz ve geçersiz tur: tüm oturumlar, hiçbir menü öğesi seçili değil
+  for (const url of ["/live", "/live?tur=bilinmeyen"]) {
+    await page.goto(url);
+    await expect(page.getByRole("heading", { level: 1, name: "Canlı sayım" })).toBeVisible();
+    await expect(cards).toHaveCount(4);
+    await expect(nav.locator("[aria-current]")).toHaveCount(0);
+  }
+
+  // "Yeni analiz" → kamera seç → başlatma penceresinde yalnızca kişi sayımı profilleri
+  await page.goto("/live?tur=kisi");
+  await page.getByRole("link", { name: "+ Yeni analiz" }).click();
+  await expect(page).toHaveURL(/\/cameras\?tur=kisi$/);
+  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
+  await expect(dialog.getByTestId("profile-row")).toHaveCount(1);
+  await expect(dialog.getByTestId("profile-row")).toContainText("Mağaza girişi");
+  await expect(dialog.getByText("Yumurta")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Vazgeç" }).click();
+
+  // süzmesiz kameralar sayfasında tüm profiller sunulur
+  await page.goto("/cameras");
+  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  await expect(page.getByRole("dialog", { name: "Canlı sayımı başlat" }).getByTestId("profile-row")).toHaveCount(3);
+});
+
+test("analiz süzmesi (sahte API): türde oturum yoksa boş durum Yeni analiz bağlantısı verir", async ({ page }) => {
+  await login(page);
+  await page.route("**/api/live/sessions", (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: [fakeSession("u1", "Bant A", "blob")] }) : route.continue());
+  await page.goto("/live?tur=kisi");
+  await expect(page.getByText("Henüz kişi sayımı yok.")).toBeVisible();
+  await expect(page.getByText("Kameralar sayfasından ya da “Yeni analiz” ile başlat.")).toBeVisible();
+  await expect(page.getByTestId("session-card")).toHaveCount(0);
+  await page.getByRole("link", { name: "Yeni analiz" }).click();
+  await expect(page).toHaveURL(/\/cameras\?tur=kisi$/);
+});

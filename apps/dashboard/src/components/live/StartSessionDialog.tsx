@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { KIND_CATEGORY, type AnalysisKind } from "@/lib/analysisKind";
 import { api, type CatalogCategory, type LiveSession, type Profile } from "@/lib/live";
 
 /** Profil hangi sayım türünde (telefondaki ProductCatalog.contains ile aynı) */
@@ -35,8 +36,10 @@ export function StreamChoice({ value, onChange }: { value: boolean; onChange: (s
 }
 
 /** Kamera seçildi: profil seç (ya da hazır profilden ekle) → canlı oturum başlar, canlı sayfaya geçilir */
-export default function StartSessionDialog({ sourceId, channelId, title, substream, streamChoice, onClose }: {
-  sourceId: string; channelId: string | null; title: string; substream: boolean; streamChoice: boolean; onClose: () => void;
+export default function StartSessionDialog({ sourceId, channelId, title, substream, streamChoice, kind, onClose }: {
+  sourceId: string; channelId: string | null; title: string; substream: boolean; streamChoice: boolean;
+  /** Süzülmüş analiz sayfasından gelindiyse yalnızca o türün profilleri sunulur */
+  kind: AnalysisKind | null; onClose: () => void;
 }) {
   const router = useRouter();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -98,7 +101,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
     try {
       const s = await api<LiveSession>("sessions", { method: "POST", json: { sourceId, channelId, profileId: selected, substream: streamChoice ? sub : null } });
       dialog.current?.close();
-      router.push(`/live?s=${s.id}`);
+      router.push(`/live?s=${s.id}${kind ? `&tur=${kind}` : ""}`);
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
@@ -118,7 +121,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
           </div>
         )}
         <div className="grid max-h-[50vh] gap-4 overflow-y-auto pr-1">
-          {catalog.filter((c) => c.available).map((cat) => {
+          {catalog.filter((c) => c.available && (!kind || c.id === KIND_CATEGORY[kind])).map((cat) => {
             const list = (profiles ?? []).filter((p) => categoryOf(p) === cat.id);
             return (
               <div key={cat.id}>
@@ -169,7 +172,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
               </div>
             );
           })}
-          {catalog.filter((c) => !c.available).length > 0 && (
+          {!kind && catalog.filter((c) => !c.available).length > 0 && (
             <p className="text-xs text-faint">Yakında: {catalog.filter((c) => !c.available).map((c) => c.title).join(", ")}</p>
           )}
         </div>

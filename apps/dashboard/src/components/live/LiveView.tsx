@@ -12,6 +12,7 @@ import StaffColors from "./StaffColors";
 import { SafetyPanel, SafetySettings } from "./SafetyPanel";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, safetyHealth, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
+import { kindOfMode, KIND_TITLE, parseKind } from "@/lib/analysisKind";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "brand" | "in" | "out"; hint?: string; testId: string }) {
@@ -88,10 +89,14 @@ const btn = "h-10 rounded-[10px] border border-line bg-white px-3 text-sm font-m
 export default function LiveView() {
   const router = useRouter();
   const params = useSearchParams();
-  const [sessions, setSessions] = useState<LiveSession[] | null>(null);
+  const [all, setSessions] = useState<LiveSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const selectedId = params.get("s") ?? sessions?.[0]?.id ?? null;
-  const session = sessions?.find((s) => s.id === selectedId) ?? null;
+  // ?tur= ile süzülmüş görünüm (yoksa ya da geçersizse tüm oturumlar); süzme profilin sayım yöntemine göre
+  const kind = parseKind(params.get("tur"));
+  const turQuery = kind ? `&tur=${kind}` : "";
+  const sessions = all && kind ? all.filter((s) => kindOfMode(s.profile.countMode ?? "blob") === kind) : all;
+  // ?s= yalnızca süzmeye uyuyorsa geçerli; yoksa süzülmüş listenin ilki seçilir
+  const session = sessions?.find((s) => s.id === params.get("s")) ?? sessions?.[0] ?? null;
 
   // kalibrasyon taslağı (sunucudaki oturuma anında uygulanır; Kaydet ile profile yazılır, İptal ile geri alınır)
   const [draft, setDraft] = useState<Profile | null>(null);
@@ -224,7 +229,7 @@ export default function LiveView() {
       : "Canlı sayım kapatılsın mı? Sayılar sıfırlanır.";
     if (!session || !confirm(text)) return;
     await api(`sessions/${session.id}`, { method: "DELETE" }).catch(() => undefined);
-    router.replace("/live");
+    router.replace(kind ? `/live?tur=${kind}` : "/live");
     load();
   }
 
@@ -247,9 +252,19 @@ export default function LiveView() {
     return (
       <section className="card grid min-h-[320px] place-items-center p-8 text-center">
         <div>
-          <p className="font-medium">Açık canlı sayım yok</p>
-          <p className="mt-1 text-sm text-muted">Kameralar sayfasından bir kamera seçip &quot;Canlı sayım&quot;ı başlat.</p>
-          <Link href="/cameras" className="brand-gradient mt-4 inline-flex h-10 items-center rounded-[11px] px-4 text-sm font-semibold text-white">Kameralara git</Link>
+          {kind ? (
+            <>
+              <p className="font-medium">Henüz {KIND_TITLE[kind].toLocaleLowerCase("tr")} yok.</p>
+              <p className="mt-1 text-sm text-muted">Kameralar sayfasından ya da &ldquo;Yeni analiz&rdquo; ile başlat.</p>
+              <Link href={`/cameras?tur=${kind}`} className="brand-gradient mt-4 inline-flex h-10 items-center rounded-[11px] px-4 text-sm font-semibold text-white">Yeni analiz</Link>
+            </>
+          ) : (
+            <>
+              <p className="font-medium">Açık canlı sayım yok</p>
+              <p className="mt-1 text-sm text-muted">Kameralar sayfasından bir kamera seçip &quot;Canlı sayım&quot;ı başlat.</p>
+              <Link href="/cameras" className="brand-gradient mt-4 inline-flex h-10 items-center rounded-[11px] px-4 text-sm font-semibold text-white">Kameralara git</Link>
+            </>
+          )}
         </div>
       </section>
     );
@@ -268,11 +283,11 @@ export default function LiveView() {
       <div className="mb-4 grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2.5" role="tablist" aria-label="Canlı sayımlar">
         {sessions.map((s) => (
           <SessionCard key={s.id} s={s} selected={s.id === session.id}
-                       onSelect={() => { setDraft(null); router.replace(`/live?s=${s.id}`); }} />
+                       onSelect={() => { setDraft(null); router.replace(`/live?s=${s.id}${turQuery}`); }} />
         ))}
-        <Link href="/cameras"
+        <Link href={kind ? `/cameras?tur=${kind}` : "/cameras"}
               className="grid min-h-[76px] place-items-center rounded-2xl border border-dashed border-line px-3 text-[13px] font-medium text-muted transition hover:border-brand-100 hover:text-brand-500">
-          + Kamera ekle
+          {kind ? "+ Yeni analiz" : "+ Kamera ekle"}
         </Link>
       </div>
       {error && <p role="alert" className="mb-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
