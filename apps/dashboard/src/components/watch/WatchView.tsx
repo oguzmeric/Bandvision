@@ -37,6 +37,18 @@ const DELETED_ELSEWHERE = "Bu şablon başka yerde silindi; değişiklikler kayd
 const RESTORED = "Kaydedilmemiş değişiklikler geri yüklendi.";
 const RESTORED_CHANGED = "Şablon bu arada başka yerde değiştirildi; kaydederseniz bu değişiklikler onun yerine geçer.";
 const RESTORED_DELETED = "Şablon bu arada başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.";
+const CHANGED_ELSEWHERE = "Bu şablon başka yerde değiştirildi. Üzerine yazılsın mı?";
+const NOT_FOUND = "Şablon bulunamadı; başka yerde silinmiş olabilir.";
+
+/**
+ * Sekmenin düzenleme geçmişi ve temeli: düzenleme başladığında şablonun sunucudaki `updatedAt` değeri (kaydedilmemiş yeni
+ * sekmede null). Temel sonraki liste yenilemelerini izlemez; Kaydet sunucudaki güncel değer farklıysa üzerine yazmadan sorar.
+ */
+type Edit = { tabId: string; hist: History; base: number | null };
+/** Düzenlemenin temeli: süren (kaydedilmemiş) düzenlemede aynı kalır; kayıtlı hâlden başlayan düzenlemede şablonun şimdiki değeri */
+function baseOf(cur: { edit: Edit | null; dirty: boolean; viewAt: number | null }, tabId: string): number | null {
+  return cur.edit && cur.edit.tabId === tabId && cur.dirty ? cur.edit.base : cur.viewAt;
+}
 
 /**
  * Kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı (sessionStorage; sekmeler arası taşmaz). Geri/İleri, yenileme
@@ -96,6 +108,7 @@ type Naming = { title: string; initial: string; submit: (name: string) => Promis
  * analiz sunucusunda bir taslak açılır ve ızgara taslağın akışını gösterir; "Kaydet" tıklanana dek şablon değişmez.
  * Kaydedilmemiş değişiklikle sekme değiştirmek, menüden başka sayfaya gitmek ya da sayfayı kapatmak sorulur; tarayıcının
  * Geri/İleri düğmesi sorulmaz: düzenleme bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir.
+ * Kaydet, şablon bu düzenleme başladıktan sonra başka yerde değiştirildiyse üzerine yazmadan önce sorar.
  */
 export default function WatchView() {
   const [layouts, setLayouts] = useState<ViewLayout[]>([]);
@@ -106,8 +119,8 @@ export default function WatchView() {
   /** Kaydedilmemiş yeni şablonun sekmesi (kimlik, ad); yeni şablon yalnız seçiliyken vardır */
   const [fresh, setFresh] = useState<{ id: string; name: string } | null>(null);
   const localSeq = useRef(0);
-  /** Düzenleme geçmişi; yalnız `tabId` sekmesi seçiliyken geçerli (yoksa kayıtlı şablonun kendisi gösterilir) */
-  const [edit, setEdit] = useState<{ tabId: string; hist: History } | null>(null);
+  /** Düzenleme geçmişi ve temeli; yalnız `tabId` sekmesi seçiliyken geçerli (yoksa kayıtlı şablonun kendisi gösterilir) */
+  const [edit, setEdit] = useState<Edit | null>(null);
   /** Seçili kutu: listeden tıklanan kamera buraya yerleşir */
   const [selected, setSelected] = useState<number | null>(null);
   /** Izgaranın klavye sekme durağı (gezici sekme sırası: ok tuşları kutudan kutuya); seçimden bağımsız */
@@ -144,10 +157,10 @@ export default function WatchView() {
   const discarded = useRef<string | null>(null);
   /** Güncel değerler (işleyiciler ve `reload` sabit kalsın diye ref üzerinden okunur); her çizimde aşağıda doldurulur */
   const live = useRef({
-    edit: null as { tabId: string; hist: History } | null,
+    edit: null as Edit | null,
     hist: null as History | null, currentId: null as string | null, present: null as Draft | null, selected: null as number | null,
     single: null as Single | null, byKey: new Map<string, TileStatus>(), labels: {} as Record<string, string>, dirty: false,
-    layout: null as ViewLayout | null, tabName: null as string | null,
+    layout: null as ViewLayout | null, tabName: null as string | null, viewAt: null as number | null,
   });
   const keepAsNew = useRef<(notice: string) => void>(() => undefined);
   /**
@@ -157,6 +170,8 @@ export default function WatchView() {
   const restore = useRef<"pending" | "applying" | "done" | UnsavedEntry>("pending");
   /** Geri yükleme bildirimi ("Değişiklikleri at" ile) */
   const [restored, setRestored] = useState<string | null>(null);
+  /** Bildirim kalkınca odaklanacak sekme ("Değişiklikleri at" düğmesiyle odak sayfaya düşmesin) */
+  const focusTab = useRef<string | null>(null);
   /** Kullanıcı çıkmayı onayladı (bağlantı, Çıkış): saklanan düzenleme silindi, sayfa kapanana dek yeniden yazılmaz */
   const dropped = useRef(false);
 
@@ -176,10 +191,12 @@ export default function WatchView() {
         keepAsNew.current(DELETED_ELSEWHERE);
         return true;
       }
+      // Açık sekme (kaydedilmemiş yeni şablon da) listede kaldıkça değişmez. Hatırlanan sekme yalnız sayfa açılırken
+      // seçilir: tarayıcının bütün sekmelerinde ortaktır, başka sekmedeki seçim buradaki düzenlemeyi kapatmasın
       setCurrentId((cur) => {
-        if (isLocal(cur)) return cur;                       // kaydedilmemiş yeni şablon açık kalır
+        if (isLocal(cur) || (cur && v.some((x) => x.id === cur))) return cur;
         const want = remembered();
-        return want && v.some((x) => x.id === want) ? want : cur && v.some((x) => x.id === cur) ? cur : v[0]?.id ?? null;
+        return want && v.some((x) => x.id === want) ? want : v[0]?.id ?? null;
       });
       return true;
     } catch (e) {
@@ -221,15 +238,17 @@ export default function WatchView() {
     if (currentId && !isLocal(currentId)) remember(currentId);
   }, [currentId]);
   // Kayıtlı şablon değişti (başka cihazda düzenlendi): düzenleme yoksa (kayıtlı hâl gösteriliyordu) yenisi izlenir;
-  // kaydedilmemiş düzenleme varsa korunur. Kaydet sonrası (düzenlenen = kayıtlı) geçmiş de korunur.
-  const prevSaved = useRef<Draft | null>(null);
+  // kaydedilmemiş düzenleme varsa korunur. Kaydet sonrası (düzenlenen = kayıtlı) geçmiş de korunur. Yalnız AYNI sekmenin
+  // önceki kayıtlı hâline bakılır: sekme değişince (ör. geri yüklenen düzenleme, hatırlanan başka sekmenin kayıtlı hâline
+  // eşit) düzenleme atılmaz.
+  const prevSaved = useRef<{ id: string | null; draft: Draft } | null>(null);
   useEffect(() => {
     const prev = prevSaved.current;
-    prevSaved.current = saved;
-    if (!saved) return;
+    prevSaved.current = saved ? { id: currentId, draft: saved } : null;
+    if (!saved || !prev || prev.id !== currentId) return;
     setEdit((e) => {
       if (!e || e.tabId !== currentId || sameContent(e.hist.present, saved)) return e;
-      return prev && sameContent(e.hist.present, prev) ? null : e;
+      return sameContent(e.hist.present, prev.draft) ? null : e;
     });
   }, [saved, currentId]);
 
@@ -246,6 +265,8 @@ export default function WatchView() {
   useEffect(() => {
     const entry = restore.current;
     if (!loaded || typeof entry !== "object") return;
+    // Liste beklenirken kayıt silindiyse (Çıkış) geri yüklenmez: silinen düzenleme yeniden yazılmasın
+    if (readUnsaved() === null) { restore.current = "done"; return; }
     const lay = layoutFor(entry.layout, layouts);
     if (!lay) { restore.current = "done"; clearUnsaved(); return; }
     const content = { layout: entry.layout, tiles: retile(entry.tiles, lay.cells.length).tiles };
@@ -255,7 +276,7 @@ export default function WatchView() {
       if (sameContent(content, sv)) { restore.current = "done"; clearUnsaved(); return; }
       restore.current = "applying";
       setCurrentId(v.id);
-      setEdit({ tabId: v.id, hist: push(initHistory(sv), { ...content, name: v.name }) });
+      setEdit({ tabId: v.id, hist: push(initHistory(sv), { ...content, name: v.name }), base: entry.updatedAt });
       setRestored(entry.updatedAt !== null && v.updatedAt !== entry.updatedAt ? `${RESTORED} ${RESTORED_CHANGED}` : RESTORED);
       return;
     }
@@ -265,11 +286,12 @@ export default function WatchView() {
     const name = entry.name.trim() || newName(views.map((x) => x.name));
     setFresh({ id, name });
     setCurrentId(id);
-    setEdit({ tabId: id, hist: initHistory({ ...content, name }) });
+    setEdit({ tabId: id, hist: initHistory({ ...content, name }), base: null });
     setRestored(isLocal(entry.origin) ? RESTORED : `${RESTORED} ${RESTORED_DELETED}`);
   }, [loaded, views, layouts]);
-  // Düzenleme her değişince saklanır; kaydedilmemiş değişiklik kalmayınca (kaydet, geri al, vazgeç, at) silinir
-  const updatedAt = view?.updatedAt ?? null;
+  // Düzenleme her değişince saklanır (temeliyle; liste yenilense de temel değişmez); kaydedilmemiş değişiklik kalmayınca
+  // (kaydet, geri al, vazgeç, at) silinir
+  const base = edit && edit.tabId === currentId ? edit.base : null;
   useEffect(() => {
     const r = restore.current;
     if (r === "pending" || typeof r === "object") return;    // saklanan kayıt henüz uygulanmadı: silinmesin
@@ -279,12 +301,18 @@ export default function WatchView() {
     }
     if (dropped.current) return;
     if (dirty && present && currentId) {
-      writeUnsaved({ v: 1, origin: currentId, name: tabName, layout: present.layout, tiles: present.tiles, updatedAt });
+      writeUnsaved({ v: 1, origin: currentId, name: tabName, layout: present.layout, tiles: present.tiles, updatedAt: base });
     } else {
       clearUnsaved();
     }
-  }, [dirty, present, currentId, tabName, updatedAt]);
+  }, [dirty, present, currentId, tabName, base]);
   useEffect(() => { if (!dirty) setRestored(null); }, [dirty]);
+  useEffect(() => {
+    const id = focusTab.current;
+    if (!id) return;
+    focusTab.current = null;
+    document.getElementById(tabDomId(id))?.focus();
+  }, [restored, currentId]);
 
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
   const draftBody = useMemo(() => (dirty && present && layout ? { layout: present.layout, tiles: present.tiles } : null),
@@ -406,12 +434,12 @@ export default function WatchView() {
 
   // ---- düzenleme (geçmişe yazılır)
 
-  live.current = { edit, hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName };
+  live.current = { edit, hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName, viewAt: view?.updatedAt ?? null };
   const commit = useCallback((next: Draft) => {
     const { hist: h, currentId: id } = live.current;
     if (!h || !id) return;
     dropped.current = false;
-    setEdit({ tabId: id, hist: push(h, next) });
+    setEdit({ tabId: id, hist: push(h, next), base: baseOf(live.current, id) });
   }, []);
   const place = useCallback((i: number, ref: TileRef, label?: string) => {
     const p = live.current.present;
@@ -455,11 +483,11 @@ export default function WatchView() {
   };
   const doUndo = useCallback(() => {
     const { hist: h, currentId: id } = live.current;
-    if (h && id && canUndo(h)) { setEdit({ tabId: id, hist: undo(h) }); setNote(null); }
+    if (h && id && canUndo(h)) { setEdit({ tabId: id, hist: undo(h), base: baseOf(live.current, id) }); setNote(null); }
   }, []);
   const doRedo = useCallback(() => {
     const { hist: h, currentId: id } = live.current;
-    if (h && id && canRedo(h)) { setEdit({ tabId: id, hist: redo(h) }); setNote(null); }
+    if (h && id && canRedo(h)) { setEdit({ tabId: id, hist: redo(h), base: baseOf(live.current, id) }); setNote(null); }
   }, []);
   // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): yazı kutusu, açık pencere ya da tek kamera dışında
   useEffect(() => {
@@ -500,7 +528,7 @@ export default function WatchView() {
     if (!h) return;
     const id = `${LOCAL_PREFIX}${++localSeq.current}`;
     setFresh({ id, name: name || newName([]) });
-    setEdit({ tabId: id, hist: h });
+    setEdit({ tabId: id, hist: h, base: null });
     setCurrentId(id);
     setInfo(notice);
   };
@@ -510,11 +538,16 @@ export default function WatchView() {
   /** Kaydedilmemiş değişiklik varsa sorar; ayrılmak serbestse true */
   const leaveOk = () => !dirty || window.confirm(UNSAVED_TEXT);
   const clearMessages = () => { setInfo(null); setError(null); };
-  /** Geri yüklenen değişiklikleri atar: şablon kayıtlı hâline döner; kaydedilmemiş yeni sekme kapanır */
+  /**
+   * Geri yüklenen değişiklikleri atar: şablon kayıtlı hâline döner; kaydedilmemiş yeni sekme kapanır. Bildirim düğmesiyle
+   * birlikte kalktığından odak açık sekmeye geçer (sayfaya düşmez).
+   */
   const discardRestored = () => {
     setRestored(null);
-    if (isNew) setCurrentId(views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null);
+    const to = isNew ? views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null : currentId;
+    if (isNew) setCurrentId(to);
     else setEdit(null);
+    focusTab.current = to;
   };
   const selectTab = (id: string) => {
     if (id === currentId || !leaveOk()) return;
@@ -528,7 +561,7 @@ export default function WatchView() {
     const id = `${LOCAL_PREFIX}${++localSeq.current}`;
     setFresh({ id, name });
     setCurrentId(id);
-    setEdit({ tabId: id, hist: initHistory({ ...newDraft(layouts), name }) });
+    setEdit({ tabId: id, hist: initHistory({ ...newDraft(layouts), name }), base: null });
     setSelected(null);
     setNote(null);
   };
@@ -546,7 +579,7 @@ export default function WatchView() {
     setViews((vs) => [...vs.filter((x) => x.id !== v.id), v]);
     const go = cur === origin && (carry || now === start.edit);
     if (go) {
-      setEdit((e) => (carry && e && e.tabId === origin ? { tabId: v.id, hist: e.hist } : null));
+      setEdit((e) => (carry && e && e.tabId === origin ? { tabId: v.id, hist: e.hist, base: v.updatedAt } : null));
       setCurrentId(v.id);
     }
     void reload();
@@ -569,14 +602,25 @@ export default function WatchView() {
       const v = await api<ViewTemplate>("views", { method: "POST", json: body });
       if (!adopt(v, start, true)) setInfo(added(v));
     } else if (view) {
+      /** Şablon başka yerde silinmiş: düzenleme kaydedilmemiş yeni sekmede kalır (yeniden "Kaydet" yeni şablon yazar) */
+      const gone = (e: Error) => {
+        if (live.current.currentId !== origin) throw e;
+        setViews((vs) => vs.filter((x) => x.id !== view.id));
+        keepAsNew.current(DELETED_ELSEWHERE);
+      };
+      // Sunucudaki güncel hâl hemen önce alınır: bu düzenleme başladıktan sonra başka yerde değiştirildiyse üzerine yazmadan
+      // sorulur (Vazgeç: yazılmaz, düzenleme kalır). Sunucuda sürüm koşulu yok: okuma ile yazma arasında kısa bir pencere kalır.
+      const base = edit && edit.tabId === view.id ? edit.base : null;
+      const cur = (await api<ViewTemplate[]>("views")).find((x) => x.id === view.id);
+      if (!cur) { gone(new Error(NOT_FOUND)); return; }
+      if (base !== null && cur.updatedAt !== base && !window.confirm(CHANGED_ELSEWHERE)) return;
       try {
         const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
         setViews((vs) => vs.map((x) => (x.id === v.id ? v : x)));
+        setEdit((e) => (e && e.tabId === v.id ? { ...e, base: v.updatedAt } : e));     // kaydedilen hâl yeni temel
       } catch (e) {
-        // Şablon başka yerde silinmiş: düzenleme kaydedilmemiş yeni sekmede kalır (yeniden "Kaydet" yeni şablon yazar)
-        if (!(e instanceof ApiError && e.status === 404) || live.current.currentId !== origin) throw e;
-        setViews((vs) => vs.filter((x) => x.id !== view.id));
-        keepAsNew.current(DELETED_ELSEWHERE);
+        if (!(e instanceof ApiError && e.status === 404)) throw e;
+        gone(e);
       }
     }
   });
@@ -607,13 +651,15 @@ export default function WatchView() {
     setNaming({
       title: "Yeniden adlandır", initial: v.name,
       // Yalnız ad değişir: sunucudaki GÜNCEL düzen ve kutular gider (başka yerdeki düzenleme geri alınmaz); bu sekmedeki
-      // kaydedilmemiş düzenleme olduğu gibi kalır
+      // kaydedilmemiş düzenleme olduğu gibi kalır. Şablon düzenlemenin temelinden beri değişmediyse ad değişikliği kendi
+      // değişikliğimizdir: temel yeni hâle geçer (Kaydet sormaz); değiştiyse temel kalır (Kaydet yine sorar)
       submit: async (name) => {
         const list = await api<ViewTemplate[]>("views");
         const cur = list.find((x) => x.id === v.id);
-        if (!cur) throw new Error("Şablon bulunamadı; başka yerde silinmiş olabilir.");
+        if (!cur) throw new Error(NOT_FOUND);
         const n = await api<ViewTemplate>(`views/${v.id}`, { method: "PUT", json: { name, layout: cur.layout, tiles: cur.tiles } });
         setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
+        setEdit((e) => (e && e.tabId === n.id && e.base === cur.updatedAt ? { ...e, base: n.updatedAt } : e));
         setNaming(null);
       },
     });
