@@ -1,23 +1,8 @@
 @import "tailwindcss";
 
-/* BandVision paneli. Lavanta/mor renkler (canvas, line, ink, brand…) yalnızca izleme sayfasında (yeniden yapılana dek) kaldı;
-   panel sayfaları aşağıdaki gri-mavi pl-* renklerini ve .pl-* sınıflarını kullanır. */
+/* BandVision paneli: sade görünüm (TRASSIR'a yakın gri-mavi pl-* renkleri ve .pl-* sınıfları); durum renkleri ok/nok/warn. */
 @theme {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-
-  --color-canvas: #f6f5fc;
-  --color-canvas-2: #efedfa;
-  --color-card: #ffffff;
-  --color-line: #e7e4f3;
-  --color-ink: #1d1a2e;
-  --color-muted: #6e6a85;
-  --color-faint: #9a96b0;
-
-  --color-brand-50: #f1ecfe;
-  --color-brand-100: #e3d9fd;
-  --color-brand-500: #6d3bf0;
-  --color-brand-600: #5b2bd6;
-  --color-accent-500: #e0368c;
 
   --color-ok-50: #e6f6ee;
   --color-ok-600: #169c62;
@@ -53,18 +38,6 @@ body {
   background: var(--color-pl-bg);
   color: var(--color-pl-ink);
   min-height: 100%;
-}
-
-/* .card ve .brand-gradient yalnızca izleme sayfası (yeniden yapılana dek) için duruyor */
-.card {
-  background: var(--color-card);
-  border: 1px solid var(--color-line);
-  border-radius: 18px;
-  box-shadow: 0 1px 2px rgb(29 26 46 / 0.04), 0 8px 24px rgb(29 26 46 / 0.04);
-}
-
-.brand-gradient {
-  background: linear-gradient(90deg, var(--color-brand-500), var(--color-accent-500));
 }
 
 /* Sade görünümün yapı taşları: 1 px kenarlık, gölge yok, 2–4 px köşe. Bileşen katmanında: Tailwind sınıfları ezebilir. */

@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 /**
  * Sade arayüz bekçisi: panel sayfalarında, giriş sayfasında ve onların bileşenlerinde eski kart görünümünün izleri
  * kalmaz (büyük yuvarlak köşe, gölge, yarı saydam beyaz zemin, bulanık arka plan, lavanta/mor renkler, .card/.eyebrow).
- * İzleme sayfası (app/(panel)/watch, components/watch) ayrı yeniden yapılır; burada taranmaz.
  * Dosyanın her satırı taranır: sınıf adı className'de, sabitte, şablon dizgisinde ya da çok satırlı dizgide olsa da yakalanır.
  */
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,8 +18,8 @@ const ROOTS = [
   "components/settings",
   "components/geometry",
   "components/about",
+  "components/watch",
 ];
-const SKIP = new Set([path.join("app", "(panel)", "watch")]);
 /** src/lib/*.ts (yalnızca bu klasör, alt klasörsüz): sınıf adı ya da renk sabitleri burada da tutulabilir */
 const LIB = "lib";
 
@@ -48,7 +47,6 @@ function walk(dir) {
   const out = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
-    if (SKIP.has(path.relative(SRC, p))) continue;
     if (e.isDirectory()) out.push(...walk(p));
     else if (e.name.endsWith(".tsx")) out.push(p);
   }
@@ -60,6 +58,8 @@ test("panel sayfaları, giriş sayfası ve bileşenleri: eski kart görünümü 
   const files = [...ROOTS.flatMap((r) => walk(path.join(SRC, r))), ...lib];
   assert.ok(lib.length >= 10, `taranan lib dosyası az: ${lib.length}`);
   assert.ok(files.some((f) => f.includes(`${path.sep}login${path.sep}`)), "giriş sayfası taranmadı");
+  assert.ok(files.some((f) => f.endsWith(path.join("components", "watch", "WatchView.tsx"))), "izleme bileşenleri taranmadı");
+  assert.ok(files.some((f) => f.endsWith(path.join("app", "(panel)", "watch", "page.tsx"))), "izleme sayfası taranmadı");
   assert.ok(files.length >= 40, `taranan dosya az: ${files.length}`);
   const hits = [];
   for (const f of files) {
@@ -72,13 +72,15 @@ test("panel sayfaları, giriş sayfası ve bileşenleri: eski kart görünümü 
   assert.deepEqual(hits, [], `eski görünüm izleri:\n${hits.join("\n")}`);
 });
 
-test("globals.css: düz beyaz zemin, .eyebrow yok", () => {
+test("globals.css: düz beyaz zemin; .eyebrow, .card, .brand-gradient ve lavanta/mor renkler yok", () => {
   const css = readFileSync(path.join(SRC, "app", "globals.css"), "utf8");
   const body = css.match(/html,\s*body\s*\{([^}]*)\}/);
   assert.ok(body, "html, body kuralı yok");
   assert.match(body[1], /background:\s*var\(--color-pl-bg\);/);
   assert.doesNotMatch(body[1], /gradient|canvas/);
   assert.doesNotMatch(css, /\.eyebrow\b/);
+  assert.doesNotMatch(css, /\.card\b|\.brand-gradient\b/);
+  assert.doesNotMatch(css, /--color-(?:canvas|card|line|ink|muted|faint|brand|accent)\b/);
 });
 
 test("bekçi kalıpları: eski izleri yakalar, sade sınıflara takılmaz", () => {
