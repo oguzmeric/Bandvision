@@ -108,37 +108,42 @@ function TileOverlay({ layout, index, filled, tile, label, selected, active, onO
             {badge(tile.analysis).text}
           </span>
         )}
-        {alarm && (
-          <button type="button" aria-label={`Alarmı aç: ${ALARM_TITLES[alarm.type]}`}
-                  tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
-                  // dokunmatikte sola yaslanır: sağ altta "⋯" (Kutu işlemleri) düğmesine yer kalır, üst üste binmez
-                  className="absolute inset-x-0 bottom-2 mx-auto w-max max-w-[calc(100%-12px)] truncate rounded-[2px] bg-nok-600 px-2 py-1 text-[12px] font-bold text-white [@media(hover:none)]:left-1.5 [@media(hover:none)]:right-auto [@media(hover:none)]:mx-0 [@media(hover:none)]:max-w-[calc(100%-56px)]">
-            {ALARM_TITLES[alarm.type]}
-          </button>
-        )}
         {state && (
           <span className="pointer-events-none absolute inset-0 grid place-items-center p-2 text-center text-[12px] text-white/90">
             {state}
           </span>
         )}
-        {filled && (selected || alarm) && (
-          // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine. Alarmlı kutuda da
-          // görünür: ona dokunmak alarmı açtığından kutu bu menüdeki "Seç" ile seçilir
-          <button type="button" aria-label="Kutu işlemleri" aria-haspopup="menu" tabIndex={-1}
-                  onClick={(e) => { e.stopPropagation(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }}
-                  className="absolute bottom-1.5 right-1.5 hidden h-7 min-w-9 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid">⋯</button>
-        )}
         {filled && (
-          // Fareyle üstüne gelince ya da klavye odağında küçük düğmeler: büyüt, canlı sayıma git, boşalt. Dokunmatikte
-          // gösterilmez (dokunuş kutuyu seçer, ikinci dokunuş açar; küçük kutuda düğmeler dokunuşun altına girmesin)
-          <span className="absolute bottom-1.5 right-1.5 hidden max-w-[calc(100%-12px)] flex-wrap justify-end gap-1 group-focus-visible:flex group-has-[:focus-visible]:flex [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-focus-within:flex">
-            <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onOpen(index); }}
-                    className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Tam ekran</button>
-            <Link href={liveHref(tile?.analysis)} tabIndex={active ? 0 : -1} onClick={(e) => e.stopPropagation()} draggable={false}
-                  className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Canlı sayıma git</Link>
-            <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onEmpty(index); }}
-                    className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Boşalt</button>
-          </span>
+          // Alt şerit: alarm etiketi, dokunmatikte "⋯" ve kutu düğmeleri aynı satırın öğeleridir, biri ötekinin altında
+          // kalmaz. Etiket tek başınayken ortadadır; sağda "⋯" ya da kutu düğmeleri görününce (ml-auto boşluğu alır) sola
+          // yaslanır ve dar kutuda kısalır (…)
+          <div className="absolute inset-x-1.5 bottom-1.5 flex items-end justify-center gap-1">
+            {alarm && (
+              <button type="button" aria-label={`Alarmı aç: ${ALARM_TITLES[alarm.type]}`}
+                      tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
+                      className="min-w-0 truncate rounded-[2px] bg-nok-600 px-2 py-1 text-[12px] font-bold text-white">
+                {ALARM_TITLES[alarm.type]}
+              </button>
+            )}
+            {(selected || alarm) && (
+              // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine. Alarmlı kutuda da
+              // görünür: ona dokunmak alarmı açtığından kutu bu menüdeki "Seç" ile seçilir. Klavye odağında kutu düğmeleri
+              // çıkınca gizlenir (aynı işler orada; menü Shift+F10 ile açılır); kendisi odaktayken gizlenmez
+              <button type="button" aria-label="Kutu işlemleri" aria-haspopup="menu" tabIndex={-1}
+                      onClick={(e) => { e.stopPropagation(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }}
+                      className="ml-auto hidden h-7 min-w-9 shrink-0 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid group-focus-visible:hidden group-has-[:focus-visible:not([aria-haspopup])]:hidden">⋯</button>
+            )}
+            {/* Fareyle üstüne gelince ya da klavye odağında küçük düğmeler: büyüt, canlı sayıma git, boşalt. Dokunmatikte
+                yalnız klavye odağında (dokunuş kutuyu seçer, ikinci dokunuş açar; küçük kutuda düğmeler dokunuşun altına girmesin) */}
+            <span className="ml-auto hidden flex-wrap justify-end gap-1 group-focus-visible:flex group-has-[:focus-visible]:flex [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-focus-within:flex">
+              <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onOpen(index); }}
+                      className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Tam ekran</button>
+              <Link href={liveHref(tile?.analysis)} tabIndex={active ? 0 : -1} onClick={(e) => e.stopPropagation()} draggable={false}
+                    className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Canlı sayıma git</Link>
+              <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onEmpty(index); }}
+                      className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Boşalt</button>
+            </span>
+          </div>
         )}
       </div>
     </div>
