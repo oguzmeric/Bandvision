@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NAV, isCurrent, type NavItem } from "@/lib/nav";
+import { UNSAVED_KEY } from "@/lib/views";
 import { useUnsavedGuard } from "./UnsavedGuard";
 
 /** Kapalı grupların başlıkları (JSON dizi); her tarayıcıda ayrı hatırlanır */
@@ -194,6 +195,9 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
           <button type="button"
                   onClick={async () => {
                     if (!confirmLeave()) return;
+                    // Canlı izlemedeki kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı her sayfadan çıkışta silinir
+                    // (Canlı izlemeden Geri ile çıkılmış olabilir): sonraki girişte geri yüklenmez
+                    try { window.sessionStorage.removeItem(UNSAVED_KEY); } catch { /* depo yok */ }
                     await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
                     window.location.assign("/login");          // göreli: ana makine adı değişmez
                   }}
