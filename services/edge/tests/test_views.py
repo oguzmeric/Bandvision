@@ -94,6 +94,24 @@ def test_corrupt_views_file_is_quarantined(tmp_path: pathlib.Path) -> None:
     assert (tmp_path / "live" / "views.json.corrupt").exists()
 
 
+@pytest.mark.parametrize("ticks", [[100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 99.0, 50.0]],
+                         ids=["ayni-saat", "geri-giden-saat"])
+def test_update_always_increases_updated_at(tmp_path: pathlib.Path, ticks: list[float]) -> None:
+    """Panelin Kaydet çakışma denetimi `updatedAt` farkına bakar: saat aynı kalsa (Windows'ta ~15,6 ms adım) ya da geri
+    gitse de her güncelleme kesin olarak daha büyük bir değer yazar."""
+    clock = iter(ticks)
+    store = ViewStore(tmp_path, clock=lambda: next(clock))
+    v = store.create("Giriş", "1", [None])
+    seen = [v["updatedAt"]]
+    for name in ("A", "B", "C"):
+        u = store.update(v["id"], name, "1", [None])
+        assert u is not None
+        assert u["updatedAt"] > seen[-1]
+        seen.append(u["updatedAt"])
+    assert [x["updatedAt"] for x in store.list()] == [seen[-1]]
+    assert ViewStore(tmp_path).list()[0]["updatedAt"] == seen[-1]      # diske de aynısı yazıldı
+
+
 def test_locked_views_file_is_never_overwritten(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from bantvision.live import views as views_mod
 

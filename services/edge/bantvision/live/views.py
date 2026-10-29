@@ -141,8 +141,10 @@ class ViewStore:
             for i, v in enumerate(self._views):
                 if v["id"] == view_id:
                     old = self._views[i]
+                    # Her güncellemede kesin olarak artar (saat aynı adımda kalsa ya da geri gitse de): panelin Kaydet
+                    # çakışma denetimi `updatedAt` farkına bakar
                     self._views[i] = {**v, "name": name, "layout": layout, "tiles": copy.deepcopy(tiles),
-                                      "updatedAt": max(self._clock(), v["updatedAt"])}
+                                      "updatedAt": max(self._clock(), math.nextafter(v["updatedAt"], math.inf))}
                     try:
                         self._save()
                     except ViewsBusy:

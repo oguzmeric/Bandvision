@@ -147,7 +147,7 @@ Birden çok kamerayı tek ekranda şablonlu ızgarada izlemek için ortak dil (w
 "Eşit" düzenlerde hücreler soldan sağa, yukarıdan aşağıya `[x, y, 1, 1]` sırasıyla dizilir.
 
 **Şablon** (`view-template.schema.json`): `{id, name, layout, tiles, createdAt, updatedAt}`.
-- `name` 1–60 karakter; `layout` yukarıdaki düzen kimliklerinden biri ya da **N×M kimliği** (aşağıda); `createdAt` / `updatedAt` Unix saniyesi.
+- `name` 1–60 karakter; `layout` yukarıdaki düzen kimliklerinden biri ya da **N×M kimliği** (aşağıda); `createdAt` / `updatedAt` Unix saniyesi; `updatedAt` her güncellemede kesin olarak artar (saat aynı kalsa ya da geri gitse de: panelin Kaydet çakışma denetimi bu farka bakar).
 - `tiles` uzunluğu düzenin hücre sayısına eşittir. Her öğe `null` (boş kutu) ya da `{sourceId, channelId}` olur; tek kamerada (kanalsız kaynak) `channelId` `null`'dır.
 - Aynı kamera (`sourceId` + `channelId`) bir şablonda en fazla bir kez yer alır.
 - Şema yalnızca biçimi denetler. `tiles` uzunluğunun düzenle uyumu ve kameranın tekrarsızlığı alanlar arası kurallardır; şablonu kaydeden taraf (web'de analiz sunucusu) denetler.
