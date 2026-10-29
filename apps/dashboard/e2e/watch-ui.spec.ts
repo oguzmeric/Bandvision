@@ -1202,76 +1202,120 @@ test("klavye: ızgara tek sekme durağı, ok tuşları gezdirir, odak seçmez; E
   await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");
 });
 
-/** 2. kutuda en uzun adlı alarm ("YERDE YATAN KİŞİ") */
-const LYING = { ...STATUS, tiles: STATUS.tiles.map((t, i) => (i === 1 && t ? { ...t, analysis: { ...(t.analysis as object), alarm: { id: "al2", type: "lying" } } } : t)) };
-/** Kutunun üstüne gelince / klavye odağında çıkan kutu düğmeleri */
-const tileActions = (tile: Locator) => [tile.getByRole("button", { name: "Tam ekran" }), tile.getByRole("link", { name: "Canlı sayıma git" }),
-  tile.getByRole("button", { name: "Boşalt" })];
-/** Alarm etiketi kutu düğmelerinin altında kalmaz ve kutunun içindedir */
-async function labelClear(tile: Locator) {
-  const label = (await tile.getByRole("button", { name: /^Alarmı aç/ }).boundingBox())!;
+const fmt = (b: Box) => `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}×${Math.round(b.height)}`;
+/**
+ * Kutunun GÖRÜNEN katman parçaları (`data-part`: ad, rozet, alarm etiketi, ⋯, kutu düğmeleri) ikişer ikişer üst üste
+ * binmez ve hepsi kutunun içindedir (yumuşak denetim: bütün ihlaller birlikte raporlanır). Görünen parçaların adlarını
+ * (sıralı) döndürür.
+ */
+async function partsClear(tile: Locator, what: string): Promise<string[]> {
   const box = (await tile.boundingBox())!;
-  for (const a of tileActions(tile)) {
-    await expect(a).toBeVisible();
-    expect(overlaps(label, (await a.boundingBox())!)).toBe(false);
+  const parts = tile.locator("[data-part]");
+  const seen: Array<{ part: string; b: Box }> = [];
+  for (let i = 0, n = await parts.count(); i < n; i++) {
+    const p = parts.nth(i);
+    if (!(await p.isVisible())) continue;
+    const b = (await p.boundingBox())!;
+    const part = (await p.getAttribute("data-part"))!;
+    const inside = b.x >= box.x - 0.5 && b.y >= box.y - 0.5 && b.x + b.width <= box.x + box.width + 0.5 && b.y + b.height <= box.y + box.height + 0.5;
+    expect.soft(inside, `${what}: ${part} kutunun dışına taşıyor (${fmt(b)}; kutu ${fmt(box)})`).toBe(true);
+    for (const o of seen) expect.soft(overlaps(o.b, b), `${what}: ${o.part} ile ${part} üst üste (${fmt(o.b)}; ${fmt(b)})`).toBe(false);
+    seen.push({ part, b });
   }
-  expect(label.x).toBeGreaterThanOrEqual(box.x);
-  expect(label.x + label.width).toBeLessThanOrEqual(box.x + box.width);
+  return seen.map((s) => s.part).sort();
 }
 
-test.describe("masaüstü 1280 px, 4×4", () => {
-  test.use({ viewport: { width: 1280, height: 800 } });
+/** Boyut matrisi şablonu: 0. kutu alarmlı (güvenlik, "YERDE YATAN KİŞİ", rozet "Nöbette"), 1. kutu kişi sayımı (uzun ad, geniş rozet) */
+function sized(layoutId: string) {
+  const known = (LAYOUTS as Array<{ id: string; cells: unknown[] }>).find((l) => l.id === layoutId);
+  const count = known ? known.cells.length : layoutId.split("x").map(Number).reduce((a, b) => a * b, 1);
+  const refs = [{ sourceId: "b", channelId: "2" }, { sourceId: "a", channelId: null }];
+  const tiles = Array.from({ length: count }, (_, i) => refs[i] ?? null);
+  const live = { state: "live", message: "", fps: 10 };
+  const statusTiles = tiles.map((t, i) => (!t ? null : i === 0
+    ? { ...t, ...live, name: "Ofis NVR · Kasa", analysis: { mode: "safety", sessionId: "s2", name: "Kuyumcu güvenliği", healthy: true,
+      reason: null, alarm: { id: "al2", type: "lying" } } }
+    : { ...t, ...live, name: "Mağaza girişi kamerası", analysis: { mode: "detect", sessionId: "s1", name: "Mağaza girişi", entered: 120,
+      exited: 99, alarm: null } }));
+  return { count, view: { ...VIEW, layout: layoutId, tiles }, status: { id: "v1", layout: layoutId, tiles: statusTiles } };
+}
 
-  test("alarmlı kutunun üstüne gelince kutu düğmeleri alarm etiketini örtmez", async ({ page }) => {
-    const view16 = { ...VIEW, layout: "16", tiles: [...VIEW.tiles, ...Array(12).fill(null)] };
-    await mock(page, { ...LYING, layout: "16", tiles: [...LYING.tiles, ...Array(12).fill(null)] }, view16);
-    await login(page);
-    const tile = page.getByTestId("watch-tile").nth(1);
-    await expect(page.getByTestId("watch-tile")).toHaveCount(16);
-    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeVisible();
-    await page.mouse.move(0, 0);
-    for (const a of tileActions(tile)) await expect(a).toBeHidden();                 // üstüne gelmeden düğme yok
-    await tile.hover();
-    await labelClear(tile);
+/**
+ * Görünmesi gereken parçalar: katman yoğunluğu (`data-tier`), cihaz ve duruma göre. `alarm`: alarmlı kutu (0.); öteki kişi
+ * sayımı kutusu (1.). "focus": kutu ya da içindeki öğe klavye odağında.
+ */
+function expectedParts(tier: string, touch: boolean, state: "idle" | "hover" | "selected" | "focus", alarm: boolean): string[] {
+  if (tier === "tiny") return ["badge"];
+  const full = tier === "full";
+  const parts = ["badge"];
+  if (alarm) parts.push("alarm");
+  if (full || !alarm) parts.push("name");                                         // küçük alarmlı kutuda adın yerinde etiket
+  if (full && (state === "hover" || state === "focus")) parts.push("actions");
+  const more = touch ? (alarm || state === "selected") && !(full && state === "focus") : !full && state === "hover";
+  if (more) parts.push("more");
+  return parts.sort();
+}
+
+/** Ölçülen kutu boyutları ve beklenen katman yoğunluğu (eşikler layoutGrid.mjs `tileTier`) */
+const MATRIX = [
+  { name: "masaüstü 1280 px", use: { viewport: { width: 1280, height: 800 } }, touch: false,
+    ids: [["1", "full"], ["4", "full"], ["16", "full"], ["5x5", "full"], ["8x8", "small"], ["8x16", "tiny"]] },
+  { name: "dokunmatik 390 px", use: { viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true }, touch: true,
+    ids: [["1", "full"], ["4", "full"], ["9", "small"], ["16", "small"]] },
+];
+for (const m of MATRIX) {
+  test.describe(`kutu katmanı, ${m.name}`, () => {
+    test.use(m.use);
+    for (const [id, tier] of m.ids) {
+      test(`${id}: görünen parçalar (ad, rozet, alarm etiketi, ⋯, kutu düğmeleri) üst üste binmez ve kutunun içindedir`, async ({ page }) => {
+        const { view, status, count } = sized(id);
+        await mock(page, status, view);
+        await login(page);
+        const tiles = page.getByTestId("watch-tile");
+        await expect(tiles).toHaveCount(count);
+        const alarm = tiles.nth(0);
+        await expect(alarm).toHaveAttribute("data-alarm", "true");
+        if (!m.touch) await page.mouse.move(0, 0);
+        const b = (await alarm.boundingBox())!;
+        console.log(`ÖLÇÜ ${m.name} ${id}: kutu ${b.width.toFixed(1)}×${b.height.toFixed(1)}`);
+        await expect(alarm).toHaveAttribute("data-tier", tier);
+        const other = tiles.nth(1);
+        // durum gelince (rozet) her durumda görünen parçalar beklenenlerdir, ikişer ikişer binmez, kutudan taşmaz
+        await expect(alarm.locator("[data-part=badge]")).toBeAttached();
+        if (count > 1) await expect(other.locator("[data-part=badge]")).toBeAttached();
+        expect(await partsClear(alarm, `${id} boşta`)).toEqual(expectedParts(tier, m.touch, "idle", true));
+        if (count > 1) expect(await partsClear(other, `${id} 2. kutu boşta`)).toEqual(expectedParts(tier, m.touch, "idle", false));
+        if (m.touch) {
+          if (count > 1) {
+            await other.tap();                                                          // seçili kutuda ⋯
+            await expect(other).toHaveAttribute("data-selected", "true");
+            expect(await partsClear(other, `${id} 2. kutu seçili`)).toEqual(expectedParts(tier, true, "selected", false));
+          }
+        } else {
+          await alarm.hover();
+          expect(await partsClear(alarm, `${id} üstüne gelince`)).toEqual(expectedParts(tier, false, "hover", true));
+          if (count > 1) {
+            await other.hover();
+            expect(await partsClear(other, `${id} 2. kutunun üstüne gelince`)).toEqual(expectedParts(tier, false, "hover", false));
+          }
+          await page.mouse.move(0, 0);
+        }
+        await alarm.focus();
+        await page.keyboard.press("Home");                                              // klavye odağı (focus-visible)
+        await expect(alarm).toBeFocused();
+        expect(await alarm.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
+        expect(await partsClear(alarm, `${id} klavye odağında`)).toEqual(expectedParts(tier, m.touch, "focus", true));
+        await page.keyboard.press("Tab");                                               // kutunun içindeki ilk öğe: alarm etiketi
+        if (tier !== "tiny") await expect(alarm.getByRole("button", { name: /^Alarmı aç/ })).toBeFocused();
+        expect(await partsClear(alarm, `${id} kutunun içinde klavye odağı`))
+          .toEqual(tier === "tiny" ? ["badge"] : expectedParts(tier, m.touch, "focus", true));
+      });
+    }
   });
-});
+}
 
 test.describe("dokunmatik dar ekran (390 px)", () => {
   test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
-
-  test("alarmlı kutuda ⋯ düğmesi alarm etiketiyle üst üste binmez (2×2, uzun alarm adı)", async ({ page }) => {
-    await mock(page, LYING);
-    await login(page);
-    const tile = page.getByTestId("watch-tile").nth(1);
-    const label = tile.getByRole("button", { name: /^Alarmı aç/ });
-    const more = tile.getByRole("button", { name: "Kutu işlemleri" });
-    await expect(label).toBeVisible();
-    await expect(more).toBeVisible();
-    const b = (await more.boundingBox())!;
-    expect(overlaps((await label.boundingBox())!, b)).toBe(false);
-    expect(b.x + b.width).toBeLessThanOrEqual((await tile.boundingBox())!.x + (await tile.boundingBox())!.width);
-  });
-
-  test("klavye odağındaki alarmlı kutuda kutu düğmeleri ne alarm etiketini ne ⋯ düğmesini örter", async ({ page }) => {
-    await mock(page, LYING);
-    await login(page);
-    const tiles = page.getByTestId("watch-tile");
-    const tile = tiles.nth(1);
-    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeVisible();
-    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeVisible();
-    await tiles.nth(0).focus();
-    await page.keyboard.press("ArrowRight");                                          // klavyeyle alarmlı kutuya
-    await expect(tile).toBeFocused();
-    expect(await tile.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
-    await labelClear(tile);
-    // kutu düğmeleri görünürken ⋯ gizlenir (aynı işler düğmelerde; klavyede Shift+F10 menüyü açar)
-    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeHidden();
-    // kutunun içindeki odak (alarm etiketi) da aynı
-    await page.keyboard.press("Tab");
-    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeFocused();
-    await labelClear(tile);
-    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeHidden();
-  });
 
   test("dirty iken aynı adrese bağlantı (menüde Canlı izleme): gezinmez, düzenleme kalır, menü kapanır", async ({ page }) => {
     await mock(page, STATUS);
@@ -1795,6 +1839,85 @@ test("Kaydet: değişmemiş şablonda sormaz; kaydetmek ve burada yeniden adland
   await save.click();
   await expect.poll(() => puts(calls).length).toBe(5);
   expect(dialogs).toEqual(['"Bahçe" şablonu silinsin mi?', CHANGED]);
+});
+
+/** Kaydet'in hemen önceki şablon listesi isteğini (GET views) bekletir; `release` ile bırakılır */
+async function holdListGet(page: Page) {
+  const h = { on: false, held: 0, release: () => undefined as void, gate: Promise.resolve() };
+  await page.route("**/api/live/views", async (r) => {
+    if (h.on && r.request().method() === "GET") { h.held += 1; await h.gate; }
+    return r.fallback();
+  });
+  return {
+    arm: () => { h.on = true; h.gate = new Promise<void>((res) => { h.release = () => { h.on = false; res(); }; }); },
+    held: () => h.held,
+    release: () => h.release(),
+  };
+}
+
+test("Kaydet: denetim isteği sürerken başka sekmeye geçilirse (atma onaylandı) ne üzerine yazma sorulur ne kaydedilir", async ({ page }) => {
+  await mock(page, STATUS, [VIEW, V2]);
+  const { calls, store } = await mockStore(page, [{ ...VIEW }, { ...V2 }]);
+  const list = await holdListGet(page);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  Object.assign(store[0], { updatedAt: 9 });                                         // başka yerde de değişti
+  list.arm();
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => list.held()).toBe(1);                                     // liste isteği bekliyor
+  await tab(page, "Depo katı").click();                                              // "Kaydedilmedi, çıkılsın mı?" → Tamam
+  await expect(tab(page, "Depo katı")).toHaveAttribute("aria-selected", "true");
+  list.release();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeEnabled();   // kayıt işlemi bitti
+  expect(dialogs).toEqual([UNSAVED]);
+  expect(puts(calls)).toHaveLength(0);
+  await tab(page, "Giriş katı").click();
+  await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");                  // düzenleme atıldı, şablon değişmedi
+});
+
+test("Kaydet: denetim isteği sürerken 'Değişiklikleri at' ile düzenleme atılırsa kaydedilmez", async ({ page }) => {
+  await mock(page, STATUS);
+  const { calls } = await mockStore(page, [{ ...VIEW }]);
+  const list = await holdListGet(page);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  await page.evaluate((e) => sessionStorage.setItem("bv.watch.unsaved", JSON.stringify(e)), ENTRY);
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  list.arm();
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => list.held()).toBe(1);
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  list.release();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeEnabled();
+  expect(dialogs).toEqual([]);
+  expect(puts(calls)).toHaveLength(0);
+  await expect(page.getByTestId("watch-tile").nth(3)).toHaveAttribute("data-empty", "true");
+});
+
+test("geri yükleme: hiç kayıtlı şablon yokken 'Değişiklikleri at' sonrası odak '+' (Yeni şablon) düğmesine geçer", async ({ page }) => {
+  await mock(page, STATUS, []);
+  await mockStore(page, []);
+  await login(page);
+  await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
+  page.on("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "Yeni şablon", exact: true }).click();
+  await camera(page, "Kapı").click();
+  await expect.poll(() => stored(page)).toMatchObject({ name: "Yeni şablon" });
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeFocused();
+  await expect.poll(() => stored(page)).toBeNull();
 });
 
 test("geri yükleme: hatırlanan sekme başka olsa ve düzenleme onun kayıtlı hâline eşit olsa da düzenleme kendi sekmesinde açılır; değişmemiş şablonda Kaydet sormaz", async ({ page }) => {
