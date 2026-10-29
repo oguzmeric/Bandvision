@@ -16,7 +16,7 @@ test("özet kipi, girişsiz: sayfa giriş formuna yeniden yazılır; API okuma v
   await page.goto("/watch");
   await expect(page.getByRole("heading", { name: "BandVision" })).toBeVisible();
   await expect(page.getByLabel("Şifre")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "İzleme" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Canlı izleme" })).toHaveCount(0);
   for (const p of ["/api/jobs", "/api/access", "/api/live/health"]) {
     expect((await request.get(p)).status(), p).toBe(401);
   }
@@ -47,7 +47,7 @@ test("özet kipi: doğru şifre oturum çerezi verir ve /watch açılır; çerez
   await page.getByLabel("Şifre").fill(PASSWORD);
   await page.getByRole("button", { name: "Giriş yap" }).click();
   await expect(page).toHaveURL(/\/watch$/);
-  await expect(page.getByRole("heading", { name: "İzleme" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Canlı izleme" })).toBeVisible();
 
   const cookie = (await page.context().cookies()).find((c) => c.name === "bv_session");
   expect(cookie?.httpOnly).toBe(true);

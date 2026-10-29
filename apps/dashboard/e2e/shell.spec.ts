@@ -248,7 +248,7 @@ test.describe("telefon (390×844)", () => {
     await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toBeFocused();
   });
 
-  // İzleme (/watch) ayrı yeniden yapılıyor; o sayfanın telefon görünümü kendi testinde
+  // Canlı izleme (/watch) 390 px görünümü kendi testinde (e2e/watch-ui.spec.ts: sekmeler yatay kayar, sayfa taşmaz)
   const PAGES: { path: string; ready: (page: Page) => Locator }[] = [
     { path: "/live", ready: (p) => p.locator("main h1") },
     { path: "/live?tur=kisi", ready: (p) => p.getByRole("heading", { level: 1, name: "Kişi sayımı" }) },
