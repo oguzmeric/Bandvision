@@ -13,11 +13,17 @@ export interface TileAnalysis {
   alarm: { id: string; type: AlarmType } | null;
 }
 export interface TileStatus { sourceId: string; channelId: string | null; name: string; state: "connecting" | "live" | "error"; message: string; fps: number; analysis: TileAnalysis | null }
+/** Kaydedilmemiş şablon taslağı (`views/drafts`): yalnızca analiz sunucusunun belleğinde, akış/durum istenmezse 10 dk'da silinir */
+export interface ViewDraft { id: string; layout: string; tiles: Array<TileRef | null>; name: string; createdAt: number; updatedAt: number }
 export interface ViewStatus { id: string; layout: string; tiles: Array<TileStatus | null> }
 /** `cameras/status` cevabı: kutu durumuyla aynı, kaynak/kanal kimliği olmadan */
 export type CameraStatus = Omit<TileStatus, "sourceId" | "channelId">;
 
 export const LAST_VIEW_KEY = "bv.watch.last";
+/** Düzenleme taslağı sunucuya bu kadar durulduktan sonra yazılır */
+export const DRAFT_DEBOUNCE_MS = 300;
+/** Kaydedilmemiş düzenlemeyle sekme/sayfa değiştirirken sorulur */
+export const UNSAVED_TEXT = "Kaydedilmedi, çıkılsın mı?";
 export const STATUS_POLL_MS = 1500;
 export const STREAM_RETRY_MS = 2000;
 /** Şablon listesi alınamazsa (analiz sunucusu yok) bu aralıkla yeniden denenir */
@@ -82,11 +88,4 @@ export function copyName(name: string, taken: Iterable<string>, max = 60): strin
     const candidate = `${base}${tail}`;
     if (!used.has(candidate)) return candidate;
   }
-}
-
-/** Düzen değişince kutular sırasıyla korunur; sığmayanlar düşer (kaç kamera düştüğü uyarı için döner) */
-export function retile(tiles: Array<TileRef | null>, count: number): { tiles: Array<TileRef | null>; dropped: number } {
-  const next = tiles.slice(0, count);
-  while (next.length < count) next.push(null);
-  return { tiles: next, dropped: tiles.slice(count).filter(Boolean).length };
 }

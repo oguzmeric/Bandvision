@@ -2,7 +2,8 @@
 
 import { useCallback, useId, useMemo, useState } from "react";
 import { api, type Source } from "@/lib/live";
-import { cellBox, retile, type TileRef, type ViewLayout, type ViewTemplate } from "@/lib/views";
+import { cellBox, type TileRef, type ViewLayout, type ViewTemplate } from "@/lib/views";
+import { retile } from "@/lib/templateEdit.mjs";
 import CameraList, { refKey } from "./CameraList";
 
 const droppedNote = (n: number) => `${n} kamera düzene sığmadı ve şablondan çıkarıldı.`;
