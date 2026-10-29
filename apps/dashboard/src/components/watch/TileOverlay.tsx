@@ -111,7 +111,8 @@ function TileOverlay({ layout, index, filled, tile, label, selected, active, onO
         {alarm && (
           <button type="button" aria-label={`Alarmı aç: ${ALARM_TITLES[alarm.type]}`}
                   tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
-                  className="absolute inset-x-0 bottom-2 mx-auto w-max rounded-[2px] bg-nok-600 px-2 py-1 text-[12px] font-bold text-white">
+                  // dokunmatikte sola yaslanır: sağ altta "⋯" (Kutu işlemleri) düğmesine yer kalır, üst üste binmez
+                  className="absolute inset-x-0 bottom-2 mx-auto w-max max-w-[calc(100%-12px)] truncate rounded-[2px] bg-nok-600 px-2 py-1 text-[12px] font-bold text-white [@media(hover:none)]:left-1.5 [@media(hover:none)]:right-auto [@media(hover:none)]:mx-0 [@media(hover:none)]:max-w-[calc(100%-56px)]">
             {ALARM_TITLES[alarm.type]}
           </button>
         )}
@@ -125,7 +126,7 @@ function TileOverlay({ layout, index, filled, tile, label, selected, active, onO
           // görünür: ona dokunmak alarmı açtığından kutu bu menüdeki "Seç" ile seçilir
           <button type="button" aria-label="Kutu işlemleri" aria-haspopup="menu" tabIndex={-1}
                   onClick={(e) => { e.stopPropagation(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }}
-                  className="absolute bottom-1.5 left-1.5 hidden h-7 min-w-9 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid">⋯</button>
+                  className="absolute bottom-1.5 right-1.5 hidden h-7 min-w-9 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid">⋯</button>
         )}
         {filled && (
           // Fareyle üstüne gelince ya da klavye odağında küçük düğmeler: büyüt, canlı sayıma git, boşalt. Dokunmatikte

@@ -23,3 +23,8 @@ export function canRedo(h: History): boolean;
 export function isDirty(h: History, saved: Pick<Draft, "layout" | "tiles"> | null): boolean;
 export function validateGrid(rows: number, cols: number): string | null;
 export function neighbor(layout: ViewLayout, index: number, dir: "up" | "down" | "left" | "right"): number;
+/** Tarayıcı sekmesinde saklanan kaydedilmemiş düzenleme (sessionStorage) */
+export interface UnsavedEntry {
+  v: 1; origin: string; name: string; layout: string; tiles: Array<TileRef | null>; updatedAt: number | null;
+}
+export function parseUnsaved(raw: string | null): UnsavedEntry | null;

@@ -20,6 +20,8 @@ export interface ViewStatus { id: string; layout: string; tiles: Array<TileStatu
 export type CameraStatus = Omit<TileStatus, "sourceId" | "channelId">;
 
 export const LAST_VIEW_KEY = "bv.watch.last";
+/** Kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı (sessionStorage) */
+export const UNSAVED_KEY = "bv.watch.unsaved";
 /** Düzenleme taslağı sunucuya bu kadar durulduktan sonra yazılır */
 export const DRAFT_DEBOUNCE_MS = 300;
 /** Kaydedilmemiş düzenlemeyle sekme/sayfa değiştirirken sorulur */

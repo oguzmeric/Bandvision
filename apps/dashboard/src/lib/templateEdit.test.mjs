@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  EDITOR_LAYOUTS, HISTORY_LIMIT, applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, push,
+  EDITOR_LAYOUTS, HISTORY_LIMIT, applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push,
   redo, refKey, retile, sameContent, swap, undo, validateGrid,
 } from "./templateEdit.mjs";
 
@@ -148,4 +148,30 @@ test("neighbor: ok tuşlarıyla geometrik komşu kutu; kenarda yerinde kalır", 
   assert.equal(neighbor(three, 2, "left"), 0);
   assert.equal(neighbor(three, 1, "down"), 2);
   assert.equal(neighbor(three, 2, "down"), 2);
+});
+
+test("parseUnsaved: geçerli kaydı okur; bozuk ya da geçersiz içerik yok sayılır", () => {
+  const ok = { v: 1, origin: "v1", name: "Giriş katı", layout: "6x8", tiles: [cam("a"), null, cam("b", "2")], updatedAt: 5 };
+  assert.deepEqual(parseUnsaved(JSON.stringify(ok)), ok);
+  assert.deepEqual(parseUnsaved(JSON.stringify({ ...ok, layout: "4", updatedAt: null, tiles: [{ sourceId: "a" }] })),
+    { ...ok, layout: "4", updatedAt: null, tiles: [cam("a")] });                       // channelId yoksa null
+  for (const bad of [
+    "", "{", "null", "[]", "5",
+    JSON.stringify({ ...ok, v: 2 }),
+    JSON.stringify({ ...ok, origin: "" }),
+    JSON.stringify({ ...ok, origin: 7 }),
+    JSON.stringify({ ...ok, name: 3 }),
+    JSON.stringify({ ...ok, layout: "16x9" }),                                         // 144 kutu
+    JSON.stringify({ ...ok, layout: "0x4" }),
+    JSON.stringify({ ...ok, layout: "abc" }),
+    JSON.stringify({ ...ok, layout: "123456" }),
+    JSON.stringify({ ...ok, tiles: "x" }),
+    JSON.stringify({ ...ok, tiles: Array.from({ length: 129 }, () => null) }),
+    JSON.stringify({ ...ok, tiles: [{ sourceId: 5 }] }),
+    JSON.stringify({ ...ok, tiles: [{ sourceId: "" }] }),
+    JSON.stringify({ ...ok, tiles: [{ sourceId: "a", channelId: 2 }] }),
+    JSON.stringify({ ...ok, tiles: ["a"] }),
+    JSON.stringify({ ...ok, updatedAt: "dün" }),
+  ]) assert.equal(parseUnsaved(bad), null, bad);
+  assert.equal(parseUnsaved(null), null);
 });

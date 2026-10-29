@@ -7,11 +7,11 @@ import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
 import { layoutFor } from "@/lib/layoutGrid.mjs";
 import {
-  applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, push, redo, refKey, sameContent, swap, undo,
-  type Draft, type History,
+  applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push, redo, refKey, retile,
+  sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
 } from "@/lib/templateEdit.mjs";
 import {
-  copyName, LAST_VIEW_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize, UNSAVED_TEXT,
+  copyName, LAST_VIEW_KEY, UNSAVED_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize, UNSAVED_TEXT,
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
 import CameraList, { type CamState } from "./CameraList";
@@ -34,6 +34,28 @@ const isDraftId = (id: string) => id.startsWith("draft-");
 const droppedNote = (n: number) => `${n} kamera düzene sığmadı ve şablondan çıkarıldı. Geri al ile geri getirilebilir.`;
 const FULL_HINT = "Bütün kutular dolu: değiştirmek istediğiniz kutuyu seçin ya da önce bir kutuyu boşaltın.";
 const DELETED_ELSEWHERE = "Bu şablon başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.";
+const RESTORED = "Kaydedilmemiş değişiklikler geri yüklendi.";
+const RESTORED_CHANGED = "Şablon bu arada başka yerde değiştirildi; kaydederseniz bu değişiklikler onun yerine geçer.";
+const RESTORED_DELETED = "Şablon bu arada başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.";
+
+/**
+ * Kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı (sessionStorage; sekmeler arası taşmaz). Geri/İleri, yenileme
+ * ya da çökmeden sonra Canlı izlemeye dönünce geri yüklenir. Depo yoksa ya da kayıt bozuksa sessizce yok sayılır (ve silinir).
+ */
+function readUnsaved(): UnsavedEntry | null {
+  try {
+    const raw = window.sessionStorage.getItem(UNSAVED_KEY);
+    const entry = parseUnsaved(raw);
+    if (raw !== null && !entry) window.sessionStorage.removeItem(UNSAVED_KEY);
+    return entry;
+  } catch { return null; }
+}
+function writeUnsaved(entry: UnsavedEntry): void {
+  try { window.sessionStorage.setItem(UNSAVED_KEY, JSON.stringify(entry)); } catch { /* depolama yok ya da dolu */ }
+}
+function clearUnsaved(): void {
+  try { window.sessionStorage.removeItem(UNSAVED_KEY); } catch { /* depolama yok */ }
+}
 
 /** Durum, şablonun bu hâline mi ait: aynı düzen ve her kutuda aynı kamera (boş kutu boş) */
 function sameTiles(status: ViewStatus, view: ViewTemplate): boolean {
@@ -72,7 +94,8 @@ type Naming = { title: string; initial: string; submit: (name: string) => Promis
  * Düzenleme her zaman açıktır: düzen düğmesi, sürükle-bırak, dokun-seç ya da Boşalt şablonun düzenlenen hâlini değiştirir
  * (geri al / yinele geçmişi, sekme başına, sayfa yenilenince silinir). Düzenlenen hâl kayıtlı şablondan farklıysa
  * analiz sunucusunda bir taslak açılır ve ızgara taslağın akışını gösterir; "Kaydet" tıklanana dek şablon değişmez.
- * Kaydedilmemiş değişiklikle sekme değiştirmek, menüden başka sayfaya gitmek ya da sayfayı kapatmak sorulur.
+ * Kaydedilmemiş değişiklikle sekme değiştirmek, menüden başka sayfaya gitmek ya da sayfayı kapatmak sorulur; tarayıcının
+ * Geri/İleri düğmesi sorulmaz: düzenleme bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir.
  */
 export default function WatchView() {
   const [layouts, setLayouts] = useState<ViewLayout[]>([]);
@@ -127,6 +150,15 @@ export default function WatchView() {
     layout: null as ViewLayout | null, tabName: null as string | null,
   });
   const keepAsNew = useRef<(notice: string) => void>(() => undefined);
+  /**
+   * Saklanan düzenlemenin geri yüklenmesi: "pending" (depo henüz okunmadı), okunan kayıt (liste gelince uygulanacak),
+   * "applying" (uygulandı, düzenleme çizilince saklama yeniden başlar), "done". Bitene dek saklanan kayıt silinmez.
+   */
+  const restore = useRef<"pending" | "applying" | "done" | UnsavedEntry>("pending");
+  /** Geri yükleme bildirimi ("Değişiklikleri at" ile) */
+  const [restored, setRestored] = useState<string | null>(null);
+  /** Kullanıcı çıkmayı onayladı (bağlantı, Çıkış): saklanan düzenleme silindi, sayfa kapanana dek yeniden yazılmaz */
+  const dropped = useRef(false);
 
   /**
    * Şablon ve düzen listesini alır; başarıyı döndürür. Seçili şablon silinmişse kalanlardan birine geçilir; ama
@@ -201,9 +233,58 @@ export default function WatchView() {
     });
   }, [saved, currentId]);
 
-  // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, sayfayı kapatma)
-  useEffect(() => { guard.setDirty(dirty); }, [dirty, guard]);
+  // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, Çıkış, sayfayı kapatma); çıkış onaylanınca saklanan düzenleme silinir
+  useEffect(() => {
+    guard.setDirty(dirty, () => { dropped.current = true; clearUnsaved(); });
+  }, [dirty, guard]);
   useEffect(() => () => guard.setDirty(false), [guard]);
+
+  // Saklanan düzenleme: sayfa açılınca okunur (yalnız tarayıcıda), liste gelince uygulanır
+  useEffect(() => {
+    if (restore.current === "pending") restore.current = readUnsaved() ?? "done";
+  }, []);
+  useEffect(() => {
+    const entry = restore.current;
+    if (!loaded || typeof entry !== "object") return;
+    const lay = layoutFor(entry.layout, layouts);
+    if (!lay) { restore.current = "done"; clearUnsaved(); return; }
+    const content = { layout: entry.layout, tiles: retile(entry.tiles, lay.cells.length).tiles };
+    const v = isLocal(entry.origin) ? null : views.find((x) => x.id === entry.origin) ?? null;
+    if (v) {
+      const sv = { layout: v.layout, tiles: v.tiles, name: v.name };
+      if (sameContent(content, sv)) { restore.current = "done"; clearUnsaved(); return; }
+      restore.current = "applying";
+      setCurrentId(v.id);
+      setEdit({ tabId: v.id, hist: push(initHistory(sv), { ...content, name: v.name }) });
+      setRestored(entry.updatedAt !== null && v.updatedAt !== entry.updatedAt ? `${RESTORED} ${RESTORED_CHANGED}` : RESTORED);
+      return;
+    }
+    // Kaydedilmemiş yeni şablon ya da bu arada başka yerde silinen şablon: kaydedilmemiş yeni sekmede açılır
+    restore.current = "applying";
+    const id = `${LOCAL_PREFIX}${++localSeq.current}`;
+    const name = entry.name.trim() || newName(views.map((x) => x.name));
+    setFresh({ id, name });
+    setCurrentId(id);
+    setEdit({ tabId: id, hist: initHistory({ ...content, name }) });
+    setRestored(isLocal(entry.origin) ? RESTORED : `${RESTORED} ${RESTORED_DELETED}`);
+  }, [loaded, views, layouts]);
+  // Düzenleme her değişince saklanır; kaydedilmemiş değişiklik kalmayınca (kaydet, geri al, vazgeç, at) silinir
+  const updatedAt = view?.updatedAt ?? null;
+  useEffect(() => {
+    const r = restore.current;
+    if (r === "pending" || typeof r === "object") return;    // saklanan kayıt henüz uygulanmadı: silinmesin
+    if (r === "applying") {
+      if (!dirty) return;
+      restore.current = "done";
+    }
+    if (dropped.current) return;
+    if (dirty && present && currentId) {
+      writeUnsaved({ v: 1, origin: currentId, name: tabName, layout: present.layout, tiles: present.tiles, updatedAt });
+    } else {
+      clearUnsaved();
+    }
+  }, [dirty, present, currentId, tabName, updatedAt]);
+  useEffect(() => { if (!dirty) setRestored(null); }, [dirty]);
 
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
   const draftBody = useMemo(() => (dirty && present && layout ? { layout: present.layout, tiles: present.tiles } : null),
@@ -216,12 +297,13 @@ export default function WatchView() {
   // eşleşme görülünce (ya da yükleme başarısız olursa) yeniden izin verilir. Taslak gösterilirken bakılmaz.
   const resyncing = useRef(false);
   useEffect(() => {
-    if (!status || !view || status.id !== view.id) return;
+    // kaydedilmemiş düzenleme varken ızgara taslağı gösterir; şablonun son durumu eskidir, ona bakılmaz
+    if (!status || !view || status.id !== view.id || dirty) return;
     if (sameTiles(status, view)) { resyncing.current = false; return; }
     if (resyncing.current) return;
     resyncing.current = true;
     void reload().then((ok) => { if (!ok) resyncing.current = false; });
-  }, [status, view, reload]);
+  }, [status, view, reload, dirty]);
   const hasPresent = present !== null;
   useEffect(() => { if (!hasPresent) setSingle(null); }, [hasPresent]);   // şablon kalmadıysa tek kamera da kapanır
   // Kayıt cihazları: şablon listesi alınabildikten sonra (sunucu ayakta), "NVR'dan şablon" seçici için
@@ -328,6 +410,7 @@ export default function WatchView() {
   const commit = useCallback((next: Draft) => {
     const { hist: h, currentId: id } = live.current;
     if (!h || !id) return;
+    dropped.current = false;
     setEdit({ tabId: id, hist: push(h, next) });
   }, []);
   const place = useCallback((i: number, ref: TileRef, label?: string) => {
@@ -427,6 +510,12 @@ export default function WatchView() {
   /** Kaydedilmemiş değişiklik varsa sorar; ayrılmak serbestse true */
   const leaveOk = () => !dirty || window.confirm(UNSAVED_TEXT);
   const clearMessages = () => { setInfo(null); setError(null); };
+  /** Geri yüklenen değişiklikleri atar: şablon kayıtlı hâline döner; kaydedilmemiş yeni sekme kapanır */
+  const discardRestored = () => {
+    setRestored(null);
+    if (isNew) setCurrentId(views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null);
+    else setEdit(null);
+  };
   const selectTab = (id: string) => {
     if (id === currentId || !leaveOk()) return;
     clearMessages();
@@ -625,6 +714,12 @@ export default function WatchView() {
       )}
       {problem && !single && (
         <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-700`}><ConnectionProblem problem={problem} /></p>
+      )}
+      {restored && dirty && chrome && (
+        <div role="status" className={`${message} flex flex-wrap items-center gap-2 border-pl-sel-line bg-pl-sel text-pl-ink`}>
+          <span className="min-w-0 flex-1">{restored}</span>
+          <button type="button" onClick={discardRestored} className="pl-btn">Değişiklikleri at</button>
+        </div>
       )}
       {(error || draftError) && chrome && (
         <p role="alert" className={`${message} border-nok-line bg-nok-50 text-nok-600`}>{error ?? draftError}</p>

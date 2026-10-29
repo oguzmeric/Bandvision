@@ -1,6 +1,6 @@
 // Şablon editörünün saf mantığı (Canlı izleme): düzen düğmeleri, kamera atama, geri al/yinele, kaydedilmedi mi, N×M denetimi.
 // Taslak (Draft) = { layout, tiles, name }; girdiler hiç değiştirilmez, her işlem yeni nesne döndürür.
-import { MAX_TILES, layoutFor } from "./layoutGrid.mjs";
+import { MAX_TILES, layoutFor, parseGrid } from "./layoutGrid.mjs";
 
 /** Editördeki 10 düzen düğmesi (spec sırası): 1, 2×2, 3×3, 4×4, 1+5, 1+7, 4×3, 5×5, 8×8, N×M */
 export const EDITOR_LAYOUTS = ["1", "4", "9", "16", "6", "8", "12", "5x5", "8x8", "nxm"];
@@ -121,4 +121,32 @@ export function neighbor(layout, index, dir) {
     if (score < bestScore) { bestScore = score; best = i; }
   });
   return best;
+}
+
+// ---- Kaydedilmemiş düzenlemenin tarayıcı sekmesinde saklanan kaydı (Geri/İleri, yenileme, çökme sonrası geri yükleme)
+
+const REF_MAX = 120;
+const isRef = (t) => t !== null && typeof t === "object" && typeof t.sourceId === "string" && t.sourceId.length > 0
+  && t.sourceId.length <= REF_MAX && (t.channelId === undefined || t.channelId === null
+    || (typeof t.channelId === "string" && t.channelId.length <= REF_MAX));
+/** Katalog kimliği biçimi (1–2 rakam; var olup olmadığına katalog gelince bakılır) ya da geçerli N×M kimliği */
+const layoutOk = (id) => typeof id === "string" && (/^[0-9]{1,2}$/.test(id) || parseGrid(id) !== null);
+
+/**
+ * Saklanan kaydı okur ve denetler: `{ v: 1, origin, name, layout, tiles, updatedAt }`. Bozuk JSON ya da geçersiz içerik
+ * (sürüm, kimlik, düzen kimliği, en çok 128 kutu, kamera kimlikleri metin) null döner: çağıran kaydı siler.
+ */
+export function parseUnsaved(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  let d;
+  try { d = JSON.parse(raw); } catch { return null; }
+  if (d === null || typeof d !== "object" || Array.isArray(d) || d.v !== 1) return null;
+  if (typeof d.origin !== "string" || !d.origin || d.origin.length > 80 || typeof d.name !== "string") return null;
+  if (!layoutOk(d.layout) || !Array.isArray(d.tiles) || d.tiles.length > MAX_TILES) return null;
+  if (!d.tiles.every((t) => t === null || isRef(t))) return null;
+  if (d.updatedAt !== null && typeof d.updatedAt !== "number") return null;
+  return {
+    v: 1, origin: d.origin, name: d.name, layout: d.layout, updatedAt: d.updatedAt,
+    tiles: d.tiles.map((t) => (t ? { sourceId: t.sourceId, channelId: t.channelId ?? null } : null)),
+  };
 }
