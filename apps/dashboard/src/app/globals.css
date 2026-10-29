@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* BandVision paneli. Lavanta/mor renkler (canvas, line, ink, brand…) yalnızca giriş ve izleme sayfasında kaldı;
+/* BandVision paneli. Lavanta/mor renkler (canvas, line, ink, brand…) yalnızca izleme sayfasında (yeniden yapılana dek) kaldı;
    panel sayfaları aşağıdaki gri-mavi pl-* renklerini ve .pl-* sınıflarını kullanır. */
 @theme {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -25,6 +25,10 @@
   --color-nok-600: #d93a4a;
   --color-warn-50: #fcf3e2;
   --color-warn-700: #b7791f;
+  /* durum kutularının 1 px kenarlığı (sade görünüm) */
+  --color-ok-line: #bfe8d3;
+  --color-warn-line: #f0d9a8;
+  --color-nok-line: #f3c2c7;
 
   /* Sade arayüz (TRASSIR'a yakın gri-mavi; taslak duzen.html): menü, durum şeridi ve .pl-* sınıfları */
   --color-pl-bg: #ffffff;
@@ -35,10 +39,12 @@
   --color-pl-ctl: #b9bfc8;
   --color-pl-ink: #1d2330;
   --color-pl-muted: #4a5261;
-  --color-pl-faint: #9aa1ad;
+  /* yardım yazıları: beyaz zeminde ≥4,5:1 (taslaktaki #9aa1ad 2,6:1 kalıyordu) */
+  --color-pl-faint: #6b7280;
   --color-pl-sel: #dbe9fb;
   --color-pl-sel-line: #9ec3f0;
   --color-pl-accent: #2c5aa0;
+  --color-pl-accent-hover: #244b86;
 }
 
 /* Düz beyaz zemin (sade arayüz); eski lavanta geçişli zemin kaldırıldı */
@@ -49,7 +55,7 @@ body {
   min-height: 100%;
 }
 
-/* .card ve .brand-gradient yalnızca giriş sayfası ve izleme sayfası (yeniden yapılana dek) için duruyor */
+/* .card ve .brand-gradient yalnızca izleme sayfası (yeniden yapılana dek) için duruyor */
 .card {
   background: var(--color-card);
   border: 1px solid var(--color-line);
@@ -146,7 +152,7 @@ body {
     font-weight: 600;
   }
   .pl-btn-primary:hover:not(:disabled) {
-    background: #244b86;
+    background: var(--color-pl-accent-hover);
   }
   .pl-btn:disabled {
     opacity: 0.5;
@@ -165,7 +171,8 @@ body {
   }
   .pl-btn:focus-visible,
   .pl-input:focus-visible {
-    outline: 2px solid var(--color-pl-sel-line);
+    /* odak halkası vurgu renginde: beyaz ve gri zeminde ≥3:1 (WCAG 1.4.11) */
+    outline: 2px solid var(--color-pl-accent);
     outline-offset: 1px;
   }
 }

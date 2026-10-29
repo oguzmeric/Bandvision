@@ -22,7 +22,7 @@ export function profileStatus(p: Profile): string {
 export function StreamChoice({ value, onChange }: { value: boolean; onChange: (sub: boolean) => void }) {
   const opt = (sub: boolean, title: string, hint: string) => (
     <button type="button" role="radio" aria-checked={value === sub} onClick={() => onChange(sub)}
-            className={`px-3 py-1.5 text-left ${value === sub ? "bg-pl-sel" : "bg-[#f7f8fa] hover:bg-pl-head"}`}>
+            className={`px-3 py-1.5 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${value === sub ? "bg-pl-sel" : "bg-[#f7f8fa] hover:bg-pl-head"}`}>
       <span className={`block text-[13px] font-semibold ${value === sub ? "text-pl-ink" : "text-pl-muted"}`}>{title}</span>
       <span className="block text-[11.5px] text-pl-faint">{hint}</span>
     </button>
@@ -184,7 +184,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
             <StreamChoice value={sub} onChange={setSub} />
           </div>
         )}
-        {error && <p role="alert" className="mt-3 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+        {error && <p role="alert" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
         <div className="-mx-4 -mb-4 mt-4 flex gap-2 border-t border-pl-line-soft bg-pl-side px-4 py-2.5">
           <button type="button" onClick={() => dialog.current?.close()} className="pl-btn h-8 flex-1 justify-center">Vazgeç</button>
           <button type="button" onClick={start} disabled={!selected || busy} className="pl-btn pl-btn-primary h-8 flex-1 justify-center">

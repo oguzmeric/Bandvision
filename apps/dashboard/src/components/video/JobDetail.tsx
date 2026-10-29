@@ -75,7 +75,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
       )}
 
       {job.status === "failed" && (
-        <div role="alert" className="rounded-[2px] border border-[#f3c2c7] bg-nok-50 p-3 text-[13px] text-nok-600">
+        <div role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 p-3 text-[13px] text-nok-600">
           <p className="font-medium">Analiz tamamlanamadı</p>
           <p className="mt-1">{job.error}</p>
           <p className="mt-2 text-xs">İpucu: video sabit kamerayla, bandın tepesinden çekilmiş olmalı. Bant başta doluysa &quot;boş bant aralığı&quot;nı belirterek yeniden dene.</p>
@@ -137,7 +137,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
                 )}
               </dl>
               {r.calibration?.notes?.map((n) => (
-                <p key={n} className="mb-3 rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-1.5 text-[12.5px] text-warn-700">{n}</p>
+                <p key={n} className="mb-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[12.5px] text-warn-700">{n}</p>
               ))}
               {files.has("counts.csv") && (
                 <>

@@ -60,7 +60,7 @@ export default function GeometryDialog({ file, initial, twoWay, allowAngled, onS
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           {frame.error ? (
-            <p className="rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-2 text-[13px] text-warn-700">{frame.error}</p>
+            <p className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-2 text-[13px] text-warn-700">{frame.error}</p>
           ) : (
             <RoiEditor src={frame.src} aspect={frame.aspect} value={g} onChange={setG} twoWay={twoWay} />
           )}

@@ -15,7 +15,7 @@ function Segmented<T extends string | boolean>({ label, value, options, onChange
          className="grid auto-cols-fr grid-flow-col overflow-hidden rounded-[2px] border border-pl-ctl text-[13px]">
       {options.map(([v, text]) => (
         <button key={String(v)} type="button" role="radio" aria-checked={v === value} onClick={() => onChange(v)}
-                className={`h-7 border-r border-pl-ctl px-2 last:border-r-0 ${v === value ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>
+                className={`h-7 border-r border-pl-ctl px-2 last:border-r-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${v === value ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>
           {text}
         </button>
       ))}

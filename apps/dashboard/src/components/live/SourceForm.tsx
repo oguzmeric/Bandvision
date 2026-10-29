@@ -58,7 +58,7 @@ export default function SourceForm({ editing, onSaved, onCancel }: {
 
   const seg = (k: SourceKind, label: string) => (
     <button type="button" role="radio" aria-checked={f.kind === k} onClick={() => set("kind", k)}
-            className={`h-7 text-[13px] ${f.kind === k ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>
+            className={`h-7 text-[13px] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${f.kind === k ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>
       {label}
     </button>
   );
@@ -154,7 +154,7 @@ export default function SourceForm({ editing, onSaved, onCancel }: {
       </div>
       <p className="mt-1 text-[11.5px] text-pl-faint">Şifre yalnızca bu bilgisayarda saklanır; panele geri gösterilmez.</p>
 
-      {error && <p role="alert" className="mt-2.5 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
 
       <div className="-mx-2.5 mt-3 flex gap-2 border-t border-pl-line-soft px-2.5 pt-2.5">
         {onCancel && (

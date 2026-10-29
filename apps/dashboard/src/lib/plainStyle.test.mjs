@@ -5,13 +5,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 /**
- * Sade arayüz bekçisi: panel sayfalarında ve onların bileşenlerinde eski kart görünümünün izleri kalmaz
- * (büyük yuvarlak köşe, gölge, yarı saydam beyaz zemin, bulanık arka plan, lavanta/mor renkler, .card/.eyebrow).
+ * Sade arayüz bekçisi: panel sayfalarında, giriş sayfasında ve onların bileşenlerinde eski kart görünümünün izleri
+ * kalmaz (büyük yuvarlak köşe, gölge, yarı saydam beyaz zemin, bulanık arka plan, lavanta/mor renkler, .card/.eyebrow).
  * İzleme sayfası (app/(panel)/watch, components/watch) ayrı yeniden yapılır; burada taranmaz.
+ * Dosyanın her satırı taranır: sınıf adı className'de, sabitte, şablon dizgisinde ya da çok satırlı dizgide olsa da yakalanır.
  */
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOTS = [
   "app/(panel)",
+  "app/login",
   "components/live",
   "components/video",
   "components/settings",
@@ -19,6 +21,8 @@ const ROOTS = [
   "components/about",
 ];
 const SKIP = new Set([path.join("app", "(panel)", "watch")]);
+/** src/lib/*.ts (yalnızca bu klasör, alt klasörsüz): sınıf adı ya da renk sabitleri burada da tutulabilir */
+const LIB = "lib";
 
 const IDIOMS = [
   { name: "rounded-3xl", re: /\brounded-3xl\b/ },
@@ -28,12 +32,14 @@ const IDIOMS = [
   { name: "backdrop-blur", re: /\bbackdrop-blur/ },
   { name: "eyebrow", re: /\beyebrow\b/ },
   { name: "brand-gradient", re: /\bbrand-gradient\b/ },
-  { name: "card sınıfı", re: /className=(?:"|\{`|\{")(?:[^"`]*\s)?card(?:[\s"`]|$)/ },
+  // tek başına "card" sözcüğü (data-testid="source-card" gibi tireli adlar değil)
+  { name: "card sınıfı", re: /(?<![-\w])card(?![-\w])/ },
   // lavanta zemin ve mor vurgu: sade görünüm gri-mavi (pl-*) renkleri kullanır
   { name: "canvas zemin", re: /\b(?:bg|from|to|via)-canvas\b|\bbg-canvas-2\b/ },
   { name: "brand rengi", re: /\b(?:bg|text|border|accent|ring|outline|fill|stroke|from|to|via|decoration)-brand-\d/ },
-  { name: "eski gri tonlar", re: /\b(?:text|border|bg|divide)-(?:ink|muted|faint|line|card)\b/ },
+  { name: "eski gri tonlar", re: /\b(?:text|border|bg|divide|ring|outline|fill|stroke)-(?:ink|muted|faint|line|card)\b/ },
   { name: "mor/lavanta renk kodu", re: /#(?:6d3bf0|9b3be6|e0368c|5b2bd6|eeeafb|fbfaff|2b2740|cfc7f3|0e0c17|1d1a2e|f6f5fc|efedfa|e7e4f3)\b/i },
+  { name: "mor gölge rengi", re: /rgba?\(\s*109\s*,\s*59\s*,\s*240\b/ },
 ];
 
 /** @param {string} dir */
@@ -49,9 +55,12 @@ function walk(dir) {
   return out;
 }
 
-test("panel sayfaları ve bileşenleri: eski kart görünümü yok", () => {
-  const files = ROOTS.flatMap((r) => walk(path.join(SRC, r)));
-  assert.ok(files.length >= 30, `taranan dosya az: ${files.length}`);
+test("panel sayfaları, giriş sayfası ve bileşenleri: eski kart görünümü yok", () => {
+  const lib = readdirSync(path.join(SRC, LIB)).filter((n) => n.endsWith(".ts")).map((n) => path.join(SRC, LIB, n));
+  const files = [...ROOTS.flatMap((r) => walk(path.join(SRC, r))), ...lib];
+  assert.ok(lib.length >= 10, `taranan lib dosyası az: ${lib.length}`);
+  assert.ok(files.some((f) => f.includes(`${path.sep}login${path.sep}`)), "giriş sayfası taranmadı");
+  assert.ok(files.length >= 40, `taranan dosya az: ${files.length}`);
   const hits = [];
   for (const f of files) {
     readFileSync(f, "utf8").split(/\r?\n/).forEach((line, i) => {
@@ -74,12 +83,15 @@ test("globals.css: düz beyaz zemin, .eyebrow yok", () => {
 
 test("bekçi kalıpları: eski izleri yakalar, sade sınıflara takılmaz", () => {
   const bad = ['<div className="card p-4">', '<section className="card overflow-x-auto">', "className={`card ${x}`}",
-    '<p className="eyebrow">', "rounded-2xl", "shadow-sm", "bg-white/70", "backdrop-blur-sm", "bg-canvas", "bg-canvas-2",
-    "text-brand-600", "accent-brand-500", "text-muted", "border-line", "text-ink", "text-faint",
-    'color: "#6d3bf0"', "bg-[#FBFAFF]"];
+    'const box = "card";', "`x card`", "  card p-4 rounded", "brand-gradient h-10",
+    '<p className="eyebrow">', "rounded-2xl", "rounded-3xl", "shadow-sm", "bg-white/70", "backdrop-blur-sm", "bg-canvas",
+    "bg-canvas-2", "text-brand-600", "accent-brand-500", "text-muted", "border-line", "text-ink", "text-faint",
+    "ring-line", "outline-line", "fill-ink", 'color: "#6d3bf0"', "bg-[#FBFAFF]",
+    "shadow-[0_8px_18px_rgba(109,59,240,0.25)]", "rgba(109, 59, 240, 0.2)"];
   const good = ['<div className="pl-section">', "text-pl-muted", "border-pl-line", "text-pl-ink", "bg-pl-head",
-    "UploadCard", 'className="cards-x"', "rounded-[3px]", "text-nok-600", "bg-warn-50", "border-pl-line-soft",
-    'color: "#2c5aa0"', "bg-[#f7f8fa]"];
+    "UploadCard", 'className="cards-x"', 'data-testid="source-card"', "session-card", "cardinal", "rounded-[3px]",
+    "text-nok-600", "bg-warn-50", "border-pl-line-soft", "border-nok-line", "border-warn-line", "ring-pl-accent",
+    "outline-pl-accent", 'color: "#2c5aa0"', "bg-[#f7f8fa]"];
   for (const s of bad) assert.ok(IDIOMS.some(({ re }) => re.test(s)), `yakalanmadı: ${s}`);
   for (const s of good) assert.ok(!IDIOMS.some(({ re }) => re.test(s)), `yanlış yakalandı: ${s}`);
 });

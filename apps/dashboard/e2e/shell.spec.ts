@@ -271,6 +271,65 @@ test.describe("telefon (390×844)", () => {
     }
   });
 
+  const width = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth);
+
+  test("canlı sayım (sahte API): seçili oturum, sayaçlar ve ayar paneli 390 px'e sığar", async ({ page }) => {
+    await login(page, "/about");
+    const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+    const session = (id: string, name: string, countMode: string) => ({
+      id, name, state: "live", message: "", fps: 8, width: 1280, height: 720, counting: true, total: 12345, totalOut: 678,
+      staffIn: 0, staffOut: 0, twoWay: countMode === "detect", ratePerMinute: 42, calibrating: null,
+      calibrationMessage: "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret; uzun bir ileti de taşmamalı.",
+      sourceId: null, channelId: null, profileId: null, substream: true,
+      profile: { id: `p-${id}`, name: `Profil ${name}`, roi: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 }, linePosition: 0.5,
+                 direction: "down", diffThreshold: 30, expectedArea: 0, splitTouching: false, countMode },
+    });
+    const sessions = [session("u1", "Uzun adlı bant kamerası numara bir", "blob"), session("k1", "Giriş kapısı", "detect")];
+    await page.route("**/api/live/sessions", (r) => r.request().method() === "GET" ? r.fulfill({ json: sessions }) : r.continue());
+    await page.route("**/api/live/sessions/*/stream*", (r) => r.fulfill({ contentType: "image/gif", body: GIF }));
+    await page.route("**/api/live/sessions/*/frame.jpg*", (r) => r.fulfill({ contentType: "image/gif", body: GIF }));
+    // ayar taslağı sunucuya gitmez (sahte oturum)
+    await page.route("**/api/live/sessions/*/profile*", (r) => r.fulfill({ json: {} }));
+    await page.route("**/api/live/sessions/*/actions", (r) => r.fulfill({ json: {} }));
+    await page.route("**/api/live/alarms*", (r) => r.fulfill({ json: [] }));
+
+    for (const [id, button, panel] of [["u1", "Kalibre", "Kalibrasyon"], ["k1", "Ayarla", "Kalibrasyon"]] as const) {
+      await page.goto(`/live?s=${id}`);
+      await expect(page.getByRole("region", { name: "Sayım" })).toBeVisible();
+      await expect(page.getByTestId(id === "u1" ? "live-count" : "live-in")).toBeVisible();
+      expect(await width(page), `${id} sayaçlar`).toBeLessThanOrEqual(390);
+      await page.getByRole("button", { name: button, exact: true }).click();
+      await expect(page.getByRole("region", { name: panel })).toBeVisible();
+      expect(await width(page), `${id} ayar paneli`).toBeLessThanOrEqual(390);
+    }
+  });
+
+  test("video ile test (sahte API): bitmiş analiz seçiliyken 390 px'e sığar", async ({ page }) => {
+    await login(page, "/about");
+    const now = new Date().toISOString();
+    const job = {
+      schema: "bantvision.analysis-job.v1", id: "j1", status: "done", createdAt: now, updatedAt: now,
+      expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      video: { name: "cok_uzun_adli_bant_videosu_yumurta_hatti_2026_10_28_vardiya_1.mp4", sizeBytes: 123_456_789,
+               seconds: 95, fps: 30, width: 1920, height: 1080 },
+      options: { preset: "egg" }, progress: 1,
+      result: { count: 120, truth: 118, errorPct: 1.69, processingFps: 87,
+                calibration: { countMode: "blob", direction: "down", background: "boş bant (0–1,5 sn)", threshold: 30,
+                               expectedArea: 0.0123, notes: ["Bant başta doluydu; arka plan boş bant aralığından öğrenildi."] },
+                files: ["annotated.mp4", "counts.csv", "profile.json"] },
+    };
+    await page.route("**/api/jobs", (r) => r.fulfill({ json: [job] }));
+    await page.route("**/api/jobs/j1/files/counts.csv", (r) =>
+      r.fulfill({ contentType: "text/csv", body: "zaman_sn;iz;delta;toplam\n1;1;1;1\n50;2;1;60\n95;3;1;120\n" }));
+    await page.route("**/api/jobs/j1/files/annotated.mp4", (r) => r.fulfill({ status: 404 }));
+    await page.goto("/videos");
+    const detail = page.getByTestId("job-detail");
+    await expect(detail.getByRole("heading", { name: job.video.name })).toBeVisible();
+    await expect(detail.getByRole("img", { name: /120/ })).toBeVisible();                     // sayım grafiği yüklendi
+    await expect(page.locator("main div.animate-pulse:not(.absolute)")).toHaveCount(0);
+    expect(await width(page)).toBeLessThanOrEqual(390);
+  });
+
   test("'yakında' duyurusu ve açıklaması açık çekmecenin (kipli kutunun) içinde", async ({ page }) => {
     await login(page, "/about");
     await page.getByRole("button", { name: "Menü" }).click();

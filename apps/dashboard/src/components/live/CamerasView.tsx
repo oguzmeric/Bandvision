@@ -27,7 +27,7 @@ function CountingLink({ session }: { session: LiveSession }) {
   const warn = health !== null && !health.healthy;
   return (
     <Link href={`/live?s=${session.id}`} title={warn ? health.reason ?? undefined : undefined}
-          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-[#f7d9b5] bg-warn-50 text-warn-700" : "border-[#bfe8d3] bg-ok-50 text-ok-600"}`}>
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-warn-line bg-warn-50 text-warn-700" : "border-ok-line bg-ok-50 text-ok-600"}`}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
       {!safety ? "Sayılıyor" : warn ? "Uyarı" : "Nöbette"}
     </Link>
@@ -56,7 +56,7 @@ function RecorderChannels({ source, sessions, onStart }: {
                className="pl-input h-8 flex-1" />
         <button type="button" onClick={() => load(true)} className="pl-btn h-8">Yenile</button>
       </div>
-      {error && <p role="alert" className="rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
       {channels === null && !error && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="aspect-video animate-pulse rounded-[2px] bg-pl-side" />)}</div>}
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {shown.map((c) => (
@@ -123,7 +123,7 @@ export default function CamerasView() {
       </div>
       <section className="pl-section mb-0 min-w-0" aria-labelledby="sources-title">
         <h2 id="sources-title">Kaynaklar</h2>
-        {error && <p role="alert" className="mb-2 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+        {error && <p role="alert" className="mb-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
         {sources === null && !error && <div className="h-24 animate-pulse rounded-[2px] bg-pl-side" />}
         {sources?.length === 0 && (
           <div className="grid min-h-[160px] place-items-center p-6 text-center text-pl-muted">

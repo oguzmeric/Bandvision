@@ -23,7 +23,7 @@ export default function AlarmBanner() {
 
   const next = pathname + (search ? `?${search}` : "");
   const warning = problem && (
-    <p role="status" data-testid="alarm-feed-warning" className="rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+    <p role="status" data-testid="alarm-feed-warning" className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
       {problem === "auth" ? (
         <>
           Oturum süresi doldu — alarmları görmek için yeniden giriş yapın.{" "}
@@ -41,7 +41,7 @@ export default function AlarmBanner() {
       {warning}
       {unwatched.map((u) => (
         <p key={u.id} role="status" data-testid="watch-warning"
-           className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+           className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
           <span className="min-w-0 flex-1"><b>Güvenlik kamerası izlenmiyor: {u.name}</b> — {u.reason}</span>
           <Link href={`/live?s=${u.id}`} className="font-medium underline">Kamerayı aç</Link>
         </p>

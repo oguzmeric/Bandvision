@@ -128,7 +128,7 @@ export default function AlarmsView() {
         <span className={count}>Yanlış alarm <b data-testid="count-false">{counts.false}</b></span>
       </section>
 
-      {error && <p role="status" className="mb-3 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="status" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
       {list !== null && list.length >= ALARM_LIST_LIMIT && (
         <p className="mb-3 text-[12.5px] text-warn-700">İlk {ALARM_LIST_LIMIT} alarm gösteriliyor; tarih aralığını daraltın.</p>
       )}

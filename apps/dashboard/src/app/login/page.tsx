@@ -10,17 +10,18 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { next } = await searchParams;
   if (!authMode()) redirect(safeNext(next));            // şifre kipi kapalı: giriş gerekmez
   return (
-    <main className="grid min-h-screen place-items-center px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-line bg-white p-7 shadow-[0_12px_32px_rgba(29,26,46,0.06)]">
-        <div className="mb-6 flex items-center gap-3">
-          <Image src="/brand/logo-mark.png" alt="" width={46} height={36} priority />
+    // Sade görünüm: gri zeminde tek kenarlıklı bölüm; başlık satırı .pl-section > h2 görünümünde
+    <main className="grid min-h-screen place-items-center bg-pl-side px-4">
+      <section className="pl-section mb-0 w-full max-w-sm pb-4">
+        <div className="-mx-2.5 mb-4 flex items-center gap-3 rounded-t-[3px] border-b border-pl-line bg-pl-head px-2.5 py-2">
+          <Image src="/brand/logo-mark.png" alt="" width={32} height={25} priority />
           <div>
-            <h1 className="text-lg font-semibold">BandVision</h1>
-            <p className="text-sm text-muted">Panele giriş</p>
+            <h1 className="text-[15px] font-semibold">BandVision</h1>
+            <p className="text-[12.5px] text-pl-muted">Panele giriş</p>
           </div>
         </div>
         <LoginForm next={safeNext(next)} />
-      </div>
+      </section>
     </main>
   );
 }

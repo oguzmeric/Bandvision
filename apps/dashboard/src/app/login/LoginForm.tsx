@@ -37,14 +37,13 @@ export default function LoginForm({ next }: { next: string }) {
 
   return (
     <form method="post" action="/api/login" onSubmit={submit}>
-      <label className="block text-sm font-medium">Şifre
+      <label className="block text-[12.5px] text-pl-muted">Şifre
         <input name="password" type="password" autoComplete="current-password" required autoFocus value={password}
                onChange={(e) => setPassword(e.target.value)}
-               className="mt-1.5 h-10 w-full rounded-[10px] border border-line bg-white px-3 text-sm outline-none focus:border-brand-500 focus:ring-3 focus:ring-brand-50" />
+               className="pl-input mt-1 h-9 w-full" />
       </label>
-      {error && <p role="alert" data-testid="login-error" className="mt-3 rounded-xl bg-nok-50 px-3 py-2 text-sm text-nok-600">{error}</p>}
-      <button type="submit" disabled={busy || !ready}
-              className="brand-gradient mt-5 h-11 w-full rounded-[11px] text-sm font-semibold text-white shadow-[0_8px_18px_rgba(109,59,240,0.25)] transition hover:brightness-105 disabled:opacity-70">
+      {error && <p role="alert" data-testid="login-error" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      <button type="submit" disabled={busy || !ready} className="pl-btn pl-btn-primary mt-4 h-9 w-full justify-center">
         {busy ? "Giriş yapılıyor…" : "Giriş yap"}
       </button>
     </form>

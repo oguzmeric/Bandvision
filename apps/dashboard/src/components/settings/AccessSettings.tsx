@@ -67,13 +67,13 @@ export default function AccessSettings() {
           {v.enabled ? "Kaydet" : "Telefondan erişimi aç"}</button>
         {v.enabled && <button type="button" onClick={() => save(false)} className="pl-btn h-8">Erişimi kapat</button>}
       </div>
-      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-[#bfe8d3] bg-ok-50 text-ok-600" : "border-[#f3c2c7] bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-600" : "border-nok-line bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
       {v.buildState === "building" && (
-        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
           {v.buildMessage || "Panel derleniyor (ilk açılış 1-2 dk)…"} Yerel ağ erişimi derleme bitince açılır.</p>
       )}
       {v.buildState === "failed" && (
-        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-1.5 text-[13px] text-nok-600">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-1.5 text-[13px] text-nok-600">
           {v.buildMessage || "Yerel ağ için derleme başarısız; panel yalnızca bu bilgisayarda açık."}</p>
       )}
       {v.lanActive && v.addresses.length > 0 && (

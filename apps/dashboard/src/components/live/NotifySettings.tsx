@@ -68,9 +68,9 @@ export default function NotifySettings() {
           <button type="button" onClick={() => run("notify/test", "Deneme mesajı gönderildi.")} className="pl-btn h-8">Deneme mesajı gönder</button>
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="pl-btn h-8">Deneme alarmı</button>
         </div>
-        {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-[#bfe8d3] bg-ok-50 text-ok-600" : "border-[#f3c2c7] bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+        {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-600" : "border-nok-line bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
         {cfg?.lastError && (
-          <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-[#f3c2c7] bg-white px-3 py-1.5 text-[12.5px] text-nok-600">
+          <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-nok-line bg-white px-3 py-1.5 text-[12.5px] text-nok-600">
             Son gönderim hatası ({stamp(cfg.lastError.at)}): {cfg.lastError.text}
           </p>
         )}

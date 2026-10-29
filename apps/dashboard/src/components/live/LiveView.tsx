@@ -18,8 +18,8 @@ import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types"
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "total" | "in" | "out"; hint?: string; testId: string }) {
   const tones = {
     total: "border-pl-sel-line bg-pl-sel text-pl-accent",
-    in: "border-[#bfe8d3] bg-ok-50 text-ok-600",
-    out: "border-[#f7d9b5] bg-warn-50 text-warn-700",
+    in: "border-ok-line bg-ok-50 text-ok-600",
+    out: "border-warn-line bg-warn-50 text-warn-700",
   };
   return (
     <div className={`rounded-[3px] border px-3 py-2 ${tones[tone]}`}>
@@ -78,7 +78,7 @@ function Seg<T extends string>({ label, value, options, onChange }: { label: str
     <div role="radiogroup" aria-label={label} className="grid auto-cols-fr grid-flow-col overflow-hidden rounded-[2px] border border-pl-ctl text-[13px]">
       {options.map(([v, t]) => (
         <button key={v} type="button" role="radio" aria-checked={v === value} onClick={() => onChange(v)}
-                className={`h-7 border-r border-pl-ctl px-2 last:border-r-0 ${v === value ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>{t}</button>
+                className={`h-7 border-r border-pl-ctl px-2 last:border-r-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${v === value ? "bg-pl-sel font-semibold text-pl-ink" : "bg-[#f7f8fa] text-pl-muted hover:bg-pl-head hover:text-pl-ink"}`}>{t}</button>
       ))}
     </div>
   );
@@ -245,7 +245,7 @@ export default function LiveView() {
   const aspect = session && session.width && session.height ? session.width / session.height : 16 / 9;
 
   if (sessions === null) return error
-    ? <p role="alert" className="rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>
+    ? <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>
     : <div className="h-64 animate-pulse rounded-[3px] border border-pl-line-soft bg-pl-side" />;
 
   if (!session) {
@@ -290,7 +290,7 @@ export default function LiveView() {
           {kind ? "+ Yeni analiz" : "+ Kamera ekle"}
         </Link>
       </div>
-      {error && <p role="alert" className="mb-3 rounded-[2px] border border-[#f3c2c7] bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
 
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="pl-section mb-0 min-w-0 pb-2.5" aria-label="Canlı görüntü">
@@ -310,7 +310,7 @@ export default function LiveView() {
                        value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
               {teaching && (
                 <button type="button" aria-label="Görüntüde personelin üstüne tıklayın" onClick={teachAt} disabled={teachBusy}
-                        className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-500" />
+                        className="absolute inset-0 cursor-crosshair outline-none ring-2 ring-inset ring-warn-700" />
               )}
             </RoiEditor>
           ) : (
@@ -381,7 +381,7 @@ export default function LiveView() {
             <section className="pl-section mb-0 pb-2.5" aria-label={safety ? "Güvenlik ayarları" : "Kalibrasyon"}>
               <h2>{twoWay || safety ? "Ayarlar" : "Kalibrasyon"}</h2>
               {!safety && (session.calibrationMessage || !twoWay) && (
-                <p className="rounded-[2px] border border-[#f0d9a8] bg-warn-50 px-2.5 py-1.5 text-[12.5px] text-warn-700" aria-live="polite">
+                <p className="rounded-[2px] border border-warn-line bg-warn-50 px-2.5 py-1.5 text-[12.5px] text-warn-700" aria-live="polite">
                   {session.calibrationMessage || (mode === "linescan"
                     ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
                     : "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret.")}
