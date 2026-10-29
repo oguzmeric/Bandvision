@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "@/lib/live";
 import { FAILS_BEFORE_WARNING } from "@/components/live/AlarmCenter";
 import { problemOf, STATUS_POLL_MS, STUCK_REBUMP_MS, stateText, type CameraStatus, type Problem } from "@/lib/views";
@@ -15,7 +15,8 @@ export type SingleMode = "page" | "wall" | "phone";
 const GONE: CameraStatus = { name: "", state: "error", message: "Kamera silinmiş.", fps: 0, analysis: null };
 
 /**
- * Tek kamera (çift tık / dokunuş): ham akış; "Net görüntü" ana akışa geçer. Esc/Geri ile ızgaraya dönülür.
+ * Tek kamera (çift tık / dokunuş): ham akış; "Net görüntü" ana akışa geçer. Esc, "← Izgaraya dön" ya da görüntüye
+ * çift tık ile ızgaraya dönülür.
  * Kamera durumu (`cameras/status`) yoklanır: bağlı değilse görüntünün üstünde yazar. Akış şu durumlarda baştan açılır:
  * yoklama koptuktan sonra düzelince (sunucu yeniden başladı); kamera bağlı değilken 30 sn'de bir (sunucu 60 sn'den uzun
  * kesintide kamera akışını bitirir, durum yoklaması sağlıklı kalsa da görüntü kendiliğinden dönmez); bağlı değilden
@@ -30,6 +31,8 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
   const [cam, setCam] = useState<CameraStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const { streamKey, onError, bump, visible } = useStreamKey();
+  /** Görüntüye açıldıktan sonra basılma sayısı: kutuyu açan çift tıkın artığı (ilk basışı açılıştan önce) kapatmasın */
+  const presses = useRef(0);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -96,26 +99,34 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
   const q = new URLSearchParams({ source: sourceId, quality, k: String(streamKey) });
   if (channelId) q.set("channel", channelId);
   const overlay = mode !== "page";
-  const btn = `h-9 shrink-0 rounded-[10px] border px-3 text-sm ${overlay ? "border-white/40 text-white" : "border-line"}`;
+  const btn = overlay
+    ? "inline-flex h-8 shrink-0 items-center rounded-[2px] border border-white/40 px-2.5 text-[13px] text-white"
+    : "pl-btn shrink-0";
   const state = problem ? null : cam && cam.state !== "live" ? stateText(cam) : null;
   const frame = {
-    page: "relative aspect-video w-full overflow-hidden rounded-2xl bg-black",
+    page: "relative aspect-video w-full overflow-hidden bg-black",
     wall: "relative h-screen w-screen bg-black",
     phone: "fixed inset-0 z-50 bg-black",
   }[mode];
   const header = (
-    <div className={overlay ? "absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-2 bg-black/55 p-2 text-white" : "flex flex-wrap items-center gap-2"}>
+    <div className={overlay ? "absolute inset-x-0 top-0 z-10 flex flex-wrap items-center gap-2 bg-black/55 p-2 text-white" : "flex flex-wrap items-center gap-1.5"}>
       <button type="button" onClick={onClose} className={btn}>← Izgaraya dön</button>
-      <h2 className="min-w-0 flex-1 truncate text-lg font-semibold">{name}</h2>
-      <Link href={liveHref} className={`${btn} inline-flex items-center`}>Canlı sayıma git</Link>
+      <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{name}</h2>
+      <Link href={liveHref} className={btn}>Canlı sayıma git</Link>
       <button type="button" aria-pressed={quality === "main"} onClick={() => setQuality(quality === "sub" ? "main" : "sub")}
               className={btn}>{quality === "sub" ? "Net görüntü" : "Hızlı görüntü"}</button>
     </div>
   );
   return (
-    <section className={mode === "page" ? "grid gap-3" : undefined}>
+    <section className={mode === "page" ? "grid gap-2" : undefined}>
       {!overlay && header}
-      <div className={frame}>
+      {/* Görüntüye çift tıklamak ızgaraya döner (düğme ve bağlantıdaki çift tık sayılmaz) */}
+      <div className={frame} data-testid="single-camera"
+           onPointerDown={() => { presses.current += 1; }}
+           onDoubleClick={(e) => {
+             if (presses.current < 2) return;
+             if (!(e.target instanceof Element && e.target.closest("button, a"))) onClose();
+           }}>
         {visible && (
           // eslint-disable-next-line @next/next/no-img-element -- canlı MJPEG akışı
           <img alt={`${name} canlı görüntü`} src={`/api/live/cameras/stream?${q}`} className="absolute inset-0 h-full w-full object-contain"
