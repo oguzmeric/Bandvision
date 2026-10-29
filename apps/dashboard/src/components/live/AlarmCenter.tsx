@@ -27,6 +27,8 @@ interface AlarmCenterValue {
   problem: "auth" | "down" | null;
   /** 60 sn'den uzun süredir izlenmeyen güvenlik kameraları */
   unwatched: Unwatched[];
+  /** Son alınan canlı oturum listesi (panel genelinde tek yoklama; ör. Canlı izleme kamera listesinin durum noktaları) */
+  sessions: LiveSession[];
   /** "Gördüm"ü kaydedilemeyen alarm */
   ackFailed: string | null;
   ack: (a: Alarm) => Promise<boolean>;
@@ -72,6 +74,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const [problem, setProblem] = useState<"auth" | "down" | null>(null);
   const [ackFailed, setAckFailed] = useState<string | null>(null);
   const [unwatched, setUnwatched] = useState<Unwatched[]>([]);
+  const [sessions, setSessions] = useState<LiveSession[]>([]);
   /** Açık alarm penceresi: gösterilen alarm ve listedeki yeri (alarm onaylanınca aynı yerdeki sonrakine geçilir) */
   const [viewer, setViewer] = useState<{ id: string; index: number } | null>(null);
   /** Cevap yalnızca istek ile cevap arasında sıra değişmediyse uygulanır (onaydan önce başlayan istek geri getirmesin) */
@@ -129,6 +132,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
       try {
         const list = await api<LiveSession[]>("sessions");
         if (!alive) return;
+        setSessions(Array.isArray(list) ? list : []);
         const now = Date.now();
         const seen = new Set<string>();
         const out: Unwatched[] = [];
@@ -248,8 +252,8 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
 
   const close = useCallback(() => setViewer(null), []);
   const refresh = useCallback(() => refreshRef.current(), []);
-  const value = useMemo(() => ({ alarms, problem, unwatched, ackFailed, ack, markFalse, open, refresh }),
-    [alarms, problem, unwatched, ackFailed, ack, markFalse, open, refresh]);
+  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, ackFailed, ack, markFalse, open, refresh }),
+    [alarms, problem, unwatched, sessions, ackFailed, ack, markFalse, open, refresh]);
   const showing = viewer === null ? null
     : alarms.some((a) => a.id === viewer.id) ? viewer.id
     : alarms.length > 0 ? alarms[Math.min(viewer.index, alarms.length - 1)].id

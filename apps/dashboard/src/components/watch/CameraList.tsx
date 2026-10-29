@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAlarmCenter } from "@/components/live/AlarmCenter";
 import { api, type Channel, type LiveSession, type Source } from "@/lib/live";
 import { refKey } from "@/lib/templateEdit.mjs";
-import { RELOAD_RETRY_MS, type TileRef } from "@/lib/views";
+import type { TileRef } from "@/lib/views";
 
 /** Sürüklenen kamera (listeden kutuya): `{ ref, name }` JSON */
 export const CAMERA_MIME = "application/x-bv-camera";
@@ -16,19 +17,33 @@ const DOT_TEXT = { live: "canlı", problem: "sorunlu" } as const;
 /** Gri nokta: ızgaradaki kamera henüz bağlanıyor; ızgarada olmayan (ve analiz oturumu olmayan) kameranın durumu yoklanmaz */
 const UNKNOWN_IN_GRID = "bağlanıyor";
 const UNKNOWN_OUTSIDE = "bu şablonda izlenmiyor";
-/** Analiz oturumlarının durumu bu aralıkla alınır (ızgarada olmayan ama sayımı süren kameralar için; okuyucu açmaz) */
-const SESSIONS_POLL_MS = RELOAD_RETRY_MS;
+const LEGEND_UNKNOWN = `bağlanıyor / bilinmiyor (${UNKNOWN_OUTSIDE})`;
 
 function sessionState(s: LiveSession): CamState | undefined {
   if (s.state === "live") return "live";
   return s.state === "error" || s.state === "reconnecting" ? "problem" : undefined;
 }
+/** Önem sırası: aynı kamerada birden çok oturum varsa en kötü durum gösterilir (sorunlu > canlı > bilinmiyor) */
+const RANK = { problem: 2, live: 1 } as const;
+const worse = (a: CamState | undefined, b: CamState | undefined) => ((b ? RANK[b] : 0) > (a ? RANK[a] : 0) ? b : a);
+
+/** Analiz oturumu olan kameraların durumu (kamera → en kötü oturum durumu) */
+export function sessionStates(list: LiveSession[]): Map<string, CamState | undefined> {
+  const m = new Map<string, CamState | undefined>();
+  for (const x of list) {
+    if (!x.sourceId) continue;
+    const key = refKey({ sourceId: x.sourceId, channelId: x.channelId ?? null });
+    m.set(key, worse(m.get(key), sessionState(x)));
+  }
+  return m;
+}
 
 /**
  * Sağdaki yazılı kamera listesi (taslak duzen.html): tek kameralar ve kayıt cihazlarının altında kanalları; yeşil nokta
  * canlı, turuncu sorunlu, gri bilinmiyor (altta açıklaması var). Izgaradaki kameraların durumu sayfanın tek durum
- * yoklamasından; ızgarada olmayan kameralardan yalnız analiz oturumu olanlarınki oturum listesinden gelir (5 sn'de bir;
- * izleme için kamera okuyucusu açılmaz), diğerleri gri ("bu şablonda izlenmiyor"). Öğe kutuya sürüklenir ya da
+ * yoklamasından; ızgarada olmayan kameralardan yalnız analiz oturumu olanlarınki panelin oturum listesinden (alarm
+ * merkezinin 5 sn'lik tek yoklaması; izleme için kamera okuyucusu açılmaz) gelir, diğerleri gri ("bu şablonda
+ * izlenmiyor"). Öğe kutuya sürüklenir ya da
  * tıklanır (seçili kutuya, seçili kutu yoksa ilk boş kutuya gider). Şablondaki kamera yine seçilebilir: başka kutuya taşınır.
  * Kayıt cihazları açık gelir (kanallar bir kez alınır); başlığa tıklayınca kapanır/açılır.
  * Etiketler sunucunun kutu adıyla aynı biçimdedir: tek kamera "Kapı", kanal "Ofis NVR · Kasa" (`onLabels`).
@@ -49,26 +64,10 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
   const [channels, setChannels] = useState<Record<string, Channel[] | string | undefined>>({});
   /** Kanal isteği sürenler: kapatıp yeniden açmak ikinci istek göndermez */
   const pending = useRef(new Set<string>());
-  /** Analiz oturumu olan kameraların durumu (kamera → durum) */
-  const [sessions, setSessions] = useState<Map<string, CamState | undefined>>(() => new Map());
-
-  useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      if (document.visibilityState !== "hidden") {
-        try {
-          const list = await api<LiveSession[]>("sessions");
-          if (!alive) return;
-          setSessions(new Map(list.filter((x) => x.sourceId)
-            .map((x) => [refKey({ sourceId: x.sourceId as string, channelId: x.channelId }), sessionState(x)] as const)));
-        } catch { /* sunucu yoksa sayfanın uyarısı yeter; noktalar son bilinen hâlde kalır */ }
-      }
-      if (alive) timer = setTimeout(poll, SESSIONS_POLL_MS);
-    };
-    void poll();
-    return () => { alive = false; clearTimeout(timer); };
-  }, []);
+  /** Analiz oturumu olan kameraların durumu (kamera → durum), panelin oturum yoklamasından */
+  const center = useAlarmCenter();
+  const allSessions = center?.sessions;
+  const sessions = useMemo(() => sessionStates(allSessions ?? []), [allSessions]);
 
   const fetchChannels = useCallback(async (s: Source) => {
     if (pending.current.has(s.id)) return;
@@ -167,7 +166,7 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
         {(["live", "problem", "unknown"] as const).map((k) => (
           <span key={k} className="inline-flex items-center gap-1">
             <span aria-hidden="true" className={`h-2 w-2 rounded-full ${DOT[k]}`} />
-            {k === "unknown" ? `bilinmiyor (${UNKNOWN_OUTSIDE})` : DOT_TEXT[k]}
+            {k === "unknown" ? LEGEND_UNKNOWN : DOT_TEXT[k]}
           </span>
         ))}
       </p>

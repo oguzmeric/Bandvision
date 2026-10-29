@@ -120,8 +120,9 @@ function TileOverlay({ layout, index, filled, tile, label, selected, active, onO
             {state}
           </span>
         )}
-        {filled && selected && (
-          // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine
+        {filled && (selected || alarm) && (
+          // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine. Alarmlı kutuda da
+          // görünür: ona dokunmak alarmı açtığından kutu bu menüdeki "Seç" ile seçilir
           <button type="button" aria-label="Kutu işlemleri" aria-haspopup="menu" tabIndex={-1}
                   onClick={(e) => { e.stopPropagation(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }}
                   className="absolute bottom-1.5 left-1.5 hidden h-7 min-w-9 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid">⋯</button>

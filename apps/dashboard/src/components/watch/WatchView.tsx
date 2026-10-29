@@ -26,8 +26,10 @@ import { useDraft } from "./useDraft";
 import { usePhoneLandscape } from "./usePhoneLandscape";
 import { useStreamKey } from "./useStreamKey";
 
-/** Kaydedilmemiş yeni şablonun sekmesi (sunucuda henüz yok) */
-const NEW_ID = "yeni";
+/** Kaydedilmemiş yeni şablonun sekme kimliği (sunucuda henüz yok): her yeni sekmede ayrı ("yeni-1", "yeni-2"…), böylece
+ * süren bir kayıt yanıtı sonradan açılan başka bir yeni sekmeyle karışmaz */
+const LOCAL_PREFIX = "yeni-";
+const isLocal = (id: string | null) => !!id && id.startsWith(LOCAL_PREFIX);
 const isDraftId = (id: string) => id.startsWith("draft-");
 const droppedNote = (n: number) => `${n} kamera düzene sığmadı ve şablondan çıkarıldı. Geri al ile geri getirilebilir.`;
 const FULL_HINT = "Bütün kutular dolu: değiştirmek istediğiniz kutuyu seçin ya da önce bir kutuyu boşaltın.";
@@ -78,8 +80,9 @@ export default function WatchView() {
   /** Şablon listesi en az bir kez alındı ("Henüz şablon yok" ancak o zaman söylenir) */
   const [loaded, setLoaded] = useState(false);
   const [currentId, setCurrentId] = useState<string | null>(null);
-  /** Kaydedilmemiş yeni şablonun adı (sekmesi açıkken); yeni şablon yalnız seçiliyken vardır */
-  const [fresh, setFresh] = useState<string | null>(null);
+  /** Kaydedilmemiş yeni şablonun sekmesi (kimlik, ad); yeni şablon yalnız seçiliyken vardır */
+  const [fresh, setFresh] = useState<{ id: string; name: string } | null>(null);
+  const localSeq = useRef(0);
   /** Düzenleme geçmişi; yalnız `tabId` sekmesi seçiliyken geçerli (yoksa kayıtlı şablonun kendisi gösterilir) */
   const [edit, setEdit] = useState<{ tabId: string; hist: History } | null>(null);
   /** Seçili kutu: listeden tıklanan kamera buraya yerleşir */
@@ -118,6 +121,7 @@ export default function WatchView() {
   const discarded = useRef<string | null>(null);
   /** Güncel değerler (işleyiciler ve `reload` sabit kalsın diye ref üzerinden okunur); her çizimde aşağıda doldurulur */
   const live = useRef({
+    edit: null as { tabId: string; hist: History } | null,
     hist: null as History | null, currentId: null as string | null, present: null as Draft | null, selected: null as number | null,
     single: null as Single | null, byKey: new Map<string, TileStatus>(), labels: {} as Record<string, string>, dirty: false,
     layout: null as ViewLayout | null, tabName: null as string | null,
@@ -136,12 +140,12 @@ export default function WatchView() {
       setLoaded(true);
       setProblem(null);
       const { currentId: id, dirty: d } = live.current;
-      if (d && id && id !== NEW_ID && id !== discarded.current && !v.some((x) => x.id === id)) {
+      if (d && id && !isLocal(id) && id !== discarded.current && !v.some((x) => x.id === id)) {
         keepAsNew.current(DELETED_ELSEWHERE);
         return true;
       }
       setCurrentId((cur) => {
-        if (cur === NEW_ID) return cur;                     // kaydedilmemiş yeni şablon açık kalır
+        if (isLocal(cur)) return cur;                       // kaydedilmemiş yeni şablon açık kalır
         const want = remembered();
         return want && v.some((x) => x.id === want) ? want : cur && v.some((x) => x.id === cur) ? cur : v[0]?.id ?? null;
       });
@@ -163,26 +167,26 @@ export default function WatchView() {
     return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [reload]);
 
-  const isNew = currentId === NEW_ID && fresh !== null;
+  const isNew = fresh !== null && currentId === fresh.id;
   const view = isNew ? null : views.find((v) => v.id === currentId) ?? null;
   const saved = useMemo<Draft | null>(() => (view ? { layout: view.layout, tiles: view.tiles, name: view.name } : null), [view]);
   const hist = useMemo<History | null>(
     () => (edit && edit.tabId === currentId ? edit.hist : saved ? initHistory(saved) : null), [edit, currentId, saved]);
   const present = hist?.present ?? null;
   const dirty = hist !== null && isDirty(hist, isNew ? null : saved);
-  const tabName = isNew ? fresh : view?.name ?? "";
+  const tabName = isNew ? fresh.name : view?.name ?? "";
   const presentLayout = present?.layout ?? null;
   const layout = useMemo(() => (presentLayout ? layoutFor(presentLayout, layouts) : null), [presentLayout, layouts]);
 
   // Sekme değişince: başka sekmenin geçmişi, yeni şablon, seçim, menü ve iletiler bırakılır; seçim hatırlanır
   useEffect(() => {
     setEdit((e) => (e && e.tabId !== currentId ? null : e));
-    if (currentId !== NEW_ID) setFresh(null);
+    setFresh((f) => (f && f.id === currentId ? f : null));
     setSelected(null);
     setFocusIdx(0);
     setMenu(null);
     setNote(null);
-    if (currentId && currentId !== NEW_ID) remember(currentId);
+    if (currentId && !isLocal(currentId)) remember(currentId);
   }, [currentId]);
   // Kayıtlı şablon değişti (başka cihazda düzenlendi): düzenleme yoksa (kayıtlı hâl gösteriliyordu) yenisi izlenir;
   // kaydedilmemiş düzenleme varsa korunur. Kaydet sonrası (düzenlenen = kayıtlı) geçmiş de korunur.
@@ -320,7 +324,7 @@ export default function WatchView() {
 
   // ---- düzenleme (geçmişe yazılır)
 
-  live.current = { hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName };
+  live.current = { edit, hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName };
   const commit = useCallback((next: Draft) => {
     const { hist: h, currentId: id } = live.current;
     if (!h || !id) return;
@@ -411,9 +415,10 @@ export default function WatchView() {
   keepAsNew.current = (notice: string) => {
     const { hist: h, tabName: name } = live.current;
     if (!h) return;
-    setFresh(name || newName([]));
-    setEdit({ tabId: NEW_ID, hist: h });
-    setCurrentId(NEW_ID);
+    const id = `${LOCAL_PREFIX}${++localSeq.current}`;
+    setFresh({ id, name: name || newName([]) });
+    setEdit({ tabId: id, hist: h });
+    setCurrentId(id);
     setInfo(notice);
   };
 
@@ -428,24 +433,29 @@ export default function WatchView() {
     setCurrentId(id);
   };
   const newTemplate = () => {
-    if (!layouts.length || !leaveOk()) return;
+    if (!layouts.length || busy || !leaveOk()) return;
     clearMessages();
     const name = newName(views.map((v) => v.name));
-    setFresh(name);
-    setCurrentId(NEW_ID);
-    setEdit({ tabId: NEW_ID, hist: initHistory({ ...newDraft(layouts), name }) });
+    const id = `${LOCAL_PREFIX}${++localSeq.current}`;
+    setFresh({ id, name });
+    setCurrentId(id);
+    setEdit({ tabId: id, hist: initHistory({ ...newDraft(layouts), name }) });
     setSelected(null);
     setNote(null);
   };
+  /** İşlemin başladığı an: sekme ve düzenleme durumu (`adopt` istek sürerken bir şey değişti mi diye bakar) */
+  const startOf = () => ({ origin: live.current.currentId, edit: live.current.edit });
   /**
-   * Sunucudan dönen yeni şablonu listeye ekler ve (uygunsa) ona geçer; geçildiyse true. `origin`: işlemin başladığı
-   * sekme; `carry`: o sekmenin düzenleme geçmişi yeni şablona taşınır (Kaydet, Farklı kaydet). İstek sürerken başka
-   * sekmeye geçildiyse, ya da (taşımadan) bu sekmede yeni düzenleme yapıldıysa geçilmez: düzenleme sorusuz atılmaz.
+   * Sunucudan dönen yeni şablonu listeye ekler ve (uygunsa) ona geçer; geçildiyse true. `start`: işlemin başladığı
+   * sekme ve düzenleme durumu; `carry`: o sekmenin düzenleme geçmişi yeni şablona taşınır (Kaydet, Farklı kaydet).
+   * İstek sürerken başka sekmeye geçildiyse, ya da (taşımadan) bu sekmede yeni bir düzenleme yapıldıysa geçilmez:
+   * istek SÜRERKEN yapılan düzenleme sorusuz atılmaz. Başlamadan önceki düzenlemenin atılması zaten sorulmuştu.
    */
-  const adopt = (v: ViewTemplate, origin: string | null, carry: boolean): boolean => {
-    const { currentId: cur, dirty: d } = live.current;
+  const adopt = (v: ViewTemplate, start: { origin: string | null; edit: unknown }, carry: boolean): boolean => {
+    const { currentId: cur, edit: now } = live.current;
+    const origin = start.origin;
     setViews((vs) => [...vs.filter((x) => x.id !== v.id), v]);
-    const go = cur === origin && (carry || !d);
+    const go = cur === origin && (carry || now === start.edit);
     if (go) {
       setEdit((e) => (carry && e && e.tabId === origin ? { tabId: v.id, hist: e.hist } : null));
       setCurrentId(v.id);
@@ -461,12 +471,14 @@ export default function WatchView() {
     try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   const save = () => run(async () => {
-    if (!present || !tabName) return;
-    const origin = currentId;
+    if (!present) return;
+    if (!tabName.trim()) throw new Error("Şablonun adı yok: önce sekmeye sağ tıklayıp Yeniden adlandır ile ad verin.");
+    const start = startOf();
+    const origin = start.origin;
     const body = { name: tabName, layout: present.layout, tiles: present.tiles };
     if (isNew) {
       const v = await api<ViewTemplate>("views", { method: "POST", json: body });
-      if (!adopt(v, origin, true)) setInfo(added(v));
+      if (!adopt(v, start, true)) setInfo(added(v));
     } else if (view) {
       try {
         const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
@@ -482,20 +494,23 @@ export default function WatchView() {
   const saveAs = () => {
     if (!present) return;
     const content = { layout: present.layout, tiles: present.tiles };
-    const origin = currentId;
+    const start = startOf();
     setNaming({
       title: "Farklı kaydet", initial: copyName(tabName ?? "", views.map((v) => v.name)),
       submit: async (name) => {
         const v = await api<ViewTemplate>("views", { method: "POST", json: { name, ...content } });
         setNaming(null);
         clearMessages();
-        if (!adopt(v, origin, true)) setInfo(added(v));
+        if (!adopt(v, start, true)) setInfo(added(v));
       },
     });
   };
   const renameTab = (id: string) => {
-    if (id === NEW_ID) {
-      setNaming({ title: "Yeniden adlandır", initial: fresh ?? "", submit: async (name) => { setFresh(name); setNaming(null); } });
+    if (isLocal(id)) {
+      setNaming({ title: "Yeniden adlandır", initial: fresh?.name ?? "", submit: async (name) => {
+        setFresh((f) => (f && f.id === id ? { ...f, name } : f));
+        setNaming(null);
+      } });
       return;
     }
     const v = views.find((x) => x.id === id);
@@ -509,7 +524,7 @@ export default function WatchView() {
         const cur = list.find((x) => x.id === v.id);
         if (!cur) throw new Error("Şablon bulunamadı; başka yerde silinmiş olabilir.");
         const n = await api<ViewTemplate>(`views/${v.id}`, { method: "PUT", json: { name, layout: cur.layout, tiles: cur.tiles } });
-        setViews(list.map((x) => (x.id === n.id ? n : x)));
+        setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
         setNaming(null);
       },
     });
@@ -517,16 +532,16 @@ export default function WatchView() {
   const copyTab = (id: string) => {
     const v = views.find((x) => x.id === id);
     if (!v || !leaveOk()) return;
-    const origin = currentId;
+    const start = startOf();
     void run(async () => {
       const c = await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } });
-      if (!adopt(c, origin, false)) setInfo(added(c));
+      if (!adopt(c, start, false)) setInfo(added(c));
     });
   };
   const deleteTab = (id: string) => {
-    const name = id === NEW_ID ? fresh : views.find((x) => x.id === id)?.name;
+    const name = isLocal(id) ? fresh?.name : views.find((x) => x.id === id)?.name;
     if (name == null || !window.confirm(`"${name}" şablonu silinsin mi?`)) return;
-    if (id === NEW_ID) {
+    if (isLocal(id)) {
       clearMessages();
       setCurrentId(views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null);
       return;
@@ -542,27 +557,30 @@ export default function WatchView() {
   /** Kayıt cihazının tüm kanallarından (en çok 16) şablon kurar ve ona geçer */
   const fromRecorder = (sourceId: string) => {
     if (!leaveOk()) return;
-    const origin = currentId;
+    const start = startOf();
     void run(async () => {
       const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
       const note = v.truncated ? `İlk 16 kanal alındı (toplam ${v.channelCount}).` : null;
-      setInfo(adopt(v, origin, false) ? note : [added(v), note].filter(Boolean).join(" "));
+      setInfo(adopt(v, start, false) ? note : [added(v), note].filter(Boolean).join(" "));
     });
   };
 
   const tabs: TabItem[] = [
     ...views.map((v) => ({ id: v.id, name: v.name, unsaved: v.id === currentId && dirty })),
-    ...(isNew && fresh ? [{ id: NEW_ID, name: fresh, unsaved: true }] : []),
+    ...(isNew ? [{ id: fresh.id, name: fresh.name, unsaved: true }] : []),
   ];
   const menuActions = (m: Menu): MenuAction[] => {
     if (m.kind === "tab") {
       return [
         { label: "Yeniden adlandır", onSelect: () => renameTab(m.id) },
-        { label: "Kopyala", onSelect: () => copyTab(m.id), disabled: m.id === NEW_ID || busy },
+        { label: "Kopyala", onSelect: () => copyTab(m.id), disabled: isLocal(m.id) || busy },
         { label: "Sil", onSelect: () => deleteTab(m.id), disabled: busy },
       ];
     }
+    // Alarmlı kutuya dokunmak/tıklamak alarmı açtığından kutu buradan seçilir (sonra listeden kamera, ya da Boşalt)
+    const alarmed = !!tileStatus(m.index)?.analysis?.alarm;
     return [
+      ...(alarmed && selected !== m.index ? [{ label: "Seç", onSelect: () => setSelected(m.index) }] : []),
       { label: "Tek kamera", onSelect: () => openTile(m.index) },
       { label: "Boşalt", onSelect: () => emptyTile(m.index) },
     ];
@@ -590,15 +608,15 @@ export default function WatchView() {
         <>
           <PageHeader title="Canlı izleme" />
           <TemplateTabs tabs={tabs} current={currentId} onSelect={selectTab} onAdd={newTemplate}
-                        onMenu={(id, x, y) => setMenu({ kind: "tab", id, x, y })} addDisabled={layouts.length === 0} />
+                        onMenu={(id, x, y) => setMenu({ kind: "tab", id, x, y })} addDisabled={layouts.length === 0 || busy} />
           <div className="flex flex-wrap items-center gap-1.5">
             <EditorMenu layoutId={present?.layout ?? null} canUndo={!!hist && canUndo(hist)} canRedo={!!hist && canRedo(hist)}
-                        canSave={dirty && !!layout} canSaveAs={!!present && !!layout} busy={busy} disabled={layouts.length === 0}
+                        canSave={dirty && !!layout && !!tabName.trim()} canSaveAs={!!present && !!layout} busy={busy} disabled={layouts.length === 0}
                         recorders={recorders} onNew={newTemplate} onUndo={doUndo} onRedo={doRedo} onSave={save} onSaveAs={saveAs}
                         onLayout={chooseLayout} onFromRecorder={fromRecorder}
                         canClearSelected={selected !== null && !!present?.tiles[selected]}
                         onClearSelected={() => { if (selected !== null) emptyTile(selected); }} />
-            <button type="button" onClick={save} disabled={!dirty || !layout || busy} className="pl-btn">Kaydet</button>
+            <button type="button" onClick={save} disabled={!dirty || !layout || busy || !tabName.trim()} className="pl-btn">Kaydet</button>
             <button type="button" onClick={doUndo} disabled={!hist || !canUndo(hist)} className="pl-btn">Geri al</button>
             {canWall && <button type="button" onClick={wall} disabled={!present || !layout} className="pl-btn">Tüm ekran</button>}
             {dirty && <span className="text-[12px] text-warn-700">Kaydedilmemiş değişiklik var</span>}

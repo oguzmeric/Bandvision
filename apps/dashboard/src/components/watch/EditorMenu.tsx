@@ -94,7 +94,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
       {open && (
         <div id={`${uid}-menu`} role="dialog" aria-label="Şablon editörü"
              className="absolute left-0 top-full z-40 mt-1 w-[300px] max-w-[calc(100vw-32px)] border border-pl-ctl bg-pl-bg py-1 text-[13px] text-pl-ink">
-          <button type="button" className={item} onClick={act(onNew)}>Yeni şablon</button>
+          <button type="button" className={item} disabled={busy} onClick={act(onNew)}>Yeni şablon</button>
           <button type="button" className={item} disabled={!canUndo} onClick={onUndo}>Geri al <span className="float-right text-pl-faint">Ctrl+Z</span></button>
           <button type="button" className={item} disabled={!canRedo} onClick={onRedo}>Yinele <span className="float-right text-pl-faint">Ctrl+Y</span></button>
           <button type="button" className={item} disabled={!canSave || busy} onClick={act(onSave)}>Kaydet</button>
