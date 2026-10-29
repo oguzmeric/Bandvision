@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Channel, type Source } from "@/lib/live";
+import { api, type Channel, type LiveSession, type Source } from "@/lib/live";
 import { refKey } from "@/lib/templateEdit.mjs";
-import type { TileRef } from "@/lib/views";
+import { RELOAD_RETRY_MS, type TileRef } from "@/lib/views";
 
 /** Sürüklenen kamera (listeden kutuya): `{ ref, name }` JSON */
 export const CAMERA_MIME = "application/x-bv-camera";
@@ -11,12 +11,24 @@ export const CAMERA_MIME = "application/x-bv-camera";
 /** Listedeki kameranın durumu: yalnız ızgaradaki kameralar için bilinir (tek durum yoklaması) */
 export type CamState = "live" | "problem";
 
-const DOT = { live: "bg-ok-600", problem: "bg-warn-700" } as const;
+const DOT = { live: "bg-ok-600", problem: "bg-warn-700", unknown: "bg-pl-ctl" } as const;
 const DOT_TEXT = { live: "canlı", problem: "sorunlu" } as const;
+/** Gri nokta: ızgaradaki kamera henüz bağlanıyor; ızgarada olmayan (ve analiz oturumu olmayan) kameranın durumu yoklanmaz */
+const UNKNOWN_IN_GRID = "bağlanıyor";
+const UNKNOWN_OUTSIDE = "bu şablonda izlenmiyor";
+/** Analiz oturumlarının durumu bu aralıkla alınır (ızgarada olmayan ama sayımı süren kameralar için; okuyucu açmaz) */
+const SESSIONS_POLL_MS = RELOAD_RETRY_MS;
+
+function sessionState(s: LiveSession): CamState | undefined {
+  if (s.state === "live") return "live";
+  return s.state === "error" || s.state === "reconnecting" ? "problem" : undefined;
+}
 
 /**
  * Sağdaki yazılı kamera listesi (taslak duzen.html): tek kameralar ve kayıt cihazlarının altında kanalları; yeşil nokta
- * canlı, turuncu sorunlu, gri bilinmiyor (ızgarada olmayan kameranın durumu yoklanmaz). Öğe kutuya sürüklenir ya da
+ * canlı, turuncu sorunlu, gri bilinmiyor (altta açıklaması var). Izgaradaki kameraların durumu sayfanın tek durum
+ * yoklamasından; ızgarada olmayan kameralardan yalnız analiz oturumu olanlarınki oturum listesinden gelir (5 sn'de bir;
+ * izleme için kamera okuyucusu açılmaz), diğerleri gri ("bu şablonda izlenmiyor"). Öğe kutuya sürüklenir ya da
  * tıklanır (seçili kutuya, seçili kutu yoksa ilk boş kutuya gider). Şablondaki kamera yine seçilebilir: başka kutuya taşınır.
  * Kayıt cihazları açık gelir (kanallar bir kez alınır); başlığa tıklayınca kapanır/açılır.
  * Etiketler sunucunun kutu adıyla aynı biçimdedir: tek kamera "Kapı", kanal "Ofis NVR · Kasa" (`onLabels`).
@@ -37,6 +49,26 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
   const [channels, setChannels] = useState<Record<string, Channel[] | string | undefined>>({});
   /** Kanal isteği sürenler: kapatıp yeniden açmak ikinci istek göndermez */
   const pending = useRef(new Set<string>());
+  /** Analiz oturumu olan kameraların durumu (kamera → durum) */
+  const [sessions, setSessions] = useState<Map<string, CamState | undefined>>(() => new Map());
+
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      if (document.visibilityState !== "hidden") {
+        try {
+          const list = await api<LiveSession[]>("sessions");
+          if (!alive) return;
+          setSessions(new Map(list.filter((x) => x.sourceId)
+            .map((x) => [refKey({ sourceId: x.sourceId as string, channelId: x.channelId }), sessionState(x)] as const)));
+        } catch { /* sunucu yoksa sayfanın uyarısı yeter; noktalar son bilinen hâlde kalır */ }
+      }
+      if (alive) timer = setTimeout(poll, SESSIONS_POLL_MS);
+    };
+    void poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, []);
 
   const fetchChannels = useCallback(async (s: Source) => {
     if (pending.current.has(s.id)) return;
@@ -77,16 +109,17 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
   const item = (ref: TileRef, name: string, label: string) => {
     const key = refKey(ref);
     const inGrid = used.has(key);
-    const st = inGrid ? stateOf(key) : undefined;
+    const st = inGrid ? stateOf(key) : sessions.get(key);
+    const text = st ? DOT_TEXT[st] : inGrid ? UNKNOWN_IN_GRID : UNKNOWN_OUTSIDE;
     return (
       <li key={key}>
         <button type="button" draggable data-testid="camera-item"
-                aria-label={[name, st && DOT_TEXT[st], inGrid && "şablonda"].filter(Boolean).join(", ")}
+                aria-label={[name, text, inGrid && "şablonda"].filter(Boolean).join(", ")}
                 onDragStart={(e) => { e.dataTransfer.setData(CAMERA_MIME, JSON.stringify({ ref, name: label })); e.dataTransfer.effectAllowed = "copyMove"; }}
                 onClick={() => onPick(ref, label)}
                 className={`flex w-full items-center gap-1.5 border-b border-pl-head px-2 py-1 text-left text-[13px] hover:bg-pl-sel focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${inGrid ? "font-semibold" : ""}`}>
-          <span aria-hidden="true" data-state={st ?? "unknown"} title={st ? DOT_TEXT[st] : "durum bilinmiyor"}
-                className={`h-2 w-2 shrink-0 rounded-full ${st ? DOT[st] : "bg-pl-ctl"}`} />
+          <span aria-hidden="true" data-state={st ?? "unknown"} title={text}
+                className={`h-2 w-2 shrink-0 rounded-full ${DOT[st ?? "unknown"]}`} />
           <span className="min-w-0 truncate">{name}</span>
         </button>
       </li>
@@ -129,6 +162,15 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
             </li>
           ))}
       </ul>
+      {/* Noktaların açıklaması */}
+      <p data-testid="camera-legend" className="flex flex-wrap gap-x-3 gap-y-0.5 border-t border-pl-line px-2 py-1 text-[11.5px] text-pl-muted">
+        {(["live", "problem", "unknown"] as const).map((k) => (
+          <span key={k} className="inline-flex items-center gap-1">
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${DOT[k]}`} />
+            {k === "unknown" ? `bilinmiyor (${UNKNOWN_OUTSIDE})` : DOT_TEXT[k]}
+          </span>
+        ))}
+      </p>
     </aside>
   );
 }

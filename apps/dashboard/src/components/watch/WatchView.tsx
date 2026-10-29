@@ -7,7 +7,7 @@ import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
 import { layoutFor } from "@/lib/layoutGrid.mjs";
 import {
-  applyLayout, assign, canRedo, canUndo, initHistory, isDirty, newDraft, newName, push, redo, refKey, sameContent, swap, undo,
+  applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, push, redo, refKey, sameContent, swap, undo,
   type Draft, type History,
 } from "@/lib/templateEdit.mjs";
 import {
@@ -21,7 +21,7 @@ import EditorMenu from "./EditorMenu";
 import NameDialog from "./NameDialog";
 import SingleCamera, { type SingleMode } from "./SingleCamera";
 import TemplateTabs, { PANEL_ID, tabDomId, type TabItem } from "./TemplateTabs";
-import TileOverlay, { type TileDrop } from "./TileOverlay";
+import TileOverlay, { type TileDrop, type TileMove } from "./TileOverlay";
 import { useDraft } from "./useDraft";
 import { usePhoneLandscape } from "./usePhoneLandscape";
 import { useStreamKey } from "./useStreamKey";
@@ -31,6 +31,7 @@ const NEW_ID = "yeni";
 const isDraftId = (id: string) => id.startsWith("draft-");
 const droppedNote = (n: number) => `${n} kamera düzene sığmadı ve şablondan çıkarıldı. Geri al ile geri getirilebilir.`;
 const FULL_HINT = "Bütün kutular dolu: değiştirmek istediğiniz kutuyu seçin ya da önce bir kutuyu boşaltın.";
+const DELETED_ELSEWHERE = "Bu şablon başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.";
 
 /** Durum, şablonun bu hâline mi ait: aynı düzen ve her kutuda aynı kamera (boş kutu boş) */
 function sameTiles(status: ViewStatus, view: ViewTemplate): boolean {
@@ -83,6 +84,8 @@ export default function WatchView() {
   const [edit, setEdit] = useState<{ tabId: string; hist: History } | null>(null);
   /** Seçili kutu: listeden tıklanan kamera buraya yerleşir */
   const [selected, setSelected] = useState<number | null>(null);
+  /** Izgaranın klavye sekme durağı (gezici sekme sırası: ok tuşları kutudan kutuya); seçimden bağımsız */
+  const [focusIdx, setFocusIdx] = useState(0);
   const [status, setStatus] = useState<ViewStatus | null>(null);
   const [single, setSingle] = useState<Single | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -111,17 +114,33 @@ export default function WatchView() {
   const wallRef = useRef<HTMLDivElement>(null);
   const center = useAlarmCenter();
   const guard = useUnsavedGuard();
+  /** Bu sayfada silinen şablon: listeden kalkınca "başka yerde silindi" sayılmasın */
+  const discarded = useRef<string | null>(null);
+  /** Güncel değerler (işleyiciler ve `reload` sabit kalsın diye ref üzerinden okunur); her çizimde aşağıda doldurulur */
+  const live = useRef({
+    hist: null as History | null, currentId: null as string | null, present: null as Draft | null, selected: null as number | null,
+    single: null as Single | null, byKey: new Map<string, TileStatus>(), labels: {} as Record<string, string>, dirty: false,
+    layout: null as ViewLayout | null, tabName: null as string | null,
+  });
+  const keepAsNew = useRef<(notice: string) => void>(() => undefined);
 
-  /** Şablon ve düzen listesini alır; başarıyı döndürür (seçili şablon silinmişse kalanlardan birine geçilir) */
-  const reload = useCallback(async (select?: string): Promise<boolean> => {
+  /**
+   * Şablon ve düzen listesini alır; başarıyı döndürür. Seçili şablon silinmişse kalanlardan birine geçilir; ama
+   * kaydedilmemiş düzenlemesi varsa (başka yerde silindi) düzenleme atılmaz: kaydedilmemiş yeni sekme olarak kalır.
+   */
+  const reload = useCallback(async (): Promise<boolean> => {
     try {
       const [l, v] = await Promise.all([api<ViewLayout[]>("view-layouts"), api<ViewTemplate[]>("views")]);
       setLayouts(l);
       setViews(v);
       setLoaded(true);
       setProblem(null);
+      const { currentId: id, dirty: d } = live.current;
+      if (d && id && id !== NEW_ID && id !== discarded.current && !v.some((x) => x.id === id)) {
+        keepAsNew.current(DELETED_ELSEWHERE);
+        return true;
+      }
       setCurrentId((cur) => {
-        if (select && v.some((x) => x.id === select)) return select;
         if (cur === NEW_ID) return cur;                     // kaydedilmemiş yeni şablon açık kalır
         const want = remembered();
         return want && v.some((x) => x.id === want) ? want : cur && v.some((x) => x.id === cur) ? cur : v[0]?.id ?? null;
@@ -160,6 +179,7 @@ export default function WatchView() {
     setEdit((e) => (e && e.tabId !== currentId ? null : e));
     if (currentId !== NEW_ID) setFresh(null);
     setSelected(null);
+    setFocusIdx(0);
     setMenu(null);
     setNote(null);
     if (currentId && currentId !== NEW_ID) remember(currentId);
@@ -196,7 +216,7 @@ export default function WatchView() {
     if (sameTiles(status, view)) { resyncing.current = false; return; }
     if (resyncing.current) return;
     resyncing.current = true;
-    void reload(view.id).then((ok) => { if (!ok) resyncing.current = false; });
+    void reload().then((ok) => { if (!ok) resyncing.current = false; });
   }, [status, view, reload]);
   const hasPresent = present !== null;
   useEffect(() => { if (!hasPresent) setSingle(null); }, [hasPresent]);   // şablon kalmadıysa tek kamera da kapanır
@@ -300,9 +320,7 @@ export default function WatchView() {
 
   // ---- düzenleme (geçmişe yazılır)
 
-  /** Güncel değerler: 128 kutunun işleyicileri sabit kalsın diye ref üzerinden okunur */
-  const live = useRef({ hist, currentId, present, selected, single, byKey, labels });
-  live.current = { hist, currentId, present, selected, single, byKey, labels };
+  live.current = { hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName };
   const commit = useCallback((next: Draft) => {
     const { hist: h, currentId: id } = live.current;
     if (!h || !id) return;
@@ -378,6 +396,26 @@ export default function WatchView() {
   const addLabels = useCallback((l: Record<string, string>) => setLabels((m) => ({ ...m, ...l })), []);
   const onAlarm = useCallback((id: string) => center?.open(id), [center]);
   const onTileMenu = useCallback((index: number, x: number, y: number) => setMenu({ kind: "tile", index, x, y }), []);
+  /** Klavye: ok tuşları / Home / End ile sekme durağı ve odak komşu kutuya geçer (seçim değişmez) */
+  const onMove = useCallback((i: number, to: TileMove) => {
+    const l = live.current.layout;
+    if (!l) return;
+    const n = to === "home" ? 0 : to === "end" ? l.cells.length - 1 : neighbor(l, i, to);
+    setFocusIdx(n);
+    gridRef.current?.querySelectorAll<HTMLElement>("[data-testid=watch-tile]")[n]?.focus();
+  }, []);
+  /**
+   * Şablon sunucuda yok (başka yerde silindi) ama kaydedilmemiş düzenleme var: düzenleme atılmaz, aynı adla kaydedilmemiş
+   * yeni sekmeye taşınır ("Kaydet" yeni şablon olarak yazar) ve neden söylenir.
+   */
+  keepAsNew.current = (notice: string) => {
+    const { hist: h, tabName: name } = live.current;
+    if (!h) return;
+    setFresh(name || newName([]));
+    setEdit({ tabId: NEW_ID, hist: h });
+    setCurrentId(NEW_ID);
+    setInfo(notice);
+  };
 
   // ---- sekmeler ve şablon işlemleri
 
@@ -399,13 +437,23 @@ export default function WatchView() {
     setSelected(null);
     setNote(null);
   };
-  /** Sunucudan dönen yeni şablonu listeye ekler ve ona geçer; `carry`: düzenleme geçmişi yeni sekmeye taşınır */
-  const adopt = (v: ViewTemplate, carry: boolean) => {
+  /**
+   * Sunucudan dönen yeni şablonu listeye ekler ve (uygunsa) ona geçer; geçildiyse true. `origin`: işlemin başladığı
+   * sekme; `carry`: o sekmenin düzenleme geçmişi yeni şablona taşınır (Kaydet, Farklı kaydet). İstek sürerken başka
+   * sekmeye geçildiyse, ya da (taşımadan) bu sekmede yeni düzenleme yapıldıysa geçilmez: düzenleme sorusuz atılmaz.
+   */
+  const adopt = (v: ViewTemplate, origin: string | null, carry: boolean): boolean => {
+    const { currentId: cur, dirty: d } = live.current;
     setViews((vs) => [...vs.filter((x) => x.id !== v.id), v]);
-    setEdit((e) => (carry && e ? { tabId: v.id, hist: e.hist } : null));
-    setCurrentId(v.id);
-    void reload(v.id);
+    const go = cur === origin && (carry || !d);
+    if (go) {
+      setEdit((e) => (carry && e && e.tabId === origin ? { tabId: v.id, hist: e.hist } : null));
+      setCurrentId(v.id);
+    }
+    void reload();
+    return go;
   };
+  const added = (v: ViewTemplate) => `"${v.name}" şablonu eklendi.`;
   const run = async (fn: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -414,24 +462,34 @@ export default function WatchView() {
   };
   const save = () => run(async () => {
     if (!present || !tabName) return;
+    const origin = currentId;
     const body = { name: tabName, layout: present.layout, tiles: present.tiles };
     if (isNew) {
-      adopt(await api<ViewTemplate>("views", { method: "POST", json: body }), true);
+      const v = await api<ViewTemplate>("views", { method: "POST", json: body });
+      if (!adopt(v, origin, true)) setInfo(added(v));
     } else if (view) {
-      const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
-      setViews((vs) => vs.map((x) => (x.id === v.id ? v : x)));
+      try {
+        const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
+        setViews((vs) => vs.map((x) => (x.id === v.id ? v : x)));
+      } catch (e) {
+        // Şablon başka yerde silinmiş: düzenleme kaydedilmemiş yeni sekmede kalır (yeniden "Kaydet" yeni şablon yazar)
+        if (!(e instanceof ApiError && e.status === 404) || live.current.currentId !== origin) throw e;
+        setViews((vs) => vs.filter((x) => x.id !== view.id));
+        keepAsNew.current(DELETED_ELSEWHERE);
+      }
     }
   });
   const saveAs = () => {
     if (!present) return;
     const content = { layout: present.layout, tiles: present.tiles };
+    const origin = currentId;
     setNaming({
       title: "Farklı kaydet", initial: copyName(tabName ?? "", views.map((v) => v.name)),
       submit: async (name) => {
         const v = await api<ViewTemplate>("views", { method: "POST", json: { name, ...content } });
         setNaming(null);
         clearMessages();
-        adopt(v, true);
+        if (!adopt(v, origin, true)) setInfo(added(v));
       },
     });
   };
@@ -444,10 +502,14 @@ export default function WatchView() {
     if (!v) return;
     setNaming({
       title: "Yeniden adlandır", initial: v.name,
-      // Yalnız ad değişir: kayıtlı düzen ve kutular gider (bu sekmedeki kaydedilmemiş düzenleme ayrıca kalır)
+      // Yalnız ad değişir: sunucudaki GÜNCEL düzen ve kutular gider (başka yerdeki düzenleme geri alınmaz); bu sekmedeki
+      // kaydedilmemiş düzenleme olduğu gibi kalır
       submit: async (name) => {
-        const n = await api<ViewTemplate>(`views/${v.id}`, { method: "PUT", json: { name, layout: v.layout, tiles: v.tiles } });
-        setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
+        const list = await api<ViewTemplate[]>("views");
+        const cur = list.find((x) => x.id === v.id);
+        if (!cur) throw new Error("Şablon bulunamadı; başka yerde silinmiş olabilir.");
+        const n = await api<ViewTemplate>(`views/${v.id}`, { method: "PUT", json: { name, layout: cur.layout, tiles: cur.tiles } });
+        setViews(list.map((x) => (x.id === n.id ? n : x)));
         setNaming(null);
       },
     });
@@ -455,8 +517,10 @@ export default function WatchView() {
   const copyTab = (id: string) => {
     const v = views.find((x) => x.id === id);
     if (!v || !leaveOk()) return;
+    const origin = currentId;
     void run(async () => {
-      adopt(await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } }), false);
+      const c = await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } });
+      if (!adopt(c, origin, false)) setInfo(added(c));
     });
   };
   const deleteTab = (id: string) => {
@@ -468,19 +532,21 @@ export default function WatchView() {
       return;
     }
     void run(async () => {
+      discarded.current = id;
       await api(`views/${id}`, { method: "DELETE" });
       setViews((vs) => vs.filter((x) => x.id !== id));
-      if (id === currentId) setEdit(null);
+      setEdit((e) => (e && e.tabId === id ? null : e));
       await reload();
     });
   };
   /** Kayıt cihazının tüm kanallarından (en çok 16) şablon kurar ve ona geçer */
   const fromRecorder = (sourceId: string) => {
     if (!leaveOk()) return;
+    const origin = currentId;
     void run(async () => {
       const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
-      adopt(v, false);
-      setInfo(v.truncated ? `İlk 16 kanal alındı (toplam ${v.channelCount}).` : null);
+      const note = v.truncated ? `İlk 16 kanal alındı (toplam ${v.channelCount}).` : null;
+      setInfo(adopt(v, origin, false) ? note : [added(v), note].filter(Boolean).join(" "));
     });
   };
 
@@ -529,7 +595,9 @@ export default function WatchView() {
             <EditorMenu layoutId={present?.layout ?? null} canUndo={!!hist && canUndo(hist)} canRedo={!!hist && canRedo(hist)}
                         canSave={dirty && !!layout} canSaveAs={!!present && !!layout} busy={busy} disabled={layouts.length === 0}
                         recorders={recorders} onNew={newTemplate} onUndo={doUndo} onRedo={doRedo} onSave={save} onSaveAs={saveAs}
-                        onLayout={chooseLayout} onFromRecorder={fromRecorder} />
+                        onLayout={chooseLayout} onFromRecorder={fromRecorder}
+                        canClearSelected={selected !== null && !!present?.tiles[selected]}
+                        onClearSelected={() => { if (selected !== null) emptyTile(selected); }} />
             <button type="button" onClick={save} disabled={!dirty || !layout || busy} className="pl-btn">Kaydet</button>
             <button type="button" onClick={doUndo} disabled={!hist || !canUndo(hist)} className="pl-btn">Geri al</button>
             {canWall && <button type="button" onClick={wall} disabled={!present || !layout} className="pl-btn">Tüm ekran</button>}
@@ -565,7 +633,8 @@ export default function WatchView() {
                       <TileOverlay key={i} layout={layout} index={i} filled={ref !== null} tile={tileStatus(i)}
                                    label={ref ? labels[refKey(ref)] ?? null : null} selected={selected === i}
                                    onOpen={openTile} onAlarm={onAlarm} onSelect={setSelected} onDropped={onDropped}
-                                   onEmpty={emptyTile} onMenu={onTileMenu} />
+                                   onEmpty={emptyTile} onMenu={onTileMenu}
+                                   active={i === Math.min(focusIdx, layout.cells.length - 1)} onFocusTile={setFocusIdx} onMove={onMove} />
                     );
                   })}
                   {immersive && (

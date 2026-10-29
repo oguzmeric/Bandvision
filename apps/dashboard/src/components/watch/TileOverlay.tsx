@@ -27,19 +27,33 @@ function dropOf(dt: DataTransfer): TileDrop | null {
 }
 const accepts = (dt: DataTransfer) => dt.types.includes(TILE_MIME) || dt.types.includes(CAMERA_MIME);
 
+/** Klavyeyle kutular arası gezinme: yön ya da ilk/son kutu */
+export type TileMove = "up" | "down" | "left" | "right" | "home" | "end";
+const MOVES: Record<string, TileMove> = {
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Home: "home", End: "end",
+};
+
 /**
  * Birleşik görüntünün üstünde tek kutunun HTML katmanı: ad, durum, rozet, alarm çerçevesi; ayrıca düzenleme:
- *   - tıklama ya da klavye odağı kutuyu seçer (sonra listeden tıklanan kamera buraya gelir); alarmlı kutuya tıklamak alarmı açar;
- *   - çift tık (dokunmatikte seçili kutuya yeniden dokunma) ya da Enter/Boşluk tek kamerayı açar;
+ *   - tıklama kutuyu seçer (sonra listeden tıklanan kamera buraya gelir); alarmlı kutuya tıklamak alarmı açar;
+ *   - çift tık (dokunmatikte seçili kutuya yeniden dokunma) tek kamerayı açar;
+ *   - klavye: ızgara tek sekme durağıdır (`active` kutu); ok tuşları / Home / End kutudan kutuya gezdirir (`onMove`),
+ *     seçim odağı izlemez: Enter/Boşluk kutuyu seçer, seçili dolu kutuda tek kamerayı açar; seçim odak ızgaradan
+ *     çıkınca da kalır (kamera listesine geçip kamera seçilebilsin);
  *   - listeden kamera ya da başka kutu buraya sürüklenip bırakılır;
- *   - sağ tık / Shift+F10 / menü tuşu menüyü açar (Tek kamera, Boşalt); Delete kutuyu boşaltır.
+ *   - sağ tık / Shift+F10 / menü tuşu menüyü açar (Tek kamera, Boşalt); Delete kutuyu boşaltır; dokunmatikte seçili dolu
+ *     kutuda görünen "⋯" düğmesi aynı menüyü açar (iOS'ta uzun basış sağ tık vermez).
  * `filled`: şablonda bu kutuya kamera atanmış; `tile`: kameranın canlı durumu (ilk yanıt gelene dek null: "Bağlanıyor…");
  * `label`: durum gelmeden gösterilecek ad (kamera listesinden). İşleyiciler kutu sırasını alır (128 kutuda tek işlev).
  */
-function TileOverlay({ layout, index, filled, tile, label, selected, onOpen, onAlarm, onSelect, onDropped, onEmpty, onMenu }: {
+function TileOverlay({ layout, index, filled, tile, label, selected, active, onOpen, onAlarm, onSelect, onDropped, onEmpty, onMenu,
+  onFocusTile, onMove }: {
   layout: ViewLayout; index: number; filled: boolean; tile: TileStatus | null; label: string | null; selected: boolean;
+  /** Izgaranın tek sekme durağı bu kutu mu (gezici sekme sırası) */
+  active: boolean;
   onOpen: (i: number) => void; onAlarm: (alarmId: string) => void; onSelect: (i: number) => void;
   onDropped: (i: number, d: TileDrop) => void; onEmpty: (i: number) => void; onMenu: (i: number, x: number, y: number) => void;
+  onFocusTile: (i: number) => void; onMove: (i: number, to: TileMove) => void;
 }) {
   const alarm = tile?.analysis?.alarm ?? null;
   const state = !filled ? null : tile ? (tile.state === "live" ? null : stateText(tile)) : "Bağlanıyor…";
@@ -59,15 +73,21 @@ function TileOverlay({ layout, index, filled, tile, label, selected, onOpen, onA
            if (selected && filled && touchOnly()) onOpen(index);
            else onSelect(index);
          }}
-         // Klavyeyle odaklanınca da seçilir (fare/dokunuş odağı sayılmaz: seçimi tıklama yapar, dokunmatikte ikinci dokunuş açar)
-         onFocus={(e) => { if (e.target === e.currentTarget && e.currentTarget.matches(":focus-visible")) onSelect(index); }}
+         // Odak seçimi değiştirmez; yalnız gezici sekme durağı bu kutuya geçer
+         onFocus={(e) => { if (e.target === e.currentTarget) onFocusTile(index); }}
          onContextMenu={(e) => { if (!filled) return; e.preventDefault(); const p = menuPoint(e, false); onMenu(index, p.x, p.y); }}
-         role="group" tabIndex={0}
+         role="group" tabIndex={active ? 0 : -1}
          aria-label={`${filled ? (name ?? "Kamera") : "Boş kutu"}${selected ? " (seçili)" : ""}`}
          onKeyDown={(e) => {
-           if (e.target !== e.currentTarget || !filled) return;           // iç düğme/bağlantıdaki tuş kutuyu açmaz
-           if (isMenuKey(e)) { e.preventDefault(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }
-           else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(index); }
+           if (e.target !== e.currentTarget) return;                     // iç düğme/bağlantıdaki tuş kutuya gitmez
+           const move = MOVES[e.key];
+           if (move) { e.preventDefault(); onMove(index, move); }
+           else if (e.key === "Enter" || e.key === " ") {
+             e.preventDefault();
+             if (!selected) onSelect(index);
+             else if (filled) onOpen(index);
+           } else if (!filled) return;
+           else if (isMenuKey(e)) { e.preventDefault(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }
            else if (e.key === "Delete") { e.preventDefault(); onEmpty(index); }
          }}>
       <div className={`relative h-full w-full rounded-[3px] ${selected
@@ -90,7 +110,7 @@ function TileOverlay({ layout, index, filled, tile, label, selected, onOpen, onA
         )}
         {alarm && (
           <button type="button" aria-label={`Alarmı aç: ${ALARM_TITLES[alarm.type]}`}
-                  onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
+                  tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
                   className="absolute inset-x-0 bottom-2 mx-auto w-max rounded-[2px] bg-nok-600 px-2 py-1 text-[12px] font-bold text-white">
             {ALARM_TITLES[alarm.type]}
           </button>
@@ -100,15 +120,21 @@ function TileOverlay({ layout, index, filled, tile, label, selected, onOpen, onA
             {state}
           </span>
         )}
+        {filled && selected && (
+          // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine
+          <button type="button" aria-label="Kutu işlemleri" aria-haspopup="menu" tabIndex={-1}
+                  onClick={(e) => { e.stopPropagation(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }}
+                  className="absolute bottom-1.5 left-1.5 hidden h-7 min-w-9 place-items-center rounded-[2px] bg-black/70 px-2 text-[15px] leading-none text-white [@media(hover:none)]:grid">⋯</button>
+        )}
         {filled && (
           // Fareyle üstüne gelince ya da klavye odağında küçük düğmeler: büyüt, canlı sayıma git, boşalt. Dokunmatikte
           // gösterilmez (dokunuş kutuyu seçer, ikinci dokunuş açar; küçük kutuda düğmeler dokunuşun altına girmesin)
           <span className="absolute bottom-1.5 right-1.5 hidden max-w-[calc(100%-12px)] flex-wrap justify-end gap-1 group-focus-visible:flex group-has-[:focus-visible]:flex [@media(hover:hover)]:group-hover:flex [@media(hover:hover)]:group-focus-within:flex">
-            <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(index); }}
+            <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onOpen(index); }}
                     className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Tam ekran</button>
-            <Link href={liveHref(tile?.analysis)} onClick={(e) => e.stopPropagation()} draggable={false}
+            <Link href={liveHref(tile?.analysis)} tabIndex={active ? 0 : -1} onClick={(e) => e.stopPropagation()} draggable={false}
                   className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Canlı sayıma git</Link>
-            <button type="button" onClick={(e) => { e.stopPropagation(); onEmpty(index); }}
+            <button type="button" tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onEmpty(index); }}
                     className="rounded-[2px] bg-black/60 px-1.5 py-0.5 text-[11px] text-white">Boşalt</button>
           </span>
         )}

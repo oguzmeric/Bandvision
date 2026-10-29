@@ -100,3 +100,25 @@ export function validateGrid(rows, cols) {
   if (rows * cols > MAX_TILES) return `En çok ${MAX_TILES} kutu (${rows}×${cols} = ${rows * cols}).`;
   return null;
 }
+
+/**
+ * Klavyeyle kutular arası gezinme (ızgara tek sekme durağıdır, ok tuşları kutudan kutuya): `dir` yönündeki en yakın
+ * kutu. Kutu merkezleri karşılaştırılır; ana eksende ilerlemeyen kutular sayılmaz, yan eksendeki sapma iki kat cezalıdır
+ * (1 büyük + 5 gibi düzensiz düzenlerde de doğal komşu). O yönde kutu yoksa aynı kutu döner.
+ */
+export function neighbor(layout, index, dir) {
+  const center = ([x, y, w, h]) => [x + w / 2, y + h / 2];
+  const [cx, cy] = center(layout.cells[index]);
+  let best = index;
+  let bestScore = Infinity;
+  layout.cells.forEach((cell, i) => {
+    if (i === index) return;
+    const [x, y] = center(cell);
+    const main = { right: x - cx, left: cx - x, down: y - cy, up: cy - y }[dir];
+    if (!(main > 0)) return;
+    const side = dir === "left" || dir === "right" ? Math.abs(y - cy) : Math.abs(x - cx);
+    const score = main + 2 * side;
+    if (score < bestScore) { bestScore = score; best = i; }
+  });
+  return best;
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  EDITOR_LAYOUTS, HISTORY_LIMIT, applyLayout, assign, canRedo, canUndo, initHistory, isDirty, newDraft, newName, push,
+  EDITOR_LAYOUTS, HISTORY_LIMIT, applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, push,
   redo, refKey, retile, sameContent, swap, undo, validateGrid,
 } from "./templateEdit.mjs";
 
@@ -132,4 +132,20 @@ test("validateGrid: 1–16 ve en çok 128 kutu, Türkçe ileti", () => {
   for (const [r, c] of [[0, 5], [17, 2], [5, 0], [2.5, 3], [Number.NaN, 2]]) {
     assert.equal(validateGrid(r, c), "Satır ve sütun 1–16 arasında olmalı.", `${r}×${c}`);
   }
+});
+
+test("neighbor: ok tuşlarıyla geometrik komşu kutu; kenarda yerinde kalır", () => {
+  const four = CATALOG.find((l) => l.id === "4");
+  assert.equal(neighbor(four, 0, "right"), 1);
+  assert.equal(neighbor(four, 0, "down"), 2);
+  assert.equal(neighbor(four, 3, "left"), 2);
+  assert.equal(neighbor(four, 3, "up"), 1);
+  assert.equal(neighbor(four, 0, "left"), 0);
+  assert.equal(neighbor(four, 1, "up"), 1);
+  // 1 büyük + 2: büyük kutudan sağa üstteki küçük, alttakinden sola büyük kutu
+  const three = CATALOG.find((l) => l.id === "3");
+  assert.equal(neighbor(three, 0, "right"), 1);
+  assert.equal(neighbor(three, 2, "left"), 0);
+  assert.equal(neighbor(three, 1, "down"), 2);
+  assert.equal(neighbor(three, 2, "down"), 2);
 });

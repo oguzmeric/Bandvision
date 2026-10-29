@@ -36,13 +36,14 @@ function LayoutIcon({ id }: { id: string }) {
  * "Şablon editörü" düğmesi ve açılan menü (taslak sayfalar.html): Yeni şablon, Geri al, Yinele, Kaydet, Farklı kaydet…,
  * NVR'dan şablon; 10 düzen düğmesi ve N×M (satır × sütun, en çok 128 kutu). Menü kipsiz bir pencere (`role="dialog"`):
  * içinde sayı kutuları da olduğundan `role="menu"` değil. Esc ya da dışarı tıklama kapatır, odak düğmeye döner.
- * Düzen, N×M, Geri al ve Yinele menüyü açık bırakır (art arda denenebilsin); diğerleri kapatır.
+ * Düzen, N×M, Geri al, Yinele ve "Seçili kutuyu boşalt" menüyü açık bırakır (art arda denenebilsin); diğerleri kapatır.
+ * Odak menünün dışına çıkınca (Tab ile ya da başka bir öğeye) menü kapanır.
  */
-export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSaveAs, busy, disabled, recorders,
-  onNew, onUndo, onRedo, onSave, onSaveAs, onLayout, onFromRecorder }: {
-  layoutId: string | null; canUndo: boolean; canRedo: boolean; canSave: boolean; canSaveAs: boolean; busy: boolean;
-  disabled: boolean; recorders: Source[];
-  onNew: () => void; onUndo: () => void; onRedo: () => void; onSave: () => void; onSaveAs: () => void;
+export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSaveAs, canClearSelected, busy, disabled, recorders,
+  onNew, onUndo, onRedo, onSave, onSaveAs, onClearSelected, onLayout, onFromRecorder }: {
+  layoutId: string | null; canUndo: boolean; canRedo: boolean; canSave: boolean; canSaveAs: boolean; canClearSelected: boolean;
+  busy: boolean; disabled: boolean; recorders: Source[];
+  onNew: () => void; onUndo: () => void; onRedo: () => void; onSave: () => void; onSaveAs: () => void; onClearSelected: () => void;
   onLayout: (id: string) => void; onFromRecorder: (sourceId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -83,7 +84,9 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
 
   return (
     <div ref={wrapRef} className="relative"
-         onKeyDown={(e) => { if (open && e.key === "Escape") { e.stopPropagation(); close(true); } }}>
+         onKeyDown={(e) => { if (open && e.key === "Escape") { e.stopPropagation(); close(true); } }}
+         // Odak dışarıdaki bir öğeye geçti: kapanır (odak kaybolduysa, ör. düğme pasifleşti, açık kalır)
+         onBlur={(e) => { if (open && e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
       <button ref={buttonRef} type="button" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? `${uid}-menu` : undefined}
               disabled={disabled} onClick={() => setOpen((o) => !o)} className="pl-btn">
         Şablon editörü <span aria-hidden="true">▾</span>
@@ -96,6 +99,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
           <button type="button" className={item} disabled={!canRedo} onClick={onRedo}>Yinele <span className="float-right text-pl-faint">Ctrl+Y</span></button>
           <button type="button" className={item} disabled={!canSave || busy} onClick={act(onSave)}>Kaydet</button>
           <button type="button" className={item} disabled={!canSaveAs || busy} onClick={act(onSaveAs)}>Farklı kaydet…</button>
+          <button type="button" className={item} disabled={!canClearSelected} onClick={onClearSelected}>Seçili kutuyu boşalt</button>
           {recorders.length > 0 && (
             <label className="flex items-center gap-2 px-3 py-1">
               <span className="shrink-0">NVR&apos;dan şablon</span>
