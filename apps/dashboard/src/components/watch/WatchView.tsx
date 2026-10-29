@@ -5,7 +5,7 @@ import { ApiError, api, type Source } from "@/lib/live";
 import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
-import { layoutFor } from "@/lib/layoutGrid.mjs";
+import { layoutFor, tileTier } from "@/lib/layoutGrid.mjs";
 import {
   applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push, redo, refKey, retile,
   sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
@@ -128,6 +128,8 @@ export default function WatchView() {
   const [status, setStatus] = useState<ViewStatus | null>(null);
   const [single, setSingle] = useState<Single | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  /** Izgaranın CSS boyutu: kutu katmanının yoğunluğu buna göre (akış boyutunun aksine beklemeden güncellenir) */
+  const [gridBox, setGridBox] = useState<{ w: number; h: number } | null>(null);
   /** Analiz sunucusuyla konuşulamıyor (liste ya da durum yoklaması başarısız): sunucu yok ya da oturum doldu; düzelince kalkar */
   const [problem, setProblem] = useState<Problem | null>(null);
   /** Kayıt cihazları ("NVR'dan şablon" için) */
@@ -348,6 +350,7 @@ export default function WatchView() {
 
   // Kapsayıcı boyutu: birleşik görüntü tam bu boyutta istenir (telefonda küçük, masaüstünde büyük). İlk ölçüm hemen
   // (şablon değişince eski boyut hiç istenmesin), sonraki boyut değişimleri durulunca; boyut aynıysa durum değişmez.
+  // Kutu katmanının yoğunluğu için CSS boyutu her değişimde hemen ölçülür (katmanlar boyut değişirken de üst üste binmesin).
   useLayoutEffect(() => {
     const el = gridRef.current;
     if (!el || !layout) return;
@@ -355,9 +358,14 @@ export default function WatchView() {
       const n = streamSize(el);
       setSize((p) => (p && p.w === n.w && p.h === n.h ? p : n));
     };
+    const box = () => {
+      const r = el.getBoundingClientRect();
+      setGridBox((p) => (p && p.w === r.width && p.h === r.height ? p : { w: r.width, h: r.height }));
+    };
     measure();
+    box();
     let t: ReturnType<typeof setTimeout> | undefined;
-    const ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(measure, RESIZE_DEBOUNCE_MS); });
+    const ro = new ResizeObserver(() => { box(); clearTimeout(t); t = setTimeout(measure, RESIZE_DEBOUNCE_MS); });
     ro.observe(el);
     return () => { ro.disconnect(); clearTimeout(t); };
   }, [layout, single, wallOn, immersive]);
@@ -792,7 +800,7 @@ export default function WatchView() {
                   {layout.cells.map((_, i) => {
                     const ref = present.tiles[i] ?? null;
                     return (
-                      <TileOverlay key={i} layout={layout} index={i} filled={ref !== null} tile={tileStatus(i)}
+                      <TileOverlay key={i} layout={layout} index={i} tier={tileTier(layout, i, gridBox)} filled={ref !== null} tile={tileStatus(i)}
                                    label={ref ? labels[refKey(ref)] ?? null : null} selected={selected === i}
                                    onOpen={openTile} onAlarm={onAlarm} onSelect={setSelected} onDropped={onDropped}
                                    onEmpty={emptyTile} onMenu={onTileMenu}
