@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -566,9 +566,9 @@ test("izleme: ızgara akışı sekme görünürken 15 dk'da bir baştan açılı
   expect(new Set(ks).size).toBe(2);                                   // yeni anahtar
 });
 
-/** Şablon işlemleri testleri için sahte şablon deposu: GET/POST/PUT/DELETE views */
+/** Şablon işlemleri testleri için sahte şablon deposu: GET/POST/PUT/DELETE views (PUT, gerçek sunucu gibi `updatedAt`'i artırır) */
 async function mockStore(page: Page, initial: object[]) {
-  const store = [...initial] as Array<{ id: string; layout?: string }>;
+  const store = [...initial] as Array<{ id: string; layout?: string; name?: string; updatedAt?: number }>;
   const calls: Array<{ method: string; url: string; body: unknown }> = [];
   await page.route("**/api/live/views", async (r) => {
     const req = r.request();
@@ -588,7 +588,8 @@ async function mockStore(page: Page, initial: object[]) {
       const body = req.postDataJSON() as object;
       calls.push({ method: "PUT", url: req.url(), body });
       const i = store.findIndex((v) => v.id === id);
-      store[i] = { ...store[i], ...body };
+      if (i < 0) return r.fulfill({ status: 404, json: { detail: "Şablon bulunamadı." } });
+      store[i] = { ...store[i], ...body, updatedAt: (store[i].updatedAt ?? 0) + 1 };
       return r.fulfill({ json: store[i] });
     }
     if (req.method() === "DELETE") {
@@ -721,6 +722,12 @@ const stored = (page: Page) => page.evaluate(() => {
   return raw === null ? null : JSON.parse(raw) as { origin: string; name: string; layout: string; tiles: unknown[]; updatedAt: number | null };
 });
 const RESTORED = "Kaydedilmemiş değişiklikler geri yüklendi.";
+/** Kaydet, şablon bu düzenleme başladıktan sonra başka yerde değiştirildiyse sorar */
+const CHANGED = "Bu şablon başka yerde değiştirildi. Üzerine yazılsın mı?";
+const puts = (calls: Call[]) => calls.filter((c) => c.method === "PUT");
+type Box = { x: number; y: number; width: number; height: number };
+/** İki sınır kutusu üst üste biniyor mu (yalnız kenarları değen kutular binmez) */
+const overlaps = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 async function openEditor(page: Page) {
   await page.getByRole("button", { name: "Şablon editörü" }).click();
@@ -1195,23 +1202,75 @@ test("klavye: ızgara tek sekme durağı, ok tuşları gezdirir, odak seçmez; E
   await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");
 });
 
+/** 2. kutuda en uzun adlı alarm ("YERDE YATAN KİŞİ") */
+const LYING = { ...STATUS, tiles: STATUS.tiles.map((t, i) => (i === 1 && t ? { ...t, analysis: { ...(t.analysis as object), alarm: { id: "al2", type: "lying" } } } : t)) };
+/** Kutunun üstüne gelince / klavye odağında çıkan kutu düğmeleri */
+const tileActions = (tile: Locator) => [tile.getByRole("button", { name: "Tam ekran" }), tile.getByRole("link", { name: "Canlı sayıma git" }),
+  tile.getByRole("button", { name: "Boşalt" })];
+/** Alarm etiketi kutu düğmelerinin altında kalmaz ve kutunun içindedir */
+async function labelClear(tile: Locator) {
+  const label = (await tile.getByRole("button", { name: /^Alarmı aç/ }).boundingBox())!;
+  const box = (await tile.boundingBox())!;
+  for (const a of tileActions(tile)) {
+    await expect(a).toBeVisible();
+    expect(overlaps(label, (await a.boundingBox())!)).toBe(false);
+  }
+  expect(label.x).toBeGreaterThanOrEqual(box.x);
+  expect(label.x + label.width).toBeLessThanOrEqual(box.x + box.width);
+}
+
+test.describe("masaüstü 1280 px, 4×4", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test("alarmlı kutunun üstüne gelince kutu düğmeleri alarm etiketini örtmez", async ({ page }) => {
+    const view16 = { ...VIEW, layout: "16", tiles: [...VIEW.tiles, ...Array(12).fill(null)] };
+    await mock(page, { ...LYING, layout: "16", tiles: [...LYING.tiles, ...Array(12).fill(null)] }, view16);
+    await login(page);
+    const tile = page.getByTestId("watch-tile").nth(1);
+    await expect(page.getByTestId("watch-tile")).toHaveCount(16);
+    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeVisible();
+    await page.mouse.move(0, 0);
+    for (const a of tileActions(tile)) await expect(a).toBeHidden();                 // üstüne gelmeden düğme yok
+    await tile.hover();
+    await labelClear(tile);
+  });
+});
+
 test.describe("dokunmatik dar ekran (390 px)", () => {
   test.use({ viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true });
 
   test("alarmlı kutuda ⋯ düğmesi alarm etiketiyle üst üste binmez (2×2, uzun alarm adı)", async ({ page }) => {
-    const lying = { ...STATUS, tiles: STATUS.tiles.map((t, i) => (i === 1 && t ? { ...t, analysis: { ...(t.analysis as object), alarm: { id: "al2", type: "lying" } } } : t)) };
-    await mock(page, lying);
+    await mock(page, LYING);
     await login(page);
     const tile = page.getByTestId("watch-tile").nth(1);
     const label = tile.getByRole("button", { name: /^Alarmı aç/ });
     const more = tile.getByRole("button", { name: "Kutu işlemleri" });
     await expect(label).toBeVisible();
     await expect(more).toBeVisible();
-    const a = (await label.boundingBox())!;
     const b = (await more.boundingBox())!;
-    const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    expect(overlap).toBe(false);
+    expect(overlaps((await label.boundingBox())!, b)).toBe(false);
     expect(b.x + b.width).toBeLessThanOrEqual((await tile.boundingBox())!.x + (await tile.boundingBox())!.width);
+  });
+
+  test("klavye odağındaki alarmlı kutuda kutu düğmeleri ne alarm etiketini ne ⋯ düğmesini örter", async ({ page }) => {
+    await mock(page, LYING);
+    await login(page);
+    const tiles = page.getByTestId("watch-tile");
+    const tile = tiles.nth(1);
+    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeVisible();
+    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeVisible();
+    await tiles.nth(0).focus();
+    await page.keyboard.press("ArrowRight");                                          // klavyeyle alarmlı kutuya
+    await expect(tile).toBeFocused();
+    expect(await tile.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
+    await labelClear(tile);
+    // kutu düğmeleri görünürken ⋯ gizlenir (aynı işler düğmelerde; klavyede Shift+F10 menüyü açar)
+    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeHidden();
+    // kutunun içindeki odak (alarm etiketi) da aynı
+    await page.keyboard.press("Tab");
+    await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeFocused();
+    await labelClear(tile);
+    await expect(tile.getByRole("button", { name: "Kutu işlemleri" })).toBeHidden();
   });
 
   test("dirty iken aynı adrese bağlantı (menüde Canlı izleme): gezinmez, düzenleme kalır, menü kapanır", async ({ page }) => {
@@ -1222,17 +1281,26 @@ test.describe("dokunmatik dar ekran (390 px)", () => {
     await tiles.nth(3).tap();
     await camera(page, "Depo").tap();
     await expect(tiles.nth(3)).toContainText("Depo");
+    await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/draft-1\/stream/);
+    let polls = 0;                                                                    // bu sayfanın taslak-1 durum yoklamaları
+    await page.route("**/api/live/views/draft-1/status", (r) => { polls += 1; return r.fallback(); });
     const dialogs: string[] = [];
     page.on("dialog", (d) => { dialogs.push(d.message()); void d.dismiss(); });
     const length = await page.evaluate(() => history.length);
     await page.getByRole("button", { name: "Menü" }).tap();
     await page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Canlı izleme", exact: true }).tap();
+    const after = polls;
     await expect(page.getByTestId("menu-backdrop")).toHaveCount(0);                  // menü kapandı
     await expect(page).toHaveURL(/\/watch$/);
     await expect(tiles.nth(3)).toContainText("Depo");
     await expect(tab(page, /^Giriş katı/)).toContainText("*");
     expect(dialogs).toEqual([]);
     expect(await page.evaluate(() => history.length)).toBe(length);
+    // sayfa yeniden kurulmadı: kurulsaydı düzenleme geri yüklemeyle gelirdi (bildirim) ve yeni taslak açılırdı. Aynı
+    // sayfanın taslak-1 yoklaması iki tur daha sürer (yeniden kurulan sayfa taslak-2'yi yoklardı), sonra bakılır
+    await expect.poll(() => polls).toBeGreaterThanOrEqual(after + 2);
+    await expect(page.getByRole("status").filter({ hasText: RESTORED })).toHaveCount(0);
+    await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/draft-1\/stream/);
   });
 
   test("seçili kutunun ⋯ menüsünden ve Şablon editöründen boşaltılır", async ({ page }) => {
@@ -1390,27 +1458,36 @@ test("Yeniden adlandır başka yerdeki düzenlemeyi geri almaz: sunucudaki günc
   await expect(page.getByTestId("watch-tile")).toHaveCount(1);                     // değişiklik yoktu: güncel hâl izlenir
 });
 
-test("başka yerde silinen şablonun kaydedilmemiş düzenlemesi atılmaz: yeni sekmede kalır, Kaydet yeni şablon yazar", async ({ page }) => {
-  await mock(page, STATUS);
-  const { calls, store } = await mockStore(page, [VIEW]);
-  await login(page);
-  const tiles = page.getByTestId("watch-tile");
-  await expect(tiles.nth(0)).toContainText("Kapı");
-  await camera(page, "Depo").dragTo(tiles.nth(3));
-  store.splice(0, 1);                                                               // başka cihazda silindi
-  await page.route("**/api/live/views/v1", (r) => (r.request().method() === "PUT"
-    ? r.fulfill({ status: 404, json: { detail: "Şablon bulunamadı." } }) : r.fallback()));
-  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
-  await expect(page.getByText("Bu şablon başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.")).toBeVisible();
-  await expect(tab(page, /^Giriş katı/)).toHaveAttribute("aria-selected", "true");
-  await expect(tab(page, /^Giriş katı/)).toContainText("*");
-  await expect(tiles.nth(3)).toContainText("Depo");
-  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
-  await expect.poll(() => calls.filter((c) => c.method === "POST").length).toBe(1);
-  expect(calls.at(-1)).toMatchObject({ method: "POST", body: { name: "Giriş katı", layout: "4",
-    tiles: [...VIEW.tiles.slice(0, 3), { sourceId: "d", channelId: null }] } });
-  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
-});
+for (const late of [false, true]) {
+  test(`başka yerde silinen şablonun kaydedilmemiş düzenlemesi atılmaz (${late ? "liste alındıktan sonra silindi: PUT 404" : "Kaydet'ten hemen önceki listede yok: PUT gönderilmez"}): yeni sekmede kalır, Kaydet yeni şablon yazar`, async ({ page }) => {
+    await mock(page, STATUS);
+    const { calls, store } = await mockStore(page, [VIEW]);
+    await login(page);
+    const tiles = page.getByTestId("watch-tile");
+    await expect(tiles.nth(0)).toContainText("Kapı");
+    await camera(page, "Depo").dragTo(tiles.nth(3));
+    if (!late) store.splice(0, 1);                                                    // başka cihazda silindi
+    let put404 = 0;
+    await page.route("**/api/live/views/v1", (r) => {
+      if (r.request().method() !== "PUT") return r.fallback();
+      put404 += 1;
+      const i = store.findIndex((v) => v.id === "v1");
+      if (i >= 0) store.splice(i, 1);                                                 // late: liste alındıktan hemen sonra silindi
+      return r.fulfill({ status: 404, json: { detail: "Şablon bulunamadı." } });
+    });
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect(page.getByText("Bu şablon başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.")).toBeVisible();
+    expect(put404).toBe(late ? 1 : 0);
+    await expect(tab(page, /^Giriş katı/)).toHaveAttribute("aria-selected", "true");
+    await expect(tab(page, /^Giriş katı/)).toContainText("*");
+    await expect(tiles.nth(3)).toContainText("Depo");
+    await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+    await expect.poll(() => calls.filter((c) => c.method === "POST").length).toBe(1);
+    expect(calls.at(-1)).toMatchObject({ method: "POST", body: { name: "Giriş katı", layout: "4",
+      tiles: [...VIEW.tiles.slice(0, 3), { sourceId: "d", channelId: null }] } });
+    await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  });
+}
 
 test("kaydedilmemiş değişiklik: Çıkış bir kez sorar ve oturumu kapatır", async ({ page }) => {
   await mock(page, STATUS);
@@ -1490,8 +1567,27 @@ test("geri yükleme: sayfa yenilenince (beforeunload onaylanır) düzenleme geri
   await page.getByRole("button", { name: "Değişiklikleri at" }).click();
   await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");
   await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  await expect(tab(page, "Giriş katı")).toBeFocused();                                // düğme kalktı: odak sekmeye geçer (sayfaya düşmez)
   await expect.poll(() => stored(page)).toBeNull();
   await expect(page.getByRole("status").filter({ hasText: RESTORED })).toHaveCount(0);
+});
+
+test("geri yükleme: kaydedilmemiş yeni sekmede 'Değişiklikleri at' sekmeyi kapatır, odak açılan sekmeye geçer", async ({ page }) => {
+  await mock(page, STATUS);
+  await mockStore(page, [VIEW]);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  page.on("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "Yeni şablon", exact: true }).click();
+  await camera(page, "Kapı").click();
+  await expect.poll(() => stored(page)).toMatchObject({ name: "Yeni şablon" });
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  await expect(tab(page, /^Yeni şablon/)).toHaveCount(0);
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  await expect(tab(page, "Giriş katı")).toBeFocused();
+  await expect.poll(() => stored(page)).toBeNull();
 });
 
 test("geri yükleme: kaydedilmemiş yeni şablon da geri gelir; Kaydet kaydı siler", async ({ page }) => {
@@ -1513,9 +1609,9 @@ test("geri yükleme: kaydedilmemiş yeni şablon da geri gelir; Kaydet kaydı si
   await expect.poll(() => stored(page)).toBeNull();
 });
 
-test("geri yükleme: şablon bu arada başka yerde silindiyse yeni sekmede, değiştirildiyse üstüne açılır ve söylenir", async ({ page }) => {
+test("geri yükleme: şablon bu arada başka yerde silindiyse yeni sekmede, değiştirildiyse üstüne açılır ve söylenir (Kaydet sorar)", async ({ page }) => {
   await mock(page, STATUS);
-  const { store } = await mockStore(page, [{ ...VIEW }]);
+  const { calls, store } = await mockStore(page, [{ ...VIEW }]);
   await login(page);
   await viaAlarms(page);
   const tiles = page.getByTestId("watch-tile");
@@ -1528,6 +1624,14 @@ test("geri yükleme: şablon bu arada başka yerde silindiyse yeni sekmede, değ
   await expect(page.getByRole("status").filter({ hasText: "başka yerde değiştirildi" })).toBeVisible();
   await expect(tab(page, /^Giriş katı/)).toContainText("*");
   await expect(tiles.nth(3)).toContainText("Depo");
+  // geri yüklenen düzenlemenin temeli saklanan updatedAt'tir: Kaydet üzerine yazmadan sorar; Vazgeç yazmaz
+  const asked: string[] = [];
+  page.once("dialog", (d) => { asked.push(d.message()); void d.dismiss(); });
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => asked).toEqual([CHANGED]);
+  await expect(page.getByRole("button", { name: "Kaydet", exact: true })).toBeEnabled();
+  expect(puts(calls)).toHaveLength(0);
+  expect(await stored(page)).toMatchObject({ origin: "v1", updatedAt: 1 });
   await page.goBack();
   await expect(page).toHaveURL(/\/alarms$/);
   store.splice(0, 1);                                                               // başka yerde silindi
@@ -1550,8 +1654,9 @@ test("geri yükleme: onaylanmış bağlantıyla çıkınca kayıt silinir; bozuk
   await page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Alarmlar", exact: true }).click();
   await expect(page).toHaveURL(/\/alarms$/);
   expect(await stored(page)).toBeNull();
-  // bozuk kayıt: sayfa çalışır, kayıt silinir, bildirim yok
-  for (const bad of ["{bozuk", JSON.stringify({ v: 1, origin: "v1", name: "x", layout: "16x9", tiles: [], updatedAt: null })]) {
+  // bozuk kayıt: sayfa çalışır, kayıt silinir, bildirim yok. İkincisi düzeni ("4") tanınan ama ayrıştırıcının reddettiği
+  // kayıt (kamera kimliği sayı): ayrıştırıcı kabul etseydi geri yüklenirdi (bildirim, "*")
+  for (const bad of ["{bozuk", JSON.stringify({ v: 1, origin: "v1", name: "x", layout: "4", tiles: [{ sourceId: 5 }], updatedAt: 1 })]) {
     await page.evaluate((v) => sessionStorage.setItem("bv.watch.unsaved", v), bad);
     await page.goto("/watch");
     await expect(tiles.nth(0)).toContainText("Kapı");
@@ -1559,7 +1664,188 @@ test("geri yükleme: onaylanmış bağlantıyla çıkınca kayıt silinir; bozuk
     await expect.poll(() => page.evaluate(() => sessionStorage.getItem("bv.watch.unsaved"))).toBeNull();
     await expect(page.getByRole("status").filter({ hasText: RESTORED })).toHaveCount(0);
     await expect(tab(page, "Giriş katı")).not.toContainText("*");
+    await expect(page.getByText("Kaydedilmemiş değişiklik var")).toBeHidden();
+    await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/v1\/stream/);          // ızgara şablonu akıtır (taslak yok)
+    await tiles.nth(3).click();                                                        // ızgara kullanılabilir
+    await expect(tiles.nth(3)).toHaveAttribute("data-selected", "true");
   }
+});
+
+/** Saklanan düzenleme kaydı: Giriş katı'nın 4. kutusuna Depo eklenmiş (şablonun updatedAt'i 1 iken başladı) */
+const ENTRY = { v: 1, origin: "v1", name: "Giriş katı", layout: "4", tiles: [...VIEW.tiles.slice(0, 3), { sourceId: "d", channelId: null }], updatedAt: 1 };
+const V3 = { id: "v3", name: "Bahçe", layout: "1", createdAt: 3, updatedAt: 3, tiles: [null] };
+
+/**
+ * Başka bir şablonu (`del`) siler; liste yenilenir. Yenilenen listenin uygulandığı görülsün diye depoda `id` şablonunun
+ * adı `rename` olur ve sekmesi beklenir.
+ */
+async function reloadByDelete(page: Page, store: Array<{ id: string; name?: string }>, del: string, id: string, rename: string) {
+  Object.assign(store.find((v) => v.id === id)!, { name: rename });
+  await tab(page, del).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Sil" }).click();
+  await expect(tab(page, rename)).toBeVisible();
+}
+
+test("Çıkış başka sayfadan da saklanan düzenlemeyi siler (Canlı izlemeden Geri ile çıkılmış)", async ({ page }) => {
+  await mock(page, STATUS);
+  await login(page);
+  await viaAlarms(page);
+  await camera(page, "Depo").dragTo(page.getByTestId("watch-tile").nth(3));
+  await expect.poll(() => stored(page)).not.toBeNull();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/alarms$/);
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); void d.accept(); });
+  await page.getByRole("button", { name: "Çıkış" }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(dialogs).toEqual([]);                                                        // bu sayfada değişiklik yok: sorulmaz
+  expect(await stored(page)).toBeNull();                                              // sonraki girişte geri yüklenmez
+});
+
+test("Çıkış, Canlı izleme açılırken (şablon listesi gelmeden) basılırsa saklanan düzenleme sonradan geri yüklenip yeniden yazılmaz", async ({ page }) => {
+  await mock(page, STATUS);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  await page.route("**/api/live/views", async (r) => { await gate; await r.fulfill({ json: [VIEW] }); });
+  // liste, oturum kapatma isteği sürerken gelir (sayfa henüz /login'e geçmedi)
+  await page.route("**/api/logout", async (r) => { release(); await new Promise((res) => setTimeout(res, 1500)); await r.continue(); });
+  await page.evaluate((e) => sessionStorage.setItem("bv.watch.unsaved", JSON.stringify(e)), ENTRY);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Canlı izleme" })).toBeVisible();
+  await expect(page.getByTestId("watch-tile")).toHaveCount(0);                       // liste bekliyor
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); void d.accept(); });
+  await page.getByRole("button", { name: "Çıkış" }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(dialogs).toEqual([]);                                                        // geri yüklenip "kaydedilmedi" olmadı
+  expect(await stored(page)).toBeNull();
+});
+
+test("Kaydet: şablon bu düzenleme başladıktan sonra başka yerde değiştirildiyse sorar; Vazgeç yazmaz ve düzenleme kalır, Tamam yazar", async ({ page }) => {
+  await mock(page, STATUS);
+  const { calls, store } = await mockStore(page, [{ ...VIEW }]);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  Object.assign(store[0], { updatedAt: 9 });                                         // başka yerde değiştirildi (bu sayfanın listesi eski)
+  const save = page.getByRole("button", { name: "Kaydet", exact: true });
+  const dialogs: string[] = [];
+  page.once("dialog", (d) => { dialogs.push(d.message()); void d.dismiss(); });
+  await save.click();
+  await expect.poll(() => dialogs).toEqual([CHANGED]);
+  await expect(save).toBeEnabled();                                                   // istek bitti, hâlâ kaydedilmedi
+  expect(puts(calls)).toHaveLength(0);
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(tiles.nth(3)).toContainText("Depo");
+  await expect(page.getByText("Kaydedilmemiş değişiklik var")).toBeVisible();
+  await expect.poll(() => stored(page)).toMatchObject({ origin: "v1", updatedAt: 1 });
+  page.once("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  await save.click();
+  await expect.poll(() => puts(calls).length).toBe(1);
+  expect(dialogs).toEqual([CHANGED, CHANGED]);
+  expect(puts(calls)[0].body).toEqual({ name: "Giriş katı", layout: "4", tiles: ENTRY.tiles });
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  await expect(page.getByText("Kaydedilmemiş değişiklik var")).toBeHidden();
+  await expect.poll(() => stored(page)).toBeNull();
+});
+
+test("Kaydet: değişmemiş şablonda sormaz; kaydetmek ve burada yeniden adlandırmak temeli günceller; liste yenilense de temel (ve saklanan) değişmez", async ({ page }) => {
+  await mock(page, STATUS, [VIEW, V2, V3]);
+  const { calls, store } = await mockStore(page, [{ ...VIEW }, { ...V2 }, { ...V3 }]);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  const save = page.getByRole("button", { name: "Kaydet", exact: true });
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await save.click();
+  await expect.poll(() => puts(calls).length).toBe(1);
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  // sunucu updatedAt'i artırdı; temel kaydedilen hâlin updatedAt'i oldu: yeniden düzenleyip kaydetmek sormaz
+  await tiles.nth(3).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Boşalt" }).click();
+  await save.click();
+  await expect.poll(() => puts(calls).length).toBe(2);
+  // kaydedilmemiş düzenleme varken burada yeniden adlandırmak kendi değişikliğimizdir: Kaydet yine sormaz
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await tab(page, /^Giriş katı/).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Yeniden adlandır" }).click();
+  const dlg = page.getByRole("dialog", { name: "Yeniden adlandır" });
+  await dlg.getByLabel("Şablon adı").fill("Zemin kat");
+  await dlg.getByRole("button", { name: "Tamam" }).click();
+  await expect(tab(page, /^Zemin kat/)).toContainText("*");
+  await save.click();
+  await expect.poll(() => puts(calls).length).toBe(4);                              // ad + Kaydet
+  await expect(tab(page, "Zemin kat")).not.toContainText("*");
+  expect(dialogs).toEqual([]);
+  // düzenleme sürerken başka yerde değişti ve liste yenilendi (başka şablon silindi): temel ve saklanan kayıt eski kalır, Kaydet sorar
+  await tiles.nth(3).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Boşalt" }).click();
+  await expect.poll(() => stored(page)).not.toBeNull();
+  const base = (await stored(page))!.updatedAt;
+  Object.assign(store[0], { updatedAt: 99 });
+  await reloadByDelete(page, store, "Bahçe", "v2", "Depo katı (2)");
+  await expect(tab(page, /^Zemin kat/)).toContainText("*");
+  expect((await stored(page))!.updatedAt).toBe(base);
+  await save.click();
+  await expect.poll(() => puts(calls).length).toBe(5);
+  expect(dialogs).toEqual(['"Bahçe" şablonu silinsin mi?', CHANGED]);
+});
+
+test("geri yükleme: hatırlanan sekme başka olsa ve düzenleme onun kayıtlı hâline eşit olsa da düzenleme kendi sekmesinde açılır; değişmemiş şablonda Kaydet sormaz", async ({ page }) => {
+  await mock(page, STATUS, [VIEW, V2]);
+  const { calls } = await mockStore(page, [{ ...VIEW }, { ...V2 }]);
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  // A'nın (Giriş katı) düzenlemesi B'nin (Depo katı) kayıtlı hâliyle aynı; hatırlanan sekme B
+  const entry = { ...ENTRY, layout: V2.layout, tiles: V2.tiles };
+  await page.evaluate((e) => {
+    localStorage.setItem("bv.watch.last", "v2");
+    sessionStorage.setItem("bv.watch.unsaved", JSON.stringify(e));
+  }, entry);
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  await expect(tab(page, /^Giriş katı/)).toHaveAttribute("aria-selected", "true");
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(page.getByTestId("watch-tile")).toHaveCount(1);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Depo");
+  await expect.poll(() => stored(page)).toMatchObject({ origin: "v1", layout: "1", updatedAt: 1 });
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.dismiss(); });
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts(calls).length).toBe(1);
+  expect(dialogs).toEqual([]);
+  expect(puts(calls)[0].body).toEqual({ name: "Giriş katı", layout: "1", tiles: V2.tiles });
+});
+
+test("liste yenilenince açık sekme değişmez: hatırlanan sekme (başka tarayıcı sekmesinden) başka olsa da kaydedilmemiş düzenleme kalır; temizken de", async ({ page }) => {
+  const V4 = { ...V3, id: "v4", name: "Otopark" };
+  await mock(page, STATUS, [VIEW, V2, V3, V4]);
+  const { store } = await mockStore(page, [{ ...VIEW }, { ...V2 }, { ...V3 }, { ...V4 }]);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  page.on("dialog", (d) => void d.accept());
+  /** Başka bir tarayıcı sekmesi Depo katı'nı seçti (hatırlanan sekme tarayıcıda ortak) */
+  const otherBrowserTab = () => page.evaluate(() => localStorage.setItem("bv.watch.last", "v2"));
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect.poll(() => stored(page)).not.toBeNull();
+  await otherBrowserTab();
+  await reloadByDelete(page, store, "Bahçe", "v2", "Depo katı (2)");
+  await expect(tab(page, /^Giriş katı/)).toHaveAttribute("aria-selected", "true");
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(tiles.nth(3)).toContainText("Depo");
+  expect(await stored(page)).toMatchObject({ origin: "v1" });
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  await otherBrowserTab();
+  await reloadByDelete(page, store, "Otopark", "v2", "Depo katı (3)");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
 });
 
 test("kamera listesi: kaynaklar alınamazsa 'Yeniden dene'; kanallar yükleniyor, boş cihaz; kapat-aç ikinci istek göndermez", async ({ page }) => {
