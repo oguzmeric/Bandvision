@@ -20,7 +20,7 @@ import ContextMenu, { type MenuAction } from "./ContextMenu";
 import EditorMenu from "./EditorMenu";
 import NameDialog from "./NameDialog";
 import SingleCamera, { type SingleMode } from "./SingleCamera";
-import TemplateTabs, { PANEL_ID, tabDomId, type TabItem } from "./TemplateTabs";
+import TemplateTabs, { ADD_ID, PANEL_ID, tabDomId, type TabItem } from "./TemplateTabs";
 import TileOverlay, { type TileDrop, type TileMove } from "./TileOverlay";
 import { useDraft } from "./useDraft";
 import { usePhoneLandscape } from "./usePhoneLandscape";
@@ -170,7 +170,8 @@ export default function WatchView() {
   const restore = useRef<"pending" | "applying" | "done" | UnsavedEntry>("pending");
   /** Geri yükleme bildirimi ("Değişiklikleri at" ile) */
   const [restored, setRestored] = useState<string | null>(null);
-  /** Bildirim kalkınca odaklanacak sekme ("Değişiklikleri at" düğmesiyle odak sayfaya düşmesin) */
+  /** Bildirim kalkınca odaklanacak öğenin DOM kimliği: açık sekme, sekme kalmadıysa "+" ("Değişiklikleri at" düğmesiyle odak
+   * sayfaya düşmesin) */
   const focusTab = useRef<string | null>(null);
   /** Kullanıcı çıkmayı onayladı (bağlantı, Çıkış): saklanan düzenleme silindi, sayfa kapanana dek yeniden yazılmaz */
   const dropped = useRef(false);
@@ -311,7 +312,7 @@ export default function WatchView() {
     const id = focusTab.current;
     if (!id) return;
     focusTab.current = null;
-    document.getElementById(tabDomId(id))?.focus();
+    document.getElementById(id)?.focus();
   }, [restored, currentId]);
 
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
@@ -540,14 +541,14 @@ export default function WatchView() {
   const clearMessages = () => { setInfo(null); setError(null); };
   /**
    * Geri yüklenen değişiklikleri atar: şablon kayıtlı hâline döner; kaydedilmemiş yeni sekme kapanır. Bildirim düğmesiyle
-   * birlikte kalktığından odak açık sekmeye geçer (sayfaya düşmez).
+   * birlikte kalktığından odak açık sekmeye, hiç sekme kalmadıysa "+" düğmesine geçer (sayfaya düşmez).
    */
   const discardRestored = () => {
     setRestored(null);
     const to = isNew ? views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null : currentId;
     if (isNew) setCurrentId(to);
     else setEdit(null);
-    focusTab.current = to;
+    focusTab.current = to ? tabDomId(to) : ADD_ID;
   };
   const selectTab = (id: string) => {
     if (id === currentId || !leaveOk()) return;
@@ -612,6 +613,8 @@ export default function WatchView() {
       // sorulur (Vazgeç: yazılmaz, düzenleme kalır). Sunucuda sürüm koşulu yok: okuma ile yazma arasında kısa bir pencere kalır.
       const base = edit && edit.tabId === view.id ? edit.base : null;
       const cur = (await api<ViewTemplate[]>("views")).find((x) => x.id === view.id);
+      // İstek sürerken başka sekmeye geçildiyse ya da düzenleme atıldıysa (kullanıcı düzenlemeyi bıraktı) ne sorulur ne yazılır
+      if (live.current.currentId !== origin || live.current.edit !== start.edit) return;
       if (!cur) { gone(new Error(NOT_FOUND)); return; }
       if (base !== null && cur.updatedAt !== base && !window.confirm(CHANGED_ELSEWHERE)) return;
       try {

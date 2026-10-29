@@ -8,6 +8,8 @@ export interface TabItem { id: string; name: string; unsaved: boolean }
 /** Sekmenin DOM kimliği (ızgara bölmesi `aria-labelledby` ile buna bağlanır) */
 export const tabDomId = (id: string) => `bv-tab-${id}`;
 export const PANEL_ID = "bv-watch-panel";
+/** "+" (Yeni şablon) düğmesinin DOM kimliği (sekme kalmayınca odak buraya) */
+export const ADD_ID = "bv-tab-add";
 
 /**
  * Şablon sekmeleri (TRASSIR gibi üstte yan yana; taslak duzen.html): tıklayınca o şablona geçilir, sonda "+" yeni şablon,
@@ -57,7 +59,7 @@ export default function TemplateTabs({ tabs, current, onSelect, onAdd, onMenu, a
             );
           })}
         </div>
-        <button type="button" aria-label="Yeni şablon" title="Yeni şablon" onClick={onAdd} disabled={addDisabled}
+        <button type="button" id={ADD_ID} aria-label="Yeni şablon" title="Yeni şablon" onClick={onAdd} disabled={addDisabled}
                 className="shrink-0 px-3 text-[15px] font-bold leading-none text-pl-accent hover:bg-pl-sel disabled:opacity-50">+</button>
       </div>
       {currentTab && (
