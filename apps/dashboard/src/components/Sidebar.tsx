@@ -43,7 +43,7 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
   const pathname = usePathname() ?? "";
   const params = useSearchParams();
   /** Kaydedilmemiş değişiklik bekçisi: bağlantıları kendisi yakalar; "Çıkış" (bağlantı değil) burada sorar */
-  const { confirmLeave } = useUnsavedGuard();
+  const { leave } = useUnsavedGuard();
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
@@ -193,7 +193,7 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
         {canLogout && (
           <button type="button"
                   onClick={async () => {
-                    if (!confirmLeave()) return;
+                    if (!(await leave())) return;
                     await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
                     window.location.assign("/login");          // göreli: ana makine adı değişmez
                   }}
