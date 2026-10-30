@@ -35,10 +35,11 @@ test("gridId kimlik üretir", () => {
   assert.equal(gridId(5, 5), "5x5");
 });
 
-test("tileTier: kutu katmanının yoğunluğu kutunun dış boyutundan (CSS px)", () => {
-  assert.deepEqual([TILE_FULL, TILE_SMALL, TILE_TINY], [{ w: 128, h: 72 }, { w: 72, h: 44 }, { w: 24, h: 22 }]);
+test("tileTier: kutu katmanının yoğunluğu kutunun dış boyutundan (CSS px) ve kök yazı boyutundan (eşikler rem)", () => {
+  // eşikler rem cinsinden (TileOverlay'in Tailwind ölçüleri); kök 16 px'te 128×72, 72×44, 24×22
+  assert.deepEqual([TILE_FULL, TILE_SMALL, TILE_TINY], [{ w: 8, h: 4.5 }, { w: 4.5, h: 2.75 }, { w: 1.5, h: 1.375 }]);
   const at = (id, w, h, i = 0) => tileTier(layoutFor(id, []), i, { w, h });
-  // ölçülen ızgaralar (e2e): masaüstü 1280 px ve telefon 390 px
+  // ölçülen ızgaralar (e2e, kök 16 px): masaüstü 1280 px ve telefon 390 px
   assert.equal(at("2x2", 740, 416.3), "full");            // 370×208
   assert.equal(at("4x4", 740, 416.3), "full");            // 185×104
   assert.equal(at("5x5", 740, 416.3), "full");            // 148×83
@@ -50,7 +51,7 @@ test("tileTier: kutu katmanının yoğunluğu kutunun dış boyutundan (CSS px)"
   assert.equal(at("8x8", 350, 196.9), "tiny");            // 43.75×24.6
   assert.equal(at("8x16", 350, 98.4), "micro");           // 21.9×12.3: köşedeki nokta kutudan taşardı
   assert.equal(at("1x16", 350, 12.3), "micro");           // 21.9×12.3
-  // sınırlar: eşik dahil
+  // sınırlar: eşik dahil (kök 16 px)
   assert.equal(at("1x1", 128, 72), "full");
   assert.equal(at("1x1", 127.9, 72), "small");
   assert.equal(at("1x1", 128, 71.9), "small");
@@ -69,28 +70,38 @@ test("tileTier: kutu katmanının yoğunluğu kutunun dış boyutundan (CSS px)"
   assert.equal(tileSize(one5, 0, null), null);
 });
 
-test("tileTier: durum metni olan normal kutunun orta alanı en az bir satır almalı; almıyorsa küçük kutu", () => {
-  // orta alan = kutu yüksekliği − şeritler ve boşluklar (FULL_CHROME_H); satır STATE_LINE_H
-  assert.deepEqual([FULL_CHROME_H, STATE_LINE_H], [72, 16]);
-  const at = (id, w, h, i = 0) => tileTier(layoutFor(id, []), i, { w, h }, true);
-  assert.equal(at("2x2", 740, 416.3), "full");            // 370×208
-  assert.equal(at("4x4", 740, 416.3), "full");            // 185×104: iki satır
-  assert.equal(at("5x5", 740, 416.3), "small");           // 148×83: orta alan 11 px, bir satır sığmaz
-  assert.equal(at("2x2", 350, 196.9), "full");            // 175×98: bir satır
-  assert.equal(at("2x2", 260, 146), "small");             // 130×73 (dokunmatik 300 px)
-  assert.equal(at("4x4", 518, 291.4), "small");           // 129.5×72.8 (tablet 820 px)
-  assert.equal(at("8x8", 740, 416.3), "small");           // küçük kutu durumdan etkilenmez
-  assert.equal(at("8x16", 350, 98.4), "micro");
-  // canlı (durum metni yok) kutu eskisi gibi: 148×83 normal
-  assert.equal(tileTier(layoutFor("5x5", []), 0, { w: 740, h: 416.3 }, false), "full");
-  // sınır: 128×88 bir satır alır
-  assert.equal(at("1x1", 128, 88), "full");
-  assert.equal(at("1x1", 128, 87.9), "small");
-  assert.equal(at("1x1", 127.9, 88), "small");
-  assert.equal(tileTier(layoutFor("1x1", []), 0, null, true), "full");   // ölçülmeden önce
+test("tileTier: kök yazı boyutu 16, 20, 24 px; eşikler onunla büyür (ölçülen kutular)", () => {
+  const tier = (w, h, rem) => tileTier(layoutFor("1x1", []), 0, { w, h }, rem);
+  for (const rem of [16, 20, 24]) {
+    // sınırlar: 8×4.5 rem normal, 4.5×2.75 rem küçük, 1.5×1.375 rem çok küçük
+    assert.equal(tier(8 * rem, 4.5 * rem, rem), "full", `kök ${rem}`);
+    assert.equal(tier(8 * rem - 0.1, 4.5 * rem, rem), "small", `kök ${rem}`);
+    assert.equal(tier(8 * rem, 4.5 * rem - 0.1, rem), "small", `kök ${rem}`);
+    assert.equal(tier(4.5 * rem, 2.75 * rem, rem), "small", `kök ${rem}`);
+    assert.equal(tier(4.5 * rem - 0.1, 2.75 * rem, rem), "tiny", `kök ${rem}`);
+    assert.equal(tier(1.5 * rem, 1.375 * rem, rem), "tiny", `kök ${rem}`);
+    assert.equal(tier(1.5 * rem, 1.375 * rem - 0.1, rem), "micro", `kök ${rem}`);
+  }
+  // ölçülen kutular (e2e, Chrome yazı boyutu 20 / 24 px)
+  assert.equal(tier(180, 101.25, 20), "full");            // masaüstü 4×4
+  assert.equal(tier(144, 81, 20), "small");               // masaüstü 5×5 (16 px'te normaldi: alarm etiketi taşardı)
+  assert.equal(tier(170, 95.63, 20), "full");             // telefon 2×2
+  assert.equal(tier(113.33, 63.75, 20), "small");         // telefon 3×3
+  assert.equal(tier(235.5, 132.47, 24), "full");          // masaüstü 4×4
+  assert.equal(tier(188.39, 105.97, 24), "small");        // masaüstü 5×5
+  assert.equal(tier(165, 92.81, 24), "small");            // telefon 2×2
+  assert.equal(tier(110, 61.88, 24), "tiny");             // telefon 3×3
 });
 
-test("stateLines: normal kutunun orta alanına sığan durum satırı (en çok 2)", () => {
+test("tileTier: kameranın durumuna bağlı değil (yalnız boyut ve kök yazı boyutu)", () => {
+  // 148×83 (masaüstü 5×5): orta alan bir satır almaz ama kutu yine normaldir; durum orada noktaya döner (stateLines 0)
+  assert.equal(tileTier(layoutFor("5x5", []), 0, { w: 740, h: 416.3 }), "full");
+  assert.equal(stateLines(83.3), 0);
+});
+
+test("stateLines: normal kutunun orta alanına sığan durum satırı (en çok 2), kök yazı boyutuyla", () => {
+  // orta alan = kutu yüksekliği − FULL_CHROME_H rem; satır STATE_LINE_H rem
+  assert.deepEqual([FULL_CHROME_H, STATE_LINE_H], [4.5, 1]);
   assert.equal(stateLines(87.9), 0);
   assert.equal(stateLines(88), 1);
   assert.equal(stateLines(98.4), 1);
@@ -99,4 +110,13 @@ test("stateLines: normal kutunun orta alanına sığan durum satırı (en çok 2
   assert.equal(stateLines(104.1), 2);
   assert.equal(stateLines(416), 2);
   assert.equal(stateLines(10), 0);
+  for (const rem of [16, 20, 24]) {
+    assert.equal(stateLines(5.5 * rem - 0.1, rem), 0, `kök ${rem}`);
+    assert.equal(stateLines(5.5 * rem, rem), 1, `kök ${rem}`);
+    assert.equal(stateLines(6.5 * rem - 0.1, rem), 1, `kök ${rem}`);
+    assert.equal(stateLines(6.5 * rem, rem), 2, `kök ${rem}`);
+  }
+  assert.equal(stateLines(101.25, 20), 0);                 // masaüstü 4×4, 20 px: durum noktaya döner (eskiden ince şerit)
+  assert.equal(stateLines(95.63, 20), 0);                  // telefon 2×2, 20 px
+  assert.equal(stateLines(132.47, 24), 1);                 // masaüstü 4×4, 24 px
 });

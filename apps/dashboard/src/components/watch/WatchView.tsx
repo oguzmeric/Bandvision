@@ -5,7 +5,7 @@ import { ApiError, api, type Source } from "@/lib/live";
 import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
-import { layoutFor } from "@/lib/layoutGrid.mjs";
+import { layoutFor, ROOT_PX } from "@/lib/layoutGrid.mjs";
 import {
   applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push, redo, refKey, retile,
   sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
@@ -131,6 +131,12 @@ export default function WatchView() {
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   /** Izgaranın CSS boyutu: kutu katmanının yoğunluğu buna göre (akış boyutunun aksine beklemeden güncellenir) */
   const [gridBox, setGridBox] = useState<{ w: number; h: number } | null>(null);
+  /**
+   * Kök yazı boyutu (px; tarayıcının yazı boyutu ayarı): kutu katmanı rem cinsindendir, yoğunluk eşikleri de. 1 rem
+   * genişliğindeki gizli ölçü öğesinden okunur; ayar sayfa açıkken değişirse ResizeObserver ile hemen güncellenir.
+   */
+  const [rem, setRem] = useState(ROOT_PX);
+  const remRef = useRef<HTMLSpanElement>(null);
   /** Analiz sunucusuyla konuşulamıyor (liste ya da durum yoklaması başarısız): sunucu yok ya da oturum doldu; düzelince kalkar */
   const [problem, setProblem] = useState<Problem | null>(null);
   /** Kayıt cihazları ("NVR'dan şablon" için) */
@@ -370,6 +376,18 @@ export default function WatchView() {
   // Kapsayıcı boyutu: birleşik görüntü tam bu boyutta istenir (telefonda küçük, masaüstünde büyük). İlk ölçüm hemen
   // (şablon değişince eski boyut hiç istenmesin), sonraki boyut değişimleri durulunca; boyut aynıysa durum değişmez.
   // Kutu katmanının yoğunluğu için CSS boyutu her değişimde hemen ölçülür (katmanlar boyut değişirken de üst üste binmesin).
+  useLayoutEffect(() => {
+    const el = remRef.current;
+    if (!el) return;
+    const read = () => {
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) setRem((p) => (p === w ? p : w));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useLayoutEffect(() => {
     const el = gridRef.current;
     if (!el || !layout) return;
@@ -788,6 +806,8 @@ export default function WatchView() {
 
   return (
     <div className="grid min-w-0 gap-2">
+      {/* Kök yazı boyutunun ölçüsü (1 rem): görünmez, yer kaplamaz */}
+      <span ref={remRef} aria-hidden="true" className="pointer-events-none invisible absolute h-0 w-[1rem]" />
       {chrome && (
         <>
           <PageHeader title="Canlı izleme" />
@@ -838,7 +858,7 @@ export default function WatchView() {
                   {layout.cells.map((_, i) => {
                     const ref = present.tiles[i] ?? null;
                     return (
-                      <TileOverlay key={i} layout={layout} index={i} grid={gridBox} filled={ref !== null} tile={tileStatus(i)}
+                      <TileOverlay key={i} layout={layout} index={i} grid={gridBox} rem={rem} filled={ref !== null} tile={tileStatus(i)}
                                    label={ref ? labels[refKey(ref)] ?? null : null} selected={selected === i}
                                    onOpen={openTile} onAlarm={onAlarm} onSelect={setSelected} onDropped={onDropped}
                                    onEmpty={emptyTile} onMenu={onTileMenu}

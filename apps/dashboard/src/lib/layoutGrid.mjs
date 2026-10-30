@@ -27,26 +27,33 @@ export function layoutFor(id, catalog) {
 }
 
 /**
- * Kutu katmanının yoğunluğu, kutunun dış boyutuna (CSS px) göre; böylece hiçbir boyutta ad, rozet, durum metni, alarm
- * etiketi ve düğmeler üst üste binmez ya da kutudan taşmaz:
- *   - "full": sütun: üst şeritte ad ve rozet, orta alanda durum metni, alt şeritte alarm etiketi ile dokunmatikte "⋯" ya da
- *     (üstüne gelince/klavye odağında) düğmeler. Durum metni olan kutuda orta alan en az bir satır almalı, yoksa "small";
- *   - "small": tek şerit: alarm etiketi ya da ad, nokta (rozet ya da bağlantı durumu), "⋯" (düğmeler yalnız "⋯" ve sağ
- *     tık menüsünde);
+ * Kutu katmanının yoğunluğu, kutunun dış boyutuna (CSS px) ve kök yazı boyutuna göre (kameranın durumuna göre DEĞİL: durum
+ * değişince kutu yoğunluk değiştirmez); böylece hiçbir boyutta ve tarayıcının hiçbir yazı boyutunda ad, rozet, nokta,
+ * durum metni, alarm etiketi ve düğmeler üst üste binmez ya da kutudan taşmaz:
+ *   - "full": sütun: üst şeritte ad, rozet (ve aşağıdaki durumda nokta); orta alanda durum metni; alt şeritte alarm etiketi
+ *     ile dokunmatikte "⋯" ya da (üstüne gelince/klavye odağında) düğmeler. Orta alan bir satır almıyorsa durum, üst
+ *     şeritte addan sonra noktadır;
+ *   - "small": tek şerit: alarm etiketi ya da ad, nokta, "⋯" (düğmeler yalnız "⋯" ve sağ tık menüsünde);
  *   - "tiny": yalnız köşede nokta;
  *   - "micro": köşedeki nokta kutudan taşardı: küçük nokta kutunun ortasında.
- * `grid`: ızgaranın boyutu; henüz ölçülmediyse null ("full"). `withState`: kutuda durum metni var (canlı değil).
+ * Bütün ölçüler rem cinsindendir (TileOverlay'in Tailwind sınıflarıyla aynı; 1 rem = 4 Tailwind aralık birimi): katman
+ * tarayıcının yazı boyutuyla büyür, eşikler de. `rem`: kök yazı boyutu (px; sayfada ölçülür, varsayılan 16).
+ * `grid`: ızgaranın boyutu; henüz ölçülmediyse null ("full").
  */
-export const TILE_FULL = Object.freeze({ w: 128, h: 72 });
-export const TILE_SMALL = Object.freeze({ w: 72, h: 44 });
-export const TILE_TINY = Object.freeze({ w: 24, h: 22 });
+export const ROOT_PX = 16;
+/** Normal kutu: alt şerit (etiket 1 rem + boşluk + üç düğme 5 rem) ve kenarlar sığar; yükseklik FULL_CHROME_H */
+export const TILE_FULL = Object.freeze({ w: 8, h: 4.5 });
+/** Küçük kutu: şerit (etiket 0.75 + nokta 0.5 + "⋯" 1.75 + aralıklar) ve kenarlar sığar; şerit 1.75 rem yüksek */
+export const TILE_SMALL = Object.freeze({ w: 4.5, h: 2.75 });
+/** Çok küçük kutu: köşedeki 0.5 rem nokta (kenardan 0.5 rem içeride) payıyla sığar */
+export const TILE_TINY = Object.freeze({ w: 1.5, h: 1.375 });
 /**
- * Normal kutuda orta alanın dışında kalan yükseklik (TileOverlay ile aynı ölçüler): kutu boşluğu 4 + şerit boşluğu 6 (iki
- * kenar: 20), üst şerit 20, alt şerit 24, iki aralık 4.
+ * Normal kutuda orta alanın dışında kalan yükseklik (rem): kutu boşluğu 0.25 + şerit boşluğu 0.375 (iki kenar: 1.25), üst
+ * şerit 1.25, alt şerit 1.5, iki aralık 0.25.
  */
-export const FULL_CHROME_H = 72;
-/** Durum metninin satır yüksekliği (12 px yazı, 16 px satır) */
-export const STATE_LINE_H = 16;
+export const FULL_CHROME_H = 4.5;
+/** Durum metninin satır yüksekliği (rem; `leading-4`) */
+export const STATE_LINE_H = 1;
 
 /** Kutunun dış boyutu (CSS px); ızgara ölçülmediyse null */
 export function tileSize(layout, index, grid) {
@@ -55,17 +62,17 @@ export function tileSize(layout, index, grid) {
   return { w: (grid.w * w) / layout.cols, h: (grid.h * h) / layout.rows };
 }
 
-/** Normal kutunun orta alanına sığan durum metni satırı (en çok 2): kutu yüksekliğinden */
-export function stateLines(h) {
-  return Math.max(0, Math.min(2, Math.floor((h - FULL_CHROME_H) / STATE_LINE_H)));
+/** Normal kutunun orta alanına sığan durum metni satırı (en çok 2): kutu yüksekliğinden (px) ve kök yazı boyutundan */
+export function stateLines(h, rem = ROOT_PX) {
+  return Math.max(0, Math.min(2, Math.floor((h - FULL_CHROME_H * rem) / (STATE_LINE_H * rem))));
 }
 
-export function tileTier(layout, index, grid, withState = false) {
+export function tileTier(layout, index, grid, rem = ROOT_PX) {
   const size = tileSize(layout, index, grid);
   if (!size) return "full";
-  const { w, h } = size;
-  if (w >= TILE_FULL.w && h >= TILE_FULL.h && (!withState || stateLines(h) >= 1)) return "full";
-  if (w >= TILE_SMALL.w && h >= TILE_SMALL.h) return "small";
-  if (w >= TILE_TINY.w && h >= TILE_TINY.h) return "tiny";
+  const fits = (t) => size.w >= t.w * rem && size.h >= t.h * rem;
+  if (fits(TILE_FULL)) return "full";
+  if (fits(TILE_SMALL)) return "small";
+  if (fits(TILE_TINY)) return "tiny";
   return "micro";
 }

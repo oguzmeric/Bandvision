@@ -9,17 +9,23 @@ import { CAMERA_MIME } from "./CameraList";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
 const TONE = { ok: "bg-ok-600 text-white", warn: "bg-warn-700 text-white", info: "bg-black/60 text-white" } as const;
+/** Nokta, kamera canlıyken: analiz rozetinin rengi, dolu */
+const DOT = { ok: "bg-ok-600", warn: "bg-warn-700", info: "bg-white/85" } as const;
 /**
- * Küçük kutularda rozetin ve bağlantı durumunun yerine renkli nokta: rozet varsa onun rengi (alarm/analiz durumu öne
- * geçer), yoksa kamera listesindeki gibi gri "bağlanıyor", turuncu "bağlantı yok" (sorunlu)
+ * Nokta, kamera canlı değilken: kamera listesindeki bağlantı rengi (gri bağlanıyor, turuncu bağlantı yok), HALKA (içi boş):
+ * biçim de "canlı değil"i söyler (yalnız renge kalmaz); rozet ya da alarm rengi öne geçmez
  */
-const DOT = { ok: "bg-ok-600", warn: "bg-warn-700", info: "bg-white/85", connecting: "bg-pl-ctl", error: "bg-warn-700" } as const;
-/** Ad, rozet ve alarm etiketi: tek satır, 20 px */
-const PILL = "rounded-[2px] px-1.5 py-0.5 text-[11px] leading-4";
+const RING = { connecting: "border-pl-ctl", error: "border-warn-700" } as const;
+/*
+ * Bütün ölçüler rem (layoutGrid.mjs eşikleri de rem; tarayıcının yazı boyutuyla birlikte büyürler). Yerleşimi etkilemeyen
+ * çizgiler (odak çerçevesi, noktanın 1 px gölge halkası) px kalabilir.
+ */
+/** Ad, rozet ve alarm etiketi: tek satır, 1.25 rem */
+const PILL = "rounded-[0.125rem] px-1.5 py-0.5 text-[0.6875rem] leading-4";
 /** Kutu düğmesi: yalnız simge; erişilebilir adı ve ipucu yazılı adıdır */
-const ACT = "grid h-6 w-6 place-items-center rounded-[2px] bg-black/60 text-white hover:bg-black/80";
+const ACT = "grid h-6 w-6 place-items-center rounded-[0.125rem] bg-black/60 text-white hover:bg-black/80";
 /** "⋯" (Kutu işlemleri): dokunmatikte seçili ya da alarmlı kutuda; yüksekliği yoğunluğa göre */
-const MORE = "hidden shrink-0 place-items-center rounded-[2px] bg-black/70 text-[15px] leading-none text-white";
+const MORE = "hidden shrink-0 place-items-center rounded-[0.125rem] bg-black/70 text-[0.9375rem] leading-none text-white";
 const ICON = {
   open: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
   live: "M4 20h16M7 16v-4M12 16V8M17 16v-7",
@@ -68,24 +74,26 @@ const MOVES: Record<string, TileMove> = {
  *   - listeden kamera ya da başka kutu buraya sürüklenip bırakılır;
  *   - sağ tık / Shift+F10 / menü tuşu menüyü açar (Tek kamera, Boşalt); Delete kutuyu boşaltır; dokunmatikte seçili dolu
  *     kutuda görünen "⋯" düğmesi aynı menüyü açar (iOS'ta uzun basış sağ tık vermez).
- * Katman yoğunluğu (kutunun boyutundan ve durum metni olup olmadığından; layoutGrid.mjs `tileTier`): parçalar hiçbir
- * boyutta üst üste binmez, kutudan taşmaz:
+ * Katman yoğunluğu (kutunun boyutundan ve kök yazı boyutundan; kameranın durumundan DEĞİL: durum değişince kutu yoğunluk
+ * değiştirmez; layoutGrid.mjs `tileTier`): parçalar hiçbir boyutta ve yazı boyutunda üst üste binmez, kutudan taşmaz:
  *   - "full": sütun: üst şeritte ad (kısalır) ve rozet; orta alanda durum metni (ortada, sığdığı kadar en çok 2 satır,
  *     tamamı kutunun ipucunda); alt şeritte alarm etiketi, dokunmatikte "⋯", fareyle üstüne gelince ya da klavye odağında
- *     tek satır simge düğmeler (Tam ekran, Canlı sayıma git, Boşalt). Orta alan bir satır almıyorsa kutu "small" olur;
+ *     tek satır simge düğmeler (Tam ekran, Canlı sayıma git, Boşalt). Orta alan bir satır almıyorsa durum, üst şeritte
+ *     addan sonra, rozetten önce noktadır;
  *   - "small": tek şerit: alarm etiketi (alarmlı kutuda) ya da ad, nokta, "⋯" (dokunmatikte seçili/alarmlı kutuda, fareyle
  *     üstüne gelince); düğmelerin işleri "⋯" ve sağ tık menüsünde (Canlı sayıma git: tek kamerada);
  *   - "tiny": yalnız köşede nokta; "micro" (köşedeki nokta kutudan taşardı): küçük nokta kutunun ortasında.
- * Nokta, rozet varsa onun rengindedir; yoksa kamera canlı değilken bağlantı durumunu gösterir (dokunmatikte ipucu yok,
- * bağlantısı kopan kutu karanlık bir görüntüyle karışmasın). Küçük kutularda ad, alarm ve durum kutunun ipucunda; noktanın
- * ipucu ve ekran okuyucu metni rozeti ve durumu söyler.
+ * Nokta: kamera canlı değilken bağlantı rengi halka (kamera listesindeki gibi gri bağlanıyor, turuncu bağlantı yok;
+ * dokunmatikte ipucu yok, bağlantısı kopan kutu karanlık bir görüntüyle karışmasın), canlıyken analiz rozetinin rengi dolu.
+ * Alarm kırmızı çerçeve ve alarm etiketiyle görünür. Küçük kutularda ad, alarm ve durum kutunun ipucunda; noktanın ipucu ve
+ * ekran okuyucu metni rozeti ve durumu söyler.
  * `filled`: şablonda bu kutuya kamera atanmış; `tile`: kameranın canlı durumu (ilk yanıt gelene dek null: "Bağlanıyor…");
- * `label`: durum gelmeden gösterilecek ad (kamera listesinden); `grid`: ızgaranın ölçülen boyutu (yoğunluk için). İşleyiciler
- * kutu sırasını alır (128 kutuda tek işlev).
+ * `label`: durum gelmeden gösterilecek ad (kamera listesinden); `grid`: ızgaranın ölçülen boyutu, `rem`: ölçülen kök yazı
+ * boyutu (px; yoğunluk için). İşleyiciler kutu sırasını alır (128 kutuda tek işlev).
  */
-function TileOverlay({ layout, index, grid, filled, tile, label, selected, active, onOpen, onAlarm, onSelect, onDropped, onEmpty,
+function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, active, onOpen, onAlarm, onSelect, onDropped, onEmpty,
   onMenu, onFocusTile, onMove }: {
-  layout: ViewLayout; index: number; grid: { w: number; h: number } | null; filled: boolean; tile: TileStatus | null;
+  layout: ViewLayout; index: number; grid: { w: number; h: number } | null; rem: number; filled: boolean; tile: TileStatus | null;
   label: string | null; selected: boolean;
   /** Izgaranın tek sekme durağı bu kutu mu (gezici sekme sırası) */
   active: boolean;
@@ -99,15 +107,18 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
   const name = tile?.name ?? (filled ? label : null);
   const b = tile?.analysis ? badge(tile.analysis) : null;
   const badgeTitle = tile?.analysis ? tile.analysis.reason ?? tile.analysis.name : undefined;
-  const tier = tileTier(layout, index, grid, state !== null);
+  const tier = tileTier(layout, index, grid, rem);
   const full = tier === "full";
   const size = tileSize(layout, index, grid);
   /** Normal kutunun orta alanına sığan durum satırı (ızgara ölçülmeden önce 2) */
-  const lines = size ? stateLines(size.h) : 2;
+  const lines = size ? stateLines(size.h, rem) : 2;
+  /** Normal kutuda durum metni orta alana sığmıyor: durum üst şeritte nokta */
+  const stateDot = full && state !== null && lines < 1;
   // Normal kutuda durum metninin tamamı; küçük kutularda gizlenen bilgiler kutunun ipucunda
   const hint = (full ? state : [name, alarmTitle, state].filter(Boolean).join(" — ")) || undefined;
-  // Küçük kutulardaki nokta: rozet varsa onun rengi, yoksa (canlı değilken) bağlantı durumu; metni ikisini de söyler
-  const dotTone = b ? b.tone : state === null ? null : tile?.state === "error" ? "error" : "connecting";
+  // Nokta: canlı değilken bağlantı rengi halka, canlıyken rozet rengi dolu; ipucu ve ekran okuyucu metni ikisini de söyler
+  const conn = state === null ? null : tile?.state === "error" ? "error" : "connecting";
+  const dotLook = conn ? `border-[0.125rem] bg-transparent ${RING[conn]}` : b ? DOT[b.tone] : null;
   const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), state].filter((t): t is string => !!t);
 
   const alarmButton = (cls: string) => alarm && (
@@ -125,8 +136,8 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
   const nameTag = name && (
     <span data-part="name" title={name} className={`min-w-0 truncate bg-black/55 font-medium text-white ${PILL}`}>{name}</span>
   );
-  const dot = (cls: string) => dotTone && (
-    <span data-part="dot" title={dotText.join("\n")} className={`shrink-0 rounded-full ring-1 ring-black/40 ${DOT[dotTone]} ${cls}`}>
+  const dot = (cls: string) => dotLook && (
+    <span data-part="dot" title={dotText.join("\n")} className={`shrink-0 rounded-full ring-1 ring-black/40 ${dotLook} ${cls}`}>
       <span className="sr-only">{dotText.join(", ")}</span>
     </span>
   );
@@ -167,32 +178,34 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
            else if (isMenuKey(e)) { e.preventDefault(); const p = menuPoint(e, true); onMenu(index, p.x, p.y); }
            else if (e.key === "Delete") { e.preventDefault(); onEmpty(index); }
          }}>
-      <div className={`relative h-full w-full rounded-[3px] ${selected
+      <div className={`relative h-full w-full rounded-[0.1875rem] ${selected
         ? "outline outline-2 -outline-offset-2 outline-[#5aa9ff]"
         : "group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-white"}`}>
         {alarm && (
           // Yalnız kırmızı çerçeve yanıp söner (yazılar ve düğmeler okunur kalır)
-          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[3px] ring-4 ring-nok-600 motion-safe:animate-pulse" />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[0.1875rem] ring-[0.25rem] ring-nok-600 motion-safe:animate-pulse" />
         )}
         {full && filled && (
           // Normal kutu: sütun. Şeritlerin yüksekliği sabittir (layoutGrid.mjs FULL_CHROME_H): orta alan üstüne gelince ya da
           // odakta değişmez, durum metni şeritlerin alanına girmez
           <div className="absolute inset-1.5 flex flex-col gap-1">
-            {/* Üst şerit: ad solda (kısalır), rozet sağda; aynı satırın öğeleri olduklarından üst üste binmezler */}
+            {/* Üst şerit: ad solda (kısalır), durum metni orta alana sığmıyorsa nokta, rozet sağda (en geniş hâli ad ve noktaya
+                yer bırakır); aynı satırın öğeleri olduklarından üst üste binmezler */}
             <div className="flex h-5 shrink-0 items-start gap-1">
               {nameTag}
+              {stateDot && dot("mt-1.5 h-2 w-2")}
               {b && (
                 <span data-part="badge" title={badgeTitle}
-                      className={`ml-auto max-w-[calc(100%-1rem)] shrink-0 truncate font-semibold ${PILL} ${TONE[b.tone]}`}>
+                      className={`ml-auto shrink-0 truncate font-semibold ${stateDot ? "max-w-[calc(100%-1.75rem)]" : "max-w-[calc(100%-1rem)]"} ${PILL} ${TONE[b.tone]}`}>
                   {b.text}
                 </span>
               )}
             </div>
             {/* Orta alan: durum metni ortada, sığan satır kadar (en çok 2; kısalırsa tamamı kutunun ipucunda) */}
             <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-              {state && (
+              {state && !stateDot && (
                 <span data-part="state"
-                      className={`${lines >= 2 ? "line-clamp-2" : "line-clamp-1"} max-h-full min-w-0 break-words text-center text-[12px] leading-4 text-white/90`}>
+                      className={`${lines >= 2 ? "line-clamp-2" : "line-clamp-1"} max-h-full min-w-0 break-words text-center text-[0.75rem] leading-4 text-white/90`}>
                   {state}
                 </span>
               )}
@@ -202,7 +215,7 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
                 yaslanır ve kısalır (…). Düğmeler tek satır simgedir (sarılmaz). "⋯" ile düğmeler hiçbir zaman birlikte
                 görünmez */}
             <div className="flex h-6 shrink-0 items-end justify-center gap-1">
-              {alarmButton("rounded-[2px] px-2 py-0.5 text-[12px] leading-4")}
+              {alarmButton("rounded-[0.125rem] px-2 py-0.5 text-[0.75rem] leading-4")}
               {(selected || alarm) && (
                 // Dokunmatik (üstüne gelinemeyen) ekranda seçili kutunun işlemleri: sağ tık / uzun basış yerine. Alarmlı kutuda da
                 // görünür: ona dokunmak alarmı açtığından kutu bu menüdeki "Seç" ile seçilir. Klavye odağında kutu düğmeleri
@@ -228,12 +241,12 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
           <div className="absolute inset-x-1 top-1 flex items-start gap-1">
             {alarm ? alarmButton(PILL) : nameTag}
             {dot("ml-auto mt-1.5 h-2 w-2")}
-            {moreButton(`h-7 min-w-7 px-1 ${dotTone ? "" : "ml-auto"} ${selected || alarm ? "[@media(hover:none)]:grid" : ""} [@media(hover:hover)]:group-hover:grid focus-visible:grid`)}
+            {moreButton(`h-7 min-w-7 px-1 ${dotLook ? "" : "ml-auto"} ${selected || alarm ? "[@media(hover:none)]:grid" : ""} [@media(hover:hover)]:group-hover:grid focus-visible:grid`)}
           </div>
         )}
         {tier === "tiny" && dot("absolute right-1 top-1 h-2 w-2")}
       </div>
-      {/* En küçük kutu: köşedeki nokta kutudan taşardı; küçük nokta kutunun tam ortasında (kutu en az 6×6 px oldukça içinde) */}
+      {/* En küçük kutu: köşedeki nokta kutudan taşardı; küçük nokta (0.375 rem) kutunun tam ortasında, kutu o kadar oldukça içinde */}
       {tier === "micro" && dot("absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2")}
     </div>
   );
