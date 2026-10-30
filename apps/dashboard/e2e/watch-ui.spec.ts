@@ -2961,3 +2961,49 @@ test("NVR'dan şablon: yanıt hiç gelmezse (takılma) uzun sınırda kesilir; i
   await held[0].fulfill({ status: 500, json: { detail: "geç" } }).catch(() => undefined);
 });
 
+test("oturum düşünce taslak yazımı durur: panelin 401'i alan POST/PUT yeniden denenmez, sonraki düzenlemeler istek göndermez; girişten sonra düzenlemeler geri yüklenir", async ({ page }) => {
+  const drafts = await mock(page, STATUS);
+  await mockStore(page, [VIEW]);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect.poll(() => drafts.calls.filter((c) => c.method === "POST").length).toBe(1);   // oturum geçerliyken taslak açıldı
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  // oturum düştü: panel taslak ve yoklama isteklerine 401 verir
+  await page.context().clearCookies();
+  const writes: string[] = [];
+  const expired = (r: Route) => {
+    const m = r.request().method();
+    if (/\/views\/drafts/.test(r.request().url()) && m !== "GET") writes.push(m);
+    return r.fulfill({ status: 401, json: { error: "Giriş gerekli." } });
+  };
+  await page.route("**/api/live/views/drafts**", expired);
+  await page.route("**/api/live/views/*/status", expired);
+  await page.route("**/api/live/alarms?active=1", expired);
+  await camera(page, "Arka kapı").dragTo(tiles.nth(3));
+  await expect.poll(() => writes.length).toBe(1);                                      // ilk yazma 401 aldı
+  for (const name of ["Depo", "Arka kapı", "Depo"]) {                                  // 6 sn'den uzun süre düzenlemeye devam
+    await page.waitForTimeout(2_200);
+    await camera(page, name).dragTo(tiles.nth(3));
+  }
+  await page.waitForTimeout(1_000);
+  expect(writes).toEqual(["PUT"]);                                                     // ne yeniden deneme ne yeni istek
+  const link = page.getByRole("status").filter({ hasText: AUTH }).getByRole("link", { name: "Giriş yap" });
+  await expect(link).toBeVisible({ timeout: 20_000 });
+  expect(writes).toEqual(["PUT"]);
+  await link.click();
+  await expect(page).toHaveURL(/\/login\?next=%2Fwatch/);
+  expect(await stored(page)).toMatchObject({ origin: "v1", tiles: [VIEW.tiles[0], VIEW.tiles[1], null, { sourceId: "d", channelId: null }] });   // son düzenleme saklı
+  await page.unroute("**/api/live/views/drafts**", expired);
+  await page.unroute("**/api/live/views/*/status", expired);
+  await page.unroute("**/api/live/alarms?active=1", expired);
+  await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+  await page.getByRole("button", { name: "Giriş yap" }).click();
+  await expect(page).toHaveURL(/\/watch$/);
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(tiles.nth(3)).toContainText("Depo");
+  expect(dialogs).toEqual([]);
+});

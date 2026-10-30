@@ -28,7 +28,10 @@ function dropDraft(id: string): void {
  * İstekler sırayla gider (aynı anda iki taslak açılmaz). Sunucuya ulaşılamazsa STREAM_RETRY_MS sonra yeniden denenir;
  * sunucu içeriği reddederse (4xx) ileti `error`'a yazılır ve içerik değişene dek yeniden gönderilmez. Sunucu şimdilik
  * kabul etmiyorsa (503: ör. bütün tarayıcılarda en çok 32 taslak açık) ileti `error`'a yazılır ve STREAM_RETRY_MS sonra
- * yeniden denenir; başarınca ileti kalkar.
+ * yeniden denenir; başarınca ileti kalkar. Panelin kendi 401'i (oturum doldu) bir kez görülünce sayfa yenilenene dek
+ * taslağa hiçbir istek (POST/PUT/DELETE) gitmez ve yeniden denenmez: oturum olmadan hepsi 401 alırdı, 2 sn'de bir
+ * tekrarlanırken giriş sayfasına geçmek ya da sekmeyi kapatmak süren isteği yarıda keser (panel günlüğünde "aborted").
+ * Düzenleme sessionStorage'da durur; giriş tam sayfa gezinmesidir, durumu yeniden kurar.
  */
 export function useDraft(owner: string | null, edit: DraftBody | null, sessionLost = false): {
   draftId: string | null; error: string | null; lost: (id: string) => void; release: () => void;
@@ -50,8 +53,10 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
   /** Oturum düştü (401): sayfa kapanırken silme isteği gönderilmez (girişsiz istek 401 alırdı; taslak 10 dk'da silinir) */
   const noSession = useRef(sessionLost);
   noSession.current = sessionLost;
+  /** Taslak isteği panelin 401'ini aldı (oturum doldu): sayfa yenilenene dek taslağa istek gitmez, yeniden denenmez */
+  const authLost = useRef(false);
   /** Sayfadan çıkarken (kapanış, söküm) taslağı siler; oturum düştüyse göndermez */
-  const leaving = (id: string) => { if (!noSession.current) dropDraft(id); };
+  const leaving = (id: string) => { if (!noSession.current && !authLost.current) dropDraft(id); };
 
   const sync = useCallback(async () => {
     if (running.current) { again.current = true; return; }
@@ -64,12 +69,13 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
         const w = released.current ? null : want.current;
         // İstenmiyor ya da başka sekmenin taslağı: eskisi silinir
         if (draft.current && (w === null || draft.current.owner !== w.owner)) {
-          dropDraft(draft.current.id);
+          if (!authLost.current) dropDraft(draft.current.id);        // oturum yok: silme 401 alırdı (taslak 10 dk'da kendiliğinden gider)
           draft.current = null;
           sent.current = null;
           setCurrent(null);
         }
         if (w === null) { rejected.current = null; setError(null); continue; }
+        if (authLost.current) continue;
         if (draft.current && sent.current && sameContent(w.body, sent.current)) continue;
         if (rejected.current && sameContent(w.body, rejected.current)) continue;
         const target = draft.current;                     // güncellenen taslak (yoksa yenisi açılır)
@@ -91,8 +97,11 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
             // analiz sunucusu şimdilik kabul etmiyor ("Çok fazla açık taslak var…"): söylenir ve yeniden denenir
             setError(e.message);
             retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
-          } else if (!(e instanceof ApiError) || e.status >= 500 || e.status === 401) {
-            // sunucu yok / oturum doldu: sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
+          } else if (e instanceof ApiError && e.status === 401) {
+            // oturum doldu: sayfanın durum yoklaması bunu söyler ("Giriş yap"); taslağa bir daha istek gitmez, yeniden denenmez
+            authLost.current = true;
+          } else if (!(e instanceof ApiError) || e.status >= 500) {
+            // sunucu yok: sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
             retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e.status === 404 && target) {
             // taslak sunucuda yok: yenisi açılır (kimlik o ana dek kalır). `lost` bu arada bırakmış da olabilir.
