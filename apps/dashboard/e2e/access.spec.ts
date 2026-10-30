@@ -155,11 +155,12 @@ test("ayarlar: başlatıcının durum dosyası derleme sürüyor/başarısız di
 });
 
 test("telefondan erişim: şifre alanlarının erişilebilir adı görünen etiketle aynı (WCAG 2.5.3)", async ({ page }) => {
-  await login(page, "/videos");
+  await login(page);
+  await expect(page.getByRole("heading", { level: 1, name: "Telefondan erişim" })).toBeVisible();   // giriş bitti
   const view = { enabled: false, envPassword: false, lanActive: false, runner: false, addresses: [], buildState: null, buildMessage: null };
   for (const [hasPassword, label] of [[false, "Panel şifresi"], [true, "Yeni panel şifresi"]] as const) {
     await page.route("**/api/access", (r) => (r.request().method() === "GET" ? r.fulfill({ json: { ...view, hasPassword } }) : r.fallback()));
-    await page.goto("/settings");
+    await page.reload();
     const main = page.getByRole("main");
     await expect(main.getByText(label, { exact: true })).toBeVisible();
     await expect(main.locator("#access-pw")).toHaveAccessibleName(label);
