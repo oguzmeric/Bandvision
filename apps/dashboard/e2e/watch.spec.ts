@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 /**
@@ -14,6 +14,14 @@ async function login(page: Page) {
   await expect(page.getByRole("heading", { name: "Kameralar ve kayıt cihazları" })).toBeVisible();
 }
 
+/**
+ * Görüntü bu adresten çözüldü: `currentSrc` beklenen yolu içerir ve boyutu var. `src` değişince tarayıcı yenisi gelene
+ * dek eskisini gösterebilir; yalnız `naturalWidth` önceki akışın karesini de sayardı.
+ */
+function decodedFrom(img: Locator, path: string): Promise<boolean> {
+  return img.evaluate((el: HTMLImageElement, p) => el.currentSrc.includes(p) && el.naturalWidth > 0, path);
+}
+
 test("izleme (gerçek yığın): API ile şablon, birleşik akış gelir, tek kamera akışı gelir", async ({ page }) => {
   await login(page);
   const src = await (await page.request.post("/api/live/sources", { data: {
@@ -23,12 +31,12 @@ test("izleme (gerçek yığın): API ile şablon, birleşik akış gelir, tek ka
   try {
     await page.goto("/watch");
     await page.getByRole("tab", { name: "E2E izleme", exact: true }).click();
-    await expect.poll(async () => page.getByAltText("E2E izleme canlı görüntü")
-      .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => decodedFrom(page.getByAltText("E2E izleme canlı görüntü"), `/api/live/views/${view.id}/stream?`),
+      { timeout: 30_000 }).toBe(true);
     await expect(page.getByTestId("watch-tile").first()).toContainText("İzleme klibi");
     await page.getByTestId("watch-tile").first().dblclick();
-    await expect.poll(async () => page.getByAltText("İzleme klibi canlı görüntü")
-      .evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => decodedFrom(page.getByAltText("İzleme klibi canlı görüntü"), `/api/live/cameras/stream?source=${src.id}&`),
+      { timeout: 30_000 }).toBe(true);
   } finally {
     // test düşse de şablon ve kaynak kalmasın (sonraki testler "Henüz kaynak yok" bekleyebilir)
     await page.request.delete(`/api/live/views/${view.id}`);
@@ -53,16 +61,18 @@ test("izleme (gerçek yığın): arayüzden yeni şablon, düzenlerken taslak ak
     // kaydedilmeden canlı: ızgara analiz sunucusundaki taslağı akıtır
     const img = page.getByTestId("watch-grid").locator("img");
     await expect(img).toHaveAttribute("src", /\/api\/live\/views\/draft-[0-9a-f]{12}\/stream/, { timeout: 15_000 });
-    await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    const draftId = await page.getByTestId("watch-grid").getAttribute("data-stream");
+    await expect.poll(() => decodedFrom(img, `/api/live/views/${draftId}/stream?`), { timeout: 30_000 }).toBe(true);
     await expect(page.getByTestId("watch-tile").first()).toContainText("Düzenleyici klibi");
     await page.getByRole("button", { name: "Kaydet", exact: true }).click();
     const saved = page.getByRole("tab", { name: "Yeni şablon", exact: true });
     await expect(saved).toHaveAttribute("aria-selected", "true");
     await expect(img).toHaveAttribute("src", /\/api\/live\/views\/(?!draft-)[^/]+\/stream/);
-    await expect.poll(async () => page.getByAltText("Yeni şablon canlı görüntü")
-      .evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
-    const views = await (await page.request.get("/api/live/views")).json() as Array<{ name: string; layout: string; tiles: unknown[] }>;
-    expect(views.find((v) => v.name === "Yeni şablon")).toMatchObject({ layout: "1", tiles: [{ sourceId: src.id, channelId: null }] });
+    const views = await (await page.request.get("/api/live/views")).json() as Array<{ id: string; name: string; layout: string; tiles: unknown[] }>;
+    const view = views.find((v) => v.name === "Yeni şablon");
+    expect(view).toMatchObject({ layout: "1", tiles: [{ sourceId: src.id, channelId: null }] });
+    await expect.poll(() => decodedFrom(page.getByAltText("Yeni şablon canlı görüntü"), `/api/live/views/${view!.id}/stream?`),
+      { timeout: 30_000 }).toBe(true);
     await saved.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Sil" }).click();
     await expect(saved).toHaveCount(0);
@@ -198,7 +208,7 @@ test("izleme (gerçek yığın): 5×5 taslak JPEG kareleri akıtır, kaydedince 
     expect(st.tiles.slice(1).every((t) => t === null)).toBe(true);
     const img = grid.locator("img");
     await expect(img).toHaveAttribute("src", new RegExp(`/api/live/views/${draftId}/stream\\?`));
-    await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => decodedFrom(img, `/api/live/views/${draftId}/stream?`), { timeout: 30_000 }).toBe(true);
     await expectFiveByFiveWithCameraFirst(page, draftId);
 
     // Kaydet: şablon "5x5" olarak yazılır, taslak silinir, ızgara şablonun akışına döner
@@ -212,7 +222,7 @@ test("izleme (gerçek yığın): 5×5 taslak JPEG kareleri akıtır, kaydedince 
     await expect(grid).toHaveAttribute("data-stream", view!.id);
     await expect(img).toHaveAttribute("src", new RegExp(`/api/live/views/${view!.id}/stream\\?`));
     await expect.poll(async () => (await page.request.get(`/api/live/views/${draftId}/status`)).status()).toBe(404);
-    await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 }).toBeGreaterThan(0);
+    await expect.poll(() => decodedFrom(img, `/api/live/views/${view!.id}/stream?`), { timeout: 30_000 }).toBe(true);
     await expectFiveByFiveWithCameraFirst(page, view!.id);
   } finally {
     // test düşse de şablon ve kaynak kalmasın; sonraki testler "Henüz kaynak yok" bekleyebilir
