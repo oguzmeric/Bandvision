@@ -1202,21 +1202,25 @@ test("klavye: ızgara tek sekme durağı, ok tuşları gezdirir, odak seçmez; E
   await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");
 });
 
-const fmt = (b: Box) => `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.width)}×${Math.round(b.height)}`;
+const fmt = (b: Box) => `${b.x.toFixed(1)},${b.y.toFixed(1)} ${b.width.toFixed(1)}×${b.height.toFixed(1)}`;
 /**
- * Kutunun GÖRÜNEN katman parçaları (`data-part`: ad, rozet, alarm etiketi, ⋯, kutu düğmeleri) ikişer ikişer üst üste
- * binmez ve hepsi kutunun içindedir (yumuşak denetim: bütün ihlaller birlikte raporlanır). Görünen parçaların adlarını
- * (sıralı) döndürür.
+ * Kutunun GÖRÜNEN katman parçaları (`data-part`: ad, rozet ya da nokta, durum metni, alarm etiketi, ⋯ ve fareyle üstüne
+ * gelince ya da klavye odağında çıkan kutu düğmeleri) ikişer ikişer üst üste binmez ve hepsi kutunun içindedir (yumuşak
+ * denetim: bütün ihlaller birlikte raporlanır). Ölçüm sayfada tek seferde yapılır. Görünen parçaların adlarını (sıralı)
+ * döndürür.
  */
 async function partsClear(tile: Locator, what: string): Promise<string[]> {
-  const box = (await tile.boundingBox())!;
-  const parts = tile.locator("[data-part]");
+  const { box, parts } = await tile.evaluate((el) => {
+    const rect = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
+    return {
+      box: rect(el),
+      parts: [...el.querySelectorAll<HTMLElement>("[data-part]")]
+        .map((p) => ({ part: p.dataset.part ?? "", b: rect(p), hidden: getComputedStyle(p).visibility === "hidden" }))
+        .filter((p) => p.b.width > 0 && p.b.height > 0 && !p.hidden),
+    };
+  });
   const seen: Array<{ part: string; b: Box }> = [];
-  for (let i = 0, n = await parts.count(); i < n; i++) {
-    const p = parts.nth(i);
-    if (!(await p.isVisible())) continue;
-    const b = (await p.boundingBox())!;
-    const part = (await p.getAttribute("data-part"))!;
+  for (const { part, b } of parts) {
     const inside = b.x >= box.x - 0.5 && b.y >= box.y - 0.5 && b.x + b.width <= box.x + box.width + 0.5 && b.y + b.height <= box.y + box.height + 0.5;
     expect.soft(inside, `${what}: ${part} kutunun dışına taşıyor (${fmt(b)}; kutu ${fmt(box)})`).toBe(true);
     for (const o of seen) expect.soft(overlaps(o.b, b), `${what}: ${o.part} ile ${part} üst üste (${fmt(o.b)}; ${fmt(b)})`).toBe(false);
@@ -1225,92 +1229,241 @@ async function partsClear(tile: Locator, what: string): Promise<string[]> {
   return seen.map((s) => s.part).sort();
 }
 
-/** Boyut matrisi şablonu: 0. kutu alarmlı (güvenlik, "YERDE YATAN KİŞİ", rozet "Nöbette"), 1. kutu kişi sayımı (uzun ad, geniş rozet) */
-function sized(layoutId: string) {
-  const known = (LAYOUTS as Array<{ id: string; cells: unknown[] }>).find((l) => l.id === layoutId);
-  const count = known ? known.cells.length : layoutId.split("x").map(Number).reduce((a, b) => a * b, 1);
-  const refs = [{ sourceId: "b", channelId: "2" }, { sourceId: "a", channelId: null }];
-  const tiles = Array.from({ length: count }, (_, i) => refs[i] ?? null);
-  const live = { state: "live", message: "", fps: 10 };
-  const statusTiles = tiles.map((t, i) => (!t ? null : i === 0
-    ? { ...t, ...live, name: "Ofis NVR · Kasa", analysis: { mode: "safety", sessionId: "s2", name: "Kuyumcu güvenliği", healthy: true,
-      reason: null, alarm: { id: "al2", type: "lying" } } }
-    : { ...t, ...live, name: "Mağaza girişi kamerası", analysis: { mode: "detect", sessionId: "s1", name: "Mağaza girişi", entered: 120,
-      exited: 99, alarm: null } }));
-  return { count, view: { ...VIEW, layout: layoutId, tiles }, status: { id: "v1", layout: layoutId, tiles: statusTiles } };
+const LIVE = { state: "live", message: "", fps: 10 };
+const NO_LINK = { state: "error", message: "Görüntü açılamadı; yeniden deneniyor.", fps: 0 };
+const NO_LINK_TEXT = "Bağlantı yok — Görüntü açılamadı; yeniden deneniyor.";
+const GUARD = { mode: "safety", name: "Kuyumcu güvenliği", healthy: true, reason: null };
+/** Küçük kutudaki noktanın beklenen rengi: kamera listesinin açıklamasındaki nokta ya da bilgi rozetinin beyazı */
+type DotColor = "canlı" | "sorunlu" | "bağlanıyor" | "beyaz";
+interface Role {
+  key: string; ref: { sourceId: string; channelId: string | null };
+  /** Kameranın durumdaki adı: kamera listesindeki etiketten farklı (durumun geldiği bundan anlaşılır) */
+  name: string; status: object; alarm: boolean;
+  /** Rozet yazısı (analiz yoksa null); `state`: kutuda görünmesi gereken durum metni (canlıda null) */
+  badge: string | null; state: string | null; dot: DotColor;
+}
+/** Boyut matrisinin kutu rolleri: canlı alarm, canlı kişi sayımı, bağlantı yok, bağlanıyor, alarm ile bağlantı yok */
+const ROLES: Role[] = [
+  { key: "alarm", ref: { sourceId: "b", channelId: "2" }, name: "Ofis NVR · Kasa",
+    status: { ...LIVE, analysis: { ...GUARD, sessionId: "s2", alarm: { id: "al2", type: "lying" } } },
+    alarm: true, badge: "Nöbette", state: null, dot: "canlı" },
+  { key: "canlı", ref: { sourceId: "a", channelId: null }, name: "Mağaza girişi kamerası",
+    status: { ...LIVE, analysis: { mode: "detect", sessionId: "s1", name: "Mağaza girişi", entered: 120, exited: 99, alarm: null } },
+    alarm: false, badge: "G 120 · Ç 99", state: null, dot: "beyaz" },
+  { key: "bağlantı yok", ref: { sourceId: "c", channelId: null }, name: "Arka kapı bahçesi", status: { ...NO_LINK, analysis: null },
+    alarm: false, badge: null, state: NO_LINK_TEXT, dot: "sorunlu" },
+  { key: "bağlanıyor", ref: { sourceId: "d", channelId: null }, name: "Depo rampası",
+    status: { state: "connecting", message: "", fps: 0, analysis: null }, alarm: false, badge: null, state: "Bağlanıyor…", dot: "bağlanıyor" },
+  { key: "alarm ve bağlantı yok", ref: { sourceId: "b", channelId: "1" }, name: "Ofis NVR · Giriş",
+    status: { ...NO_LINK, analysis: { ...GUARD, sessionId: "s3", alarm: { id: "al3", type: "hands_up" } } },
+    alarm: true, badge: "Nöbette", state: NO_LINK_TEXT, dot: "canlı" },
+];
+
+function geom(id: string): { cols: number; count: number } {
+  const known = (LAYOUTS as Array<{ id: string; cols: number; cells: unknown[] }>).find((l) => l.id === id);
+  if (known) return { cols: known.cols, count: known.cells.length };
+  const [rows, cols] = id.split("x").map(Number);
+  return { cols, count: rows * cols };
+}
+
+/** Her düzen için şablonlar: roller sırayla kutulara; düzende yer kalmayan roller sonraki şablona (1×1'de rol başına bir şablon) */
+function matrixViews(ids: string[]) {
+  const plan: Array<{ id: string; name: string; roles: Role[] }> = [];
+  const views: object[] = [];
+  const statuses: Record<string, object> = {};
+  for (const id of ids) {
+    const { count } = geom(id);
+    for (let k = 0; k * count < ROLES.length; k++) {
+      const roles = ROLES.slice(k * count, (k + 1) * count);
+      const vid = `m${plan.length}`;
+      const name = `Düzen ${id} · ${k + 1}`;
+      const tiles = Array.from({ length: count }, (_, i) => roles[i]?.ref ?? null);
+      views.push({ id: vid, name, layout: id, createdAt: 1, updatedAt: 1, tiles });
+      statuses[vid] = { id: vid, layout: id, tiles: tiles.map((t, i) => t && { ...t, name: roles[i].name, ...roles[i].status }) };
+      plan.push({ id, name, roles });
+    }
+  }
+  return { plan, views, statuses };
+}
+
+async function mockMatrix(page: Page, views: object[], statuses: Record<string, object>) {
+  await page.route("**/api/live/view-layouts", (r) => r.fulfill({ json: LAYOUTS }));
+  await page.route("**/api/live/views", (r) => r.fulfill({ json: views }));
+  await page.route("**/api/live/views/*/status", (r) => r.fulfill({ json: statuses[r.request().url().split("/").at(-2)!] }));
+  await page.route("**/api/live/views/*/stream**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  await page.route("**/api/live/alarms?active=1", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/live/sessions", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/live/sources", (r) => r.fulfill({ json: SOURCES }));
+  await page.route("**/api/live/sources/b/channels", (r) => r.fulfill({ json: CHANNELS }));
+}
+
+/** Noktaların beklenen renkleri: kamera listesinin açıklamasındaki noktalardan (aynı renkler) ve bilgi rozetinin beyazı */
+async function dotColors(page: Page): Promise<Record<DotColor, string>> {
+  const legend = page.getByTestId("camera-legend");
+  const of = (text: string) => legend.locator("span", { hasText: text }).first().locator("span").first()
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const white = await page.evaluate(() => {
+    const s = document.createElement("span");
+    s.className = "bg-white/85";
+    document.body.append(s);
+    const c = getComputedStyle(s).backgroundColor;
+    s.remove();
+    return c;
+  });
+  return { "canlı": await of("canlı"), "sorunlu": await of("sorunlu"), "bağlanıyor": await of("bağlanıyor"), "beyaz": white };
 }
 
 /**
- * Görünmesi gereken parçalar: katman yoğunluğu (`data-tier`), cihaz ve duruma göre. `alarm`: alarmlı kutu (0.); öteki kişi
- * sayımı kutusu (1.). "focus": kutu ya da içindeki öğe klavye odağında.
+ * Kutunun durumu dokunmadan da görünür: normal kutuda durum metni orta alanda (tam satırlar, en çok 2; tamamı kutunun
+ * ipucunda); küçük kutularda nokta (rozet varsa onun rengi, yoksa kamera listesindeki bağlantı rengi; ipucu ve ekran
+ * okuyucu metni ikisini de söyler).
  */
-function expectedParts(tier: string, touch: boolean, state: "idle" | "hover" | "selected" | "focus", alarm: boolean): string[] {
-  if (tier === "tiny") return ["badge"];
-  const full = tier === "full";
-  const parts = ["badge"];
-  if (alarm) parts.push("alarm");
-  if (full || !alarm) parts.push("name");                                         // küçük alarmlı kutuda adın yerinde etiket
-  if (full && (state === "hover" || state === "focus")) parts.push("actions");
-  const more = touch ? (alarm || state === "selected") && !(full && state === "focus") : !full && state === "hover";
-  if (more) parts.push("more");
+async function statusShown(tile: Locator, r: Role, tier: string, colors: Record<DotColor, string>, what: string) {
+  if (tier === "full") {
+    const st = tile.locator("[data-part=state]");
+    if (!r.state) { expect.soft(await st.count(), `${what}: durum metni yok`).toBe(0); return; }
+    expect.soft(await st.count(), `${what}: durum metni`).toBe(1);
+    if (!(await st.count())) return;
+    expect.soft(await st.textContent(), `${what}: durum metni`).toBe(r.state);
+    expect.soft(await tile.getAttribute("title"), `${what}: kutunun ipucunda durum metninin tamamı`).toBe(r.state);
+    const h = Math.round((await st.boundingBox())?.height ?? 0);
+    expect.soft([16, 32], `${what}: durum metni bir ya da iki tam satır (${h} px)`).toContain(h);
+    return;
+  }
+  const dot = tile.locator("[data-part=dot]");
+  expect.soft(await dot.count(), `${what}: nokta`).toBe(1);
+  if (!(await dot.count())) return;
+  const title = (await dot.getAttribute("title")) ?? "";
+  const sr = (await dot.locator(".sr-only").textContent()) ?? "";
+  for (const t of [r.badge, r.state]) {
+    if (!t) continue;
+    expect.soft(title, `${what}: noktanın ipucu`).toContain(t);
+    expect.soft(sr, `${what}: noktanın ekran okuyucu metni`).toContain(t);
+  }
+  expect.soft(await dot.evaluate((el) => getComputedStyle(el).backgroundColor), `${what}: nokta rengi (${r.dot})`).toBe(colors[r.dot]);
+}
+
+/**
+ * "idle": boşta; "hover": fareyle üstünde; "focus": kutu klavye odağında; "inner": kutunun içindeki alarm etiketi klavye
+ * odağında; "selected": dokunmatikte seçili; "more": "⋯" menüsü açılıp Esc ile kapandı (odak "⋯"de, focus-visible).
+ */
+type TileState = "idle" | "hover" | "focus" | "inner" | "selected" | "more";
+/** Görünmesi gereken parçalar: katman yoğunluğu (`data-tier`), cihaz, rol ve duruma göre */
+function expectedParts(r: Role, tier: string, touch: boolean, st: TileState): string[] {
+  const dot = r.badge !== null || r.state !== null;
+  if (tier === "tiny" || tier === "micro") return dot ? ["dot"] : [];
+  const selected = st === "selected" || st === "more";
+  const focused = st === "focus" || st === "inner";
+  const parts: string[] = [];
+  if (tier === "small") {
+    parts.push(r.alarm ? "alarm" : "name");                                       // küçük alarmlı kutuda adın yerinde etiket
+    if (dot) parts.push("dot");
+    if (touch ? r.alarm || selected : st === "hover" || st === "more") parts.push("more");
+  } else {
+    parts.push("name");
+    if (r.badge) parts.push("badge");
+    if (r.state) parts.push("state");
+    if (r.alarm) parts.push("alarm");
+    if (st === "hover" || focused) parts.push("actions");
+    if (touch && (r.alarm || selected) && !focused) parts.push("more");
+  }
   return parts.sort();
 }
 
-/** Ölçülen kutu boyutları ve beklenen katman yoğunluğu (eşikler layoutGrid.mjs `tileTier`) */
-const MATRIX = [
+/**
+ * Boyut matrisi: görünüm başına tek sayfa, düzen başına şablon(lar). Beklenen yoğunluk [canlı kutu, durum metni olan kutu]
+ * (eşikler layoutGrid.mjs `tileTier`; ölçülen boyutlar ÖLÇÜ satırlarında).
+ */
+const MATRIX: Array<{ name: string; use: { viewport: { width: number; height: number }; hasTouch?: boolean; isMobile?: boolean };
+  touch: boolean; tiers: Record<string, [string, string]> }> = [
   { name: "masaüstü 1280 px", use: { viewport: { width: 1280, height: 800 } }, touch: false,
-    ids: [["1", "full"], ["4", "full"], ["16", "full"], ["5x5", "full"], ["8x8", "small"], ["8x16", "tiny"]] },
+    tiers: { "1": ["full", "full"], "4": ["full", "full"], "16": ["full", "full"], "5x5": ["full", "small"], "8x8": ["small", "small"],
+      "9x9": ["small", "small"], "8x16": ["tiny", "tiny"] } },
   { name: "dokunmatik 390 px", use: { viewport: { width: 390, height: 800 }, hasTouch: true, isMobile: true }, touch: true,
-    ids: [["1", "full"], ["4", "full"], ["9", "small"], ["16", "small"]] },
+    tiers: { "1": ["full", "full"], "4": ["full", "full"], "9": ["small", "small"], "16": ["small", "small"], "5x5": ["tiny", "tiny"],
+      "8x8": ["tiny", "tiny"], "8x16": ["micro", "micro"], "1x16": ["micro", "micro"] } },
+  { name: "dokunmatik 300 px", use: { viewport: { width: 300, height: 700 }, hasTouch: true, isMobile: true }, touch: true,
+    tiers: { "4": ["full", "small"] } },
+  { name: "dokunmatik tablet 820 px", use: { viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true }, touch: true,
+    tiers: { "16": ["full", "small"] } },
 ];
 for (const m of MATRIX) {
   test.describe(`kutu katmanı, ${m.name}`, () => {
     test.use(m.use);
-    for (const [id, tier] of m.ids) {
-      test(`${id}: görünen parçalar (ad, rozet, alarm etiketi, ⋯, kutu düğmeleri) üst üste binmez ve kutunun içindedir`, async ({ page }) => {
-        const { view, status, count } = sized(id);
-        await mock(page, status, view);
-        await login(page);
-        const tiles = page.getByTestId("watch-tile");
+    test(`${Object.keys(m.tiers).join(", ")}: görünen parçalar (ad, rozet/nokta, durum, alarm etiketi, ⋯, kutu düğmeleri) her durumda üst üste binmez ve kutunun içindedir; durum dokunmadan görünür`, async ({ page }) => {
+      const { plan, views, statuses } = matrixViews(Object.keys(m.tiers));
+      await mockMatrix(page, views, statuses);
+      await login(page);
+      const colors = await dotColors(page);
+      const tiles = page.getByTestId("watch-tile");
+      const menu = page.getByRole("menu", { name: "Kutu işlemleri" });
+      let escapes = 0;
+      for (const p of plan) {
+        const { cols, count } = geom(p.id);
+        await tab(page, p.name).click();
+        await expect(tab(page, p.name)).toHaveAttribute("aria-selected", "true");
         await expect(tiles).toHaveCount(count);
-        const alarm = tiles.nth(0);
-        await expect(alarm).toHaveAttribute("data-alarm", "true");
-        if (!m.touch) await page.mouse.move(0, 0);
-        const b = (await alarm.boundingBox())!;
-        console.log(`ÖLÇÜ ${m.name} ${id}: kutu ${b.width.toFixed(1)}×${b.height.toFixed(1)}`);
-        await expect(alarm).toHaveAttribute("data-tier", tier);
-        const other = tiles.nth(1);
-        // durum gelince (rozet) her durumda görünen parçalar beklenenlerdir, ikişer ikişer binmez, kutudan taşmaz
-        await expect(alarm.locator("[data-part=badge]")).toBeAttached();
-        if (count > 1) await expect(other.locator("[data-part=badge]")).toBeAttached();
-        expect(await partsClear(alarm, `${id} boşta`)).toEqual(expectedParts(tier, m.touch, "idle", true));
-        if (count > 1) expect(await partsClear(other, `${id} 2. kutu boşta`)).toEqual(expectedParts(tier, m.touch, "idle", false));
-        if (m.touch) {
-          if (count > 1) {
-            await other.tap();                                                          // seçili kutuda ⋯
-            await expect(other).toHaveAttribute("data-selected", "true");
-            expect(await partsClear(other, `${id} 2. kutu seçili`)).toEqual(expectedParts(tier, true, "selected", false));
+        // durum geldi: kutunun yazısında ya da ipucunda kameranın durumdaki adı
+        await expect.poll(() => tiles.nth(0).evaluate((el) => `${el.textContent} ${el.getAttribute("title")}`)).toContain(p.roles[0].name);
+        const b = (await tiles.nth(0).boundingBox())!;
+        console.log(`ÖLÇÜ ${m.name} ${p.name}: kutu ${b.width.toFixed(1)}×${b.height.toFixed(1)}`);
+        for (const [i, r] of p.roles.entries()) {
+          const tile = tiles.nth(i);
+          const tier = m.tiers[p.id][r.state ? 1 : 0];
+          const what = `${p.name} ${r.key}`;
+          const check = async (st: TileState) => expect.soft(await partsClear(tile, `${what} (${st})`), `${what} (${st}): görünen parçalar`)
+            .toEqual(expectedParts(r, tier, m.touch, st));
+          if (!m.touch) await page.mouse.move(0, 0);
+          expect.soft(await tile.getAttribute("data-tier"), `${what}: yoğunluk`).toBe(tier);
+          await statusShown(tile, r, tier, colors, what);
+          await check("idle");
+          if (!m.touch) {
+            await tile.hover();
+            await check("hover");
+            await page.mouse.move(0, 0);
           }
-        } else {
-          await alarm.hover();
-          expect(await partsClear(alarm, `${id} üstüne gelince`)).toEqual(expectedParts(tier, false, "hover", true));
-          if (count > 1) {
-            await other.hover();
-            expect(await partsClear(other, `${id} 2. kutunun üstüne gelince`)).toEqual(expectedParts(tier, false, "hover", false));
+          // klavye odağı: ilk kutudan ok tuşlarıyla (odak görünür)
+          await tiles.nth(0).focus();
+          await page.keyboard.press("Home");
+          for (let k = 0; k < Math.floor(i / cols); k++) await page.keyboard.press("ArrowDown");
+          for (let k = 0; k < i % cols; k++) await page.keyboard.press("ArrowRight");
+          await expect(tile).toBeFocused();
+          expect(await tile.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
+          await check("focus");
+          if (r.alarm && (tier === "full" || tier === "small")) {
+            await page.keyboard.press("Tab");                                            // kutunun içindeki ilk öğe: alarm etiketi
+            await expect(tile.getByRole("button", { name: /^Alarmı aç/ })).toBeFocused();
+            await check("inner");
           }
-          await page.mouse.move(0, 0);
+          // klavye odağı bırakılır: dokunuş ve "⋯" denemeleri klavyesiz (odaktaki kutuda ya da alarm etiketinde "⋯" yerine
+          // kutu düğmeleri çıkar; o durum yukarıda ölçüldü)
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          if (m.touch && !r.alarm) {
+            await tile.tap();                                                             // dokunuş seçer
+            await expect(tile).toHaveAttribute("data-selected", "true");
+            await check("selected");
+          }
+          if (expectedParts(r, tier, m.touch, "more").includes("more")) {
+            // "⋯" menüsü açılıp Esc ile kapanınca odak "⋯"ye döner (focus-visible): kutu düğmeleri onunla birlikte çıkmaz;
+            // masaüstünde fare kutudan çıksa da "⋯" odaktayken görünür kalır (odak sayfaya düşmez)
+            const more = tile.getByRole("button", { name: "Kutu işlemleri" });
+            if (!m.touch) await tile.hover();
+            await expect(more).toBeVisible();
+            if (m.touch) await more.tap();
+            else await more.click();
+            await expect(menu).toBeVisible();
+            await page.keyboard.press("Escape");
+            await expect(menu).toHaveCount(0);
+            if (!m.touch) await page.mouse.move(0, 0);
+            await expect.soft(more, `${what}: Esc sonrası odak ⋯'de`).toBeFocused();
+            expect.soft(await more.evaluate((el) => el.matches(":focus-visible")), `${what}: ⋯ focus-visible`).toBe(true);
+            await check("more");
+            escapes += 1;
+          }
         }
-        await alarm.focus();
-        await page.keyboard.press("Home");                                              // klavye odağı (focus-visible)
-        await expect(alarm).toBeFocused();
-        expect(await alarm.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
-        expect(await partsClear(alarm, `${id} klavye odağında`)).toEqual(expectedParts(tier, m.touch, "focus", true));
-        await page.keyboard.press("Tab");                                               // kutunun içindeki ilk öğe: alarm etiketi
-        if (tier !== "tiny") await expect(alarm.getByRole("button", { name: /^Alarmı aç/ })).toBeFocused();
-        expect(await partsClear(alarm, `${id} kutunun içinde klavye odağı`))
-          .toEqual(tier === "tiny" ? ["badge"] : expectedParts(tier, m.touch, "focus", true));
-      });
-    }
+      }
+      expect(escapes).toBeGreaterThan(0);                                                 // "⋯" + Esc en az bir kutuda denendi
+    });
   });
 }
 
@@ -1354,21 +1507,10 @@ test.describe("dokunmatik dar ekran (390 px)", () => {
     await expect(tiles.nth(0)).toContainText("Kapı");
     await expect(tiles.nth(1)).toHaveAttribute("data-alarm", "true");
     await expect(page.getByRole("button", { name: "Kutu işlemleri" })).toHaveCount(1);   // yalnız alarmlı kutuda (seçili kutu yok)
-    await tiles.nth(0).tap();
-    await expect(tiles.nth(0)).toHaveAttribute("data-selected", "true");
-    await tiles.nth(0).getByRole("button", { name: "Kutu işlemleri" }).tap();
-    await page.getByRole("menu", { name: "Kutu işlemleri" }).getByRole("menuitem", { name: "Boşalt" }).tap();
-    await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
-    await tiles.nth(2).tap();
-    await expect(tiles.nth(2)).toHaveAttribute("data-selected", "true");
-    await page.getByRole("button", { name: "Şablon editörü" }).tap();
-    await editor(page).getByRole("button", { name: "Seçili kutuyu boşalt" }).tap();
-    await expect(tiles.nth(2)).toHaveAttribute("data-empty", "true");
-    await expect(editor(page).getByRole("button", { name: "Seçili kutuyu boşalt" })).toBeDisabled();
-    await page.getByRole("button", { name: "Şablon editörü" }).tap();                 // kapat
-    // alarmlı kutuya dokunmak alarmı açar; kutu ⋯ menüsündeki "Seç" ile seçilir, sonra boşaltılır
-    await tiles.nth(1).getByRole("button", { name: "Kutu işlemleri" }).tap();
+    // Alarmlı kutuya dokunmak alarmı açar; kutu ⋯ menüsündeki "Seç" ile seçilir, sonra boşaltılır. İlk düzenlemeden ÖNCE
+    // denenir: düzenleyince ızgara taslağın durumunu gösterir, sahte taslak durumunda analiz (alarm) yok
     const menu = page.getByRole("menu", { name: "Kutu işlemleri" });
+    await tiles.nth(1).getByRole("button", { name: "Kutu işlemleri" }).tap();
     await expect(menu.getByRole("menuitem")).toHaveText(["Seç", "Tek kamera", "Boşalt"]);
     await menu.getByRole("menuitem", { name: "Seç" }).tap();
     await expect(tiles.nth(1)).toHaveAttribute("data-selected", "true");
@@ -1377,6 +1519,18 @@ test.describe("dokunmatik dar ekran (390 px)", () => {
     await expect(menu.getByRole("menuitem")).toHaveText(["Tek kamera", "Boşalt"]);
     await menu.getByRole("menuitem", { name: "Boşalt" }).tap();
     await expect(tiles.nth(1)).toHaveAttribute("data-empty", "true");
+    await tiles.nth(0).tap();
+    await expect(tiles.nth(0)).toHaveAttribute("data-selected", "true");
+    await tiles.nth(0).getByRole("button", { name: "Kutu işlemleri" }).tap();
+    await menu.getByRole("menuitem", { name: "Boşalt" }).tap();
+    await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
+    await tiles.nth(2).tap();
+    await expect(tiles.nth(2)).toHaveAttribute("data-selected", "true");
+    await page.getByRole("button", { name: "Şablon editörü" }).tap();
+    await editor(page).getByRole("button", { name: "Seçili kutuyu boşalt" }).tap();
+    await expect(tiles.nth(2)).toHaveAttribute("data-empty", "true");
+    await expect(editor(page).getByRole("button", { name: "Seçili kutuyu boşalt" })).toBeDisabled();
+    await page.getByRole("button", { name: "Şablon editörü" }).tap();                 // kapat
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 });
@@ -1903,6 +2057,91 @@ test("Kaydet: denetim isteği sürerken 'Değişiklikleri at' ile düzenleme at�
   await expect(page.getByTestId("watch-tile").nth(3)).toHaveAttribute("data-empty", "true");
 });
 
+test("Kaydet: denetim isteği sürerken düzenlemeye devam edilirse Kaydet'e basıldığı andaki hâl yazılır; sonraki düzenleme (geri alma da) kaydedilmemiş kalır ve saklanır", async ({ page }) => {
+  await mock(page, STATUS);
+  const { calls, store } = await mockStore(page, [{ ...VIEW }]);
+  const list = await holdListGet(page);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  const save = page.getByRole("button", { name: "Kaydet", exact: true });
+  const idle = () => expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeEnabled();   // kayıt işlemi bitti
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  list.arm();
+  await save.click();
+  await expect.poll(() => list.held()).toBe(1);
+  await tiles.nth(0).click({ button: "right" });                                     // istek sürerken düzenleme sürer
+  await page.getByRole("menuitem", { name: "Boşalt" }).click();
+  await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
+  list.release();
+  await expect.poll(() => puts(calls).length).toBe(1);
+  expect(puts(calls)[0].body).toEqual({ name: "Giriş katı", layout: "4", tiles: ENTRY.tiles });   // Kaydet'e basıldığı andaki hâl
+  await idle();
+  expect(dialogs).toEqual([]);
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");                         // sonraki düzenleme kaydedilmedi
+  await expect(page.getByText("Kaydedilmemiş değişiklik var")).toBeVisible();
+  await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
+  await expect(tiles.nth(3)).toContainText("Depo");
+  const later = [null, ...ENTRY.tiles.slice(1)];
+  expect(store[0].updatedAt).toBe(2);
+  // saklanan kayıt sonraki düzenlemeyi ve yeni temeli (PUT yanıtının updatedAt'i) taşır
+  await expect.poll(() => stored(page)).toMatchObject({ origin: "v1", layout: "4", tiles: later, updatedAt: 2 });
+  await save.click();                                                                 // temel güncel: sormadan yazar
+  await expect.poll(() => puts(calls).length).toBe(2);
+  expect(puts(calls)[1].body).toEqual({ name: "Giriş katı", layout: "4", tiles: later });
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  await expect.poll(() => stored(page)).toBeNull();
+  // istek sürerken kayıtlı hâle geri alınırsa: Kaydet'e basıldığı andaki hâl yazılır, geri alınmış hâl kaydedilmemiş kalır
+  await camera(page, "Kapı").dragTo(tiles.nth(0));
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  list.arm();
+  await save.click();
+  await expect.poll(() => list.held()).toBe(2);
+  await page.keyboard.press("Control+z");
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  list.release();
+  await expect.poll(() => puts(calls).length).toBe(3);
+  expect(puts(calls)[2].body).toEqual({ name: "Giriş katı", layout: "4", tiles: ENTRY.tiles });
+  await idle();
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
+  await expect.poll(() => stored(page)).toMatchObject({ origin: "v1", tiles: later, updatedAt: 4 });
+  expect(dialogs).toEqual([]);
+});
+
+test("Kaydet: denetim isteği sürerken 'Değişiklikleri at' sonrası yeniden düzenlense de kaydedilmez; yeni düzenleme kaydedilmemiş kalır", async ({ page }) => {
+  await mock(page, STATUS);
+  const { calls } = await mockStore(page, [{ ...VIEW }]);
+  const list = await holdListGet(page);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  const dialogs: string[] = [];
+  page.on("dialog", (d) => { dialogs.push(d.message()); void d.accept(); });
+  await page.evaluate((e) => sessionStorage.setItem("bv.watch.unsaved", JSON.stringify(e)), ENTRY);
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  list.arm();
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => list.held()).toBe(1);
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  await expect(tab(page, "Giriş katı")).not.toContainText("*");
+  await tiles.nth(0).click({ button: "right" });                                     // atıldıktan sonra yeni düzenleme
+  await page.getByRole("menuitem", { name: "Boşalt" }).click();
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  list.release();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeEnabled();
+  expect(dialogs).toEqual([]);
+  expect(puts(calls)).toHaveLength(0);
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");
+  await expect(tiles.nth(0)).toHaveAttribute("data-empty", "true");
+  await expect(tiles.nth(3)).toHaveAttribute("data-empty", "true");                  // atılan düzenleme geri gelmedi
+  await expect.poll(() => stored(page)).toMatchObject({ origin: "v1", tiles: [null, ...VIEW.tiles.slice(1)], updatedAt: 1 });
+});
+
 test("geri yükleme: hiç kayıtlı şablon yokken 'Değişiklikleri at' sonrası odak '+' (Yeni şablon) düğmesine geçer", async ({ page }) => {
   await mock(page, STATUS, []);
   await mockStore(page, []);
@@ -1917,6 +2156,54 @@ test("geri yükleme: hiç kayıtlı şablon yokken 'Değişiklikleri at' sonras�
   await page.getByRole("button", { name: "Değişiklikleri at" }).click();
   await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeFocused();
+  await expect.poll(() => stored(page)).toBeNull();
+});
+
+/** Kaydedilmemiş yeni şablonu (hiç kayıtlı şablon yokken) saklayıp sayfayı yeniler: geri yükleme bildirimi çıkar */
+async function restoreNewTab(page: Page) {
+  await login(page);
+  await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
+  page.on("dialog", (d) => void d.accept());
+  await page.getByRole("button", { name: "Yeni şablon", exact: true }).click();
+  await camera(page, "Kapı").click();
+  await expect.poll(() => stored(page)).toMatchObject({ name: "Yeni şablon" });
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+}
+
+test("geri yükleme: kayıt sürerken ('+' pasif) 'Değişiklikleri at' sonrası odak Şablon editörü düğmesine geçer, sayfaya düşmez", async ({ page }) => {
+  await mock(page, STATUS, []);
+  const { calls } = await mockStore(page, []);
+  await restoreNewTab(page);
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  await page.route("**/api/live/views", async (r) => { if (r.request().method() === "POST") await gate; await r.fallback(); });
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();          // yeni şablonun POST'u bekler
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  const editorButton = page.getByRole("button", { name: "Şablon editörü" });
+  await expect(editorButton).toBeFocused();
+  release();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeEnabled();
+  await expect(editorButton).toBeFocused();
+  expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+});
+
+test("geri yükleme: '+' ve Şablon editörü pasifken (düzen kataloğu boş) 'Değişiklikleri at' sonrası odak sekme listesine geçer", async ({ page }) => {
+  await mock(page, STATUS, []);
+  await mockStore(page, []);
+  await login(page);
+  await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toBeVisible();
+  // N×M düzeni katalogsuz da tanınır; katalog boşken "+" ve Şablon editörü pasif
+  await page.route("**/api/live/view-layouts", (r) => r.fulfill({ json: [] }));
+  await page.evaluate((e) => sessionStorage.setItem("bv.watch.unsaved", JSON.stringify(e)),
+    { v: 1, origin: "yeni-1", name: "Yeni şablon", layout: "2x2", tiles: [{ sourceId: "a", channelId: null }, null, null, null], updatedAt: null });
+  await page.reload();
+  await expect(page.getByRole("status").filter({ hasText: RESTORED })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Yeni şablon", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Şablon editörü" })).toBeDisabled();
+  await page.getByRole("button", { name: "Değişiklikleri at" }).click();
+  await expect(page.getByRole("tablist", { name: "Şablonlar" })).toBeFocused();
   await expect.poll(() => stored(page)).toBeNull();
 });
 
