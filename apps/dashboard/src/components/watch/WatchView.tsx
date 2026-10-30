@@ -12,7 +12,7 @@ import {
 } from "@/lib/templateEdit.mjs";
 import {
   copyName, LAST_VIEW_KEY, UNSAVED_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
-  TEMPLATE_TIMEOUT_MS, TIMEOUT_NOT_RELOADED, TIMEOUT_RELOADED, UNSAVED_TEXT,
+  RECORDER_TEMPLATE_TIMEOUT_MS, TEMPLATE_TIMEOUT_MS, TIMEOUT_NOT_RELOADED, TIMEOUT_RELOADED, UNSAVED_TEXT,
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
 import CameraList, { type CamState } from "./CameraList";
@@ -94,19 +94,20 @@ const nextEmpty = (tiles: Array<TileRef | null>, from: number): number | null =>
   }
   return null;
 };
-/** Şablon isteği TEMPLATE_TIMEOUT_MS içinde bitmedi (kesildi) */
+/** Şablon isteği süresi (TEMPLATE_TIMEOUT_MS, "NVR'dan şablon" için RECORDER_TEMPLATE_TIMEOUT_MS) içinde bitmedi (kesildi) */
 class TemplateTimeout extends Error {}
 /**
- * Şablon isteği (liste, Kaydet'in denetimi, şablonu yazan işlemler): TEMPLATE_TIMEOUT_MS içinde bitmezse kesilir
- * (`TemplateTimeout`); `page` kesilince (sayfa söküldü) de kesilir.
+ * Şablon isteği (liste, Kaydet'in denetimi, şablonu yazan işlemler): `timeoutMs` (varsayılan TEMPLATE_TIMEOUT_MS) içinde
+ * bitmezse kesilir (`TemplateTimeout`); `page` kesilince (sayfa söküldü) de kesilir.
  */
-function timedApi<T>(page: AbortSignal, path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
+function timedApi<T>(page: AbortSignal, path: string, init?: RequestInit & { json?: unknown },
+                     timeoutMs = TEMPLATE_TIMEOUT_MS): Promise<T> {
   const ctrl = new AbortController();
   const onPage = () => ctrl.abort();
   page.addEventListener("abort", onPage);
   if (page.aborted) ctrl.abort();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, TEMPLATE_TIMEOUT_MS);
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
   return api<T>(path, { ...init, signal: ctrl.signal })
     .catch((e: unknown) => { throw timedOut ? new TemplateTimeout() : e; })
     .finally(() => { clearTimeout(timer); page.removeEventListener("abort", onPage); });
@@ -697,8 +698,9 @@ export default function WatchView() {
   const added = (v: ViewTemplate) => `"${v.name}" şablonu eklendi.`;
   /**
    * Şablonu yazan işlemi tek başına çalıştırır (biri sürerken başlamaz); hata çağırana gider (ad penceresi kendinde
-   * gösterir). İstek zaman aşımına uğrarsa (TEMPLATE_TIMEOUT_MS) işlem sunucuda tamamlanmış olabilir: liste yeniden alınır
-   * (kaydedilmemiş düzenleme korunur), sonra işlem serbest kalır ve Türkçe ileti çağırana gider.
+   * gösterir). İstek zaman aşımına uğrarsa (TEMPLATE_TIMEOUT_MS; NVR'dan şablonda RECORDER_TEMPLATE_TIMEOUT_MS) işlem
+   * sunucuda tamamlanmış olabilir: liste yeniden alınır (kaydedilmemiş düzenleme korunur), sonra işlem serbest kalır ve
+   * Türkçe ileti çağırana gider.
    */
   const exclusive = async (fn: () => Promise<void>): Promise<void> => {
     if (busyRef.current) throw new Error(BUSY_TEXT);
@@ -850,7 +852,7 @@ export default function WatchView() {
     const start = startOf();
     void run(async () => {
       const v = await timedApi<ViewTemplate & { truncated: boolean; channelCount: number }>(pageLife.current.signal,
-        "views/from-recorder", { method: "POST", json: { sourceId } });
+        "views/from-recorder", { method: "POST", json: { sourceId } }, RECORDER_TEMPLATE_TIMEOUT_MS);
       const note = v.truncated ? `İlk ${MAX_TILES} kanal alındı (toplam ${v.channelCount}).` : null;
       setInfo(adopt(v, start, false) ? note : [added(v), note].filter(Boolean).join(" "));
     });

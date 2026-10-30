@@ -10,6 +10,7 @@ import http.server
 import logging
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -17,6 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -488,3 +490,107 @@ def test_unreachable_device() -> None:
         c.channels()
     assert e.value.kind == "unreachable"
     assert PASSWORD not in str(e.value)
+
+
+# MARK: - En kötü süre: "NVR'dan şablon" istemci zaman aşımı
+
+# Panelin "NVR'dan şablon" isteği (apps/dashboard/src/lib/views.ts RECORDER_TEMPLATE_TIMEOUT_MS) analiz sunucusunun kendi
+# "… yanıt vermedi" iletisini beklemelidir. Aşağıdaki testler o sürenin dayandığı yapıyı sabitler: bir cihaz GET'i en çok iki
+# istektir (401 → Digest), Hikvision iki yolu sırayla dener, TRASSIR oturum düşünce girişi ve kanal listesini bir kez daha dener.
+
+
+@contextmanager
+def _device(delay: float, *, digest: bool = False, routes: dict[str, bytes] | None = None) -> Iterator[tuple[int, list[str]]]:
+    """Her yanıtı `delay` sn geciktiren sahte cihaz (http). `digest`: Authorization'sız istek 401 + Digest sorusu alır.
+    Verilen `routes` yolları (sorgusuz) JSON/XML gövdesiyle 200 döner. (port, gelen yollar) verir."""
+    seen: list[str] = []
+    answers = routes or {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            path = self.path.split("?")[0]
+            seen.append(path)
+            time.sleep(delay)
+            if digest and "Authorization" not in self.headers:
+                status, body = 401, b""
+                head = [("WWW-Authenticate", 'Digest realm="r", nonce="n", qop="auth"')]
+            else:
+                status, body, head = 200, answers.get(path, b"{}"), []
+            try:
+                self.send_response(status)
+                for k, v in [*head, ("Content-Length", str(len(body)))]:
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:                          # istemci zaman aşımıyla bağlantıyı kapattı
+                pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield int(server.server_address[1]), seen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_device_get_may_take_two_requests_of_the_timeout_each(monkeypatch: pytest.MonkeyPatch) -> None:
+    """401 sorusu ve yeniden denenen istek ayrı ayrı zaman aşımı süresine kadar bekleyebilir: tek GET en çok 2 × R."""
+    monkeypatch.setattr(rec, "REQUEST_TIMEOUT_S", 0.5)
+    with _device(0.4, digest=True) as (port, seen):
+        http_ = rec._DeviceHTTP("127.0.0.1", port, False, USER, PASSWORD)
+        started = time.monotonic()
+        assert http_.get("/x") == b"{}"
+        elapsed = time.monotonic() - started
+        http_.close()
+    assert seen == ["/x", "/x"]
+    assert elapsed > 0.5                                                      # tek istek süresini (R) aştı
+
+
+def test_hikvision_stalled_device_costs_two_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Yanıt vermeyen Hikvision: iki kanal yolu sırayla denenir, her biri R bekler; ileti yine tek ve Türkçe."""
+    monkeypatch.setattr(rec, "REQUEST_TIMEOUT_S", 0.3)
+    with _device(0.8) as (port, seen):
+        c = make_recorder(RecorderBrand.HIKVISION, "127.0.0.1", port, 554, USER, PASSWORD)
+        started = time.monotonic()
+        with c, pytest.raises(RecorderError) as e:
+            c.channels()
+        elapsed = time.monotonic() - started
+    assert e.value.kind == "unreachable" and "yanıt vermedi" in str(e.value)
+    assert seen == ["/ISAPI/ContentMgmt/InputProxy/channels", "/ISAPI/System/Video/inputs/channels"]
+    assert elapsed >= 2 * 0.3
+
+
+def test_trassir_session_retry_repeats_login_and_channels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Oturum hatası (ağ/şifre dışı) bir kez yeniden giriş + kanal listesi demektir: 4 sıralı GET."""
+    monkeypatch.setattr(rec, "REQUEST_TIMEOUT_S", 0.5)
+    routes = {"/login": b'{"success":1,"sid":"S1"}', "/channels": b'{"success":0,"error_code":"sdk_disabled"}'}
+    with _device(0.0, routes=routes) as (port, seen):
+        http_ = rec._DeviceHTTP("127.0.0.1", port, False, USER, PASSWORD)
+        c = rec.TrassirClient(http_, "127.0.0.1", 555, USER, PASSWORD)
+        with c, pytest.raises(RecorderError) as e:
+            c.channels()
+    assert e.value.kind == "trassir"
+    assert seen == ["/login", "/channels", "/login", "/channels"]
+
+
+def test_panel_recorder_template_timeout_covers_the_worst_case_with_margin() -> None:
+    """Panelin "NVR'dan şablon" süresi, bu dosyadaki yapının en kötü süresinin %25 fazlasından kısa olamaz.
+    En kötü süre: TRASSIR (HTTPS) = 2 deneme × 2 GET (giriş, kanal listesi) × 2 istek (401 sonrası yeniden)
+    × 3 aşama (bağlanma, TLS, yanıt) × R; Hikvision 2 GET × 2 × 2 × R ve Dahua 1 GET × 2 × 2 × R daha kısadır."""
+    source = (ROOT / "apps" / "dashboard" / "src" / "lib" / "views.ts").read_text(encoding="utf-8")
+    m = re.search(r"export const RECORDER_TEMPLATE_TIMEOUT_MS = ([\d_]+);", source)
+    assert m is not None, "views.ts'de RECORDER_TEMPLATE_TIMEOUT_MS bulunamadı"
+    client_s = int(m.group(1).replace("_", "")) / 1000
+    r = rec.REQUEST_TIMEOUT_S
+    trassir = 2 * 2 * 2 * 3 * r
+    hikvision = 2 * 2 * 2 * r
+    dahua = 1 * 2 * 2 * r
+    assert trassir == max(trassir, hikvision, dahua)
+    assert client_s >= 1.25 * trassir, f"{client_s} sn < 1,25 × {trassir} sn: views.ts'deki RECORDER_TEMPLATE_TIMEOUT_MS'i büyütün"

@@ -2891,3 +2891,73 @@ for (const vp of [{ width: 1280, height: 420, hidden: false }, { width: 900, hei
   });
 }
 
+/** İçeriği olan uyarılar (Next'in boş yol duyurucusu da `role=alert`) */
+const alerts = (page: Page) => page.getByRole("alert").filter({ hasText: /\S/ });
+const RECORDER_VIEW = { id: "r1", name: "Ofis NVR", layout: "4", createdAt: 6, updatedAt: 6, truncated: false, channelCount: 2,
+  tiles: [{ sourceId: "b", channelId: "1" }, { sourceId: "b", channelId: "2" }, null, null] };
+
+for (const outcome of ["şablon", "cihaz hatası"] as const) {
+  test(`NVR'dan şablon: analiz sunucusu 15 sn'den uzun sürse de istek kesilmez, sonunda gelen yanıt kullanılır (${outcome})`, async ({ page }) => {
+    await page.clock.install();
+    await mock(page, STATUS);
+    const { store } = await mockStore(page, [{ ...VIEW }]);
+    const failed: string[] = [];
+    page.on("requestfailed", (q) => failed.push(q.url()));
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let posts = 0;
+    await page.route("**/api/live/views/from-recorder", async (r) => {
+      posts += 1;
+      await gate;
+      if (outcome === "şablon") { store.push({ ...RECORDER_VIEW }); return r.fulfill({ json: RECORDER_VIEW }); }
+      return r.fulfill({ status: 502, json: { detail: "Kayıt cihazına bağlanılamadı (10.0.0.5:80: yanıt vermedi)." } });
+    });
+    await login(page);
+    await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+    const ed = await openEditor(page);
+    await ed.getByRole("combobox", { name: "NVR'dan şablon" }).selectOption("b");
+    await expect.poll(() => posts).toBe(1);
+    const add = page.locator(`#${ADD_TAB_ID}`);
+    await expect(add).toBeDisabled();                                                  // işlem sürüyor
+    await page.clock.runFor(20_000);                                                   // eski 15 sn sınırı çoktan geçti
+    expect(failed.filter((u) => u.includes("from-recorder"))).toEqual([]);             // istek iptal edilmedi
+    await expect(alerts(page)).toHaveCount(0);                                         // genel zaman aşımı iletisi yok
+    await expect(add).toBeDisabled();                                                  // hâlâ yanıt bekleniyor
+    release();
+    if (outcome === "şablon") {
+      await expect(tab(page, "Ofis NVR")).toHaveAttribute("aria-selected", "true");    // geç gelen yanıt kullanıldı
+      await expect(alerts(page)).toHaveCount(0);
+      expect(store.filter((v) => v.id === "r1")).toHaveLength(1);                      // tek şablon (çifte ad yok)
+    } else {
+      await expect(alerts(page)).toHaveText("Kayıt cihazına bağlanılamadı (10.0.0.5:80: yanıt vermedi).");   // analiz sunucusunun kendi iletisi
+    }
+    await expect(add).toBeEnabled();
+  });
+}
+
+test("NVR'dan şablon: yanıt hiç gelmezse (takılma) uzun sınırda kesilir; işlemler serbest kalır, liste yeniden alınır, Türkçe ileti çıkar", async ({ page }) => {
+  await page.clock.install();
+  await mock(page, STATUS);
+  await mockStore(page, [{ ...VIEW }]);
+  let gets = 0;
+  await page.route("**/api/live/views", (r) => { if (r.request().method() === "GET") gets += 1; return r.fallback(); });
+  const held: Route[] = [];
+  await page.route("**/api/live/views/from-recorder", (r) => { held.push(r); });
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  const ed = await openEditor(page);
+  await ed.getByRole("combobox", { name: "NVR'dan şablon" }).selectOption("b");
+  await expect.poll(() => held.length).toBe(1);
+  const add = page.locator(`#${ADD_TAB_ID}`);
+  await expect(add).toBeDisabled();
+  await page.clock.runFor(100_000);                                                    // en kötü cihaz süresine yaklaşılsa da bekler
+  await expect(add).toBeDisabled();
+  await expect(alerts(page)).toHaveCount(0);
+  const before = gets;
+  await page.clock.runFor(150_000);                                                    // 250 sn: uzun sınır (240 sn) geçti
+  await expect(page.getByRole("alert").filter({ hasText: "İstek zaman aşımına uğradı; şablonlar yeniden yüklendi." })).toBeVisible();
+  expect(gets).toBeGreaterThan(before);
+  await expect(add).toBeEnabled();
+  await held[0].fulfill({ status: 500, json: { detail: "geç" } }).catch(() => undefined);
+});
+

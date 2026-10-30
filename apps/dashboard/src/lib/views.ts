@@ -35,6 +35,20 @@ export const RELOAD_RETRY_MS = 5000;
  * bütün şablon işlemlerini sayfa yenilenene dek pasif bırakmasın
  */
 export const TEMPLATE_TIMEOUT_MS = 15_000;
+/**
+ * "NVR'dan şablon" (`views/from-recorder`) isteği için süre. Kanal listesi önbellekte değilse analiz sunucusu cihaza kendisi
+ * sorar ve kendi "… yanıt vermedi" iletisini ancak cihaz denemeleri bitince verir; istemci bundan önce keserse genel
+ * zaman aşımı çıkar, şablon sonradan oluşur ama listede görünmez (yeni deneme "… 2" çifti açar). En kötü süre
+ * (services/edge/bantvision/live/recorders.py; R = REQUEST_TIMEOUT_S = 8 sn; httpx bağlanmayı, TLS el sıkışmasını ve yanıtı
+ * ayrı ayrı R ile sınırlar):
+ *  - bir cihaz GET'i en çok 2 istektir (401 sonrası Digest/Basic yeniden deneme); istek = bağlanma R + (TLS R) + yanıt R
+ *  - Dahua: 1 GET, HTTP: 2 × (R + R) = 32 sn
+ *  - Hikvision: 2 GET sırayla (iki kanal yolu), HTTP: 2 × 32 = 64 sn
+ *  - TRASSIR: giriş + kanal listesi = 2 GET, HTTPS: 2 × 2 × (R + R + R) = 96 sn; oturum düşmüşse bir kez daha: 192 sn
+ * En kötü 192 sn; %25 payla 240 sn (panel vekilinin undici başlık sınırı 300 sn'nin altında). Gerçekten takılan istek de
+ * bu sürede kesilir (`busy` serbest kalır). services/edge/tests/test_recorders.py bu değeri R'ye karşı denetler.
+ */
+export const RECORDER_TEMPLATE_TIMEOUT_MS = 240_000;
 /** Şablon isteği zaman aşımına uğradı; işlem sunucuda tamamlanmış olabileceğinden liste yeniden alınır */
 export const TIMEOUT_RELOADED = "İstek zaman aşımına uğradı; şablonlar yeniden yüklendi.";
 export const TIMEOUT_NOT_RELOADED = "İstek zaman aşımına uğradı; şablonlar yeniden yüklenemedi.";
