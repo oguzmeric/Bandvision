@@ -2860,3 +2860,34 @@ test("odak: araç çubuğundaki Kaydet ya da Geri al basılınca pasifleşirse o
   await expect(toolbarUndo).toBeDisabled();
   await expect(editorButton(page)).toBeFocused();
 });
+
+// ---- Son kalan düzeltmeler: eski odak izi, "NVR'dan şablon" süresi, oturum düşünce taslak yazımı
+
+/** `hidden`: sayfa sonuna kaydırınca araç çubuğu görünümden çıkar (900×400); 1280×420'de sayfa az kayar, araç çubuğu görünür kalır */
+for (const vp of [{ width: 1280, height: 420, hidden: false }, { width: 900, height: 400, hidden: true }]) {
+  test(`odak: araç çubuğunda Kaydet'e odaklanıp boş yere tıklandıktan sonra Ctrl+Z ile Kaydet pasifleşirse odak sayfada kalır ve sayfa kaymaz (${vp.width}×${vp.height})`, async ({ page }) => {
+    await page.setViewportSize(vp);
+    await mock(page, STATUS);
+    await mockStore(page, [VIEW]);
+    await login(page);
+    const tiles = page.getByTestId("watch-tile");
+    await expect(tiles.nth(0)).toContainText("Kapı");
+    const toolbarSave = page.getByRole("button", { name: "Kaydet", exact: true });
+    await tiles.nth(0).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Boşalt" }).click();                      // kaydedilmemiş düzenleme: Kaydet açık
+    await expect(toolbarSave).toBeEnabled();
+    await toolbarSave.focus();                                                         // araç çubuğunda son odaklanan düğme
+    await expect(toolbarSave).toBeFocused();
+    await page.getByRole("heading", { name: "Canlı izleme" }).click();                 // odaklanamayan yere tıklanır: odak sayfaya düşer
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    const scrolled = await page.evaluate(() => { window.scrollTo(0, document.documentElement.scrollHeight); return window.scrollY; });
+    expect(scrolled).toBeGreaterThan(0);
+    const above = await editorButton(page).evaluate((el) => el.getBoundingClientRect().bottom < 0);
+    expect(above).toBe(vp.hidden);                                                     // araç çubuğu görünümün üstünde mi (odak ona geçse sayfa kayardı)
+    await page.keyboard.press("Control+z");                                            // son adım geri alındı: kayıtlı hâl, Kaydet pasif
+    await expect(toolbarSave).toBeDisabled();
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);   // odak "Şablon editörü" düğmesine atlamadı
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);                  // sayfa kaymadı
+  });
+}
+

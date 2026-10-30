@@ -320,17 +320,16 @@ export default function WatchView() {
   // sunucudaki taslak (oturum hâlâ geçerliyken) silinir
   /**
    * Araç çubuğunda en son odaklanan düğme (Kaydet, Geri al): basılınca pasifleşirse (kaydedildi, son adım geri alındı) odak
-   * sayfaya düşmesin, "Şablon editörü" düğmesine geçsin
+   * sayfaya düşmesin, "Şablon editörü" düğmesine geçsin. Yalnız o düğme pasifleştiği anda hâlâ odaktaysa (`activeElement`):
+   * odak sonradan başka yere ya da sayfaya gittiyse (boş yere tıklandı) Ctrl+Z gibi bir işlem odağı geri çalmaz, sayfayı
+   * da kaydırmaz. Düğme pasifleşince, odakta olsun olmasın, iz bırakılır (her pasifleşme tek karar).
    */
   const toolbarFocus = useRef<HTMLButtonElement | null>(null);
   useLayoutEffect(() => {
     const el = toolbarFocus.current;
     if (!el || !el.disabled) return;
-    const at = document.activeElement;
-    if (at === el || !at || at === document.body) {
-      toolbarFocus.current = null;
-      document.getElementById(EDITOR_ID)?.focus();
-    }
+    toolbarFocus.current = null;
+    if (document.activeElement === el) document.getElementById(EDITOR_ID)?.focus();
   });
   /** Sunucudaki taslağı hemen silen işlev (useDraft'tan, aşağıda) */
   const releaseRef = useRef<() => void>(() => undefined);

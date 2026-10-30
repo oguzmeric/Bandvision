@@ -257,7 +257,7 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
         )}
         {tier === "tiny" && dot("absolute right-1 top-1 h-2 w-2")}
       </div>
-      {/* En küçük kutu: köşedeki nokta kutudan taşardı; küçük nokta (0.375 rem) kutunun tam ortasında, kutu o kadar oldukça içinde */}
+      {/* En küçük kutu: köşedeki nokta kutudan taşardı; nokta kutunun tam ortasındadır: 0.5 rem, kutu o kadar küçükse kısa kenarından 2 px küçük (en az 5 px; bkz. `micro`), yani kutunun içinde kalır */}
       {tier === "micro" && dot("absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2", micro)}
     </div>
   );
