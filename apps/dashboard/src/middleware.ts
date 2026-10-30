@@ -21,7 +21,11 @@ export async function middleware(req: NextRequest) {
   if (req.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Giriş gerekli." }, { status: 401 });
   }
-  const url = req.nextUrl.clone();
+  // Giriş formu İÇ yeniden yazmayla: hedef, isteğin geldiği kökende olmalı. `req.url` sunucunun kendi adresidir
+  // (next.config `skipMiddlewareUrlNormalize`); `req.nextUrl` ise 127.0.0.1'i "localhost" yapar. Köken farklı görününce Next
+  // yeniden yazmayı dış adres sanıp kendine HTTP vekil isteği açıyordu (yük altında "Failed to proxy … ECONNREFUSED" →
+  // giriş sayfası 500; istemci giderken vekilde "aborted ECONNRESET").
+  const url = new URL(req.url);
   url.pathname = "/login";
   url.search = `?next=${encodeURIComponent(req.nextUrl.pathname + req.nextUrl.search)}`;
   return NextResponse.rewrite(url);

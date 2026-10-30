@@ -1839,22 +1839,32 @@ for (const late of [false, true]) {
   });
 }
 
-test("kaydedilmemiş değişiklik: Çıkış bir kez sorar ve oturumu kapatır", async ({ page }) => {
-  await mock(page, STATUS);
-  await login(page);
-  const tiles = page.getByTestId("watch-tile");
-  await expect(tiles.nth(0)).toContainText("Kapı");
-  await camera(page, "Depo").dragTo(tiles.nth(3));
-  // oturum kapatma isteği 2,5 sn sürer: sayfa ancak sonra değişir (onay bir süre sonra düşse yeniden sorulurdu)
-  await page.route("**/api/logout", async (r) => { await new Promise((res) => setTimeout(res, 2500)); await r.continue(); });
-  const dialogs: string[] = [];
-  page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); void d.accept(); });
-  await expect.poll(() => stored(page)).not.toBeNull();
-  await page.getByRole("button", { name: "Çıkış" }).click();
-  await expect(page).toHaveURL(/\/login/);
-  expect(dialogs).toEqual([`confirm: ${UNSAVED}`]);
-  expect(await stored(page)).toBeNull();                                              // çıkışta saklanan düzenleme silindi
-});
+for (const early of [false, true]) {
+  test(`kaydedilmemiş değişiklik: Çıkış bir kez sorar ve oturumu kapatır; taslak oturum kapanmadan silinir${early ? " (taslak daha açılmadan Çıkış: sonradan da açılmaz)" : ""}`, async ({ page }) => {
+    const drafts = await mock(page, STATUS);
+    await login(page);
+    const tiles = page.getByTestId("watch-tile");
+    await expect(tiles.nth(0)).toContainText("Kapı");
+    // oturum kapatma isteği 2,5 sn sürer: sayfa ancak sonra değişir (onay bir süre sonra düşse yeniden sorulurdu)
+    const order: string[] = [];
+    page.on("request", (q) => { if (/\/api\/(logout|live\/views\/drafts)/.test(q.url())) order.push(`${q.method()} ${new URL(q.url()).pathname}`); });
+    await page.route("**/api/logout", async (r) => { await new Promise((res) => setTimeout(res, 2500)); await r.continue(); });
+    const dialogs: string[] = [];
+    page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); void d.accept(); });
+    await camera(page, "Depo").dragTo(tiles.nth(3));
+    await expect.poll(() => stored(page)).not.toBeNull();
+    if (!early) await expect.poll(() => drafts.store.size).toBe(1);                     // taslak açıldı
+    await page.getByRole("button", { name: "Çıkış" }).click();
+    await expect(page).toHaveURL(/\/login/);
+    expect(dialogs).toEqual([`confirm: ${UNSAVED}`]);
+    expect(await stored(page)).toBeNull();                                              // çıkışta saklanan düzenleme silindi
+    // taslak, oturum çerezi silinmeden (Çıkış isteğinden önce) silindi; sayfa kapanırken girişsiz silme isteği gitmedi
+    expect(drafts.store.size).toBe(0);
+    expect(order.at(-1)).toBe("POST /api/logout");
+    if (!early) expect(order).toEqual(["POST /api/live/views/drafts", "DELETE /api/live/views/drafts/draft-1", "POST /api/logout"]);
+    else expect(order.filter((o) => o.startsWith("DELETE"))).toEqual(order.filter((o) => o === "POST /api/live/views/drafts").map(() => "DELETE /api/live/views/drafts/draft-1"));
+  });
+}
 
 /** Alarmlar sayfasına gidip Canlı izlemeye döner (Geri ile dönülecek bir önceki sayfa olsun) */
 async function viaAlarms(page: Page) {

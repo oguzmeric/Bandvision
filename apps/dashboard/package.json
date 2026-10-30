@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
-    "test:unit": "node --test src/lib/accessCore.test.mjs src/lib/hostCheck.test.mjs src/lib/layoutGrid.test.mjs src/lib/templateEdit.test.mjs src/lib/systemStatus.test.mjs src/lib/plainStyle.test.mjs"
+    "test:unit": "node --test src/lib/accessCore.test.mjs src/lib/hostCheck.test.mjs src/lib/layoutGrid.test.mjs src/lib/templateEdit.test.mjs src/lib/systemStatus.test.mjs src/lib/panelCommit.test.mjs src/lib/plainStyle.test.mjs"
   },
   "dependencies": {
     "next": "15.5.27",

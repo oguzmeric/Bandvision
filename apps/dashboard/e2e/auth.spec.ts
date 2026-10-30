@@ -45,3 +45,16 @@ test("giriş muafiyeti yalnızca /login ve /api/login: benzer adlı yollar giri�
   await expect(page.getByLabel("Şifre")).toBeVisible();
   expect((await request.post("/api/login", { data: { password: "yanlis" } })).status()).toBe(401);   // muaf: 401 "Şifre yanlış."
 });
+
+test("girişsiz sayfa giriş formuna İÇ yeniden yazmayla gider (Next kendine vekil istek açmaz): aynı kökende, göreli hedef", async ({ request }) => {
+  // Vekil (dış) yeniden yazmada hedef mutlak adres olurdu ("http://localhost:3100/login…"): Next kendine HTTP isteği açar,
+  // yük altında "Failed to proxy … ECONNREFUSED" ile giriş sayfası 500 dönerdi.
+  for (const [path, next] of [["/watch", "%2Fwatch"], ["/live?tur=kisi", "%2Flive%3Ftur%3Dkisi"]]) {
+    const res = await request.get(path, { maxRedirects: 0 });
+    expect(res.status(), path).toBe(200);
+    expect(res.headers()["x-middleware-rewrite"], path).toBe(`/login?next=${next}`);
+    expect(await res.text(), path).toContain("Giriş · BandVision");
+  }
+  const rsc = await request.get("/alarms?_rsc=abc", { headers: { RSC: "1" }, maxRedirects: 0 });   // istemci tarafı gezinme
+  expect(rsc.headers()["x-middleware-rewrite"]).toMatch(/^\/login\?next=%2Falarms/);
+});

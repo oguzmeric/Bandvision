@@ -276,9 +276,12 @@ export default function WatchView() {
     });
   }, [saved, currentId]);
 
-  // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, Çıkış, sayfayı kapatma); çıkış onaylanınca saklanan düzenleme silinir
+  // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, Çıkış, sayfayı kapatma); çıkış onaylanınca saklanan düzenleme ve
+  // sunucudaki taslak (oturum hâlâ geçerliyken) silinir
+  /** Sunucudaki taslağı hemen silen işlev (useDraft'tan, aşağıda) */
+  const releaseRef = useRef<() => void>(() => undefined);
   useEffect(() => {
-    guard.setDirty(dirty, () => { dropped.current = true; leaves.current += 1; clearUnsaved(); });
+    guard.setDirty(dirty, () => { dropped.current = true; leaves.current += 1; clearUnsaved(); releaseRef.current(); });
   }, [dirty, guard]);
   useEffect(() => () => guard.setDirty(false), [guard]);
 
@@ -345,7 +348,8 @@ export default function WatchView() {
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
   const draftBody = useMemo(() => (dirty && present && layout ? { layout: present.layout, tiles: present.tiles } : null),
     [dirty, present, layout]);
-  const { draftId, error: draftError, lost } = useDraft(currentId, draftBody);
+  const { draftId, error: draftError, lost, release } = useDraft(currentId, draftBody, problem === "auth");
+  releaseRef.current = release;
   const streamId = dirty && draftId ? draftId : view?.id ?? null;
 
   // Şablon başka bir cihazda düzenlendi: aynı şablonun durumu farklı düzen ya da kutularda farklı kamera bildirir

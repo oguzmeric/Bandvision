@@ -30,8 +30,8 @@ function dropDraft(id: string): void {
  * kabul etmiyorsa (503: ör. bütün tarayıcılarda en çok 32 taslak açık) ileti `error`'a yazılır ve STREAM_RETRY_MS sonra
  * yeniden denenir; başarınca ileti kalkar.
  */
-export function useDraft(owner: string | null, edit: DraftBody | null): {
-  draftId: string | null; error: string | null; lost: (id: string) => void;
+export function useDraft(owner: string | null, edit: DraftBody | null, sessionLost = false): {
+  draftId: string | null; error: string | null; lost: (id: string) => void; release: () => void;
 } {
   const [current, setCurrent] = useState<{ owner: string; id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +45,13 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
   const again = useRef(false);
   const alive = useRef(true);
   const retry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Onaylı çıkış (`release`): sayfa gidiyor, yeni taslak açılmaz */
+  const released = useRef(false);
+  /** Oturum düştü (401): sayfa kapanırken silme isteği gönderilmez (girişsiz istek 401 alırdı; taslak 10 dk'da silinir) */
+  const noSession = useRef(sessionLost);
+  noSession.current = sessionLost;
+  /** Sayfadan çıkarken (kapanış, söküm) taslağı siler; oturum düştüyse göndermez */
+  const leaving = (id: string) => { if (!noSession.current) dropDraft(id); };
 
   const sync = useCallback(async () => {
     if (running.current) { again.current = true; return; }
@@ -54,7 +61,7 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
       do {
         again.current = false;
         if (!alive.current) break;
-        const w = want.current;
+        const w = released.current ? null : want.current;
         // İstenmiyor ya da başka sekmenin taslağı: eskisi silinir
         if (draft.current && (w === null || draft.current.owner !== w.owner)) {
           dropDraft(draft.current.id);
@@ -77,7 +84,8 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
           sent.current = w.body;
           rejected.current = null;
           setError(null);
-          if (want.current !== w) again.current = true;  // bu sırada içerik değişti: güncel hâli de yazılır
+          // bu sırada içerik değişti (güncel hâli de yazılır) ya da çıkış onaylandı (yeni açılan taslak silinir)
+          if (want.current !== w || released.current) again.current = true;
         } catch (e) {
           if (e instanceof ApiError && e.status === 503) {
             // analiz sunucusu şimdilik kabul etmiyor ("Çok fazla açık taslak var…"): söylenir ve yeniden denenir
@@ -99,7 +107,7 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
     } finally {
       running.current = false;
     }
-    if (!alive.current && draft.current) { dropDraft(draft.current.id); draft.current = null; }
+    if (!alive.current && draft.current) { leaving(draft.current.id); draft.current = null; }
   }, []);
 
   // İçerik değişince (durulduktan sonra) taslağa yazılır; vazgeçince ya da sekme değişince hemen
@@ -123,18 +131,25 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
   }, [key, sync]);
 
   // Sayfadan çıkınca (ve sekme kapanırken) taslak silinir. Sayfa geri/ileri önbelleğinden dönerse kimlik durur: durum
-  // yoklaması 404 alır ve `lost` yenisini açar.
+  // yoklaması 404 alır ve `lost` yenisini açar (onaylı çıkıştan sonra dönülmüşse de: taslak yeniden açılabilir).
   useEffect(() => {
     alive.current = true;
-    const onHide = () => { if (draft.current) dropDraft(draft.current.id); };
+    const onHide = () => { if (draft.current) leaving(draft.current.id); };
+    const onShow = (e: PageTransitionEvent) => {
+      if (!e.persisted || !released.current) return;
+      released.current = false;
+      void sync();
+    };
     window.addEventListener("pagehide", onHide);
+    window.addEventListener("pageshow", onShow);
     return () => {
       alive.current = false;
       clearTimeout(retry.current);
       window.removeEventListener("pagehide", onHide);
-      if (draft.current) { dropDraft(draft.current.id); draft.current = null; sent.current = null; }
+      window.removeEventListener("pageshow", onShow);
+      if (draft.current) { leaving(draft.current.id); draft.current = null; sent.current = null; }
     };
-  }, []);
+  }, [sync]);
 
   /** Çağıran taslağın sunucuda olmadığını gördü (durum 404): yenisi açılır */
   const lost = useCallback((gone: string) => {
@@ -144,5 +159,17 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
     void sync();
   }, [sync]);
 
-  return { draftId: current && current.owner === owner ? current.id : null, error, lost };
+  /**
+   * Sayfadan onaylı çıkış (menü bağlantısı, Çıkış): taslak HEMEN, oturum hâlâ geçerliyken silinir ve sayfa gidene dek yenisi
+   * açılmaz (süren açma isteği bitince o taslak da silinir). Çıkış'ta oturum çerezi az sonra silinir; taslak sayfa
+   * kapanırken (pagehide) silinmeye bırakılsaydı istek girişsiz gider (401), taslak sunucuda 10 dk kalırdı; tarayıcı bağlantıyı
+   * yarıda keserse Next bu girişsiz isteği "uncaughtException: aborted ECONNRESET" diye günlüğe yazıyordu.
+   */
+  const release = useCallback(() => {
+    released.current = true;
+    clearTimeout(retry.current);
+    void sync();
+  }, [sync]);
+
+  return { draftId: current && current.owner === owner ? current.id : null, error, lost, release };
 }
