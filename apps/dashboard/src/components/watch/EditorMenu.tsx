@@ -17,6 +17,8 @@ const ICONS: Record<string, { cols: number; rows: number; cells?: Array<[number,
   "12": { cols: 4, rows: 3 }, "5x5": { cols: 5, rows: 5 }, "8x8": { cols: 8, rows: 8 },
 };
 const DEFAULT_GRID = { rows: 6, cols: 8 };
+/** "Şablon editörü" düğmesinin DOM kimliği ("+" pasifken odak buraya) */
+export const EDITOR_ID = "bv-editor";
 
 function LayoutIcon({ id }: { id: string }) {
   const icon = ICONS[id];
@@ -87,7 +89,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
          onKeyDown={(e) => { if (open && e.key === "Escape") { e.stopPropagation(); close(true); } }}
          // Odak dışarıdaki bir öğeye geçti: kapanır (odak kaybolduysa, ör. düğme pasifleşti, açık kalır)
          onBlur={(e) => { if (open && e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
-      <button ref={buttonRef} type="button" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? `${uid}-menu` : undefined}
+      <button ref={buttonRef} id={EDITOR_ID} type="button" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? `${uid}-menu` : undefined}
               disabled={disabled} onClick={() => setOpen((o) => !o)} className="pl-btn">
         Şablon editörü <span aria-hidden="true">▾</span>
       </button>

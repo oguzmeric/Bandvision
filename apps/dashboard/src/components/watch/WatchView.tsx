@@ -17,10 +17,10 @@ import {
 import CameraList, { type CamState } from "./CameraList";
 import ConnectionProblem from "./ConnectionProblem";
 import ContextMenu, { type MenuAction } from "./ContextMenu";
-import EditorMenu from "./EditorMenu";
+import EditorMenu, { EDITOR_ID } from "./EditorMenu";
 import NameDialog from "./NameDialog";
 import SingleCamera, { type SingleMode } from "./SingleCamera";
-import TemplateTabs, { ADD_ID, PANEL_ID, tabDomId, type TabItem } from "./TemplateTabs";
+import TemplateTabs, { ADD_ID, PANEL_ID, TABLIST_ID, tabDomId, type TabItem } from "./TemplateTabs";
 import TileOverlay, { type TileDrop, type TileMove } from "./TileOverlay";
 import { useDraft } from "./useDraft";
 import { usePhoneLandscape } from "./usePhoneLandscape";
@@ -173,10 +173,16 @@ export default function WatchView() {
   /** Geri yükleme bildirimi ("Değişiklikleri at" ile) */
   const [restored, setRestored] = useState<string | null>(null);
   /** Bildirim kalkınca odaklanacak öğenin DOM kimliği: açık sekme, sekme kalmadıysa "+" ("Değişiklikleri at" düğmesiyle odak
-   * sayfaya düşmesin) */
+   * sayfaya düşmesin; "+" pasifse Şablon editörü düğmesi, o da pasifse sekme listesi) */
   const focusTab = useRef<string | null>(null);
   /** Kullanıcı çıkmayı onayladı (bağlantı, Çıkış): saklanan düzenleme silindi, sayfa kapanana dek yeniden yazılmaz */
   const dropped = useRef(false);
+  /**
+   * Düzenlemeden ayrılma sayacı: sekme değişince, "Değişiklikleri at" ile ve onaylı çıkışta (bağlantı, Çıkış) artar.
+   * Kaydet'in denetim isteği sürerken artarsa ne sorulur ne yazılır. Düzenlemenin nesne kimliğine bakılmaz: istek
+   * sürerken düzenleme sürdüyse Kaydet'e basıldığı andaki hâl yazılır, sonraki düzenlemeler kaydedilmemiş kalır.
+   */
+  const leaves = useRef(0);
 
   /**
    * Şablon ve düzen listesini alır; başarıyı döndürür. Seçili şablon silinmişse kalanlardan birine geçilir; ama
@@ -240,6 +246,9 @@ export default function WatchView() {
     setNote(null);
     if (currentId && !isLocal(currentId)) remember(currentId);
   }, [currentId]);
+  // Sekme değişimi düzenlemeden ayrılmaktır; işleme anında (çizimle birlikte) sayılır: süren Kaydet'in yanıtı bundan
+  // önce işlenemez
+  useLayoutEffect(() => { leaves.current += 1; }, [currentId]);
   // Kayıtlı şablon değişti (başka cihazda düzenlendi): düzenleme yoksa (kayıtlı hâl gösteriliyordu) yenisi izlenir;
   // kaydedilmemiş düzenleme varsa korunur. Kaydet sonrası (düzenlenen = kayıtlı) geçmiş de korunur. Yalnız AYNI sekmenin
   // önceki kayıtlı hâline bakılır: sekme değişince (ör. geri yüklenen düzenleme, hatırlanan başka sekmenin kayıtlı hâline
@@ -257,7 +266,7 @@ export default function WatchView() {
 
   // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, Çıkış, sayfayı kapatma); çıkış onaylanınca saklanan düzenleme silinir
   useEffect(() => {
-    guard.setDirty(dirty, () => { dropped.current = true; clearUnsaved(); });
+    guard.setDirty(dirty, () => { dropped.current = true; leaves.current += 1; clearUnsaved(); });
   }, [dirty, guard]);
   useEffect(() => () => guard.setDirty(false), [guard]);
 
@@ -314,7 +323,11 @@ export default function WatchView() {
     const id = focusTab.current;
     if (!id) return;
     focusTab.current = null;
-    document.getElementById(id)?.focus();
+    // Hedef pasifse (ör. "+" kayıt sürerken) ya da yoksa: Şablon editörü düğmesi, o da pasifse sekme listesi
+    for (const el of [id, EDITOR_ID, TABLIST_ID].map((x) => document.getElementById(x))) {
+      el?.focus();
+      if (el && document.activeElement === el) return;
+    }
   }, [restored, currentId]);
 
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
@@ -549,9 +562,11 @@ export default function WatchView() {
   const clearMessages = () => { setInfo(null); setError(null); };
   /**
    * Geri yüklenen değişiklikleri atar: şablon kayıtlı hâline döner; kaydedilmemiş yeni sekme kapanır. Bildirim düğmesiyle
-   * birlikte kalktığından odak açık sekmeye, hiç sekme kalmadıysa "+" düğmesine geçer (sayfaya düşmez).
+   * birlikte kalktığından odak açık sekmeye, hiç sekme kalmadıysa "+" düğmesine geçer ("+" pasifse Şablon editörü, o da
+   * pasifse sekme listesi; sayfaya düşmez). Atmak düzenlemeden ayrılmaktır: süren Kaydet yazmaz.
    */
   const discardRestored = () => {
+    leaves.current += 1;
     setRestored(null);
     const to = isNew ? views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null : currentId;
     if (isNew) setCurrentId(to);
@@ -574,8 +589,11 @@ export default function WatchView() {
     setSelected(null);
     setNote(null);
   };
-  /** İşlemin başladığı an: sekme ve düzenleme durumu (`adopt` istek sürerken bir şey değişti mi diye bakar) */
-  const startOf = () => ({ origin: live.current.currentId, edit: live.current.edit });
+  /**
+   * İşlemin başladığı an: sekme, düzenleme durumu ve ayrılma sayacı (`adopt` ve Kaydet istek sürerken bir şey değişti mi
+   * diye bakar)
+   */
+  const startOf = () => ({ origin: live.current.currentId, edit: live.current.edit, leaves: leaves.current });
   /**
    * Sunucudan dönen yeni şablonu listeye ekler ve (uygunsa) ona geçer; geçildiyse true. `start`: işlemin başladığı
    * sekme ve düzenleme durumu; `carry`: o sekmenin düzenleme geçmişi yeni şablona taşınır (Kaydet, Farklı kaydet).
@@ -621,12 +639,17 @@ export default function WatchView() {
       // sorulur (Vazgeç: yazılmaz, düzenleme kalır). Sunucuda sürüm koşulu yok: okuma ile yazma arasında kısa bir pencere kalır.
       const base = edit && edit.tabId === view.id ? edit.base : null;
       const cur = (await api<ViewTemplate[]>("views")).find((x) => x.id === view.id);
-      // İstek sürerken başka sekmeye geçildiyse ya da düzenleme atıldıysa (kullanıcı düzenlemeyi bıraktı) ne sorulur ne yazılır
-      if (live.current.currentId !== origin || live.current.edit !== start.edit) return;
+      // İstek sürerken düzenlemeden ayrıldıysa (sekme değişti, değişiklikler atıldı, onaylı çıkış) ne sorulur ne yazılır.
+      // Yalnız düzenleme sürdüyse Kaydet'e basıldığı andaki hâl (`body`) yazılır. Soru (confirm) sayfayı bekletir: soru ile
+      // PUT arasında ayrılınamaz
+      if (leaves.current !== start.leaves) return;
       if (!cur) { gone(new Error(NOT_FOUND)); return; }
       if (base !== null && cur.updatedAt !== base && !window.confirm(CHANGED_ELSEWHERE)) return;
       try {
         const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
+        // Kendi kaydımız: kayıtlı hâlin değişmesi "başka yerde değişti, düzenleme yoksa izle" sayılmaz; istek sürerken yapılan
+        // düzenleme (kayıtlı hâle geri alma da) yeni kayıtlı hâlin üstünde kaydedilmemiş olarak kalır
+        if (live.current.currentId === v.id) prevSaved.current = { id: v.id, draft: { layout: v.layout, tiles: v.tiles, name: v.name } };
         setViews((vs) => vs.map((x) => (x.id === v.id ? v : x)));
         setEdit((e) => (e && e.tabId === v.id ? { ...e, base: v.updatedAt } : e));     // kaydedilen hâl yeni temel
       } catch (e) {

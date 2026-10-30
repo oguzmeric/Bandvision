@@ -10,6 +10,8 @@ export const tabDomId = (id: string) => `bv-tab-${id}`;
 export const PANEL_ID = "bv-watch-panel";
 /** "+" (Yeni şablon) düğmesinin DOM kimliği (sekme kalmayınca odak buraya) */
 export const ADD_ID = "bv-tab-add";
+/** Sekme listesinin DOM kimliği: odaklanacak düğmelerin hepsi pasifken odak buraya (sayfaya düşmesin) */
+export const TABLIST_ID = "bv-tablist";
 
 /**
  * Şablon sekmeleri (TRASSIR gibi üstte yan yana; taslak duzen.html): tıklayınca o şablona geçilir, sonda "+" yeni şablon,
@@ -42,7 +44,9 @@ export default function TemplateTabs({ tabs, current, onSelect, onAdd, onMenu, a
   return (
     <div className="flex min-w-0 items-stretch border border-pl-line bg-pl-head">
       <div className="flex min-w-0 flex-1 overflow-x-auto" data-testid="watch-tabs">
-        <div ref={listRef} role="tablist" aria-label="Şablonlar" className="flex">
+        {/* Kodla odaklanabilir (sekme sırasında değil): odak yedeği; boşken odakta genişler ki odak çerçevesi görünsün */}
+        <div ref={listRef} id={TABLIST_ID} role="tablist" aria-label="Şablonlar" tabIndex={-1}
+             className="flex focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent empty:focus-visible:min-w-6">
           {tabs.map((t) => {
             const on = t.id === current;
             return (
