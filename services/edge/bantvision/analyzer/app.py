@@ -129,7 +129,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
         live.notifier.stop()
 
-    app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan)
+    # Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz kalır: API belge sayfaları (/docs, /redoc) ve şema
+    # (/openapi.json) sunulmaz. Anahtarsız (yerel geliştirme) açıktır.
+    no_docs: dict[str, Any] = {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.token else {}
+    app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan, **no_docs)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
 
     @app.exception_handler(RequestValidationError)

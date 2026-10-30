@@ -8,6 +8,7 @@ import pathlib
 import subprocess
 import time
 import tomllib
+import warnings
 from typing import Any
 
 import pytest
@@ -237,3 +238,36 @@ def test_system_status_commit_from_env(tmp_path: pathlib.Path, monkeypatch: pyte
     monkeypatch.setenv("BV_COMMIT", "abc1234")
     with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["commit"] == "abc1234"
+
+
+API_DOCS = ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json")
+
+
+def test_api_docs_not_served_with_token(tmp_path: pathlib.Path) -> None:
+    """Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz'dir: API belge sayfaları ve şema sunulmaz."""
+    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+        for path in API_DOCS:
+            assert c.get(path).status_code == 404, path
+            assert c.get(path, headers={"Authorization": "Bearer gizli"}).status_code == 404, path
+        assert c.get("/healthz").status_code == 200
+        assert c.get("/api/v1/system/status").status_code == 401
+
+
+def test_api_docs_served_without_token(tmp_path: pathlib.Path) -> None:
+    """Anahtarsız (yerel geliştirme) belge sayfaları eskisi gibi açık."""
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        for path in API_DOCS:
+            assert c.get(path).status_code == 200, path
+        assert "/api/v1/system/status" in c.get("/openapi.json").json()["paths"]
+
+
+def test_openapi_schema_has_no_warnings_and_unique_operation_ids(tmp_path: pathlib.Path) -> None:
+    """Şema üretimi uyarısızdır: GET ve HEAD aynı işlem kimliğini paylaşmaz (alarm kaydı ve olay resmi)."""
+    app = create_app(Settings(data_dir=tmp_path))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        schema = app.openapi()
+    ops = [op["operationId"] for item in schema["paths"].values() for op in item.values()]
+    assert len(ops) == len(set(ops))
+    for path in ("/api/v1/live/alarms/{alarm_id}/clip.webm", "/api/v1/live/alarms/{alarm_id}/image.jpg"):
+        assert set(schema["paths"][path]) == {"get", "head"}, path

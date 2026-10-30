@@ -1280,7 +1280,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Alarm bulunamadı.")
         return manager.alarms.get(alarm_id) or {}
 
-    @r.api_route("/alarms/{alarm_id}/clip.webm", methods=["GET", "HEAD"])
+    # GET ve HEAD ayrı yollar: tek yolda iki yöntem şemada aynı işlem kimliğini alıyordu ("Duplicate Operation ID")
+    @r.get("/alarms/{alarm_id}/clip.webm")
+    @r.head("/alarms/{alarm_id}/clip.webm")
     def alarm_clip(alarm_id: str) -> FileResponse:
         """İhlal anının kaydı (VP8 WebM). Tarayıcının video oynatıcısı ileri/geri sarmak için `Range` ister: 206 ve
         `Content-Range` (Starlette FileResponse); kapsam dışı aralık 416. Dosya bu arada silinmişse (7 gün temizliği,
@@ -1294,7 +1296,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Olay kaydı yok (hazırlanıyor, 7 günü geçti ya da alınamadı).")
         return FileResponse(path, media_type="video/webm", headers={"Cache-Control": "no-store"}, stat_result=st)
 
-    @r.api_route("/alarms/{alarm_id}/image.jpg", methods=["GET", "HEAD"])
+    @r.get("/alarms/{alarm_id}/image.jpg")
+    @r.head("/alarms/{alarm_id}/image.jpg")
     def alarm_image(alarm_id: str) -> Response:
         jpeg = manager.alarms.image_bytes(alarm_id)
         if jpeg is None:
