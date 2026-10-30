@@ -229,7 +229,7 @@ Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran k
   - 128 kutu, 128 alt + 2 ana okuyucu, 1920×1080 tuval ve saniyede 10 tuval tasarım sınırlarıdır, ölçülmüş sonuç değildir.
 - **Bilinen sınırlar:**
   - Şablonlar web ile iPhone arasında eşitlenmez; iPhone N×M kimliğini okumaz.
-  - Tarayıcının Geri/İleri tuşu sormaz: kaydedilmemiş değişiklik bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir.
+  - Uygulama içindeki Geri/İleri sormaz (sayfa belgesinden çıkan Geri ise tarayıcının kendi "siteden ayrıl" sorusunu çıkarır): kaydedilmemiş değişiklik bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir.
   - Kaydet'in "başka yerde değiştirildi" denetimi panelde yapılır; sunucuda sürüm koşulu yok, okuma ile yazma arasında kısa bir pencere kalır.
   - Kamera listesinde ızgarada olmayan ve analizi olmayan kameranın durumu bilinmez (gri nokta): izleme için okuyucu açılmaz.
 

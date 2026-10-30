@@ -38,7 +38,7 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 | `GET` | `/api/v1/system/status` | Durum şeridi ve Hakkında için: `{cpuPercent, uptimeS, version, commit}` (bkz. "Panel kabuğu" → "Sistem durumu") |
 | `GET` | `/healthz` | Sağlık |
 
-Güvenlik: `ANALYZER_TOKEN` tanımlıysa `Authorization: Bearer <token>` zorunlu (`/healthz` hariç; panelin sunucu tarafı çağırır; tarayıcıya verilmez). Yükleme sınırı `ANALYZER_MAX_UPLOAD_MB` (varsayılan 2048), video olmayan dosya reddedilir. CORS: `ANALYZER_CORS_ORIGINS`.
+Güvenlik: `ANALYZER_TOKEN` tanımlıysa `Authorization: Bearer <token>` zorunlu (`/healthz` hariç; panelin sunucu tarafı çağırır; tarayıcıya verilmez). Anahtar tanımlıyken API belge sayfaları (`/docs`, `/redoc`) ve şema (`/openapi.json`) sunulmaz (`404`); yalnızca anahtarsız yerel geliştirmede açıktır. Yükleme sınırı `ANALYZER_MAX_UPLOAD_MB` (varsayılan 2048), video olmayan dosya reddedilir. CORS: `ANALYZER_CORS_ORIGINS`.
 
 ## Panel kabuğu: yazılı menü, durum şeridi, Hakkında (sade arayüz)
 Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun: solda yazılı, gruplu menü; sağda süssüz sayfalar. Tasarım: `docs/superpowers/specs/2026-10-28-sade-arayuz-design.md` (bilgisayar yol haritasının 1. projesi). Bütün panel sayfaları aynı kabuktadır (`app/(panel)/layout.tsx`): solda menü, sağda sayfa; alarm şeridi sayfanın üstünde, durum şeridi en altta (ikisi de yapışkan). Sayfalar düz başlık, form satırları ve tablolardır: gölge, büyük yuvarlak köşe, yarı saydam zemin ve lavanta renkler yoktur. Eski kart görünümünün izlerini `src/lib/plainStyle.test.mjs` bekçisi (birim testi) panel sayfalarında, giriş sayfasında ve bileşenlerinde yakalar.
@@ -81,11 +81,11 @@ Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun
 - Analiz sunucusunun sürümü kurulu `bantvision-edge` paketinin sürümüdür; paket kurulu değilse "?".
 
 **Sistem durumu** (durum şeridi ve Hakkında'nın kaynağı):
-- **Panel `GET /api/system`** (`app/api/system/route.ts`). Durum şeridi her panel sayfasında 5 sn'de bir çağırır (önceki istek bitmeden yenisi gitmez); Hakkında sayfası açılışta bir kez çağırır. Panelin sunucu tarafı analiz sunucusunun `GET /api/v1/system/status` ucunu erişim anahtarıyla ve 5 sn zaman aşımıyla sorar. Yanıt her zaman `200`'dür (şerit durumu gösterir, hata saymaz):
+- **Panel `GET /api/system`** (`app/api/system/route.ts`). Durum şeridi her panel sayfasında 5 sn'de bir çağırır (önceki istek bitmeden yenisi gitmez); Hakkında sayfası açılışta bir kez çağırır. Panelin sunucu tarafı analiz sunucusunun `GET /api/v1/system/status` ucunu erişim anahtarıyla ve 5 sn zaman aşımıyla sorar. Ara katmandan geçen istekte (şifreli kipte oturumlu; şifresiz kipte `Host` geri döngü adı) yanıt her zaman `200`'dür (şerit durumu gösterir, hata saymaz):
   - `{analyzer: "up", cpuPercent, uptimeS, analyzerVersion, analyzerCommit, panelVersion, panelCommit}`;
-  - `{analyzer: "down"}`: ağ hatası, zaman aşımı, 5xx ya da beklenmeyen gövde;
+  - `{analyzer: "down"}`: ağ hatası, zaman aşımı, `401` ve `403` dışındaki her hata kodu (5xx; ör. `404`: bu ucu olmayan eski analiz sunucusu) ya da beklenmeyen gövde;
   - `{analyzer: "auth"}`: analiz sunucusu `401`/`403` döndürdü, yani panelin `ANALYZER_TOKEN`'ı yanlış ya da eksik. Bu durum "kapalı" diye gösterilmez.
-  - Şifreli kipte girişsiz istek `401` alır (ara katman). Bağlantı ve yetki hataları günlüğe aynı ileti için dakikada en çok bir satır yazılır.
+  - Ara katman isteği önce denetler: şifreli kipte girişsiz istek `401`, şifresiz kipte `Host` başlığı geri döngü adı (`localhost`, `127.0.0.1`, `[::1]`) olmayan istek `403` "Geçersiz adres." alır. Bağlantı ve yetki hataları günlüğe aynı ileti için dakikada en çok bir satır yazılır.
 - **Analiz sunucusu `GET /api/v1/system/status`** (`bantvision/analyzer/app.py`; `ANALYZER_TOKEN` tanımlıysa Bearer gerekir) `{cpuPercent, uptimeS, version, commit}` döndürür:
   - `cpuPercent`: bilgisayarın toplam işlemci yükü (yüzde, bir ondalık; `psutil`). Bir önceki çağrıdan bu yana ölçülür; sunucu açıldıktan sonraki ilk çağrı 0.0 verir.
   - `uptimeS`: analiz sunucusunun çalışma süresi (tam saniye).
