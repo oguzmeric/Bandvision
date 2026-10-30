@@ -136,6 +136,15 @@ test("durum şeridi: analiz sunucusu çalışıyor, işlemci yükü; kapanınca 
   await expect(strip(page)).not.toContainText("%");
 });
 
+test("durum şeridi: çalışan ama işlemci yükünü bilmeyen analiz sunucusu (psutil'siz ya da eski) 'çalışıyor' ve '—'", async ({ page }) => {
+  await page.route("**/api/system", (r) => r.fulfill({ json: { analyzer: "up", cpuPercent: null, uptimeS: null,
+    analyzerVersion: "?", analyzerCommit: "?", panelVersion: pkg.version, panelCommit: "abc1234" } }));
+  await login(page);
+  await expect(strip(page)).toContainText("Analiz sunucusu: çalışıyor");
+  await expect(strip(page)).toContainText("İşlemci —");
+  await expect(strip(page)).not.toContainText("%");
+});
+
 test("durum şeridi: açılışta kapalı ya da yetki hatası", async ({ page }) => {
   await page.route("**/api/system", (r) => r.fulfill({ json: { analyzer: "down" } }));
   await login(page);

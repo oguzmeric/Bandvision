@@ -19,10 +19,12 @@ if not exist "%EDGE%\.venv\Scripts\python.exe" (
   python -m venv "%EDGE%\.venv" || goto :hata
   "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
 )
-rem Eski kurulumda canli sayim paketleri (kamera/NVR baglantisi, kisi tanima) yoksa tamamla
-"%EDGE%\.venv\Scripts\python.exe" -c "import httpx, onnxruntime, PIL" >nul 2>&1
+rem Eski kurulumda (guncellemeyle yeni bir paket eklendiyse ya da alt surumu yukseldiyse) analiz sunucusu acilmaz:
+rem pyproject.toml'daki calisma bagimliliklarinin hepsi kurulu ve yeterince yeni mi, uygulama modulu aciliyor mu bakilir
+rem (tools\check_analyzer_deps.py); degilse paketler yeniden kurulur
+"%EDGE%\.venv\Scripts\python.exe" "%ROOT%\tools\check_analyzer_deps.py" >nul 2>&1
 if errorlevel 1 (
-  echo Canli sayim paketleri kuruluyor ^(bir kez^)...
+  echo Analiz sunucusu paketleri guncelleniyor ^(bir kez^)...
   "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
 )
 if not exist "%DASH%\node_modules\qrcode" (

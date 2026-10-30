@@ -4,8 +4,11 @@ from __future__ import annotations
 import datetime as dt
 import importlib.metadata
 import json
+import logging
 import pathlib
 import subprocess
+import sys
+import textwrap
 import time
 import tomllib
 import warnings
@@ -206,6 +209,40 @@ def test_system_status_shape(tmp_path: pathlib.Path) -> None:
         assert isinstance(body["uptimeS"], int) and body["uptimeS"] >= 0
         assert isinstance(body["version"], str) and body["version"]
         assert isinstance(body["commit"], str) and body["commit"]
+
+
+def test_system_status_without_psutil_reports_cpu_null(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                        caplog: pytest.LogCaptureFixture) -> None:
+    """Eski kurulumda psutil yoksa durum ucu yine 200 döner: işlemci yükü bilinmiyor (`null`), uyarı günlüğe bir kez."""
+    monkeypatch.setitem(sys.modules, "psutil", None)                  # `import psutil` ImportError verir
+    with caplog.at_level(logging.WARNING), TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        for _ in range(2):
+            r = c.get("/api/v1/system/status")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["cpuPercent"] is None and isinstance(body["uptimeS"], int) and body["commit"]
+    assert sum("psutil" in m for m in caplog.messages) == 1
+
+
+def test_analyzer_starts_and_serves_status_without_psutil(tmp_path: pathlib.Path) -> None:
+    """Güncellemeden önceki kurulum: psutil hiç kurulu değilken analiz sunucusu modülü içe aktarılır ve durum ucu çalışır
+    (ayrı süreçte; psutil hiç yüklenmeden)."""
+    code = textwrap.dedent("""
+        import json, pathlib, sys, warnings
+        sys.modules["psutil"] = None
+        warnings.simplefilter("ignore")
+        from fastapi.testclient import TestClient
+        from bantvision.analyzer.app import create_app
+        from bantvision.analyzer.jobs import Settings
+        with TestClient(create_app(Settings(data_dir=pathlib.Path(sys.argv[1])))) as c:
+            r = c.get("/api/v1/system/status")
+            print(json.dumps({"status": r.status_code, "body": r.json()}))
+    """)
+    out = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, encoding="utf-8",
+                         timeout=120, cwd=pathlib.Path(__file__).resolve().parents[1], check=False)
+    assert out.returncode == 0, out.stderr[-2000:]
+    res = json.loads(out.stdout.strip().splitlines()[-1])
+    assert res["status"] == 200 and res["body"]["cpuPercent"] is None
 
 
 def test_system_status_version_reads_distribution_named_in_pyproject(tmp_path: pathlib.Path,

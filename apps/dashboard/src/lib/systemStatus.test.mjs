@@ -11,6 +11,11 @@ test("classify: 200 up; 401/403 auth; 5xx, diğer hatalar ve ağ hatası down", 
   assert.equal(classify({ error: new Error("ECONNREFUSED") }), "down");
 });
 
+test("parseStatus: işlemci yükü bilinmiyorsa (psutil'siz eski kurulum) null kabul edilir", () => {
+  const body = { cpuPercent: null, uptimeS: 90, version: "0.1.0", commit: "abc1234" };
+  assert.deepEqual(parseStatus(body), body);
+});
+
 test("parseStatus: geçerli gövde; türü bozuk ya da eksik gövde null", () => {
   const ok = { cpuPercent: 12.5, uptimeS: 90, version: "0.1.0", commit: "abc1234" };
   assert.deepEqual(parseStatus({ ...ok, fazla: 1 }), ok);

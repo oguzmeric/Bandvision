@@ -19,7 +19,6 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 
 import cv2
-import psutil
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -174,16 +173,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def healthz() -> dict[str, Any]:
         return {"ok": True, "retentionDays": settings.retention_days, "maxUploadMb": settings.max_upload_mb}
 
+    psutil_missing_logged = False
+
+    def cpu_percent() -> float | None:
+        """Bilgisayarın toplam işlemci yükü; psutil kurulu değilse (güncellemeden önceki kurulum) None. psutil burada,
+        ilk istekte yüklenir: eksikse sunucu yine açılır, yalnızca işlemci yükü bilinmez (uyarı günlüğe bir kez)."""
+        nonlocal psutil_missing_logged
+        try:
+            import psutil  # bilerek geç yüklenir (yukarıdaki not)
+        except ImportError:
+            if not psutil_missing_logged:
+                psutil_missing_logged = True
+                _LOG.warning("psutil kurulu değil: işlemci yükü gösterilmez (analiz paketlerini yeniden kurun)")
+            return None
+        # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır.
+        return round(psutil.cpu_percent(interval=None), 1)
+
     @app.get("/api/v1/system/status", dependencies=[Auth])
     def system_status() -> dict[str, Any]:
-        # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır.
         # Sürüm kurulu dağıtımın adıyla okunur (pyproject.toml `name`); paket kurulu değilse "?"
         try:
             version = importlib.metadata.version("bantvision-edge")
         except importlib.metadata.PackageNotFoundError:
             version = "?"
-        return {"cpuPercent": round(psutil.cpu_percent(interval=None), 1),
-                "uptimeS": int(time.monotonic() - started), "version": version, "commit": commit}
+        return {"cpuPercent": cpu_percent(), "uptimeS": int(time.monotonic() - started), "version": version,
+                "commit": commit}
 
     @app.post("/api/v1/jobs", status_code=202, dependencies=[Auth])
     async def create_job(file: Annotated[UploadFile, File()],

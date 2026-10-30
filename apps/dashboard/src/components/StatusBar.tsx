@@ -30,7 +30,8 @@ export default function StatusBar() {
   }, []);
 
   const server = info ? ANALYZER_STATE_TEXT[info.analyzer] : "—";
-  const cpu = info?.analyzer === "up" ? `%${Math.round(info.cpuPercent)}` : "—";
+  // İşlemci yükü bilinmiyorsa (psutil'siz eski kurulum, durum ucu olmayan eski analiz sunucusu) da "—"
+  const cpu = info?.analyzer === "up" && info.cpuPercent !== null ? `%${Math.round(info.cpuPercent)}` : "—";
   return (
     <footer data-testid="status-bar" aria-label="Durum şeridi"
             className="sticky bottom-0 z-30 flex flex-wrap gap-x-2 border-t border-pl-line bg-pl-side px-3 py-1 text-xs text-pl-muted">

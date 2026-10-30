@@ -1,9 +1,13 @@
-/** `GET /api/system` yanıtı (app/api/system/route.ts): durum şeridi ve Hakkında sayfası okur. */
+/**
+ * `GET /api/system` yanıtı (app/api/system/route.ts): durum şeridi ve Hakkında sayfası okur. Çalışan analiz sunucusunda
+ * bilinmeyen alanlar: işlemci yükü ve çalışma süresi null, sürüm ve git özeti "?" (psutil'siz kurulum ya da durum ucu
+ * olmayan eski analiz sunucusu).
+ */
 export type SystemInfo =
   | {
       analyzer: "up";
-      cpuPercent: number;
-      uptimeS: number;
+      cpuPercent: number | null;
+      uptimeS: number | null;
       analyzerVersion: string;
       analyzerCommit: string;
       panelVersion: string;
