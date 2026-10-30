@@ -1,6 +1,6 @@
 # Sade arayüz ve izleme sekmeleri (web paneli) — tasarım
 
-Tarih: 2026-10-28 · Durum: taslak (kullanıcı incelemesi bekliyor) · Bilgisayar tarafı yol haritasının 1. projesi.
+Tarih: 2026-10-28 · Durum: uygulandı (ölçüm bekliyor) · Bilgisayar tarafı yol haritasının 1. projesi. Uygulanan davranış ve tasarımdan ayrılanlar `docs/13-web-platform.md`'de ("Panel kabuğu", "Çoklu izleme"), durum `docs/12-durum.md` §5h'de.
 
 ## Yol haritası (kullanıcıyla kararlaştırılan sıra)
 1. **Sade arayüz ve izleme sekmeleri** (bu belge)
@@ -110,7 +110,7 @@ Bugünkü panelde yalnız simgelerden oluşan dar bir yan çubuk var; sayfalar b
 - **N×M kimlik biçimi.** `"<satır>x<sütun>"`, örneğin `"6x8"` = 6 satır, 8 sütun, eşit hücreler. Satır ve sütun 1–16 arasında, toplam ≤ 128. Tuval oranı bugünkü kural gibi kutuları 16:9 kabul eder. `"4x4"` geçerlidir ve `"16"` ile aynı geometridedir. Editördeki 4×4 düğmesi katalogdaki `"16"`yı, 5×5 ve 8×8 düğmeleri `"5x5"`/`"8x8"`i kullanır. Editör "Satır × Sütun" diye gösterir.
 - **Kaydedilmemiş taslak da canlı görünür.** Editörde yapılan değişiklik, analiz sunucusunda geçici (kaydedilmeyen, 10 dk boşta silinen) bir izleme taslağı olarak açılır ve ızgara bu taslağın birleşik akışını gösterir. Böylece TRASSIR'daki gibi düzenlerken görüntü akar. "Kaydet" taslağı şablona yazar. Ortak kameralar aynı okuyucuyu kullandığı için taslak ile şablon arasında geçişte kopmaz.
 - **128 kutu ve okuyucu sınırı.**
-  - Alt akış okuyucu sınırı analiz sunucusunun ayar dosyasında (ortam değişkeni ile de ezilebilir) yapılandırılabilir; varsayılan 128 alt + 2 ana. Arayüzde ayar ekranı yok.
+  - Alt akış okuyucu sınırı analiz sunucusunun ortam değişkeniyle (`BV_WATCH_MAX_SUB`) yapılandırılır; ayrı bir ayar dosyası yoktur. Varsayılan 128 alt + 2 ana (ana akış sınırı sabit). Arayüzde ayar ekranı yok.
   - Sınırın üstündeki kutular bugünkü gibi "Sınır aşıldı" gösterir; şablon kaydı reddedilmez.
   - Proje 3'te lisans bu sayıyı ayrıca kısıtlar.
 - **Seçili sekme** her tarayıcıda ayrı hatırlanır (bugünkü gibi tarayıcı deposu).
