@@ -18,7 +18,9 @@ analyzer = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.
             "onnxruntime>=1.18", "pillow>=10.1", "psutil>=5.9"]
 # Tanıma ile iki yönlü sayım (kişi/araç/hayvan, docs/03 §4.10): YOLOX-S ONNX + Türkçe yazılı video bindirmesi
 detect = ["onnxruntime>=1.18", "pillow>=10.1"]
-dev = ["pytest>=8", "ruff>=0.5", "jsonschema[format-nongpl]>=4.22", "httpx>=0.27"]
+# httpx2: Starlette'nin TestClient'ı artık bunu kullanır (yalnız httpx kuruluysa her pytest'te StarletteDeprecationWarning
+# verir); httpx'i testler ayrıca doğrudan kullanır (Telegram için MockTransport)
+dev = ["pytest>=8", "ruff>=0.5", "jsonschema[format-nongpl]>=4.22", "httpx>=0.27", "httpx2>=2.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

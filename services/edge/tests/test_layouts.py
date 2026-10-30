@@ -6,7 +6,15 @@ import pathlib
 
 import pytest
 
-from bantvision.live.layouts import LAYOUTS, MAX_TILES, cell_rects, layout_by_id, parse_grid, smallest_for
+from bantvision.live.layouts import (
+    LAYOUTS,
+    MAX_TILES,
+    cell_rects,
+    layout_by_id,
+    parse_grid,
+    recorder_layout,
+    smallest_for,
+)
 
 CONTRACT = pathlib.Path(__file__).resolve().parents[3] / "contracts" / "view-layouts.json"
 
@@ -17,9 +25,33 @@ def test_python_catalog_equals_contract_file() -> None:
 
 
 @pytest.mark.parametrize(("n", "want"), [(0, "1"), (1, "1"), (2, "2"), (3, "3"), (4, "4"), (5, "6"), (7, "8"),
-                                         (9, "9"), (10, "12"), (13, "16"), (40, "16")])
+                                         (9, "9"), (10, "12"), (13, "16"), (40, "16"), (500, "16")])
 def test_smallest_layout_for_channel_count(n: int, want: str) -> None:
     assert smallest_for(n).id == want
+
+
+@pytest.mark.parametrize(("n", "want"), [(1, "1"), (10, "12"), (16, "16"), (17, "3x6"), (32, "4x8"), (64, "8x8"),
+                                         (100, "10x10"), (120, "10x12"), (127, "8x16"), (128, "8x16")])
+def test_recorder_layout_catalog_up_to_16_then_smallest_grid(n: int, want: str) -> None:
+    """"NVR'dan şablon": 16 kanala kadar katalogdaki en küçük düzen; üstünde bütün kanalları alan en küçük N×M (en az
+    kutu; eşitse en kare, o da eşitse sütunu fazla olan)."""
+    assert recorder_layout(n).id == want
+
+
+def test_recorder_grid_is_the_smallest_most_square_wider_one_for_every_count() -> None:
+    for n in range(17, MAX_TILES + 1):
+        lay = recorder_layout(n)
+        rows, cols = parse_grid(lay.id) or (0, 0)
+        assert rows * cols >= n and len(lay.cells) == rows * cols, n
+        fits = [(r, c) for r in range(1, 17) for c in range(1, 17) if n <= r * c <= MAX_TILES]
+        best = min(fits, key=lambda rc: (rc[0] * rc[1], abs(rc[0] - rc[1]), -rc[1]))
+        assert (rows, cols) == best, n
+        assert cols >= rows, n                                 # eşitlikte sütun fazla: yatay ekrana uyar
+
+
+def test_recorder_layout_over_128_is_rejected() -> None:
+    with pytest.raises(ValueError, match="128"):
+        recorder_layout(129)
 
 
 @pytest.mark.parametrize("lay", LAYOUTS, ids=lambda x: x.id)
@@ -57,4 +89,3 @@ def test_grid_rejects(bad: str) -> None:
 
 def test_catalog_ids_unchanged() -> None:
     assert [lay.id for lay in LAYOUTS] == ["1", "2", "3", "4", "6", "8", "9", "12", "16"]
-    assert smallest_for(500).id == "16"

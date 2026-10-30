@@ -26,7 +26,9 @@ function dropDraft(id: string): void {
  * Taslak sunucuda bulunamazsa (10 dk boşta kaldı, sunucu yeniden başladı: güncelleme 404 ya da çağıran `lost(id)`
  * der) sessizce yenisi açılır; o ana dek eski kimlik kalır (ızgara şablona dönüp tekrar taslağa atlamasın).
  * İstekler sırayla gider (aynı anda iki taslak açılmaz). Sunucuya ulaşılamazsa STREAM_RETRY_MS sonra yeniden denenir;
- * sunucu içeriği reddederse (4xx) ileti `error`'a yazılır ve içerik değişene dek yeniden gönderilmez.
+ * sunucu içeriği reddederse (4xx) ileti `error`'a yazılır ve içerik değişene dek yeniden gönderilmez. Sunucu şimdilik
+ * kabul etmiyorsa (503: ör. bütün tarayıcılarda en çok 32 taslak açık) ileti `error`'a yazılır ve STREAM_RETRY_MS sonra
+ * yeniden denenir; başarınca ileti kalkar.
  */
 export function useDraft(owner: string | null, edit: DraftBody | null): {
   draftId: string | null; error: string | null; lost: (id: string) => void;
@@ -77,7 +79,11 @@ export function useDraft(owner: string | null, edit: DraftBody | null): {
           setError(null);
           if (want.current !== w) again.current = true;  // bu sırada içerik değişti: güncel hâli de yazılır
         } catch (e) {
-          if (!(e instanceof ApiError) || e.status >= 500 || e.status === 401) {
+          if (e instanceof ApiError && e.status === 503) {
+            // analiz sunucusu şimdilik kabul etmiyor ("Çok fazla açık taslak var…"): söylenir ve yeniden denenir
+            setError(e.message);
+            retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
+          } else if (!(e instanceof ApiError) || e.status >= 500 || e.status === 401) {
             // sunucu yok / oturum doldu: sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
             retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e.status === 404 && target) {

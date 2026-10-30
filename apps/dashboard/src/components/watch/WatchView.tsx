@@ -5,7 +5,7 @@ import { ApiError, api, type Source } from "@/lib/live";
 import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
-import { layoutFor, ROOT_PX } from "@/lib/layoutGrid.mjs";
+import { layoutFor, MAX_TILES, ROOT_PX } from "@/lib/layoutGrid.mjs";
 import {
   applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push, redo, refKey, retile,
   sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
@@ -756,13 +756,13 @@ export default function WatchView() {
       await reload();
     });
   };
-  /** Kayıt cihazının tüm kanallarından (en çok 16) şablon kurar ve ona geçer */
+  /** Kayıt cihazının tüm kanallarından (en çok MAX_TILES = 128) şablon kurar ve ona geçer */
   const fromRecorder = (sourceId: string) => {
     if (busyRef.current || !leaveOk()) return;
     const start = startOf();
     void run(async () => {
       const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
-      const note = v.truncated ? `İlk 16 kanal alındı (toplam ${v.channelCount}).` : null;
+      const note = v.truncated ? `İlk ${MAX_TILES} kanal alındı (toplam ${v.channelCount}).` : null;
       setInfo(adopt(v, start, false) ? note : [added(v), note].filter(Boolean).join(" "));
     });
   };

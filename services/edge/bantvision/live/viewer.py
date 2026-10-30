@@ -35,6 +35,8 @@ from .session import open_capture
 _LOG = logging.getLogger(__name__)
 Quality = Literal["sub", "main"]
 Key = tuple[str, str | None, str]
+
+
 def _env_max_sub() -> int:
     """`BV_WATCH_MAX_SUB`: aynı anda en çok kaç alt akış okuyucusu (tam sayı ≥ 1; yoksa/geçersizse 128)."""
     try:

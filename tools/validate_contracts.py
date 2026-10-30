@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
+from collections.abc import Iterator
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError, validators
 from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts"
@@ -35,8 +38,42 @@ EXAMPLE_SCHEMAS: list[tuple[str, str]] = [
     ("view-template", "view-template.schema.json"),
 ]
 
+DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
+
 # Veri dosyaları: kendi şemalarına uymalı (düzen kataloğu web ve iPhone'da birebir kullanılır)
 DATA_FILES: list[tuple[str, str]] = [("view-layouts.json", "view-layouts.schema.json")]
+
+
+def ecma_pattern(pattern: str) -> str:
+    r"""JSON Schema desenleri ECMA-262'dir: `$` (çok satır kipi olmadan) dizgenin SONUDUR. Python'un `re`'sinde `$` sondaki
+    satır sonundan önce de eşleşir ("6x8\n" `^…$`'e uyardı). Kaçışsız ve karakter sınıfı dışındaki her `$`, `\Z` olur."""
+    out: list[str] = []
+    i, in_class = 0, False
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":                                        # kaçış: iki karakter olduğu gibi
+            out.append(pattern[i:i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+        elif ch == "$":
+            ch = r"\Z"
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _pattern(validator: Any, patrn: str, instance: Any, schema: dict[str, Any]) -> Iterator[ValidationError]:
+    """`pattern` anahtar sözcüğü, ECMA-262 anlamıyla (`ecma_pattern`)."""
+    if validator.is_type(instance, "string") and not re.search(ecma_pattern(patrn), instance):
+        yield ValidationError(f"{instance!r} does not match {patrn!r}")
+
+
+# Draft 2020-12; yalnız `pattern` JSON Schema'daki gibi uygulanır (`$` = dizgenin sonu)
+ContractValidator = validators.extend(Draft202012Validator, {"pattern": _pattern})
 
 
 def load_schemas() -> dict[str, dict[str, Any]]:
@@ -44,10 +81,12 @@ def load_schemas() -> dict[str, dict[str, Any]]:
 
 
 def build_registry(schemas: dict[str, dict[str, Any]]) -> Registry:
-    """Şemaları hem dosya adıyla (`event.schema.json`) hem `$id` ile (`bantvision.event.v1`) kaydeder."""
+    """Şemaları hem dosya adıyla (`event.schema.json`) hem `$id` ile (`bantvision.event.v1`) kaydeder. Bütün şemalar
+    Draft 2020-12'dir (`main` denetler); kayıtta `$schema` çıkarılır: yoksa jsonschema başvurulan şemanın `$schema`'sına
+    bakıp standart doğrulayıcıya döner ve `ContractValidator`'ın desen kuralı o şemada uygulanmazdı."""
     reg = Registry()
     for name, contents in schemas.items():
-        res = Resource.from_contents(contents)
+        res = Resource(contents={k: v for k, v in contents.items() if k != "$schema"}, specification=DRAFT202012)
         reg = reg.with_resource(name, res)
         if "$id" in contents:
             reg = reg.with_resource(contents["$id"], res)
@@ -55,9 +94,9 @@ def build_registry(schemas: dict[str, dict[str, Any]]) -> Registry:
 
 
 def validator_for(ref: str, schemas: dict[str, dict[str, Any]] | None = None) -> Draft202012Validator:
-    """`ref` (ör. `device.schema.json#/$defs/pairRequest`) için format denetimli doğrulayıcı."""
+    """`ref` (ör. `device.schema.json#/$defs/pairRequest`) için format denetimli doğrulayıcı (desenler `ecma_pattern`)."""
     schemas = schemas if schemas is not None else load_schemas()
-    return Draft202012Validator(
+    return ContractValidator(
         {"$ref": ref}, registry=build_registry(schemas), format_checker=Draft202012Validator.FORMAT_CHECKER
     )
 
@@ -83,6 +122,9 @@ def main() -> int:
     failures = 0
 
     for name, contents in schemas.items():
+        if contents.get("$schema") != DRAFT_2020_12:            # build_registry bunu varsayar
+            print(f"HATA şema {name}: $schema {DRAFT_2020_12} olmalı")
+            failures += 1
         try:
             Draft202012Validator.check_schema(contents)
         except Exception as exc:  # noqa: BLE001 - tüm şema hatalarını raporla

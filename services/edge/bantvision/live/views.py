@@ -142,9 +142,13 @@ class ViewStore:
                 if v["id"] == view_id:
                     old = self._views[i]
                     # Her güncellemede kesin olarak artar (saat aynı adımda kalsa ya da geri gitse de): panelin Kaydet
-                    # çakışma denetimi `updatedAt` farkına bakar
+                    # çakışma denetimi `updatedAt` farkına bakar. Değer en büyük kayan noktalı sayıdaysa bir sonrakisi
+                    # sonsuzdur (JSON'da geçersiz kayıt): o zaman aynı kalır, sonlu olur
+                    bumped = math.nextafter(v["updatedAt"], math.inf)
+                    if not math.isfinite(bumped):
+                        bumped = v["updatedAt"]
                     self._views[i] = {**v, "name": name, "layout": layout, "tiles": copy.deepcopy(tiles),
-                                      "updatedAt": max(self._clock(), math.nextafter(v["updatedAt"], math.inf))}
+                                      "updatedAt": max(self._clock(), bumped)}
                     try:
                         self._save()
                     except ViewsBusy:

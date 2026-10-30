@@ -248,25 +248,32 @@ def test_analyzer_starts_and_serves_status_without_psutil(tmp_path: pathlib.Path
 def test_system_status_version_reads_distribution_named_in_pyproject(tmp_path: pathlib.Path,
                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     """Sürüm, pyproject.toml'daki `name` adlı dağıtımdan okunur ("bantvision" adında bir dağıtım yok). Paket kurulu olsun
-    olmasın (yalnızca PYTHONPATH ile çalıştırma) aynı sonuç: dağıtım bilgisi sahtelenir, ad ve sürüm pyproject'ten."""
+    olmasın (yalnızca PYTHONPATH ile çalıştırma) aynı sonuç: yalnızca bu dağıtımın bilgisi sahtelenir (ad ve sürüm
+    pyproject'ten); öteki paketler gerçek bilgiyi okur."""
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+    real = importlib.metadata.version
 
     def installed(name: str) -> str:
-        if name == project["name"]:
-            return str(project["version"])
-        raise importlib.metadata.PackageNotFoundError(name)
+        return str(project["version"]) if name == project["name"] else real(name)
 
     monkeypatch.setattr(importlib.metadata, "version", installed)
+    assert importlib.metadata.version("pytest") == real("pytest")             # başka paketler etkilenmez
     with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["version"] == project["version"]
 
 
 def test_system_status_version_unknown_without_package(tmp_path: pathlib.Path,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+    real = importlib.metadata.version
+
     def missing(name: str) -> str:
-        raise importlib.metadata.PackageNotFoundError(name)
+        if name == project["name"]:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return real(name)
 
     monkeypatch.setattr(importlib.metadata, "version", missing)
+    assert importlib.metadata.version("pytest") == real("pytest")
     with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["version"] == "?"
 

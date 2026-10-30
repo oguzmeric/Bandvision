@@ -36,7 +36,9 @@ def all_errors(instance: Any, ref: str) -> list[ValidationError]:
 
 @pytest.mark.parametrize("schema_name", sorted(vc.load_schemas()))
 def test_schema_is_valid_draft_2020_12(schema_name: str) -> None:
-    Draft202012Validator.check_schema(vc.load_schemas()[schema_name])
+    schema = vc.load_schemas()[schema_name]
+    assert schema["$schema"] == vc.DRAFT_2020_12                 # doğrulayıcının kaydı (build_registry) bunu varsayar
+    Draft202012Validator.check_schema(schema)
 
 
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
@@ -187,6 +189,17 @@ def test_view_layout_cells_tile_the_grid_exactly(lay: dict[str, Any]) -> None:
     assert len(lay["cells"]) == int(lay["id"])                                             # ad = kutu sayısı
 
 
+def test_pattern_dollar_means_end_of_string_as_in_json_schema() -> None:
+    r"""JSON Schema desenleri ECMA-262'dir: `$` dizgenin sonudur. Python'un `re`'sinde `$` sondaki satır sonundan önce de
+    eşleşir; doğrulayıcı bu yüzden deseni `\Z` ile uygular ("6x8\n" ve "ABCD1234\n" geçmez)."""
+    pair = load(PAIR[0])
+    assert vc.errors_for({**pair, "code": "ABCD1234"}, PAIR[1]) == []
+    assert vc.errors_for({**pair, "code": "ABCD1234\n"}, PAIR[1]) != []
+    assert vc.ecma_pattern(r"^a$") == r"^a\Z"
+    assert vc.ecma_pattern(r"^[$]x\$$") == r"^[$]x\$\Z"                 # karakter sınıfındaki ve kaçışlı $ değişmez
+    assert vc.ecma_pattern(r"^(a$|b$)") == r"^(a\Z|b\Z)"
+
+
 def test_view_layout_ids_are_the_agreed_set() -> None:
     assert [d["id"] for d in _layouts()] == ["1", "2", "3", "4", "6", "8", "9", "12", "16"]
 
@@ -197,8 +210,8 @@ def test_template_layout_accepts_catalog_and_grid_ids() -> None:
     base = json.loads((vc.CONTRACTS / "examples" / "view-template-4.json").read_text(encoding="utf-8"))
     for ok in [d["id"] for d in _layouts()] + ["6x8", "1x1", "16x16"]:
         assert vc.errors_for({**base, "layout": ok}, "view-template.schema.json") == [], ok
-    for bad in ["17x2", "5", "0x3", "6X8", "06x8", "6x", ""]:
-        assert vc.errors_for({**base, "layout": bad}, "view-template.schema.json") != [], bad
+    for bad in ["17x2", "5", "0x3", "6X8", "06x8", "6x", "", "6x8\n", "6x8\nx", " 6x8"]:
+        assert vc.errors_for({**base, "layout": bad}, "view-template.schema.json") != [], repr(bad)
     catalog = json.loads((vc.CONTRACTS / "view-layouts.schema.json").read_text(encoding="utf-8"))
     ids = catalog["properties"]["layouts"]["items"]["properties"]["id"]["enum"]
     assert ids == [d["id"] for d in _layouts()]

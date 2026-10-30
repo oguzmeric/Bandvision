@@ -17,8 +17,10 @@ from typing import Any, ClassVar, Literal
 import cv2
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.types import Receive, Scope, Send
 
 from ..core import Profile
 from ..core.model_download import failure_reason
@@ -27,9 +29,9 @@ from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .alarms import AlarmStore
 from .clips import ClipWriter
-from .drafts import DraftStore
+from .drafts import DraftsFull, DraftStore
 from .jsonfile import quarantine, read_json, write_json_atomic
-from .layouts import LAYOUTS, MAX_TILES, smallest_for
+from .layouts import LAYOUTS, MAX_TILES, recorder_layout
 from .mosaic import MosaicHub, MosaicStopped, TooManySizes
 from .notify import NotifyError, TelegramNotifier
 from .power import disable_power_throttling
@@ -39,7 +41,16 @@ from .viewer import SourceGone, ViewHub
 from .views import ViewsBusy, ViewStore, check_layout_tiles
 
 _LOG = logging.getLogger(__name__)
-RECORDER_MAX_TILES = 16   # "kayıt cihazından" şablon en çok 16 kanal alır (katalogdaki en büyük düzen)
+
+
+class _GetHeadRoute(APIRoute):
+    """Ayrı GET ve HEAD yollarına bölünmüş kaynak: başka bir yöntem 405 ve `Allow: GET, HEAD` alır. (Starlette 405'te
+    eşleşen İLK yolun yöntemlerini yazar; ayrı yollarda bu yalnız "HEAD" olurdu.) GET ve HEAD aynen işlenir."""
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["method"] not in ("GET", "HEAD"):
+            raise HTTPException(405, headers={"Allow": "GET, HEAD"})
+        await super().handle(scope, receive, send)
 
 
 class _Strict(BaseModel):
@@ -948,6 +959,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             d = manager.drafts.create(body.layout, _tile_dicts(body.tiles))
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
+        except DraftsFull as e:                             # en çok MAX_DRAFTS: açık düzenleyicinin taslağı silinmez
+            raise HTTPException(503, str(e)) from e
         manager.ensure_drafts_reaper()
         return d
 
@@ -998,7 +1011,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.post("/views/from-recorder")
     def view_from_recorder(body: FromRecorderIn) -> dict[str, Any]:
-        """Kayıt cihazının kanallarından şablon: kanal sayısına uyan en küçük düzen, en çok 16 kanal (fazlası bildirilir)."""
+        """Kayıt cihazının kanallarından şablon: en çok MAX_TILES (128) kanal, sırayla; düzen `recorder_layout` (16'ya
+        kadar katalogdaki en küçük düzen, üstünde en küçük N×M). Fazlası alınmaz ve bildirilir (`truncated`)."""
         src = manager.source_or_404(body.sourceId)
         if src["kind"] != "recorder":
             raise HTTPException(400, "Bu kaynak bir kayıt cihazı değil.")
@@ -1008,8 +1022,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise _err(e) from e
         if not chans:
             raise HTTPException(422, "Kayıt cihazında kamera bulunamadı.")
-        used = chans[:RECORDER_MAX_TILES]
-        lay = smallest_for(len(used))
+        used = chans[:MAX_TILES]
+        lay = recorder_layout(len(used))
         tiles: list[dict[str, Any] | None] = [{"sourceId": src["id"], "channelId": c.id} for c in used]
         tiles += [None] * (len(lay.cells) - len(tiles))
         name = _recorder_view_name(str(src.get("name") or ""), {v["name"] for v in manager.views.list()})
@@ -1017,7 +1031,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             v = manager.views.create(name, lay.id, tiles)
         except ViewsBusy as e:
             raise HTTPException(503, str(e)) from e
-        return {**v, "truncated": len(chans) > RECORDER_MAX_TILES, "channelCount": len(chans)}
+        return {**v, "truncated": len(chans) > MAX_TILES, "channelCount": len(chans)}
 
     def _mjpeg(parts: Iterator[bytes]) -> StreamingResponse:
         return StreamingResponse(parts, media_type="multipart/x-mixed-replace; boundary=frame",
@@ -1280,9 +1294,6 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Alarm bulunamadı.")
         return manager.alarms.get(alarm_id) or {}
 
-    # GET ve HEAD ayrı yollar: tek yolda iki yöntem şemada aynı işlem kimliğini alıyordu ("Duplicate Operation ID")
-    @r.get("/alarms/{alarm_id}/clip.webm")
-    @r.head("/alarms/{alarm_id}/clip.webm")
     def alarm_clip(alarm_id: str) -> FileResponse:
         """İhlal anının kaydı (VP8 WebM). Tarayıcının video oynatıcısı ileri/geri sarmak için `Range` ister: 206 ve
         `Content-Range` (Starlette FileResponse); kapsam dışı aralık 416. Dosya bu arada silinmişse (7 gün temizliği,
@@ -1296,13 +1307,17 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
             raise HTTPException(404, "Olay kaydı yok (hazırlanıyor, 7 günü geçti ya da alınamadı).")
         return FileResponse(path, media_type="video/webm", headers={"Cache-Control": "no-store"}, stat_result=st)
 
-    @r.get("/alarms/{alarm_id}/image.jpg")
-    @r.head("/alarms/{alarm_id}/image.jpg")
     def alarm_image(alarm_id: str) -> Response:
         jpeg = manager.alarms.image_bytes(alarm_id)
         if jpeg is None:
             raise HTTPException(404, "Olay resmi yok (7 günü geçti ya da alınamadı).")
         return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    # GET ve HEAD ayrı yollar: tek yolda iki yöntem şemada aynı işlem kimliğini alıyordu ("Duplicate Operation ID").
+    # İkisi de _GetHeadRoute: başka yöntem 405 ve `Allow: GET, HEAD` alır (yalnız ilk yolun yöntemi değil).
+    for path, endpoint in (("/alarms/{alarm_id}/clip.webm", alarm_clip), ("/alarms/{alarm_id}/image.jpg", alarm_image)):
+        for method in ("GET", "HEAD"):
+            r.add_api_route(path, endpoint, methods=[method], route_class_override=_GetHeadRoute)
 
     def notify_view(cfg: dict[str, Any]) -> dict[str, Any]:
         """Ayar + son gönderim hatası (`lastError`: {text, at} ya da null; Türkçe, anahtarsız; bellekte tutulur)."""

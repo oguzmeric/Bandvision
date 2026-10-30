@@ -1945,6 +1945,39 @@ def test_clip_endpoint_serves_webm_supports_range_and_404(client: TestClient) ->
     assert client.get(f"/api/v1/live/alarms/{'b' * 32}/clip.webm").status_code == 404
 
 
+@pytest.mark.parametrize("name", ["clip.webm", "image.jpg"])
+def test_alarm_media_routes_get_head_405_allow_and_token(tmp_path: pathlib.Path, name: str) -> None:
+    """Alarm kaydı ve resmi: GET ve HEAD şemada ayrı işlemlerdir ama tek kaynak gibi davranır. Başka yöntem 405 ve
+    `Allow: GET, HEAD`; HEAD, GET'in başlıklarını (tür, uzunluk, Range) gövdesiz verir; anahtarsız 401, kayıp 404."""
+    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+        auth = {"Authorization": "Bearer gizli"}
+        mgr = c.app.state.live
+        jpeg = b"\xff\xd8\xff\xe0resim"
+        a = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 2.0, jpeg, "disabled")
+        data = _store_clip(mgr, a["id"]) if name == "clip.webm" else jpeg
+        url = f"/api/v1/live/alarms/{a['id']}/{name}"
+        for method in ("POST", "PUT", "DELETE", "PATCH"):
+            r = c.request(method, url, headers=auth)
+            assert r.status_code == 405 and r.headers["allow"] == "GET, HEAD", (method, r.headers.get("allow"))
+            assert r.json() == {"detail": "Method Not Allowed"}
+        g, h = c.get(url, headers=auth), c.head(url, headers=auth)
+        assert g.status_code == h.status_code == 200 and g.content == data and h.content == b""
+        for k in ("content-type", "content-length", "cache-control"):
+            assert h.headers[k] == g.headers[k], k
+        assert h.headers["content-length"] == str(len(data))
+        if name == "clip.webm":
+            gr = c.get(url, headers={**auth, "Range": "bytes=0-9"})
+            hr = c.head(url, headers={**auth, "Range": "bytes=0-9"})
+            assert gr.status_code == hr.status_code == 206 and gr.content == data[:10] and hr.content == b""
+            assert hr.headers["content-range"] == gr.headers["content-range"] == f"bytes 0-9/{len(data)}"
+            assert h.headers["accept-ranges"] == "bytes"
+        for method in ("GET", "HEAD"):
+            assert c.request(method, url).status_code == 401                       # anahtarsız
+            missing = c.request(method, f"/api/v1/live/alarms/{'c' * 32}/{name}", headers=auth)
+            assert missing.status_code == 404
+        assert c.get(f"/api/v1/live/alarms/{'c' * 32}/{name}", headers=auth).json()["detail"].startswith("Olay ")
+
+
 def test_false_alarm_endpoint_marks_and_acks(client: TestClient) -> None:
     mgr = client.app.state.live
     a = mgr.alarms.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
@@ -2435,6 +2468,29 @@ def test_draft_stream_and_status_use_draft(client: TestClient, monkeypatch: pyte
     assert client.get(f"{base}/{d['id']}/stream?limit=1").status_code == 404
     assert client.put(f"{base}/drafts/{d['id']}", json={"layout": "1", "tiles": [None]}).status_code == 404
     assert client.delete(f"{base}/drafts/{d['id']}").status_code == 404
+
+
+def test_draft_and_template_share_one_camera_reader(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aynı kamera hem kayıtlı şablonda hem taslakta: tek okuyucu açılır (kamera ikinci kez bağlanmaz), şablondan taslağa
+    ve geri geçişte de aynı okuyucu kullanılır."""
+    a, b = _file_sources(client, monkeypatch, 2)
+    live = client.app.state.live
+    opened: list[tuple[str, str | None, bool]] = []
+    real = live.viewers._opener
+
+    def counting(source_id: str, channel_id: str | None, sub: bool) -> Any:
+        opened.append((source_id, channel_id, sub))
+        return real(source_id, channel_id, sub)
+
+    monkeypatch.setattr(live.viewers, "_opener", counting)
+    base = "/api/v1/live/views"
+    v = client.post(base, json={"name": "Kapı", "layout": "1", "tiles": [{"sourceId": a, "channelId": None}]}).json()
+    d = client.post(f"{base}/drafts", json={"layout": "2", "tiles": [{"sourceId": a, "channelId": None},
+                                                                      {"sourceId": b, "channelId": None}]}).json()
+    for vid in (v["id"], d["id"], v["id"]):
+        assert client.get(f"{base}/{vid}/stream?w=640&h=360&limit=1").status_code == 200
+    assert opened.count((a, None, True)) == 1 and opened.count((b, None, True)) == 1
+    assert live.viewers.open_count("sub") == 2
 
 
 def test_draft_rejects_bad_body(client: TestClient) -> None:

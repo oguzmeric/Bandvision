@@ -1000,6 +1000,30 @@ test("canlı taslak: sunucuda kaybolursa (güncelleme 404, durum 404) sessizce y
   await expect(page.getByText("Analiz sunucusuna ulaşılamıyor")).toHaveCount(0);
 });
 
+test("canlı taslak: analiz sunucusunda çok fazla taslak açıksa (503) ileti hata yerinde görünür, yer açılınca taslak açılır ve ileti kalkar", async ({ page }) => {
+  const FULL = "Çok fazla açık taslak var; biraz sonra yeniden deneyin.";
+  const drafts = await mock(page, STATUS);
+  let full = true;
+  let refused = 0;
+  await page.route("**/api/live/views/drafts", (r) => {
+    if (!full || r.request().method() !== "POST") return r.fallback();
+    refused += 1;
+    return r.fulfill({ status: 503, json: { detail: FULL } });
+  });
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await camera(page, "Depo").dragTo(tiles.nth(3));
+  await expect(page.getByRole("alert").filter({ hasText: FULL })).toBeVisible();
+  await expect.poll(() => refused, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);      // yeniden deniyor
+  await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/v1\/stream/);           // taslak yok: şablon akar
+  await expect(tab(page, /^Giriş katı/)).toContainText("*");                           // düzenleme kaybolmadı
+  full = false;                                                                        // yer açıldı
+  await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/draft-1\/stream/, { timeout: 10_000 });
+  await expect(page.getByText(FULL)).toHaveCount(0);
+  expect(drafts.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+});
+
 test("kaydedilmemiş değişiklik: sekme değiştirmek ve menüden başka sayfaya gitmek sorar; Vazgeç düzenlemeyi korur; sayfa kapanırken de sorulur", async ({ page }) => {
   const drafts = await mock(page, STATUS, [VIEW, V2]);
   await page.route("**/api/live/views/v2/status", (r) => r.fulfill({ json: { id: "v2", layout: "1", tiles: [] } }));
@@ -1089,29 +1113,38 @@ test("Farklı kaydet: düzenlenen hâl yeni ad ile yeni şablon olur, ona geçil
   expect(calls.at(-1)).toMatchObject({ method: "POST", body: { name: "Yeni şablon", layout: "4", tiles: [{ sourceId: "a", channelId: null }, null, null, null] } });
 });
 
-test("Şablon editörü: NVR'dan şablon yeni şablonu kurar ve 16'dan fazlaysa söyler", async ({ page }) => {
-  await mock(page, STATUS);
-  const { store } = await mockStore(page, [VIEW]);
-  const tiles16 = Array.from({ length: 16 }, (_, i) => ({ sourceId: "b", channelId: String(i + 1) }));
-  let posted: unknown = null;
-  await page.route("**/api/live/views/from-recorder", (r) => {
-    posted = r.request().postDataJSON();
-    const v = { id: "r1", name: "Ofis NVR", layout: "16", tiles: tiles16, createdAt: 6, updatedAt: 6, truncated: true, channelCount: 20 };
-    store.push(v);
-    return r.fulfill({ json: v });
+for (const { count, layout, cells, note } of [
+  { count: 20, layout: "4x5", cells: 20, note: null },
+  { count: 130, layout: "8x16", cells: 128, note: "İlk 128 kanal alındı (toplam 130)." },
+]) {
+  test(`Şablon editörü: NVR'dan şablon ${count} kanallı cihazdan yeni şablonu kurar${note ? " ve 128'den fazlasını söyler" : "; 128'e kadar bilgi yok"}`, async ({ page }) => {
+    await mock(page, STATUS);
+    const { store } = await mockStore(page, [VIEW]);
+    const tiles = Array.from({ length: cells }, (_, i) => (i < count ? { sourceId: "b", channelId: String(i + 1) } : null));
+    let posted: unknown = null;
+    await page.route("**/api/live/views/from-recorder", (r) => {
+      posted = r.request().postDataJSON();
+      const v = { id: "r1", name: "Ofis NVR", layout, tiles, createdAt: 6, updatedAt: 6, truncated: count > 128, channelCount: count };
+      store.push(v);
+      return r.fulfill({ json: v });
+    });
+    await login(page);
+    const ed = await openEditor(page);
+    const pick = ed.getByRole("combobox", { name: "NVR'dan şablon" });
+    await expect(pick.locator("option")).toHaveText(["Kayıt cihazı seçin…", "Ofis NVR"]);     // yalnız kayıt cihazları
+    await pick.selectOption("b");
+    await expect(tab(page, "Ofis NVR")).toHaveAttribute("aria-selected", "true");
+    expect(posted).toEqual({ sourceId: "b" });
+    await expect(page.getByTestId("watch-tile")).toHaveCount(cells);
+    if (note) {
+      await expect(page.getByText(note)).toBeVisible();
+      await tab(page, "Giriş katı").click();                                           // başka şablona geçince bilgi kalkar
+      await expect(page.getByText("kanal alındı")).toHaveCount(0);
+    } else {
+      await expect(page.getByText("kanal alındı")).toHaveCount(0);
+    }
   });
-  await login(page);
-  const ed = await openEditor(page);
-  const pick = ed.getByRole("combobox", { name: "NVR'dan şablon" });
-  await expect(pick.locator("option")).toHaveText(["Kayıt cihazı seçin…", "Ofis NVR"]);     // yalnız kayıt cihazları
-  await pick.selectOption("b");
-  await expect(tab(page, "Ofis NVR")).toHaveAttribute("aria-selected", "true");
-  expect(posted).toEqual({ sourceId: "b" });
-  await expect(page.getByTestId("watch-tile")).toHaveCount(16);
-  await expect(page.getByText("İlk 16 kanal alındı (toplam 20).")).toBeVisible();
-  await tab(page, "Giriş katı").click();                                             // başka şablona geçince bilgi kalkar
-  await expect(page.getByText("İlk 16 kanal alındı")).toHaveCount(0);
-});
+}
 
 test("katalogdaki düğmesiz düzen ('3') kayıtlı şablonda çalışır: 3 kutu", async ({ page }) => {
   const view3 = { ...VIEW, layout: "3", tiles: VIEW.tiles.slice(0, 3) };

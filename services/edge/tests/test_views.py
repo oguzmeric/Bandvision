@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import math
 import pathlib
+import sys
 from typing import Any
 
 import pytest
@@ -64,19 +66,33 @@ def test_view_validation_is_422_turkish(client: TestClient, body: dict[str, Any]
         assert msg in r.json()["detail"]
 
 
-def test_from_recorder_picks_smallest_layout_and_caps_16(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    r = client.post("/api/v1/live/sources", json={"kind": "recorder", "recorderBrand": "hikvision",
-                                                  "host": "nvr.example", "username": "u", "password": "p",
-                                                  "name": "Ofis NVR"})
-    sid = r.json()["id"]
-    mgr = client.app.state.live
-    for n, want, cut in ((7, "8", False), (20, "16", True)):
-        chans = [rec.RecorderChannel(id=str(i), name=f"K{i}", number=i, has_substream=True) for i in range(1, n + 1)]
-        monkeypatch.setattr(mgr, "channels", lambda src, refresh=False, c=chans: c)
-        v = client.post("/api/v1/live/views/from-recorder", json={"sourceId": sid}).json()
-        assert v["layout"] == want and v["truncated"] is cut
-        assert [t["channelId"] for t in v["tiles"] if t][:3] == ["1", "2", "3"]
-        assert sum(1 for t in v["tiles"] if t) == min(n, 16)
+@pytest.mark.parametrize(("n", "want", "cells"), [(7, "8", 8), (16, "16", 16), (17, "3x6", 18), (20, "4x5", 20),
+                                                  (32, "4x8", 32), (64, "8x8", 64), (128, "8x16", 128),
+                                                  (129, "8x16", 128)])
+def test_from_recorder_takes_up_to_128_channels(client: TestClient, monkeypatch: pytest.MonkeyPatch, n: int, want: str,
+                                                cells: int) -> None:
+    """Kayıt cihazının bütün kanalları (en çok 128, şablon sınırı): 16'ya kadar katalogdaki en küçük düzen, üstünde en
+    küçük N×M; kanallar sırayla, boş kutular sonda. 128'den fazlası bildirilir (`truncated`, `channelCount`)."""
+    sid = _recorder(client, "Ofis NVR")
+    chans = [rec.RecorderChannel(id=str(i), name=f"K{i}", number=i, has_substream=True) for i in range(1, n + 1)]
+    monkeypatch.setattr(client.app.state.live, "channels", lambda src, refresh=False: chans)
+    r = client.post("/api/v1/live/views/from-recorder", json={"sourceId": sid})
+    assert r.status_code == 200, r.text
+    v = r.json()
+    assert v["layout"] == want and len(v["tiles"]) == cells
+    assert v["truncated"] is (n > 128) and v["channelCount"] == n
+    used = min(n, 128)
+    assert [t and t["channelId"] for t in v["tiles"]] == [str(i) for i in range(1, used + 1)] + [None] * (cells - used)
+    saved = next(x for x in client.get("/api/v1/live/views").json() if x["id"] == v["id"])
+    assert saved["layout"] == want and saved["tiles"] == v["tiles"]
+
+
+def test_from_recorder_names_are_unique(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    sid = _recorder(client, "Ofis NVR")
+    chans = [rec.RecorderChannel(id="1", name="K1", number=1, has_substream=True)]
+    monkeypatch.setattr(client.app.state.live, "channels", lambda src, refresh=False: chans)
+    for _ in range(2):
+        assert client.post("/api/v1/live/views/from-recorder", json={"sourceId": sid}).status_code == 200
     names = [x["name"] for x in client.get("/api/v1/live/views").json()]
     assert names == ["Ofis NVR · tüm kanallar", "Ofis NVR · tüm kanallar 2"]
 
@@ -110,6 +126,24 @@ def test_update_always_increases_updated_at(tmp_path: pathlib.Path, ticks: list[
         seen.append(u["updatedAt"])
     assert [x["updatedAt"] for x in store.list()] == [seen[-1]]
     assert ViewStore(tmp_path).list()[0]["updatedAt"] == seen[-1]      # diske de aynısı yazıldı
+
+
+def test_update_at_the_largest_float_stays_finite(tmp_path: pathlib.Path) -> None:
+    """`updatedAt` en büyük kayan noktalı sayıdaysa bir sonrakisi sonsuz olurdu (JSON'a yazılamaz, kayıt geçersiz
+    sayılırdı): değer sonlu kalır. Altında her güncelleme yine kesin olarak artar."""
+    big = sys.float_info.max
+    ticks = iter([big, 1.0, 1.0])
+    store = ViewStore(tmp_path, clock=lambda: next(ticks))
+    v = store.create("Giriş", "1", [None])
+    u = store.update(v["id"], "A", "1", [None])
+    assert u is not None and math.isfinite(u["updatedAt"]) and u["updatedAt"] == big
+    assert ViewStore(tmp_path).list()[0]["updatedAt"] == big                # dosyaya yazıldı ve geçerli okundu
+    below = math.nextafter(big, 0.0)
+    ticks2 = iter([below, below])
+    store2 = ViewStore(tmp_path / "b", clock=lambda: next(ticks2))
+    w = store2.create("B", "1", [None])
+    w2 = store2.update(w["id"], "B", "1", [None])
+    assert w2 is not None and w2["updatedAt"] == big > w["updatedAt"]       # mümkünse yine artar
 
 
 def test_locked_views_file_is_never_overwritten(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
