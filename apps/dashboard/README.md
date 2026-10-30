@@ -22,12 +22,12 @@ tıklanınca "yakında" der. Her sayfanın altında durum şeridi vardır: anali
 | Analizler | Raporlar | — | Yakında |
 | Donanım | Kameralar ve kayıt cihazları | `/cameras` | Kayıt cihazı (NVR) ve IP kamera ekle; kamerada canlı sayımı başlat |
 | Donanım | Cihaz ayarları | — | Yakında |
-| Sistem | Bildirimler (Telegram) | `/notifications` | Telegram kurulumu, deneme alarmı, bu tarayıcıdaki dikkat seçenekleri |
+| Sistem | Bildirimler | `/notifications` | Telegram kurulumu, deneme alarmı, bu tarayıcıdaki dikkat seçenekleri |
 | Sistem | Telefondan erişim | `/settings` | Panel şifresi, yerel ağa açma, telefonda açılacak adres ve QR kod |
 | Sistem | Lisans | — | Yakında |
 | Sistem | Hakkında | `/about` | Panelin ve analiz sunucusunun sürümü ve git kısa özeti |
 
-Süzmesiz `/live` (eski "Canlı sayım" bağlantıları) açılmaya devam eder; `/` ve logo Video ile test sayfasını açar.
+Menüdeki ad sayfanın başlığı ve tarayıcı sekmesinin adıdır. Süzmesiz `/live` (eski "Canlı sayım" bağlantıları) açılmaya devam eder; `/` ve logo Video ile test sayfasını açar.
 
 Panel analiz sunucusuna (`services/edge`, `bantvision.analyzer`) **kendi sunucu tarafından** bağlanır;
 `ANALYZER_TOKEN` tarayıcıya hiç gitmez, kamera şifreleri panele ve telefona gitmez.
@@ -67,7 +67,7 @@ Elle (geliştirme):
 |---|---|---|
 | `ANALYZER_URL` | `http://127.0.0.1:8090` | Analiz sunucusu adresi |
 | `ANALYZER_TOKEN` | — | Sunucuda token tanımlıysa aynısı (yalnızca sunucu tarafında kullanılır) |
-| `DASHBOARD_PASSWORD` | — | Tanımlıysa panelin tüm sayfaları ve API'si tek şifreyle korunur (oturum 7 gün; şifre değişince tüm oturumlar düşer); Ayarlar'daki panel şifresinden önceliklidir. Tanımlı değilse ve telefondan erişim kapalıysa panel şifresizdir ama yalnızca bu bilgisayardan açılır |
+| `DASHBOARD_PASSWORD` | — | Tanımlıysa panelin tüm sayfaları ve API'si tek şifreyle korunur (oturum 7 gün; şifre değişince tüm oturumlar düşer); Telefondan erişim sayfasındaki panel şifresinden önceliklidir. Tanımlı değilse ve telefondan erişim kapalıysa panel şifresizdir ama yalnızca bu bilgisayardan açılır |
 | `PANEL_ACCESS_FILE`, `PANEL_STATE_FILE` | `.local/access.json`, `.local/panel-state.json` | Erişim ayarı ve başlatıcı durum dosyası (testler geçici klasöre yönlendirir) |
 | `BV_COMMIT` | — | Hakkında'da gösterilen git kısa özeti; tanımlı değilse `git rev-parse --short HEAD`, o da olmazsa "?" (analiz sunucusu da aynı değişkeni okur) |
 

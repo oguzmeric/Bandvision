@@ -157,7 +157,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
                             <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" /></svg>
                           </button>
                           <button type="button" aria-label={`Sil: ${p.name}`} title="Sil" onClick={() => remove(p)}
-                                  className="grid h-7 w-7 place-items-center rounded-[2px] text-pl-muted hover:bg-nok-50 hover:text-nok-600">
+                                  className="grid h-7 w-7 place-items-center rounded-[2px] text-pl-muted hover:bg-nok-50 hover:text-nok-ink">
                             <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
                           </button>
                         </>
@@ -184,7 +184,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
             <StreamChoice value={sub} onChange={setSub} />
           </div>
         )}
-        {error && <p role="alert" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+        {error && <p role="alert" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
         <div className="-mx-4 -mb-4 mt-4 flex gap-2 border-t border-pl-line-soft bg-pl-side px-4 py-2.5">
           <button type="button" onClick={() => dialog.current?.close()} className="pl-btn h-8 flex-1 justify-center">Vazgeç</button>
           <button type="button" onClick={start} disabled={!selected || busy} className="pl-btn pl-btn-primary h-8 flex-1 justify-center">

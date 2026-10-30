@@ -37,7 +37,7 @@ Bugünkü panelde yalnız simgelerden oluşan dar bir yan çubuk var; sayfalar b
   - **İzleme:** Canlı izleme, Alarmlar.
   - **Analizler:** Ürün sayımı, Kişi sayımı, Güvenlik alarmı (poz), Yangın ve duman (gri, "yakında"), Kalite kontrol, Video ile test, Raporlar.
   - **Donanım:** Kameralar ve kayıt cihazları, Cihaz ayarları (proje 2 gelene dek gri).
-  - **Sistem:** Bildirimler (Telegram), Telefondan erişim, Lisans (proje 3 gelene dek gri), Hakkında.
+  - **Sistem:** Bildirimler (Telegram), Telefondan erişim, Lisans (proje 3 gelene dek gri), Hakkında. (Uygulamada menüdeki ad sayfa başlığı ve sekme adıyla aynıdır; Bildirimler sayfası Telegram'ın yanında bu tarayıcıdaki dikkat seçeneklerini de tuttuğu için menüde "Bildirimler"dir: `docs/13-web-platform.md` "Panel kabuğu".)
 - **Durum şeridi** (en alt):
   - analiz sunucusu çalışıyor mu;
   - işlemci yükü;

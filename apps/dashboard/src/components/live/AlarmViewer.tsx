@@ -148,7 +148,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
           </div>
           <div className="flex flex-col items-end gap-2">
             {ongoing ? (
-              <span className="inline-flex items-center gap-1.5 rounded-[2px] bg-white px-2 py-0.5 text-[12px] font-bold text-nok-600" data-testid="alarm-status">
+              <span className="inline-flex items-center gap-1.5 rounded-[2px] bg-white px-2 py-0.5 text-[12px] font-bold text-nok-ink" data-testid="alarm-status">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-nok-600" aria-hidden="true" />devam ediyor
               </span>
             ) : a.endedAt !== null && (
@@ -214,7 +214,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
 
           {mode === "browse" && (
             <p className="flex flex-wrap gap-2 px-4 pt-3 text-[12px]" data-testid="alarm-state">
-              <span className={`rounded-[2px] px-2 py-0.5 font-medium ${a.acked ? "bg-ok-50 text-ok-600" : "bg-warn-50 text-warn-700"}`}>{a.acked ? "Onaylandı" : "Onay bekliyor"}</span>
+              <span className={`rounded-[2px] px-2 py-0.5 font-medium ${a.acked ? "bg-ok-50 text-ok-ink" : "bg-warn-50 text-warn-ink"}`}>{a.acked ? "Onaylandı" : "Onay bekliyor"}</span>
               {a.falseAlarm && <span className="rounded-[2px] bg-pl-head px-2 py-0.5 font-medium text-pl-muted">Yanlış alarm</span>}
               <span className="rounded-[2px] border border-pl-line-soft bg-pl-side px-2 py-0.5 text-pl-muted">{NOTIFY_LABELS[a.notify]}</span>
             </p>
@@ -222,7 +222,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
         </div>
 
         <footer className="mt-3 grid gap-2 border-t border-pl-line-soft bg-pl-side px-4 py-3">
-          {error?.id === a.id && <p role="status" className="text-[13px] font-medium text-nok-600">{error.text}</p>}
+          {error?.id === a.id && <p role="status" className="text-[13px] font-medium text-nok-ink">{error.text}</p>}
           <div className="flex flex-wrap gap-2">
             {!a.acked && (
               <button ref={primary} type="button" disabled={busy} onClick={() => act("ack")}

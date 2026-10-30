@@ -236,7 +236,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       )}
       <p className="mt-2 text-xs text-pl-faint">{people ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
 
-      {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
 
       {uploading ? (
         <div className="mt-3" aria-live="polite">

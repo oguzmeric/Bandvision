@@ -9,7 +9,7 @@ interface AccessView {
   buildState: "building" | "failed" | "listening" | null; buildMessage: string | null;
 }
 
-/** Ayarlar → Telefondan erişim: panel şifresi, açma/kapama, telefon adresi ve QR kodu */
+/** Telefondan erişim sayfası: panel şifresi, açma/kapama, telefon adresi ve QR kodu */
 export default function AccessSettings() {
   const [v, setV] = useState<AccessView | null>(null);
   const [pw, setPw] = useState("");
@@ -43,7 +43,7 @@ export default function AccessSettings() {
   if (!v) return null;
   return (
     <section className="pl-section max-w-[760px]">
-      <h2>Telefondan erişim</h2>
+      <h2>Erişim ve şifre</h2>
       <p className="py-1 text-pl-muted">Açıkken panel ofis ağındaki telefon ve bilgisayarlardan açılır ve herkesten (bu bilgisayar dahil) şifre ister.</p>
       {v.envPassword
         ? <p className="py-1 text-pl-faint">Panel şifresi bu bilgisayarın ayarında (DASHBOARD_PASSWORD) tanımlı.</p>
@@ -51,12 +51,12 @@ export default function AccessSettings() {
           <>
             <div className="pl-row">
               <label htmlFor="access-pw">{v.hasPassword ? "Yeni panel şifresi" : "Panel şifresi"}</label>
-              <input id="access-pw" aria-label="Panel şifresi" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
+              <input id="access-pw" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)}
                      className="pl-input h-8 w-full max-w-[320px]" />
             </div>
             <div className="pl-row">
               <label htmlFor="access-pw2">Şifre (tekrar)</label>
-              <input id="access-pw2" aria-label="Şifre (tekrar)" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)}
+              <input id="access-pw2" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)}
                      className="pl-input h-8 w-full max-w-[320px]" />
             </div>
             <p className="py-1 text-[12px] text-pl-faint">En az 8 karakter. Şifre bu bilgisayarda yalnızca özeti olarak saklanır.</p>
@@ -67,13 +67,13 @@ export default function AccessSettings() {
           {v.enabled ? "Kaydet" : "Telefondan erişimi aç"}</button>
         {v.enabled && <button type="button" onClick={() => save(false)} className="pl-btn h-8">Erişimi kapat</button>}
       </div>
-      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-600" : "border-nok-line bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{msg.text}</p>}
       {v.buildState === "building" && (
-        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">
           {v.buildMessage || "Panel derleniyor (ilk açılış 1-2 dk)…"} Yerel ağ erişimi derleme bitince açılır.</p>
       )}
       {v.buildState === "failed" && (
-        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-1.5 text-[13px] text-nok-600">
+        <p data-testid="build-state" className="mt-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-1.5 text-[13px] text-nok-ink">
           {v.buildMessage || "Yerel ağ için derleme başarısız; panel yalnızca bu bilgisayarda açık."}</p>
       )}
       {v.lanActive && v.addresses.length > 0 && (

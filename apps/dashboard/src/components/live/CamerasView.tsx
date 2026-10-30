@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { parseKind } from "@/lib/analysisKind";
+import { KIND_TITLE, kindOfMode, parseKind } from "@/lib/analysisKind";
 import { api, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
 import SourceForm from "./SourceForm";
 import Thumb from "./Thumb";
@@ -21,13 +21,15 @@ function describe(s: Source): string {
  * Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir).
  * Güvenlik kamerası "Nöbette" (gerçekten izleniyor) ya da "Uyarı" (izlenmiyor; neden üstüne gelince) gösterir.
  */
+/** Sayımı süren kamera: o oturuma gider, oturumun türüne süzülmüş canlı sayım sayfasında (menüde o tür seçili) */
 function CountingLink({ session }: { session: LiveSession }) {
   const safety = session.profile.countMode === "safety";
   const health = safety ? safetyHealth(session) : null;
   const warn = health !== null && !health.healthy;
   return (
-    <Link href={`/live?s=${session.id}`} title={warn ? health.reason ?? undefined : undefined}
-          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-warn-line bg-warn-50 text-warn-700" : "border-ok-line bg-ok-50 text-ok-600"}`}>
+    <Link href={`/live?s=${session.id}&tur=${kindOfMode(session.profile.countMode ?? "blob")}`}
+          title={warn ? health.reason ?? undefined : undefined}
+          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-warn-line bg-warn-50 text-warn-ink" : "border-ok-line bg-ok-50 text-ok-ink"}`}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
       {!safety ? "Sayılıyor" : warn ? "Uyarı" : "Nöbette"}
     </Link>
@@ -56,7 +58,7 @@ function RecorderChannels({ source, sessions, onStart }: {
                className="pl-input h-8 flex-1" />
         <button type="button" onClick={() => load(true)} className="pl-btn h-8">Yenile</button>
       </div>
-      {error && <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
       {channels === null && !error && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="aspect-video animate-pulse rounded-[2px] bg-pl-side" />)}</div>}
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {shown.map((c) => (
@@ -113,6 +115,13 @@ export default function CamerasView() {
 
   return (
     <div className="grid items-start gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
+      {kind && (
+        // Menüden "Yeni analiz" ile gelindi: başlatma penceresi yalnız bu türün profillerini sunar; "Tümü" süzmeyi kaldırır
+        <p data-testid="kind-filter" className="flex flex-wrap items-center gap-x-2 border border-pl-sel-line bg-pl-sel px-3 py-1.5 text-[13px] text-pl-ink lg:col-span-2">
+          <span className="min-w-0 flex-1">Yeni analiz: <b>{KIND_TITLE[kind]}</b>. &quot;Canlı sayım&quot; yalnız bu türün profilleriyle başlar.</span>
+          <Link href="/cameras" className="font-semibold text-pl-accent underline">Tümü</Link>
+        </p>
+      )}
       <div className="min-w-0">
         <SourceForm key={editing?.id ?? "new"} editing={editing}
                     onCancel={editing ? () => setEditing(null) : undefined}
@@ -123,7 +132,7 @@ export default function CamerasView() {
       </div>
       <section className="pl-section mb-0 min-w-0" aria-labelledby="sources-title">
         <h2 id="sources-title">Kaynaklar</h2>
-        {error && <p role="alert" className="mb-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+        {error && <p role="alert" className="mb-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
         {sources === null && !error && <div className="h-24 animate-pulse rounded-[2px] bg-pl-side" />}
         {sources?.length === 0 && (
           <div className="grid min-h-[160px] place-items-center p-6 text-center text-pl-muted">
@@ -160,7 +169,7 @@ export default function CamerasView() {
                     </button>
                   )}
                   <button type="button" onClick={() => setEditing(s)} className="pl-btn h-8">Düzenle</button>
-                  <button type="button" onClick={() => remove(s)} className="pl-btn h-8 text-nok-600">Sil</button>
+                  <button type="button" onClick={() => remove(s)} className="pl-btn h-8 text-nok-ink">Sil</button>
                 </div>
               </div>
               {s.kind === "camera" && (

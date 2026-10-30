@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { KEEP_UNSAVED_ATTR } from "@/components/UnsavedGuard";
 import { ALARM_LABELS, stamp } from "@/lib/live";
 import { useAlarmCenter } from "./AlarmCenter";
 
@@ -23,11 +24,12 @@ export default function AlarmBanner() {
 
   const next = pathname + (search ? `?${search}` : "");
   const warning = problem && (
-    <p role="status" data-testid="alarm-feed-warning" className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+    <p role="status" data-testid="alarm-feed-warning" className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">
       {problem === "auth" ? (
         <>
           Oturum süresi doldu — alarmları görmek için yeniden giriş yapın.{" "}
-          <a href={`/login?next=${encodeURIComponent(next)}`} className="font-semibold underline">Giriş yap</a>
+          {/* Oturum düştü: kaydedilmemiş düzenleme (Canlı izleme) sorulmadan saklı kalır, girişten sonra geri yüklenir */}
+          <a href={`/login?next=${encodeURIComponent(next)}`} {...{ [KEEP_UNSAVED_ATTR]: "" }} className="font-semibold underline">Giriş yap</a>
         </>
       ) : "Alarmlar alınamıyor — analiz sunucusuna ulaşılamıyor."}
     </p>
@@ -41,7 +43,7 @@ export default function AlarmBanner() {
       {warning}
       {unwatched.map((u) => (
         <p key={u.id} role="status" data-testid="watch-warning"
-           className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-700">
+           className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">
           <span className="min-w-0 flex-1"><b>Güvenlik kamerası izlenmiyor: {u.name}</b> — {u.reason}</span>
           <Link href={`/live?s=${u.id}`} className="font-medium underline">Kamerayı aç</Link>
         </p>
@@ -61,12 +63,12 @@ export default function AlarmBanner() {
                         className="text-[13px] font-semibold underline">Kaydı izle</button>
                 {a.sessionId && <Link href={`/live?s=${a.sessionId}`} className="text-[13px] font-medium underline">Kamerayı aç</Link>}
                 <button type="button" onClick={() => ack(a)} aria-label={`Gördüm: ${label} — ${a.camera}`}
-                        className="h-7 rounded-[2px] bg-white px-3 text-[13px] font-semibold text-nok-600">Gördüm</button>
+                        className="h-7 rounded-[2px] bg-white px-3 text-[13px] font-semibold text-nok-ink">Gördüm</button>
               </div>
             );
           })}
-          {alarms.length > SHOWN && <p className="px-1 text-[13px] font-semibold text-nok-600">+{alarms.length - SHOWN} alarm daha</p>}
-          {ackError && <p className="px-1 text-[13px] font-medium text-nok-600">Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.</p>}
+          {alarms.length > SHOWN && <p className="px-1 text-[13px] font-semibold text-nok-ink">+{alarms.length - SHOWN} alarm daha</p>}
+          {ackError && <p className="px-1 text-[13px] font-medium text-nok-ink">Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.</p>}
         </div>
       )}
     </div>

@@ -8,8 +8,9 @@ import { badge, cellBox, liveHref, stateText, type TileStatus, type ViewLayout }
 import { CAMERA_MIME } from "./CameraList";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
-const TONE = { ok: "bg-ok-600 text-white", warn: "bg-warn-700 text-white", info: "bg-black/60 text-white" } as const;
-/** Nokta, kamera canlıyken: analiz rozetinin rengi, dolu */
+/** Rozet (beyaz yazı): koyu dolgu, ≥4,5:1 (globals.css `-ink`); noktalar açıklamadaki -600/-700 tonlarında kalır */
+const TONE = { ok: "bg-ok-ink text-white", warn: "bg-warn-ink text-white", info: "bg-black/60 text-white" } as const;
+/** Nokta, kamera canlıyken: analiz rozetinin rengi (kamera listesinin açıklamasındaki ton), dolu */
 const DOT = { ok: "bg-ok-600", warn: "bg-warn-700", info: "bg-white/85" } as const;
 /**
  * Nokta, kamera canlı değilken: kamera listesindeki bağlantı rengi (gri bağlanıyor, turuncu bağlantı yok), HALKA (içi boş):
@@ -119,6 +120,16 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
   // Nokta: canlı değilken bağlantı rengi halka, canlıyken rozet rengi dolu; ipucu ve ekran okuyucu metni ikisini de söyler
   const conn = state === null ? null : tile?.state === "error" ? "error" : "connecting";
   const dotLook = conn ? `border-[0.125rem] bg-transparent ${RING[conn]}` : b ? DOT[b.tone] : null;
+  /**
+   * En küçük kutunun ortasındaki nokta (px): 0.5 rem, ama kutunun kısa kenarından 2 px küçük (kutunun içinde kalır). Halka
+   * 0.125 rem'dir; nokta çok küçülürse halka incelir (en az 1 px) ki delik en az 3 px kalsın: halka dolu noktadan ayırt
+   * edilir (eski 0.375 rem'lik noktada delik 16 px kökte 2 px kalıyordu).
+   */
+  const micro = (() => {
+    if (tier !== "micro") return undefined;
+    const d = Math.max(5, Math.min(0.5 * rem, size ? Math.min(size.w, size.h) - 2 : 0.5 * rem));
+    return { width: d, height: d, ...(conn ? { borderWidth: Math.max(1, Math.min(0.125 * rem, (d - 3) / 2)) } : {}) };
+  })();
   const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), state].filter((t): t is string => !!t);
 
   const alarmButton = (cls: string) => alarm && (
@@ -136,8 +147,8 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
   const nameTag = name && (
     <span data-part="name" title={name} className={`min-w-0 truncate bg-black/55 font-medium text-white ${PILL}`}>{name}</span>
   );
-  const dot = (cls: string) => dotLook && (
-    <span data-part="dot" title={dotText.join("\n")} className={`shrink-0 rounded-full ring-1 ring-black/40 ${dotLook} ${cls}`}>
+  const dot = (cls: string, style?: React.CSSProperties) => dotLook && (
+    <span data-part="dot" title={dotText.join("\n")} style={style} className={`shrink-0 rounded-full ring-1 ring-black/40 ${dotLook} ${cls}`}>
       <span className="sr-only">{dotText.join(", ")}</span>
     </span>
   );
@@ -247,7 +258,7 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
         {tier === "tiny" && dot("absolute right-1 top-1 h-2 w-2")}
       </div>
       {/* En küçük kutu: köşedeki nokta kutudan taşardı; küçük nokta (0.375 rem) kutunun tam ortasında, kutu o kadar oldukça içinde */}
-      {tier === "micro" && dot("absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2")}
+      {tier === "micro" && dot("absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2", micro)}
     </div>
   );
 }

@@ -76,7 +76,7 @@ export default function AttentionSettings() {
       </div>
       <p className="mt-2 text-[11.5px] text-pl-faint">Onaylanmamış alarm varken sekme başlığı «🚨 ALARM — kamera adı» ile yanıp söner (her zaman açık).
         Bu ayarlar yalnızca bu tarayıcıda saklanır.</p>
-      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-600" : "border-nok-line bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+      {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{msg.text}</p>}
     </section>
   );
 }

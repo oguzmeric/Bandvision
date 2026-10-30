@@ -11,7 +11,8 @@ import {
   sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
 } from "@/lib/templateEdit.mjs";
 import {
-  copyName, LAST_VIEW_KEY, UNSAVED_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize, UNSAVED_TEXT,
+  copyName, LAST_VIEW_KEY, UNSAVED_KEY, liveHref, problemOf, RELOAD_RETRY_MS, RESIZE_DEBOUNCE_MS, STATUS_POLL_MS, streamSize,
+  TEMPLATE_TIMEOUT_MS, TIMEOUT_NOT_RELOADED, TIMEOUT_RELOADED, UNSAVED_TEXT,
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
 import CameraList, { type CamState } from "./CameraList";
@@ -93,6 +94,26 @@ const nextEmpty = (tiles: Array<TileRef | null>, from: number): number | null =>
   }
   return null;
 };
+/** Şablon isteği TEMPLATE_TIMEOUT_MS içinde bitmedi (kesildi) */
+class TemplateTimeout extends Error {}
+/**
+ * Şablon isteği (liste, Kaydet'in denetimi, şablonu yazan işlemler): TEMPLATE_TIMEOUT_MS içinde bitmezse kesilir
+ * (`TemplateTimeout`); `page` kesilince (sayfa söküldü) de kesilir.
+ */
+function timedApi<T>(page: AbortSignal, path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
+  const ctrl = new AbortController();
+  const onPage = () => ctrl.abort();
+  page.addEventListener("abort", onPage);
+  if (page.aborted) ctrl.abort();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, TEMPLATE_TIMEOUT_MS);
+  return api<T>(path, { ...init, signal: ctrl.signal })
+    .catch((e: unknown) => { throw timedOut ? new TemplateTimeout() : e; })
+    .finally(() => { clearTimeout(timer); page.removeEventListener("abort", onPage); });
+}
+/** focusLater: o an seçili sekme (sekme kalmadıysa "+") */
+const CURRENT_TAB = "#seçili-sekme";
+
 /** Klavye kısayolu yazı kutusunda mı (Ctrl+Z oradaki metni geri alsın) */
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select"));
 
@@ -184,9 +205,14 @@ export default function WatchView() {
   const restore = useRef<"pending" | "applying" | "done" | UnsavedEntry>("pending");
   /** Geri yükleme bildirimi ("Değişiklikleri at" ile) */
   const [restored, setRestored] = useState<string | null>(null);
-  /** Bildirim kalkınca odaklanacak öğenin DOM kimliği: açık sekme, sekme kalmadıysa "+" ("Değişiklikleri at" düğmesiyle odak
-   * sayfaya düşmesin; "+" pasifse Şablon editörü düğmesi, o da pasifse sekme listesi) */
+  /**
+   * Bir sonraki çizimden sonra odaklanacak öğenin DOM kimliği ya da CURRENT_TAB (o an seçili sekme; sekme kalmadıysa "+"):
+   * "Değişiklikleri at" düğmesi kalkınca, sekme silinince odak sayfaya düşmesin. Hedef pasifse ya da yoksa Şablon editörü
+   * düğmesi, o da pasifse sekme listesi.
+   */
   const focusTab = useRef<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
+  const focusLater = useCallback((id: string) => { focusTab.current = id; setFocusNonce((n) => n + 1); }, []);
   /** Kullanıcı çıkmayı onayladı (bağlantı, Çıkış): saklanan düzenleme silindi, sayfa kapanana dek yeniden yazılmaz */
   const dropped = useRef(false);
   /**
@@ -195,14 +221,28 @@ export default function WatchView() {
    * sürerken düzenleme sürdüyse Kaydet'e basıldığı andaki hâl yazılır, sonraki düzenlemeler kaydedilmemiş kalır.
    */
   const leaves = useRef(0);
+  /**
+   * Sayfanın ömrü: sökülünce (başka sayfaya geçildi, uygulama içi Geri) süren şablon istekleri kesilir ve ayrılma sayacı
+   * artar: Kaydet'in denetim isteği sürüyorsa ne "Üzerine yazılsın mı?" sorulur ne yazılır (düzenleme depoda kalır, dönünce
+   * geri yüklenir)
+   */
+  const pageLife = useRef(new AbortController());
+  useEffect(() => {
+    const c = new AbortController();
+    pageLife.current = c;
+    return () => { leaves.current += 1; c.abort(); };
+  }, []);
 
   /**
    * Şablon ve düzen listesini alır; başarıyı döndürür. Seçili şablon silinmişse kalanlardan birine geçilir; ama
    * kaydedilmemiş düzenlemesi varsa (başka yerde silindi) düzenleme atılmaz: kaydedilmemiş yeni sekme olarak kalır.
    */
   const reload = useCallback(async (): Promise<boolean> => {
+    // Sayfa bu sırada söküldüyse (ör. geliştirme kipinde React'ın çift bağlaması) yanıt ya da iptal hatası işlenmez
+    const page = pageLife.current.signal;
     try {
-      const [l, v] = await Promise.all([api<ViewLayout[]>("view-layouts"), api<ViewTemplate[]>("views")]);
+      const [l, v] = await Promise.all([timedApi<ViewLayout[]>(page, "view-layouts"), timedApi<ViewTemplate[]>(page, "views")]);
+      if (page.aborted) return false;
       setLayouts(l);
       setViews(v);
       setLoaded(true);
@@ -221,7 +261,7 @@ export default function WatchView() {
       });
       return true;
     } catch (e) {
-      setProblem(problemOf(e));
+      if (!page.aborted) setProblem(problemOf(e));
       return false;
     }
   }, []);
@@ -278,6 +318,20 @@ export default function WatchView() {
 
   // Kaydedilmemiş değişiklik bekçisi (menü bağlantıları, Çıkış, sayfayı kapatma); çıkış onaylanınca saklanan düzenleme ve
   // sunucudaki taslak (oturum hâlâ geçerliyken) silinir
+  /**
+   * Araç çubuğunda en son odaklanan düğme (Kaydet, Geri al): basılınca pasifleşirse (kaydedildi, son adım geri alındı) odak
+   * sayfaya düşmesin, "Şablon editörü" düğmesine geçsin
+   */
+  const toolbarFocus = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const el = toolbarFocus.current;
+    if (!el || !el.disabled) return;
+    const at = document.activeElement;
+    if (at === el || !at || at === document.body) {
+      toolbarFocus.current = null;
+      document.getElementById(EDITOR_ID)?.focus();
+    }
+  });
   /** Sunucudaki taslağı hemen silen işlev (useDraft'tan, aşağıda) */
   const releaseRef = useRef<() => void>(() => undefined);
   useEffect(() => {
@@ -335,15 +389,16 @@ export default function WatchView() {
   }, [dirty, present, currentId, tabName, base]);
   useEffect(() => { if (!dirty) setRestored(null); }, [dirty]);
   useEffect(() => {
-    const id = focusTab.current;
-    if (!id) return;
+    const want = focusTab.current;
+    if (!want) return;
     focusTab.current = null;
+    const id = want === CURRENT_TAB ? (currentId ? tabDomId(currentId) : ADD_ID) : want;
     // Hedef pasifse (ör. "+" kayıt sürerken) ya da yoksa: Şablon editörü düğmesi, o da pasifse sekme listesi
     for (const el of [id, EDITOR_ID, TABLIST_ID].map((x) => document.getElementById(x))) {
       el?.focus();
       if (el && document.activeElement === el) return;
     }
-  }, [restored, currentId]);
+  }, [restored, currentId, focusNonce, views]);
 
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
   const draftBody = useMemo(() => (dirty && present && layout ? { layout: present.layout, tiles: present.tiles } : null),
@@ -599,7 +654,7 @@ export default function WatchView() {
     const to = isNew ? views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null : currentId;
     if (isNew) setCurrentId(to);
     else setEdit(null);
-    focusTab.current = to ? tabDomId(to) : ADD_ID;
+    focusLater(to ? tabDomId(to) : ADD_ID);
   };
   const selectTab = (id: string) => {
     if (id === currentId || !leaveOk()) return;
@@ -641,12 +696,24 @@ export default function WatchView() {
     return go;
   };
   const added = (v: ViewTemplate) => `"${v.name}" şablonu eklendi.`;
-  /** Şablonu yazan işlemi tek başına çalıştırır (biri sürerken başlamaz); hata çağırana gider (ad penceresi kendinde gösterir) */
+  /**
+   * Şablonu yazan işlemi tek başına çalıştırır (biri sürerken başlamaz); hata çağırana gider (ad penceresi kendinde
+   * gösterir). İstek zaman aşımına uğrarsa (TEMPLATE_TIMEOUT_MS) işlem sunucuda tamamlanmış olabilir: liste yeniden alınır
+   * (kaydedilmemiş düzenleme korunur), sonra işlem serbest kalır ve Türkçe ileti çağırana gider.
+   */
   const exclusive = async (fn: () => Promise<void>): Promise<void> => {
     if (busyRef.current) throw new Error(BUSY_TEXT);
     busyRef.current = true;
     setBusy(true);
-    try { await fn(); } finally { busyRef.current = false; setBusy(false); }
+    try {
+      await fn();
+    } catch (e) {
+      if (!(e instanceof TemplateTimeout)) throw e;
+      throw new Error((await reload()) ? TIMEOUT_RELOADED : TIMEOUT_NOT_RELOADED);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   };
   /** Sayfadaki işlem (Kaydet, Kopyala, Sil, NVR'dan şablon): tek başına; hata sayfada yazar */
   const run = async (fn: () => Promise<void>) => {
@@ -661,7 +728,7 @@ export default function WatchView() {
     const origin = start.origin;
     const body = { name: tabName, layout: present.layout, tiles: present.tiles };
     if (isNew) {
-      const v = await api<ViewTemplate>("views", { method: "POST", json: body });
+      const v = await timedApi<ViewTemplate>(pageLife.current.signal, "views", { method: "POST", json: body });
       if (!adopt(v, start, true)) setInfo(added(v));
     } else if (view) {
       /** Şablon başka yerde silinmiş: düzenleme kaydedilmemiş yeni sekmede kalır (yeniden "Kaydet" yeni şablon yazar) */
@@ -673,7 +740,7 @@ export default function WatchView() {
       // Sunucudaki güncel hâl hemen önce alınır: bu düzenleme başladıktan sonra başka yerde değiştirildiyse üzerine yazmadan
       // sorulur (Vazgeç: yazılmaz, düzenleme kalır). Sunucuda sürüm koşulu yok: okuma ile yazma arasında kısa bir pencere kalır.
       const base = edit && edit.tabId === view.id ? edit.base : null;
-      const cur = (await api<ViewTemplate[]>("views")).find((x) => x.id === view.id);
+      const cur = (await timedApi<ViewTemplate[]>(pageLife.current.signal, "views")).find((x) => x.id === view.id);
       // İstek sürerken düzenlemeden ayrıldıysa (sekme değişti, değişiklikler atıldı, onaylı çıkış) ne sorulur ne yazılır.
       // Yalnız düzenleme sürdüyse Kaydet'e basıldığı andaki hâl (`body`) yazılır. Soru (confirm) sayfayı bekletir: soru ile
       // PUT arasında ayrılınamaz
@@ -681,7 +748,7 @@ export default function WatchView() {
       if (!cur) { gone(new Error(NOT_FOUND)); return; }
       if (base !== null && cur.updatedAt !== base && !window.confirm(CHANGED_ELSEWHERE)) return;
       try {
-        const v = await api<ViewTemplate>(`views/${view.id}`, { method: "PUT", json: body });
+        const v = await timedApi<ViewTemplate>(pageLife.current.signal, `views/${view.id}`, { method: "PUT", json: body });
         // Kendi kaydımız: kayıtlı hâlin değişmesi "başka yerde değişti, düzenleme yoksa izle" sayılmaz; istek sürerken yapılan
         // düzenleme (kayıtlı hâle geri alma da) yeni kayıtlı hâlin üstünde kaydedilmemiş olarak kalır
         if (live.current.currentId === v.id) prevSaved.current = { id: v.id, draft: { layout: v.layout, tiles: v.tiles, name: v.name } };
@@ -693,54 +760,70 @@ export default function WatchView() {
       }
     }
   });
+  /**
+   * Ad penceresini açar ("Farklı kaydet…", "Yeniden adlandır"). İsteğin hatası pencerede yazar; istek sürerken pencere
+   * Esc ya da Vazgeç ile kapandıysa hata sayfanın ileti alanında (role="alert") yazar (kaybolmaz).
+   */
+  const namingRef = useRef<Naming | null>(null);
+  namingRef.current = naming;
+  const openNaming = (title: string, initial: string, submit: (name: string) => Promise<void>) => {
+    const n: Naming = {
+      title, initial,
+      submit: async (name) => {
+        try {
+          await submit(name);
+        } catch (e) {
+          if (namingRef.current !== n) setError((e as Error).message);
+          throw e;
+        }
+      },
+    };
+    setNaming(n);
+  };
   const saveAs = () => {
     if (!present || busyRef.current) return;
     const content = { layout: present.layout, tiles: present.tiles };
     const start = startOf();
-    setNaming({
-      title: "Farklı kaydet", initial: copyName(tabName ?? "", views.map((v) => v.name)),
-      submit: (name) => exclusive(async () => {
-        const v = await api<ViewTemplate>("views", { method: "POST", json: { name, ...content } });
-        setNaming(null);
-        clearMessages();
-        if (!adopt(v, start, true)) setInfo(added(v));
-      }),
-    });
+    openNaming("Farklı kaydet", copyName(tabName ?? "", views.map((v) => v.name)), (name) => exclusive(async () => {
+      const v = await timedApi<ViewTemplate>(pageLife.current.signal, "views", { method: "POST", json: { name, ...content } });
+      setNaming(null);
+      clearMessages();
+      if (!adopt(v, start, true)) setInfo(added(v));
+    }));
   };
   const renameTab = (id: string) => {
     if (busyRef.current) return;
     if (isLocal(id)) {
       // Kaydedilmemiş yeni sekmenin adı (sunucuya ilk Kaydet'te yazılır; o sürerken değişmez)
-      setNaming({ title: "Yeniden adlandır", initial: fresh?.name ?? "", submit: (name) => exclusive(async () => {
+      openNaming("Yeniden adlandır", fresh?.name ?? "", (name) => exclusive(async () => {
         setFresh((f) => (f && f.id === id ? { ...f, name } : f));
         setNaming(null);
-      }) });
+      }));
       return;
     }
     const v = views.find((x) => x.id === id);
     if (!v) return;
-    setNaming({
-      title: "Yeniden adlandır", initial: v.name,
-      // Yalnız ad değişir: sunucudaki GÜNCEL düzen ve kutular gider (başka yerdeki düzenleme geri alınmaz); bu sekmedeki
-      // kaydedilmemiş düzenleme olduğu gibi kalır. Şablon düzenlemenin temelinden beri değişmediyse ad değişikliği kendi
-      // değişikliğimizdir: temel yeni hâle geçer (Kaydet sormaz); değiştiyse temel kalır (Kaydet yine sorar)
-      submit: (name) => exclusive(async () => {
-        const list = await api<ViewTemplate[]>("views");
-        const cur = list.find((x) => x.id === v.id);
-        if (!cur) throw new Error(NOT_FOUND);
-        const n = await api<ViewTemplate>(`views/${v.id}`, { method: "PUT", json: { name, layout: cur.layout, tiles: cur.tiles } });
-        setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
-        setEdit((e) => (e && e.tabId === n.id && e.base === cur.updatedAt ? { ...e, base: n.updatedAt } : e));
-        setNaming(null);
-      }),
-    });
+    // Yalnız ad değişir: sunucudaki GÜNCEL düzen ve kutular gider (başka yerdeki düzenleme geri alınmaz); bu sekmedeki
+    // kaydedilmemiş düzenleme olduğu gibi kalır. Şablon düzenlemenin temelinden beri değişmediyse ad değişikliği kendi
+    // değişikliğimizdir: temel yeni hâle geçer (Kaydet sormaz); değiştiyse temel kalır (Kaydet yine sorar)
+    openNaming("Yeniden adlandır", v.name, (name) => exclusive(async () => {
+      const list = await timedApi<ViewTemplate[]>(pageLife.current.signal, "views");
+      const cur = list.find((x) => x.id === v.id);
+      if (!cur) throw new Error(NOT_FOUND);
+      const n = await timedApi<ViewTemplate>(pageLife.current.signal, `views/${v.id}`,
+        { method: "PUT", json: { name, layout: cur.layout, tiles: cur.tiles } });
+      setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
+      setEdit((e) => (e && e.tabId === n.id && e.base === cur.updatedAt ? { ...e, base: n.updatedAt } : e));
+      setNaming(null);
+    }));
   };
   const copyTab = (id: string) => {
     const v = views.find((x) => x.id === id);
     if (!v || busyRef.current || !leaveOk()) return;
     const start = startOf();
     void run(async () => {
-      const c = await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } });
+      const c = await timedApi<ViewTemplate>(pageLife.current.signal, "views",
+        { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } });
       if (!adopt(c, start, false)) setInfo(added(c));
     });
   };
@@ -750,14 +833,16 @@ export default function WatchView() {
     if (isLocal(id)) {
       clearMessages();
       setCurrentId(views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null);
+      focusLater(CURRENT_TAB);
       return;
     }
     void run(async () => {
       discarded.current = id;
-      await api(`views/${id}`, { method: "DELETE" });
+      await timedApi(pageLife.current.signal, `views/${id}`, { method: "DELETE" });
       setViews((vs) => vs.filter((x) => x.id !== id));
       setEdit((e) => (e && e.tabId === id ? null : e));
       await reload();
+      focusLater(CURRENT_TAB);                             // silinen sekmenin yerine o an seçili sekme (yoksa "+")
     });
   };
   /** Kayıt cihazının tüm kanallarından (en çok MAX_TILES = 128) şablon kurar ve ona geçer */
@@ -765,7 +850,8 @@ export default function WatchView() {
     if (busyRef.current || !leaveOk()) return;
     const start = startOf();
     void run(async () => {
-      const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
+      const v = await timedApi<ViewTemplate & { truncated: boolean; channelCount: number }>(pageLife.current.signal,
+        "views/from-recorder", { method: "POST", json: { sourceId } });
       const note = v.truncated ? `İlk ${MAX_TILES} kanal alındı (toplam ${v.channelCount}).` : null;
       setInfo(adopt(v, start, false) ? note : [added(v), note].filter(Boolean).join(" "));
     });
@@ -817,22 +903,23 @@ export default function WatchView() {
           <PageHeader title="Canlı izleme" />
           <TemplateTabs tabs={tabs} current={currentId} onSelect={selectTab} onAdd={newTemplate}
                         onMenu={(id, x, y) => setMenu({ kind: "tab", id, x, y })} addDisabled={layouts.length === 0 || busy} />
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5"
+               onFocus={(e) => { toolbarFocus.current = e.target instanceof HTMLButtonElement && e.target.hasAttribute("data-toolbar") ? e.target : null; }}>
             <EditorMenu layoutId={present?.layout ?? null} canUndo={!!hist && canUndo(hist)} canRedo={!!hist && canRedo(hist)}
                         canSave={dirty && !!layout && !!tabName.trim()} canSaveAs={!!present && !!layout} busy={busy} disabled={layouts.length === 0}
                         recorders={recorders} onNew={newTemplate} onUndo={doUndo} onRedo={doRedo} onSave={save} onSaveAs={saveAs}
                         onLayout={chooseLayout} onFromRecorder={fromRecorder}
                         canClearSelected={selected !== null && !!present?.tiles[selected]}
                         onClearSelected={() => { if (selected !== null) emptyTile(selected); }} />
-            <button type="button" onClick={save} disabled={!dirty || !layout || busy || !tabName.trim()} className="pl-btn">Kaydet</button>
-            <button type="button" onClick={doUndo} disabled={!hist || !canUndo(hist)} className="pl-btn">Geri al</button>
+            <button type="button" data-toolbar="" onClick={save} disabled={!dirty || !layout || busy || !tabName.trim()} className="pl-btn">Kaydet</button>
+            <button type="button" data-toolbar="" onClick={doUndo} disabled={!hist || !canUndo(hist)} className="pl-btn">Geri al</button>
             {canWall && <button type="button" onClick={wall} disabled={!present || !layout} className="pl-btn">Tüm ekran</button>}
-            {dirty && <span className="text-[12px] text-warn-700">Kaydedilmemiş değişiklik var</span>}
+            {dirty && <span className="text-[12px] text-warn-ink">Kaydedilmemiş değişiklik var</span>}
           </div>
         </>
       )}
       {problem && !single && (
-        <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-700`}><ConnectionProblem problem={problem} /></p>
+        <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-ink`}><ConnectionProblem problem={problem} /></p>
       )}
       {restored && dirty && chrome && (
         <div role="status" className={`${message} flex flex-wrap items-center gap-2 border-pl-sel-line bg-pl-sel text-pl-ink`}>
@@ -841,10 +928,10 @@ export default function WatchView() {
         </div>
       )}
       {(error || draftError) && chrome && (
-        <p role="alert" className={`${message} border-nok-line bg-nok-50 text-nok-600`}>{error ?? draftError}</p>
+        <p role="alert" className={`${message} border-nok-line bg-nok-50 text-nok-ink`}>{error ?? draftError}</p>
       )}
-      {info && chrome && <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-700`}>{info}</p>}
-      {note && chrome && <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-700`}>{note}</p>}
+      {info && chrome && <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-ink`}>{info}</p>}
+      {note && chrome && <p role="status" className={`${message} border-warn-line bg-warn-50 text-warn-ink`}>{note}</p>}
       <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-start">
         <div className="grid min-w-0 flex-1 gap-2"
              {...(present && currentId ? { role: "tabpanel", id: PANEL_ID, "aria-labelledby": tabDomId(currentId) } : {})}>

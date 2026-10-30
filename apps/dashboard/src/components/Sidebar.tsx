@@ -4,12 +4,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { NAV, isCurrent, type NavItem } from "@/lib/nav";
+import { NAV, NAV_LEGACY_KEY, collapsedCookie, isCurrent, parseCollapsed, type NavItem } from "@/lib/nav";
 import { UNSAVED_KEY } from "@/lib/views";
 import { useUnsavedGuard } from "./UnsavedGuard";
 
-/** Kapalı grupların başlıkları (JSON dizi); her tarayıcıda ayrı hatırlanır */
-const COLLAPSED_KEY = "bv.nav.collapsed";
 /** Gri öğeye tıklanınca "yakında" yazısı bu kadar görünür */
 const SOON_MS = 3000;
 /** Dar ekran (md altı): menü çekmece olarak açılır */
@@ -17,20 +15,19 @@ const NARROW = "(max-width: 767.98px)";
 /** Sağdaki içerik sütunu (layout.tsx): çekmece açıkken etkisiz (inert) */
 const CONTENT_SELECTOR = "[data-panel-content]";
 
-function loadCollapsed(): string[] {
-  try {
-    const v: unknown = JSON.parse(window.localStorage.getItem(COLLAPSED_KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+/** Kapalı grupları bu tarayıcıda hatırlar (çerez: sunucu sonraki sayfayı da kapalı çizer) */
+function saveCollapsed(titles: string[]): void {
+  document.cookie = collapsedCookie(titles);
 }
 
-function saveCollapsed(titles: string[]): void {
+/** Önceki sürümün kaydı (localStorage): okunur ve silinir; yoksa ya da depo yoksa boş */
+function takeLegacy(): string[] {
   try {
-    window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify(titles));
+    const v = parseCollapsed(window.localStorage.getItem(NAV_LEGACY_KEY)) ?? [];
+    window.localStorage.removeItem(NAV_LEGACY_KEY);
+    return v;
   } catch {
-    // depolama yok: yalnızca bu sayfa açıkken hatırlanır
+    return [];
   }
 }
 
@@ -40,12 +37,16 @@ const ITEM = "block w-full rounded-[2px] border py-1 pl-6 pr-2 text-left text-[1
  * Soldaki yazılı, gruplu menü (TRASSIR gibi; taslak duzen.html): üstte logo, gruplar açılır-kapanır, altta Çıkış.
  * Masaüstünde 230 px sütun; dar ekranda (md altı) üstteki "Menü" düğmesinin arkasına katlanır ve içeriğin üstünde açılır.
  */
-export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) {
+/**
+ * `collapsed`: sunucunun çerezden okuduğu kapalı gruplar (çerez yoksa null): ilk çizim sunucuyla aynıdır, hidrasyon
+ * uyuşmazlığı ve açık-kapalı yanıp sönme olmaz.
+ */
+export default function Sidebar({ canLogout = false, collapsed: initial = null }: { canLogout?: boolean; collapsed?: string[] | null }) {
   const pathname = usePathname() ?? "";
   const params = useSearchParams();
   /** Kaydedilmemiş değişiklik bekçisi: bağlantıları kendisi yakalar; "Çıkış" (bağlantı değil) burada sorar */
   const { confirmLeave } = useUnsavedGuard();
-  const [collapsed, setCollapsed] = useState<string[]>([]);
+  const [collapsed, setCollapsed] = useState<string[]>(initial ?? []);
   const [open, setOpen] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
   const soonTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -63,8 +64,14 @@ export default function Sidebar({ canLogout = false }: { canLogout?: boolean }) 
     setOpen(false);
   }, []);
 
-  // Depo yalnızca tarayıcıda okunur (sunucu çıktısıyla uyum için ilk çizimde tüm gruplar açık)
-  useEffect(() => setCollapsed(loadCollapsed()), []);
+  // Çerez yoksa önceki sürümün kaydı bir kez çereze taşınır
+  useEffect(() => {
+    if (initial !== null) return;
+    const legacy = takeLegacy();
+    if (legacy.length === 0) return;
+    setCollapsed(legacy);
+    saveCollapsed(legacy);
+  }, [initial]);
   useEffect(() => () => clearTimeout(soonTimer.current), []);
   // Her gezinmede (bağlantı, Geri/İleri, router.push) çekmece kapanır
   const paramsKey = params.toString();

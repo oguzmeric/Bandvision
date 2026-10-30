@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 /** Panel oturum çerezinin adı (src/lib/session.ts SESSION_COOKIE) */
 const SESSION_COOKIE = "bv_session";
 
-/** Telefondan erişim (Ayarlar). e2e'de DASHBOARD_PASSWORD tanımlıdır: ortam şifresi kipi sınanır.
+/** Telefondan erişim sayfası. e2e'de DASHBOARD_PASSWORD tanımlıdır: ortam şifresi kipi sınanır.
  * Şifre özeti kipinin girişi/planı accessCore.test.mjs ile sınanır. Ayar dosyası geçici klasördedir (playwright.config.ts). */
 
 async function login(page: Page, next = "/settings") {
@@ -99,8 +99,9 @@ test("kenar çubuğunda Telefondan erişim bağlantısı var; ayarlar sayfası a
   await login(page, "/videos");
   await page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Telefondan erişim", exact: true }).click();
   await expect(page).toHaveURL(/\/settings$/);
-  await expect(page.getByRole("heading", { name: "Ayarlar" })).toBeVisible();
-  await expect(page.getByRole("main").getByText("Telefondan erişim", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Telefondan erişim" })).toBeVisible();
+  await expect(page).toHaveTitle("Telefondan erişim · BandVision");
+  await expect(page.getByRole("main").getByRole("heading", { level: 2, name: "Erişim ve şifre" })).toBeVisible();
 });
 
 test("ayarlar API: boşluk/256+ karakterlik şifre 422; yabancı Host başlığıyla (DNS yeniden bağlama) yazma 403", async ({ page }) => {
@@ -150,5 +151,20 @@ test("ayarlar: başlatıcının durum dosyası derleme sürüyor/başarısız di
     expect([none.buildState, none.buildMessage]).toEqual([null, null]);
   } finally {
     fs.rmSync(file!, { force: true });
+  }
+});
+
+test("telefondan erişim: şifre alanlarının erişilebilir adı görünen etiketle aynı (WCAG 2.5.3)", async ({ page }) => {
+  await login(page, "/videos");
+  const view = { enabled: false, envPassword: false, lanActive: false, runner: false, addresses: [], buildState: null, buildMessage: null };
+  for (const [hasPassword, label] of [[false, "Panel şifresi"], [true, "Yeni panel şifresi"]] as const) {
+    await page.route("**/api/access", (r) => (r.request().method() === "GET" ? r.fulfill({ json: { ...view, hasPassword } }) : r.fallback()));
+    await page.goto("/settings");
+    const main = page.getByRole("main");
+    await expect(main.getByText(label, { exact: true })).toBeVisible();
+    await expect(main.locator("#access-pw")).toHaveAccessibleName(label);
+    await expect(main.locator("#access-pw2")).toHaveAccessibleName("Şifre (tekrar)");
+    await expect(main.getByLabel(label, { exact: true })).toHaveAttribute("type", "password");
+    await page.unroute("**/api/access");
   }
 });

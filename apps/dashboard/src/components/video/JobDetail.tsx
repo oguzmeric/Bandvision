@@ -60,7 +60,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
         <div className="flex flex-wrap gap-1.5">
           {files.has("counts.csv") && <a href={fileUrl("counts.csv")} className="pl-btn h-8">CSV indir</a>}
           {files.has("profile.json") && <a href={fileUrl("profile.json")} download="profil.json" className="pl-btn h-8">Profili indir</a>}
-          <button type="button" onClick={remove} disabled={deleting} className="pl-btn h-8 text-nok-600">{deleting ? "Siliniyor…" : "Sil"}</button>
+          <button type="button" onClick={remove} disabled={deleting} className="pl-btn h-8 text-nok-ink">{deleting ? "Siliniyor…" : "Sil"}</button>
         </div>
       </header>
 
@@ -75,7 +75,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
       )}
 
       {job.status === "failed" && (
-        <div role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 p-3 text-[13px] text-nok-600">
+        <div role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 p-3 text-[13px] text-nok-ink">
           <p className="font-medium">Analiz tamamlanamadı</p>
           <p className="mt-1">{job.error}</p>
           <p className="mt-2 text-xs">İpucu: video sabit kamerayla, bandın tepesinden çekilmiş olmalı. Bant başta doluysa &quot;boş bant aralığı&quot;nı belirterek yeniden dene.</p>
@@ -137,7 +137,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
                 )}
               </dl>
               {r.calibration?.notes?.map((n) => (
-                <p key={n} className="mb-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[12.5px] text-warn-700">{n}</p>
+                <p key={n} className="mb-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[12.5px] text-warn-ink">{n}</p>
               ))}
               {files.has("counts.csv") && (
                 <>

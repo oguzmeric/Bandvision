@@ -59,12 +59,12 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
     <section className="pl-section mb-0 pb-2.5" aria-label="Güvenlik">
       <h2 className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${stateDot(session.state)}`} aria-hidden="true" />İzleniyor</h2>
       {session.state !== "live" ? (
-        <p className={`text-[12.5px] ${session.state === "error" ? "text-nok-600" : "text-pl-muted"}`} data-testid="safety-state">
+        <p className={`text-[12.5px] ${session.state === "error" ? "text-nok-ink" : "text-pl-muted"}`} data-testid="safety-state">
           Kamera: {STATE_LABELS[session.state]}{session.message ? ` — ${session.message}` : ""}
         </p>
       ) : !health.healthy && health.reason && (
         // gerçek neden (model yükleniyor/yüklenemedi, görüntü işlenemiyor…); model hatasında sunucunun Türkçe iletisi
-        <p className={`text-[12.5px] ${loading ? "text-pl-muted" : "text-nok-600"}`} data-testid="safety-reason">
+        <p className={`text-[12.5px] ${loading ? "text-pl-muted" : "text-nok-ink"}`} data-testid="safety-reason">
           {health.reason}{loading ? "…" : ""}{modelFailed ? " · 1 dakika sonra yeniden denenir." : ""}
         </p>
       )}
@@ -100,7 +100,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
         Deneme alarmı
       </button>
       {test && test.id === session.id && (
-        <p role="status" className={`mt-2 text-[12px] ${test.ok ? "text-ok-600" : "text-nok-600"}`}>{test.text}</p>
+        <p role="status" className={`mt-2 text-[12px] ${test.ok ? "text-ok-ink" : "text-nok-ink"}`}>{test.text}</p>
       )}
       {viewing && alarms.some((a) => a.id === viewing) && (
         <AlarmViewer alarms={alarms} id={viewing} mode="browse" onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />

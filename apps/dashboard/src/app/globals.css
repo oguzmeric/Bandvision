@@ -10,6 +10,11 @@
   --color-nok-600: #d93a4a;
   --color-warn-50: #fcf3e2;
   --color-warn-700: #b7791f;
+  /* Yazı renkleri (ve beyaz yazılı dolgular): kendi açık zemininde, beyazda ve gri zeminlerde ≥4,5:1 (WCAG 1.4.3). -600/-700
+     tonları yalnız yazı olmayan işaretler içindir (nokta, halka, çerçeve; ≥3:1, kamera listesinin açıklamasıyla aynı) */
+  --color-ok-ink: #0d7346;
+  --color-warn-ink: #8a5a00;
+  --color-nok-ink: #b42332;
   /* durum kutularının 1 px kenarlığı (sade görünüm) */
   --color-ok-line: #bfe8d3;
   --color-warn-line: #f0d9a8;
@@ -24,8 +29,8 @@
   --color-pl-ctl: #b9bfc8;
   --color-pl-ink: #1d2330;
   --color-pl-muted: #4a5261;
-  /* yardım yazıları: beyaz zeminde ≥4,5:1 (taslaktaki #9aa1ad 2,6:1 kalıyordu) */
-  --color-pl-faint: #6b7280;
+  /* yardım yazıları: beyaz, pl-side, pl-head ve pl-sel zeminde ≥4,5:1 (taslaktaki #9aa1ad 2,6:1; #6b7280 pl-head'de 4,2:1) */
+  --color-pl-faint: #5f6673;
   --color-pl-sel: #dbe9fb;
   --color-pl-sel-line: #9ec3f0;
   --color-pl-accent: #2c5aa0;

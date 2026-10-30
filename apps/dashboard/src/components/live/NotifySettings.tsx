@@ -45,9 +45,9 @@ export default function NotifySettings() {
             <input id="notify-token" aria-label="Bot anahtarı" type="password" autoComplete="new-password" className={field} value={token}
                    placeholder={cfg?.hasToken ? "Kayıtlı (değiştirmek için yaz)" : "123456:ABC…"} onChange={(e) => setToken(e.target.value)} />
             {cfg?.hasToken && (
-              <p className="mt-1 flex items-center justify-between gap-2 text-[12px] text-ok-600">
+              <p className="mt-1 flex items-center justify-between gap-2 text-[12px] text-ok-ink">
                 Anahtar kayıtlı
-                <button type="button" onClick={removeToken} className="font-medium text-nok-600 hover:underline">Anahtarı sil</button>
+                <button type="button" onClick={removeToken} className="font-medium text-nok-ink hover:underline">Anahtarı sil</button>
               </p>
             )}
           </div>
@@ -68,9 +68,9 @@ export default function NotifySettings() {
           <button type="button" onClick={() => run("notify/test", "Deneme mesajı gönderildi.")} className="pl-btn h-8">Deneme mesajı gönder</button>
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="pl-btn h-8">Deneme alarmı</button>
         </div>
-        {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-600" : "border-nok-line bg-nok-50 text-nok-600"}`}>{msg.text}</p>}
+        {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{msg.text}</p>}
         {cfg?.lastError && (
-          <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-nok-line bg-white px-3 py-1.5 text-[12.5px] text-nok-600">
+          <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-nok-line bg-white px-3 py-1.5 text-[12.5px] text-nok-ink">
             Son gönderim hatası ({stamp(cfg.lastError.at)}): {cfg.lastError.text}
           </p>
         )}

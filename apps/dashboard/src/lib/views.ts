@@ -30,6 +30,14 @@ export const STATUS_POLL_MS = 1500;
 export const STREAM_RETRY_MS = 2000;
 /** Şablon listesi alınamazsa (analiz sunucusu yok) bu aralıkla yeniden denenir */
 export const RELOAD_RETRY_MS = 5000;
+/**
+ * Şablon istekleri (liste, Kaydet'in denetimi, şablonu yazan işlemler) bu sürede bitmezse kesilir: takılan bir yazma
+ * bütün şablon işlemlerini sayfa yenilenene dek pasif bırakmasın
+ */
+export const TEMPLATE_TIMEOUT_MS = 15_000;
+/** Şablon isteği zaman aşımına uğradı; işlem sunucuda tamamlanmış olabileceğinden liste yeniden alınır */
+export const TIMEOUT_RELOADED = "İstek zaman aşımına uğradı; şablonlar yeniden yüklendi.";
+export const TIMEOUT_NOT_RELOADED = "İstek zaman aşımına uğradı; şablonlar yeniden yüklenemedi.";
 /** Sekme görünürken canlı akış bu aralıkla baştan açılır (sessizce donan ağ bağlantısına karşı sigorta) */
 export const STREAM_REKEY_MS = 15 * 60_000;
 /** Tek kamera bağlı değilken (bağlanıyor/hata) akış bu aralıkla baştan açılır: sunucu akışı bitirmiş olabilir */

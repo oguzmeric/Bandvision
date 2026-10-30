@@ -44,8 +44,8 @@ export default function NameDialog({ title, initial, onSubmit, onCancel }: {
             <span className="text-pl-muted">Şablon adı</span>
             <input autoFocus value={name} maxLength={MAX_NAME * 2} onChange={(e) => setName(e.target.value)} className="pl-input" />
           </label>
-          {tooLong && <p role="alert" className="text-nok-600">Ad en çok {MAX_NAME} karakter olabilir.</p>}
-          {error && <p role="alert" className="text-nok-600">{error}</p>}
+          {tooLong && <p role="alert" className="text-nok-ink">Ad en çok {MAX_NAME} karakter olabilir.</p>}
+          {error && <p role="alert" className="text-nok-ink">{error}</p>}
           <div className="flex justify-end gap-1.5">
             <button type="button" onClick={onCancel} className="pl-btn">Vazgeç</button>
             <button type="submit" disabled={!trimmed || tooLong || busy} className="pl-btn pl-btn-primary">Tamam</button>

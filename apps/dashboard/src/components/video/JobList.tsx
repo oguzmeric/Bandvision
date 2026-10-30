@@ -12,17 +12,17 @@ export function StatusPill({ job }: { job: AnalysisJob }) {
       const r = job.result;
       if (r?.truth) {
         const ok = (r.errorPct ?? 0) === 0;
-        return <span className={`${base} ${ok ? "bg-ok-50 text-ok-600" : "bg-nok-50 text-nok-600"}`}>
+        return <span className={`${base} ${ok ? "bg-ok-50 text-ok-ink" : "bg-nok-50 text-nok-ink"}`}>
           {ok ? `${r.count} / ${r.truth}` : signedPct(r.errorPct ?? 0)}</span>;
       }
-      return <span className={`${base} bg-ok-50 text-ok-600`}>
+      return <span className={`${base} bg-ok-50 text-ok-ink`}>
         {r?.countOut !== undefined ? `${r.count} giriş · ${r.countOut} çıkış` : `${r?.count ?? 0} adet`}</span>;
     }
     case "running":
     case "queued":
       return <span className={`${base} bg-pl-sel text-pl-accent`}>{job.status === "queued" ? "Sırada" : "Sürüyor"}</span>;
     case "failed":
-      return <span className={`${base} bg-nok-50 text-nok-600`}>Başarısız</span>;
+      return <span className={`${base} bg-nok-50 text-nok-ink`}>Başarısız</span>;
     default:
       return <span className={`${base} bg-pl-head text-pl-muted`}>Süresi doldu</span>;
   }

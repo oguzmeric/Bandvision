@@ -35,7 +35,7 @@ export default function StatusBar() {
   return (
     <footer data-testid="status-bar" aria-label="Durum şeridi"
             className="sticky bottom-0 z-30 flex flex-wrap gap-x-2 border-t border-pl-line bg-pl-side px-3 py-1 text-xs text-pl-muted">
-      <span>Analiz sunucusu: <span className={info?.analyzer === "up" ? "text-pl-ink" : info ? "font-semibold text-nok-600" : ""}>{server}</span></span>
+      <span>Analiz sunucusu: <span className={info?.analyzer === "up" ? "text-pl-ink" : info ? "font-semibold text-nok-ink" : ""}>{server}</span></span>
       <span aria-hidden="true">·</span>
       <span>İşlemci {cpu}</span>
       <span aria-hidden="true">·</span>

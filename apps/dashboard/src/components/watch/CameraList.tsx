@@ -126,7 +126,7 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
   };
   const channelList = (s: Source) => {
     const c = channels[s.id];
-    if (typeof c === "string") return <p className="px-6 py-1 text-[12px] text-nok-600">{c}</p>;
+    if (typeof c === "string") return <p className="px-6 py-1 text-[12px] text-nok-ink">{c}</p>;
     if (c === undefined) return <p className="px-6 py-1 text-[12px] text-pl-faint">Kanallar yükleniyor…</p>;
     if (c.length === 0) return <p className="px-6 py-1 text-[12px] text-pl-faint">Bu kayıt cihazında kamera yok.</p>;
     return (
@@ -140,7 +140,7 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
            className="min-w-0 border border-pl-line bg-pl-bg lg:sticky lg:top-2 lg:max-h-[calc(100vh-120px)] lg:w-[230px] lg:shrink-0 lg:overflow-y-auto">
       <h2 className="border-b border-pl-line bg-pl-head px-2 py-1 text-[13px] font-semibold">Kameralar</h2>
       {error && (
-        <div role="alert" className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[13px] text-nok-600">
+        <div role="alert" className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[13px] text-nok-ink">
           <span className="min-w-0 flex-1">{error}</span>
           <button type="button" onClick={load} className="pl-btn">Yeniden dene</button>
         </div>

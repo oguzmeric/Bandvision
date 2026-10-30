@@ -25,7 +25,7 @@ export default function VideoAnalysis() {
         <section className="pl-section mb-0">
           <h2>Son analizler</h2>
           {error && (
-            <p role="alert" className="mb-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>
+            <p role="alert" className="mb-2 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>
           )}
           {jobs === null && !error ? (
             <div className="h-16 animate-pulse rounded-[2px] bg-pl-side" />

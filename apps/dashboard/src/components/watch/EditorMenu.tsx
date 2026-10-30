@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { Source } from "@/lib/live";
 import { gridId, parseGrid } from "@/lib/layoutGrid.mjs";
 import { EDITOR_LAYOUTS, validateGrid } from "@/lib/templateEdit.mjs";
@@ -17,6 +17,18 @@ const ICONS: Record<string, { cols: number; rows: number; cells?: Array<[number,
   "12": { cols: 4, rows: 3 }, "5x5": { cols: 5, rows: 5 }, "8x8": { cols: 8, rows: 8 },
 };
 const DEFAULT_GRID = { rows: 6, cols: 8 };
+
+/**
+ * Hazır düzen düğmesinin erişilebilir adı ve ipucu: sütun ve satır sayısı sözle (görünen "4×3" sütun × satırdır, N×M girişi
+ * ise satır × sütun: ikisi karışmasın). Hep aynı sıra: önce sütun, sonra satır.
+ */
+function presetName(id: string): string {
+  if (id === "nxm") return "N×M: satır ve sütun sayısını aşağıya girin (en çok 128 kutu)";
+  const icon = ICONS[id];
+  const n = icon.cells?.length ?? icon.cols * icon.rows;
+  const grid = `${icon.cols} sütun, ${icon.rows} satır`;
+  return icon.cells ? `${LABELS[id]}: 1 büyük + ${n - 1} küçük kutu (${grid})` : `${LABELS[id]}: ${grid} (${n} kutu)`;
+}
 /** "Şablon editörü" düğmesinin DOM kimliği ("+" pasifken odak buraya) */
 export const EDITOR_ID = "bv-editor";
 
@@ -52,10 +64,14 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
   const [grid, setGrid] = useState<{ rows: string; cols: string }>({ rows: String(DEFAULT_GRID.rows), cols: String(DEFAULT_GRID.cols) });
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLInputElement>(null);
+  /** Menüde en son odaklanan öğe: pasifleşirse (Geri al/Yinele bitti) odak menünün kendisine alınır */
+  const lastFocused = useRef<HTMLElement | null>(null);
   const uid = useId();
 
   const close = (focusButton: boolean) => {
+    lastFocused.current = null;
     setOpen(false);
     if (focusButton) buttonRef.current?.focus();
   };
@@ -73,12 +89,22 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Odaktaki öğe menü açıkken pasifleşti (ör. son Geri al): odak sayfaya (body) düşmesin, menüde kalsın (Esc, Tab çalışır)
+  useLayoutEffect(() => {
+    const el = lastFocused.current;
+    if (!open || !el || !(el as HTMLButtonElement).disabled) return;
+    const at = document.activeElement;
+    if (at === el || !at || at === document.body) menuRef.current?.focus();
+  });
+
   const rows = Number(grid.rows);
   const cols = Number(grid.cols);
   const gridCheck = grid.rows.trim() && grid.cols.trim() ? validateGrid(rows, cols) : "Satır ve sütun 1–16 arasında olmalı.";
   /** Geçersiz girişte hiçbir şey değişmez; neden kutuların altında zaten yazıyor */
   const applyGrid = () => { if (!gridCheck) onLayout(gridId(rows, cols)); };
-  const act = (fn: () => void) => () => { close(false); fn(); };
+  /** Menüyü kapatan öğe: odak önce "Şablon editörü" düğmesine döner (sayfaya düşmez; açılan ad penceresi kapanınca da
+   * oraya döner), sonra işlem çalışır */
+  const act = (fn: () => void) => () => { close(true); fn(); };
   const pressed = (id: string) => (id === "nxm"
     ? !!layoutId && parseGrid(layoutId) !== null && !EDITOR_LAYOUTS.includes(layoutId)
     : layoutId === id);
@@ -87,6 +113,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
   return (
     <div ref={wrapRef} className="relative"
          onKeyDown={(e) => { if (open && e.key === "Escape") { e.stopPropagation(); close(true); } }}
+         onFocus={(e) => { if (menuRef.current?.contains(e.target) && e.target !== menuRef.current) lastFocused.current = e.target; }}
          // Odak dışarıdaki bir öğeye geçti: kapanır (odak kaybolduysa, ör. düğme pasifleşti, açık kalır)
          onBlur={(e) => { if (open && e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
       <button ref={buttonRef} id={EDITOR_ID} type="button" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? `${uid}-menu` : undefined}
@@ -94,7 +121,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
         Şablon editörü <span aria-hidden="true">▾</span>
       </button>
       {open && (
-        <div id={`${uid}-menu`} role="dialog" aria-label="Şablon editörü"
+        <div ref={menuRef} id={`${uid}-menu`} role="dialog" aria-label="Şablon editörü" tabIndex={-1}
              className="absolute left-0 top-full z-40 mt-1 w-[300px] max-w-[calc(100vw-32px)] border border-pl-ctl bg-pl-bg py-1 text-[13px] text-pl-ink">
           <button type="button" className={item} disabled={busy} onClick={act(onNew)}>Yeni şablon</button>
           <button type="button" className={item} disabled={!canUndo} onClick={onUndo}>Geri al <span className="float-right text-pl-faint">Ctrl+Z</span></button>
@@ -106,7 +133,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
             <label className="flex items-center gap-2 px-3 py-1">
               <span className="shrink-0">NVR&apos;dan şablon</span>
               <select aria-label="NVR'dan şablon" value="" disabled={busy}
-                      onChange={(e) => { const id = e.target.value; if (id) { close(false); onFromRecorder(id); } }}
+                      onChange={(e) => { const id = e.target.value; if (id) { close(true); onFromRecorder(id); } }}
                       className="pl-input min-w-0 flex-1">
                 <option value="">Kayıt cihazı seçin…</option>
                 {recorders.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -118,7 +145,7 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
           <div role="group" aria-labelledby={`${uid}-layouts`} className="grid grid-cols-5 gap-1.5 px-3 py-1.5">
             {EDITOR_LAYOUTS.map((id) => (
               <button key={id} type="button" aria-pressed={pressed(id)} disabled={!layoutId}
-                      title={id === "nxm" ? "Satır × sütun (en çok 128 kutu)" : undefined}
+                      aria-label={presetName(id)} title={presetName(id)}
                       onClick={() => (id === "nxm" ? rowsRef.current?.focus() : onLayout(id))}
                       className={`grid h-11 place-items-center border text-[11px] leading-none disabled:opacity-50 ${pressed(id)
                         ? "border-pl-sel-line bg-pl-sel font-semibold" : "border-pl-ctl bg-pl-side hover:bg-pl-head"}`}>
@@ -129,18 +156,16 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
           <div className="my-1 border-t border-pl-line-soft" />
           <form className="flex flex-wrap items-center gap-1.5 px-3 py-1" onSubmit={(e) => { e.preventDefault(); applyGrid(); }}>
             <span>N×M:</span>
-            <label className="flex items-center gap-1">Satır
-              <input ref={rowsRef} type="number" inputMode="numeric" min={1} max={16} value={grid.rows} disabled={!layoutId}
-                     onChange={(e) => setGrid((g) => ({ ...g, rows: e.target.value }))} className="pl-input w-14" />
-            </label>
+            <label htmlFor={`${uid}-rows`} className="flex items-center gap-1">Satır</label>
+            <input ref={rowsRef} id={`${uid}-rows`} type="number" inputMode="numeric" min={1} max={16} value={grid.rows}
+                   disabled={!layoutId} onChange={(e) => setGrid((g) => ({ ...g, rows: e.target.value }))} className="pl-input w-14" />
             <span aria-hidden="true">×</span>
-            <label className="flex items-center gap-1">Sütun
-              <input type="number" inputMode="numeric" min={1} max={16} value={grid.cols} disabled={!layoutId}
-                     onChange={(e) => setGrid((g) => ({ ...g, cols: e.target.value }))} className="pl-input w-14" />
-            </label>
+            <label htmlFor={`${uid}-cols`} className="flex items-center gap-1">Sütun</label>
+            <input id={`${uid}-cols`} type="number" inputMode="numeric" min={1} max={16} value={grid.cols}
+                   disabled={!layoutId} onChange={(e) => setGrid((g) => ({ ...g, cols: e.target.value }))} className="pl-input w-14" />
             <button type="submit" disabled={!layoutId} className="pl-btn">Uygula</button>
-            <p aria-live="polite" data-testid="grid-check" className={`w-full ${gridCheck ? "text-nok-600" : "text-pl-muted"}`}>
-              {gridCheck ?? `= ${rows * cols} kutu (en çok 128)`}
+            <p aria-live="polite" data-testid="grid-check" className={`w-full ${gridCheck ? "text-nok-ink" : "text-pl-muted"}`}>
+              {gridCheck ?? `= ${rows} satır × ${cols} sütun = ${rows * cols} kutu (en çok 128)`}
             </p>
           </form>
         </div>

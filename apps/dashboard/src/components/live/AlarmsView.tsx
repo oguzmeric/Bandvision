@@ -24,7 +24,7 @@ function duration(a: Alarm): string {
 
 function state(a: Alarm): { text: string; tone: string } {
   if (a.falseAlarm) return { text: "Yanlış alarm", tone: "bg-pl-head text-pl-muted" };
-  return a.acked ? { text: "Onaylandı", tone: "bg-ok-50 text-ok-600" } : { text: "Onay bekliyor", tone: "bg-warn-50 text-warn-700" };
+  return a.acked ? { text: "Onaylandı", tone: "bg-ok-50 text-ok-ink" } : { text: "Onay bekliyor", tone: "bg-warn-50 text-warn-ink" };
 }
 
 /**
@@ -128,9 +128,9 @@ export default function AlarmsView() {
         <span className={count}>Yanlış alarm <b data-testid="count-false">{counts.false}</b></span>
       </section>
 
-      {error && <p role="status" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="status" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
       {list !== null && list.length >= ALARM_LIST_LIMIT && (
-        <p className="mb-3 text-[12.5px] text-warn-700">İlk {ALARM_LIST_LIMIT} alarm gösteriliyor; tarih aralığını daraltın.</p>
+        <p className="mb-3 text-[12.5px] text-warn-ink">İlk {ALARM_LIST_LIMIT} alarm gösteriliyor; tarih aralığını daraltın.</p>
       )}
 
       <section className="overflow-x-auto">

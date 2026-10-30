@@ -54,7 +54,7 @@ test("izleme (gerçek yığın): arayüzden yeni şablon, düzenlerken taslak ak
     await page.getByRole("button", { name: "Yeni şablon" }).click();
     await expect(page.getByTestId("watch-tile")).toHaveCount(4);                      // 2×2
     await page.getByRole("button", { name: "Şablon editörü" }).click();
-    await page.getByRole("dialog", { name: "Şablon editörü" }).getByRole("button", { name: "1", exact: true }).click();
+    await page.getByRole("dialog", { name: "Şablon editörü" }).getByRole("button", { name: /^1:/ }).click();
     await expect(page.getByTestId("watch-tile")).toHaveCount(1);
     await page.keyboard.press("Escape");
     await page.getByRole("complementary", { name: "Kameralar" }).getByRole("button", { name: /^Düzenleyici klibi/ }).click();
@@ -189,7 +189,7 @@ test("izleme (gerçek yığın): 5×5 taslak JPEG kareleri akıtır, kaydedince 
     await page.goto("/watch");
     await page.getByRole("button", { name: "Yeni şablon" }).click();
     await page.getByRole("button", { name: "Şablon editörü" }).click();
-    await page.getByRole("dialog", { name: "Şablon editörü" }).getByRole("button", { name: "5×5", exact: true }).click();
+    await page.getByRole("dialog", { name: "Şablon editörü" }).getByRole("button", { name: /^5×5:/ }).click();
     await expect(page.getByTestId("watch-tile")).toHaveCount(25);
     await page.keyboard.press("Escape");
     await page.getByRole("complementary", { name: "Kameralar" }).getByRole("button", { name: /^Beşli klip/ }).click();

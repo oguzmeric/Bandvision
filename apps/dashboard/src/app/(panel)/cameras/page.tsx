@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import CamerasView from "@/components/live/CamerasView";
 import PageHeader from "@/components/PageHeader";
 
-export const metadata: Metadata = { title: "Kameralar" };
+export const metadata: Metadata = { title: "Kameralar ve kayıt cihazları" };
 
 export default function CamerasPage() {
   return (

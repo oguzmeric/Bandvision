@@ -19,7 +19,7 @@ test("yanlış şifre reddedilir; doğru şifreyle girilir ve çıkılır", asyn
   await page.getByLabel("Şifre").fill("e2e-test-sifresi");
   await page.getByRole("button", { name: "Giriş yap" }).click();
   await expect(page).toHaveURL(/\/videos$/);
-  await expect(page.getByRole("heading", { name: "Videodan sayım ve doğruluk" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
   expect((await page.request.get("/api/jobs")).status()).toBe(200);
 
   await page.getByRole("button", { name: "Çıkış" }).click();

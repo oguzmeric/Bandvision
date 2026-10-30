@@ -14,7 +14,7 @@ async function login(page: Page) {
   await page.goto("/videos");
   await page.getByLabel("Şifre").fill("e2e-test-sifresi");
   await page.getByRole("button", { name: "Giriş yap" }).click();
-  await expect(page.getByRole("heading", { name: "Videodan sayım ve doğruluk" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
 
 test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({ page }) => {
   await page.goto("/videos");
-  await expect(page.getByRole("heading", { name: "Videodan sayım ve doğruluk" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
   await expect(page.getByText("Henüz analiz yok")).toBeVisible();
 
   await page.getByTestId("file-input").setInputFiles(CLIP);

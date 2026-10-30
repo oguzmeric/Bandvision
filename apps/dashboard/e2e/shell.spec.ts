@@ -25,7 +25,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     { label: "Cihaz ayarları", href: null },
   ] },
   { title: "Sistem", items: [
-    { label: "Bildirimler (Telegram)", href: "/notifications" },
+    { label: "Bildirimler", href: "/notifications" },
     { label: "Telefondan erişim", href: "/settings" },
     { label: "Lisans", href: null },
     { label: "Hakkında", href: "/about" },
@@ -56,7 +56,7 @@ test("menü: gruplar ve öğeler tasarımdaki sırada", async ({ page }) => {
   for (const i of LINKS) await expect(nav.getByRole("link", { name: i.label, exact: true })).toHaveAttribute("href", i.href);
 });
 
-test("menü: her öğe kendi sayfasını açar ve yalnızca o öğe seçili görünür", async ({ page }) => {
+test("menü: her öğe kendi sayfasını açar, yalnızca o öğe seçili görünür; menüdeki ad = sayfa başlığı = sekme adı", async ({ page }) => {
   await login(page);
   const nav = menu(page);
   for (const i of LINKS) {
@@ -64,13 +64,15 @@ test("menü: her öğe kendi sayfasını açar ve yalnızca o öğe seçili gör
     const url = new URL(i.href, "http://x");
     await expect.poll(() => { const u = new URL(page.url()); return u.pathname + u.search; }, { message: i.label })
       .toBe(url.pathname + url.search);
-    await expect(page.locator("main h1"), i.label).toBeVisible();
+    await expect(page.locator("main h1"), i.label).toHaveText(i.label);
+    await expect(page, i.label).toHaveTitle(`${i.label} · BandVision`);
     await expect(nav.getByRole("link", { name: i.label, exact: true })).toHaveAttribute("aria-current", "page");
     await expect(nav.locator("[aria-current]"), i.label).toHaveCount(1);
   }
   // süzmesiz /live (eski bağlantılar) açılır; hiçbir Analiz öğesi seçili değildir
   await page.goto("/live");
-  await expect(page.locator("main h1")).toBeVisible();
+  await expect(page.locator("main h1")).toHaveText("Canlı sayım");
+  await expect(page).toHaveTitle("Canlı sayım · BandVision");
   await expect(nav.locator("[aria-current]")).toHaveCount(0);
 });
 
@@ -94,6 +96,16 @@ test("menü: gri öğeler tıklanınca 'yakında' der, sayfa değişmez", async 
   }
 });
 
+/** Kapalı menü grupları (bu tarayıcıda, çerezde) */
+const NAV_COOKIE = "bv_nav_collapsed";
+async function collapsedCookie(page: Page): Promise<unknown> {
+  const c = (await page.context().cookies()).find((x) => x.name === NAV_COOKIE);
+  return c ? JSON.parse(decodeURIComponent(c.value)) : null;
+}
+async function setCollapsed(page: Page, titles: string[]) {
+  await page.context().addCookies([{ name: NAV_COOKIE, value: encodeURIComponent(JSON.stringify(titles)), url: page.url() }]);
+}
+
 test("menü: gruplar kapanır, açılır; durum tarayıcıda hatırlanır", async ({ page }) => {
   await login(page);
   const nav = menu(page);
@@ -103,13 +115,52 @@ test("menü: gruplar kapanır, açılır; durum tarayıcıda hatırlanır", asyn
   await expect(group).toHaveAttribute("aria-expanded", "false");
   await expect(nav.getByRole("link", { name: "Ürün sayımı" })).toBeHidden();
   await expect(nav.getByRole("link", { name: "Canlı izleme" })).toBeVisible();          // diğer gruplar açık
-  expect(await page.evaluate(() => localStorage.getItem("bv.nav.collapsed"))).toBe(JSON.stringify(["Analizler"]));
+  expect(await collapsedCookie(page)).toEqual(["Analizler"]);
   await page.reload();
   await expect(nav.getByRole("button", { name: "Analizler", exact: true })).toHaveAttribute("aria-expanded", "false");
   await expect(nav.getByRole("link", { name: "Ürün sayımı" })).toBeHidden();
   await nav.getByRole("button", { name: "Analizler", exact: true }).click();
   await expect(nav.getByRole("link", { name: "Ürün sayımı" })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("bv.nav.collapsed"))).toBe("[]");
+  expect(await collapsedCookie(page)).toEqual([]);
+});
+
+test("menü: kapalı grup sayfa açılırken hiç açık görünmez (sunucu kapalı çizer); hidrasyon uyarısı yok", async ({ page }) => {
+  await login(page, "/about");
+  await setCollapsed(page, ["İzleme"]);
+  // sunucunun gönderdiği HTML'de liste zaten gizli
+  const html = await (await page.request.get("/about")).text();
+  expect(html).toMatch(/<ul id="bv-nav-0" hidden=""/);
+  // tarayıcıda her karede bak: İzleme listesi ilk boyamadan itibaren hiç görünmez
+  await page.addInitScript(() => {
+    const w = window as unknown as { __navSeen: string[] };
+    w.__navSeen = [];
+    const look = () => {
+      const ul = document.getElementById("bv-nav-0");
+      if (ul) w.__navSeen.push(ul.getClientRects().length > 0 && getComputedStyle(ul).display !== "none" ? "açık" : "kapalı");
+      if (w.__navSeen.length < 120) requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+  });
+  const errors: string[] = [];
+  page.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") errors.push(m.text()); });
+  await page.reload();
+  const nav = menu(page);
+  await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __navSeen: string[] }).__navSeen.length)).toBeGreaterThan(30);
+  const seen = await page.evaluate(() => (window as unknown as { __navSeen: string[] }).__navSeen);
+  expect(seen).not.toContain("açık");
+  expect(errors.filter((e) => /hydrat|did not match/i.test(e))).toEqual([]);
+});
+
+test("menü: önceki sürümün kaydı (localStorage) bir kez çereze taşınır", async ({ page }) => {
+  await login(page, "/about");
+  await page.context().clearCookies({ name: NAV_COOKIE });
+  await page.evaluate(() => localStorage.setItem("bv.nav.collapsed", JSON.stringify(["Donanım"])));
+  await page.reload();
+  const nav = menu(page);
+  await expect(nav.getByRole("button", { name: "Donanım", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(() => collapsedCookie(page)).toEqual(["Donanım"]);
+  expect(await page.evaluate(() => localStorage.getItem("bv.nav.collapsed"))).toBeNull();
 });
 
 test("menü: Çıkış alt kısımda, BandVision logosu üstte", async ({ page }) => {
@@ -242,7 +293,7 @@ test.describe("telefon (390×844)", () => {
 
   test("ilk grup kapalıyken menü açılınca odak çekmecenin içinde (görünür ilk öğe)", async ({ page }) => {
     await login(page, "/about");
-    await page.evaluate(() => localStorage.setItem("bv.nav.collapsed", JSON.stringify(["İzleme"])));
+    await setCollapsed(page, ["İzleme"]);
     await page.reload();
     await page.getByRole("button", { name: "Menü" }).click();
     const nav = menu(page);
@@ -251,7 +302,7 @@ test.describe("telefon (390×844)", () => {
     await expect(nav.getByRole("link", { name: "Ürün sayımı", exact: true })).toBeFocused();   // Analizler'in ilk öğesi
     expect(await page.evaluate(() => !!document.activeElement?.closest("[data-testid='sidebar']"))).toBe(true);
     // tüm gruplar kapalıyken: ilk grup başlığı
-    await page.evaluate(() => localStorage.setItem("bv.nav.collapsed", JSON.stringify(["İzleme", "Analizler", "Donanım", "Sistem"])));
+    await setCollapsed(page, ["İzleme", "Analizler", "Donanım", "Sistem"]);
     await page.reload();
     await page.getByRole("button", { name: "Menü" }).click();
     await expect(nav.getByRole("button", { name: "İzleme", exact: true })).toBeFocused();
@@ -264,7 +315,7 @@ test.describe("telefon (390×844)", () => {
     { path: "/cameras", ready: (p) => p.getByRole("heading", { name: "Kaynaklar" }) },
     { path: "/alarms", ready: (p) => p.getByTestId("alarm-counts") },
     { path: "/notifications", ready: (p) => p.getByRole("button", { name: "Deneme mesajı gönder" }) },
-    { path: "/settings", ready: (p) => p.getByRole("main").getByText("Telefondan erişim", { exact: true }) },
+    { path: "/settings", ready: (p) => p.getByRole("heading", { level: 1, name: "Telefondan erişim" }) },
     { path: "/videos", ready: (p) => p.getByRole("button", { name: "Analizi başlat" }) },
     { path: "/about", ready: (p) => p.getByTestId("about-analyzer").filter({ hasNotText: "Yükleniyor" }) },
   ];

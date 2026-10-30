@@ -42,7 +42,7 @@ export default function LoginForm({ next }: { next: string }) {
                onChange={(e) => setPassword(e.target.value)}
                className="pl-input mt-1 h-9 w-full" />
       </label>
-      {error && <p role="alert" data-testid="login-error" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" data-testid="login-error" className="mt-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
       <button type="submit" disabled={busy || !ready} className="pl-btn pl-btn-primary mt-4 h-9 w-full justify-center">
         {busy ? "Giriş yapılıyor…" : "Giriş yap"}
       </button>

@@ -12,14 +12,14 @@ import StaffColors from "./StaffColors";
 import { SafetyPanel, SafetySettings } from "./SafetyPanel";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, safetyHealth, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
-import { kindOfMode, KIND_TITLE, parseKind } from "@/lib/analysisKind";
+import { KIND_NOUN, kindOfMode, parseKind } from "@/lib/analysisKind";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "total" | "in" | "out"; hint?: string; testId: string }) {
   const tones = {
     total: "border-pl-sel-line bg-pl-sel text-pl-accent",
-    in: "border-ok-line bg-ok-50 text-ok-600",
-    out: "border-warn-line bg-warn-50 text-warn-700",
+    in: "border-ok-line bg-ok-50 text-ok-ink",
+    out: "border-warn-line bg-warn-50 text-warn-ink",
   };
   return (
     <div className={`rounded-[3px] border px-3 py-2 ${tones[tone]}`}>
@@ -48,22 +48,22 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
         {watch ? (
           <>
             {alarmed && (
-              <span className="flex items-center gap-1.5 font-semibold text-nok-600">
+              <span className="flex items-center gap-1.5 font-semibold text-nok-ink">
                 <span aria-hidden="true" className="h-2 w-2 rounded-full bg-nok-600" />Alarm
               </span>
             )}
             {s.state !== "live" ? (
               // kamera ölüyse "Nöbette" denmez: gerçek durum yazılır
-              <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-600" : "text-pl-muted"}`}>{STATE_LABELS[s.state]}</span>
+              <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-ink" : "text-pl-muted"}`}>{STATE_LABELS[s.state]}</span>
             ) : !health.healthy ? (
               // canlı ama izlemiyor (model yükleniyor/yüklenemedi, görüntü işlenemiyor…): neden üstüne gelince görünür
-              <span className="text-[13px] font-medium text-warn-700" title={health.reason ?? undefined} data-testid="watch-state">Uyarı</span>
+              <span className="text-[13px] font-medium text-warn-ink" title={health.reason ?? undefined} data-testid="watch-state">Uyarı</span>
             ) : !alarmed && <span className="text-[13px] text-pl-muted">Nöbette</span>}
           </>
         ) : s.twoWay ? (
           <>
-            <span><span className="text-[11.5px] font-medium text-ok-600">Giriş</span> <b>{int(s.total)}</b></span>
-            <span><span className="text-[11.5px] font-medium text-warn-700">Çıkış</span> <b>{int(s.totalOut)}</b></span>
+            <span><span className="text-[11.5px] font-medium text-ok-ink">Giriş</span> <b>{int(s.total)}</b></span>
+            <span><span className="text-[11.5px] font-medium text-warn-ink">Çıkış</span> <b>{int(s.totalOut)}</b></span>
           </>
         ) : (
           <span><b>{int(s.total)}</b> <span className="text-[11.5px] text-pl-muted">adet</span></span>
@@ -245,7 +245,7 @@ export default function LiveView() {
   const aspect = session && session.width && session.height ? session.width / session.height : 16 / 9;
 
   if (sessions === null) return error
-    ? <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>
+    ? <p role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>
     : <div className="h-64 animate-pulse rounded-[3px] border border-pl-line-soft bg-pl-side" />;
 
   if (!session) {
@@ -254,7 +254,7 @@ export default function LiveView() {
         <div>
           {kind ? (
             <>
-              <p className="font-medium">Henüz {KIND_TITLE[kind].toLocaleLowerCase("tr")} yok.</p>
+              <p className="font-medium">Henüz {KIND_NOUN[kind]} yok.</p>
               <p className="mt-1 text-sm text-pl-muted">Kameralar sayfasından ya da &ldquo;Yeni analiz&rdquo; ile başlat.</p>
               <Link href={`/cameras?tur=${kind}`} className="pl-btn pl-btn-primary mt-4">Yeni analiz</Link>
             </>
@@ -276,7 +276,7 @@ export default function LiveView() {
   const safety = mode === "safety";
   const g = geometryOf(p);
   const live = session.state === "live";
-  const stateTone = live ? "bg-ok-50 text-ok-600" : session.state === "ended" ? "bg-pl-head text-pl-muted" : "bg-warn-50 text-warn-700";
+  const stateTone = live ? "bg-ok-50 text-ok-ink" : session.state === "ended" ? "bg-pl-head text-pl-muted" : "bg-warn-50 text-warn-ink";
 
   return (
     <div>
@@ -290,7 +290,7 @@ export default function LiveView() {
           {kind ? "+ Yeni analiz" : "+ Kamera ekle"}
         </Link>
       </div>
-      {error && <p role="alert" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-600">{error}</p>}
+      {error && <p role="alert" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
 
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="pl-section mb-0 min-w-0 pb-2.5" aria-label="Canlı görüntü">
@@ -353,7 +353,7 @@ export default function LiveView() {
                 ) : (
                   <div className="mt-2.5 grid grid-cols-3 gap-2">
                     <button type="button" onClick={() => act(session.counting ? "stop" : "start")}
-                            className={`h-8 rounded-[2px] border text-[13px] font-semibold text-white hover:brightness-105 ${session.counting ? "border-[#d9771a] bg-[#f08a24]" : "border-ok-600 bg-ok-600"}`}>
+                            className={`h-8 rounded-[2px] border text-[13px] font-semibold text-white hover:brightness-105 ${session.counting ? "border-[#9a4708] bg-[#b4530a]" : "border-ok-ink bg-ok-ink"}`}>
                       {session.counting ? "Durdur" : "Başlat"}
                     </button>
                     <button type="button" className={btn} onClick={() => confirm("Sayaç sıfırlansın mı?") && act("reset")}>Sıfırla</button>
@@ -373,7 +373,7 @@ export default function LiveView() {
                   {safety ? <span /> : (
                     <a href={`/api/live/sessions/${session.id}/counts.csv`} className="font-medium text-pl-accent hover:underline">CSV indir</a>
                   )}
-                  <button type="button" onClick={closeSession} className="font-medium text-nok-600 hover:underline">Canlı sayımı kapat</button>
+                  <button type="button" onClick={closeSession} className="font-medium text-nok-ink hover:underline">Canlı sayımı kapat</button>
                 </div>
               </section>
             </>
@@ -381,7 +381,7 @@ export default function LiveView() {
             <section className="pl-section mb-0 pb-2.5" aria-label={safety ? "Güvenlik ayarları" : "Kalibrasyon"}>
               <h2>{twoWay || safety ? "Ayarlar" : "Kalibrasyon"}</h2>
               {!safety && (session.calibrationMessage || !twoWay) && (
-                <p className="rounded-[2px] border border-warn-line bg-warn-50 px-2.5 py-1.5 text-[12.5px] text-warn-700" aria-live="polite">
+                <p className="rounded-[2px] border border-warn-line bg-warn-50 px-2.5 py-1.5 text-[12.5px] text-warn-ink" aria-live="polite">
                   {session.calibrationMessage || (mode === "linescan"
                     ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
                     : "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret.")}
