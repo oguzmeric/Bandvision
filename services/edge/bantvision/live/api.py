@@ -1012,7 +1012,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.post("/views/from-recorder")
     def view_from_recorder(body: FromRecorderIn) -> dict[str, Any]:
         """Kayıt cihazının kanallarından şablon: en çok MAX_TILES (128) kanal, sırayla; düzen `recorder_layout` (16'ya
-        kadar katalogdaki en küçük düzen, üstünde en küçük N×M). Fazlası alınmaz ve bildirilir (`truncated`)."""
+        kadar katalogdaki en küçük düzen, üstünde kutusu en büyük N×M). Fazlası alınmaz ve bildirilir (`truncated`)."""
         src = manager.source_or_404(body.sourceId)
         if src["kind"] != "recorder":
             raise HTTPException(400, "Bu kaynak bir kayıt cihazı değil.")

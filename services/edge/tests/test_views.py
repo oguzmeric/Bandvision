@@ -66,13 +66,15 @@ def test_view_validation_is_422_turkish(client: TestClient, body: dict[str, Any]
         assert msg in r.json()["detail"]
 
 
-@pytest.mark.parametrize(("n", "want", "cells"), [(7, "8", 8), (16, "16", 16), (17, "3x6", 18), (20, "4x5", 20),
-                                                  (32, "4x8", 32), (64, "8x8", 64), (128, "8x16", 128),
-                                                  (129, "8x16", 128)])
+@pytest.mark.parametrize(("n", "want", "cells"), [(7, "8", 8), (16, "16", 16), (17, "4x5", 20), (26, "5x6", 30),
+                                                  (32, "6x6", 36), (37, "6x7", 42), (64, "8x8", 64), (73, "9x9", 81),
+                                                  (100, "10x10", 100), (121, "11x11", 121), (122, "9x14", 126),
+                                                  (127, "8x16", 128), (128, "8x16", 128), (129, "8x16", 128)])
 def test_from_recorder_takes_up_to_128_channels(client: TestClient, monkeypatch: pytest.MonkeyPatch, n: int, want: str,
                                                 cells: int) -> None:
-    """Kayıt cihazının bütün kanalları (en çok 128, şablon sınırı): 16'ya kadar katalogdaki en küçük düzen, üstünde en
-    küçük N×M; kanallar sırayla, boş kutular sonda. 128'den fazlası bildirilir (`truncated`, `channelCount`)."""
+    """Kayıt cihazının bütün kanalları (en çok 128, şablon sınırı): 16'ya kadar katalogdaki en küçük düzen, üstünde
+    kutusu en büyük N×M (`recorder_layout`); kanallar sırayla, boş kutular sonda. 128'den fazlası bildirilir
+    (`truncated`, `channelCount`)."""
     sid = _recorder(client, "Ofis NVR")
     chans = [rec.RecorderChannel(id=str(i), name=f"K{i}", number=i, has_substream=True) for i in range(1, n + 1)]
     monkeypatch.setattr(client.app.state.live, "channels", lambda src, refresh=False: chans)

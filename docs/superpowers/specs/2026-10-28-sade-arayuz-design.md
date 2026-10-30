@@ -113,6 +113,7 @@ Bugünkü panelde yalnız simgelerden oluşan dar bir yan çubuk var; sayfalar b
   - Alt akış okuyucu sınırı analiz sunucusunun ortam değişkeniyle (`BV_WATCH_MAX_SUB`) yapılandırılır; ayrı bir ayar dosyası yoktur. Varsayılan 128 alt + 2 ana (ana akış sınırı sabit). Arayüzde ayar ekranı yok.
   - Sınırın üstündeki kutular bugünkü gibi "Sınır aşıldı" gösterir; şablon kaydı reddedilmez.
   - Proje 3'te lisans bu sayıyı ayrıca kısıtlar.
+- **"NVR'dan şablon" düzeni.** Kayıt cihazının kanalları sırayla alınır (en çok 128; fazlası bildirilir). 16 kanala kadar katalogdaki en küçük düzen seçilir. 16'dan fazlasında kutu en büyük olacak biçimde N×M seçilir: satır ve sütun 1–16, kutu sayısı kanal sayısı ile 128 arasında; 16:9 ekranda 16:9 kutunun genişliği ekran / max(satır, sütun) olduğundan sıra önce en küçük max(satır, sütun), eşitse en az kutu, o da eşitse sütunu fazla olan (satır ≤ sütun). Böylece şerit ızgara çıkmaz (ör. 17 → `4x5`, 37 → `6x7`, 73 → `9x9`, 122 → `9x14`, 128 → `8x16`).
 - **Seçili sekme** her tarayıcıda ayrı hatırlanır (bugünkü gibi tarayıcı deposu).
 - **Durum şeridi.**
   - Analiz sunucusuna yeni bir durum uç noktası eklenir: işlemci yükü ve çalışma süresi. Gerekirse `psutil` bağımlılığı eklenir.

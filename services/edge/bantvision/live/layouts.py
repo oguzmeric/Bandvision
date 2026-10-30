@@ -78,14 +78,16 @@ def smallest_for(n: int) -> Layout:
 
 def recorder_layout(n: int) -> Layout:
     """"NVR'dan şablon" için `n` kanalın hepsinin sığdığı düzen: 16'ya kadar katalogdaki en küçük düzen
-    (`smallest_for`); üstünde en küçük N×M: en az kutu, eşitse en kare (satır ile sütun farkı en az), o da eşitse
-    sütunu fazla olan (yatay ekrana uyar). Ör. 17 → 3×6, 32 → 4×8, 64 → 8×8, 128 → 8×16. `n` > MAX_TILES ValueError."""
+    (`smallest_for`); üstünde kutusu en büyük N×M. 16:9 ekranda 16:9 kutuların genişliği ekran / max(satır, sütun)
+    olduğundan sıra: en küçük max(satır, sütun); eşitse en az kutu; o da eşitse sütunu fazla olan (satır ≤ sütun,
+    yatay ekrana uyar). Satır ve sütun 1–16, kutu sayısı n ile MAX_TILES arası. Ör. 17 → 4×5, 37 → 6×7 (3×13 şeridi
+    değil), 73 → 9×9, 122 → 9×14, 128 → 8×16. `n` > MAX_TILES ValueError."""
     if n > MAX_TILES:
         raise ValueError(f"Bir şablonda en çok {MAX_TILES} kutu olabilir; {n} kanal sığmaz.")
     if n <= len(LAYOUTS[-1].cells):
         return smallest_for(n)
     fits = [(r, c) for r in range(1, 17) for c in range(1, 17) if n <= r * c <= MAX_TILES]
-    rows, cols = min(fits, key=lambda rc: (rc[0] * rc[1], abs(rc[0] - rc[1]), -rc[1]))
+    rows, cols = min(fits, key=lambda rc: (max(rc), rc[0] * rc[1], -rc[1]))
     return _grid_layout(rows, cols)
 
 

@@ -78,7 +78,7 @@ Düzen, birim ızgarada hücre listesidir: `{id, name, cols, rows, cells: [[x, y
   - aynı kamera bir şablonda en fazla bir kez yer alır.
 
   Bu kurallar bozulursa 422 döner, ileti Türkçe olur.
-- **Kayıt cihazı kısayolu:** `POST /views/from-recorder {sourceId}`, NVR'ın kanal listesinden kanal sayısına uyan en küçük düzeni seçer ve kanalları sırayla yerleştirir (ör. 7 kanal → `8`). 16'dan fazla kanal varsa ilk 16 kanal alınır ve kullanıcıya bildirilir.
+- **Kayıt cihazı kısayolu:** `POST /views/from-recorder {sourceId}`, NVR'ın kanal listesinden kanal sayısına uyan en küçük düzeni seçer ve kanalları sırayla yerleştirir (ör. 7 kanal → `8`). 16'dan fazla kanal varsa ilk 16 kanal alınır ve kullanıcıya bildirilir. (Sade arayüz turunda bu 128 kanala ve 16'dan fazlasında N×M düzenine genişledi; güncel kural `docs/13-web-platform.md` "Kayıt cihazı kısayolu" ve `docs/superpowers/specs/2026-10-28-sade-arayuz-design.md`.)
 - Bir kaynak silinince şablonlar bozulmaz; kutu "Kamera silinmiş" gösterir.
 
 ## Analiz sunucusu (Python)

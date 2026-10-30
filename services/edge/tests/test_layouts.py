@@ -30,23 +30,43 @@ def test_smallest_layout_for_channel_count(n: int, want: str) -> None:
     assert smallest_for(n).id == want
 
 
-@pytest.mark.parametrize(("n", "want"), [(1, "1"), (10, "12"), (16, "16"), (17, "3x6"), (32, "4x8"), (64, "8x8"),
-                                         (100, "10x10"), (120, "10x12"), (127, "8x16"), (128, "8x16")])
-def test_recorder_layout_catalog_up_to_16_then_smallest_grid(n: int, want: str) -> None:
-    """"NVR'dan şablon": 16 kanala kadar katalogdaki en küçük düzen; üstünde bütün kanalları alan en küçük N×M (en az
-    kutu; eşitse en kare, o da eşitse sütunu fazla olan)."""
+@pytest.mark.parametrize(("n", "want"), [
+    (1, "1"), (10, "12"), (16, "16"),                                              # 16'ya kadar katalog (değişmez)
+    (17, "4x5"), (26, "5x6"), (32, "6x6"), (37, "6x7"), (64, "8x8"), (73, "9x9"), (100, "10x10"), (120, "11x11"),
+    (121, "11x11"), (122, "9x14"), (127, "8x16"), (128, "8x16")])
+def test_recorder_layout_catalog_up_to_16_then_largest_tile_grid(n: int, want: str) -> None:
+    """"NVR'dan şablon": 16 kanala kadar katalogdaki en küçük düzen; üstünde bütün kanalları alan N×M, kutu en büyük
+    olacak biçimde: önce en küçük max(satır, sütun) (16:9 kutuda kutu genişliği = ekran / max), sonra en az kutu, sonra
+    sütunu fazla olan. Şerit ızgara (37 → 3x13) çıkmaz."""
     assert recorder_layout(n).id == want
 
 
-def test_recorder_grid_is_the_smallest_most_square_wider_one_for_every_count() -> None:
+def _recorder_fits(n: int) -> list[tuple[int, int]]:
+    """16'dan fazla `n` kanal için aday N×M'ler: satır ve sütun 1–16, kutu sayısı n ile 128 arasında."""
+    return [(r, c) for r in range(1, 17) for c in range(1, 17) if n <= r * c <= MAX_TILES]
+
+
+def test_recorder_grid_orders_by_largest_tile_then_fewest_cells_then_wider_for_every_count() -> None:
+    """17..128'in her sayısı için kaba kuvvetle: seçilen düzen (1) bütün kanalları alır; (2) hiçbir adayın max(satır,
+    sütun)'ü daha küçük değildir; (3) aynı max'ta hiçbir aday daha az kutulu değildir; (4) aynı max ve kutuda sütun
+    satırdan fazladır (satır ≤ sütun)."""
     for n in range(17, MAX_TILES + 1):
         lay = recorder_layout(n)
         rows, cols = parse_grid(lay.id) or (0, 0)
         assert rows * cols >= n and len(lay.cells) == rows * cols, n
-        fits = [(r, c) for r in range(1, 17) for c in range(1, 17) if n <= r * c <= MAX_TILES]
-        best = min(fits, key=lambda rc: (rc[0] * rc[1], abs(rc[0] - rc[1]), -rc[1]))
-        assert (rows, cols) == best, n
-        assert cols >= rows, n                                 # eşitlikte sütun fazla: yatay ekrana uyar
+        assert (lay.rows, lay.cols) == (rows, cols), n
+        fits = _recorder_fits(n)
+        assert (rows, cols) in fits, n
+        side = max(rows, cols)
+        assert all(max(r, c) >= side for r, c in fits), n
+        assert all(r * c >= rows * cols for r, c in fits if max(r, c) == side), n
+        assert rows <= cols, n
+
+
+def test_recorder_grid_is_never_a_strip_above_16() -> None:
+    """37 kanal 3x13'te W/13 genişlikte kutu verirdi; 6x7'de W/7 (ekran genişliği W, 16:9 kutular)."""
+    assert recorder_layout(37).id == "6x7"
+    assert max(recorder_layout(37).rows, recorder_layout(37).cols) == 7
 
 
 def test_recorder_layout_over_128_is_rejected() -> None:
