@@ -7,6 +7,7 @@ import json
 import pathlib
 import subprocess
 import time
+import tomllib
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 CONTRACTS = ROOT / "contracts"
 CLIP = ROOT / "apps" / "ios" / "BantSayacUITests" / "ui_test_clip.mp4"
 CLIP_META = json.loads((ROOT / "apps" / "ios" / "BantSayacUITests" / "ui_test_clip.json").read_text(encoding="utf-8"))
+PYPROJECT = ROOT / "services" / "edge" / "pyproject.toml"
 
 
 @pytest.fixture(scope="module")
@@ -205,10 +207,20 @@ def test_system_status_shape(tmp_path: pathlib.Path) -> None:
         assert isinstance(body["commit"], str) and body["commit"]
 
 
-def test_system_status_version_is_edge_package_version(tmp_path: pathlib.Path) -> None:
-    """Sürüm kurulu dağıtımınkidir (pyproject `name = "bantvision-edge"`; "bantvision" adında bir dağıtım yok)."""
+def test_system_status_version_reads_distribution_named_in_pyproject(tmp_path: pathlib.Path,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sürüm, pyproject.toml'daki `name` adlı dağıtımdan okunur ("bantvision" adında bir dağıtım yok). Paket kurulu olsun
+    olmasın (yalnızca PYTHONPATH ile çalıştırma) aynı sonuç: dağıtım bilgisi sahtelenir, ad ve sürüm pyproject'ten."""
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["project"]
+
+    def installed(name: str) -> str:
+        if name == project["name"]:
+            return str(project["version"])
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", installed)
     with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
-        assert c.get("/api/v1/system/status").json()["version"] == importlib.metadata.version("bantvision-edge")
+        assert c.get("/api/v1/system/status").json()["version"] == project["version"]
 
 
 def test_system_status_version_unknown_without_package(tmp_path: pathlib.Path,
