@@ -5,7 +5,7 @@ import { ApiError, api, type Source } from "@/lib/live";
 import { FAILS_BEFORE_WARNING, useAlarmCenter } from "@/components/live/AlarmCenter";
 import PageHeader from "@/components/PageHeader";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
-import { layoutFor, tileTier } from "@/lib/layoutGrid.mjs";
+import { layoutFor } from "@/lib/layoutGrid.mjs";
 import {
   applyLayout, assign, canRedo, canUndo, initHistory, isDirty, neighbor, newDraft, newName, parseUnsaved, push, redo, refKey, retile,
   sameContent, swap, undo, type Draft, type History, type UnsavedEntry,
@@ -800,7 +800,7 @@ export default function WatchView() {
                   {layout.cells.map((_, i) => {
                     const ref = present.tiles[i] ?? null;
                     return (
-                      <TileOverlay key={i} layout={layout} index={i} tier={tileTier(layout, i, gridBox)} filled={ref !== null} tile={tileStatus(i)}
+                      <TileOverlay key={i} layout={layout} index={i} grid={gridBox} filled={ref !== null} tile={tileStatus(i)}
                                    label={ref ? labels[refKey(ref)] ?? null : null} selected={selected === i}
                                    onOpen={openTile} onAlarm={onAlarm} onSelect={setSelected} onDropped={onDropped}
                                    onEmpty={emptyTile} onMenu={onTileMenu}

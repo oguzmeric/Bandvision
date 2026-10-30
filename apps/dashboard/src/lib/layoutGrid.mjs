@@ -27,22 +27,45 @@ export function layoutFor(id, catalog) {
 }
 
 /**
- * Kutu katmanının yoğunluğu, kutunun dış boyutuna (CSS px) göre; böylece hiçbir boyutta ad, rozet, alarm etiketi ve
- * düğmeler üst üste binmez ya da kutudan taşmaz:
- *   - "full": üstte ad ve rozet, altta alarm etiketi ile dokunmatikte "⋯" ya da (üstüne gelince/klavye odağında) düğmeler;
- *   - "small": tek şerit: alarm etiketi ya da ad, rozet noktası, "⋯" (düğmeler yalnız "⋯" ve sağ tık menüsünde);
- *   - "tiny": yalnız rozet noktası.
- * `grid`: ızgaranın boyutu; henüz ölçülmediyse null ("full").
+ * Kutu katmanının yoğunluğu, kutunun dış boyutuna (CSS px) göre; böylece hiçbir boyutta ad, rozet, durum metni, alarm
+ * etiketi ve düğmeler üst üste binmez ya da kutudan taşmaz:
+ *   - "full": sütun: üst şeritte ad ve rozet, orta alanda durum metni, alt şeritte alarm etiketi ile dokunmatikte "⋯" ya da
+ *     (üstüne gelince/klavye odağında) düğmeler. Durum metni olan kutuda orta alan en az bir satır almalı, yoksa "small";
+ *   - "small": tek şerit: alarm etiketi ya da ad, nokta (rozet ya da bağlantı durumu), "⋯" (düğmeler yalnız "⋯" ve sağ
+ *     tık menüsünde);
+ *   - "tiny": yalnız köşede nokta;
+ *   - "micro": köşedeki nokta kutudan taşardı: küçük nokta kutunun ortasında.
+ * `grid`: ızgaranın boyutu; henüz ölçülmediyse null ("full"). `withState`: kutuda durum metni var (canlı değil).
  */
 export const TILE_FULL = Object.freeze({ w: 128, h: 72 });
 export const TILE_SMALL = Object.freeze({ w: 72, h: 44 });
+export const TILE_TINY = Object.freeze({ w: 24, h: 22 });
+/**
+ * Normal kutuda orta alanın dışında kalan yükseklik (TileOverlay ile aynı ölçüler): kutu boşluğu 4 + şerit boşluğu 6 (iki
+ * kenar: 20), üst şerit 20, alt şerit 24, iki aralık 4.
+ */
+export const FULL_CHROME_H = 72;
+/** Durum metninin satır yüksekliği (12 px yazı, 16 px satır) */
+export const STATE_LINE_H = 16;
 
-export function tileTier(layout, index, grid) {
-  if (!grid) return "full";
+/** Kutunun dış boyutu (CSS px); ızgara ölçülmediyse null */
+export function tileSize(layout, index, grid) {
+  if (!grid) return null;
   const [, , w, h] = layout.cells[index];
-  const tw = (grid.w * w) / layout.cols;
-  const th = (grid.h * h) / layout.rows;
-  if (tw >= TILE_FULL.w && th >= TILE_FULL.h) return "full";
-  if (tw >= TILE_SMALL.w && th >= TILE_SMALL.h) return "small";
-  return "tiny";
+  return { w: (grid.w * w) / layout.cols, h: (grid.h * h) / layout.rows };
+}
+
+/** Normal kutunun orta alanına sığan durum metni satırı (en çok 2): kutu yüksekliğinden */
+export function stateLines(h) {
+  return Math.max(0, Math.min(2, Math.floor((h - FULL_CHROME_H) / STATE_LINE_H)));
+}
+
+export function tileTier(layout, index, grid, withState = false) {
+  const size = tileSize(layout, index, grid);
+  if (!size) return "full";
+  const { w, h } = size;
+  if (w >= TILE_FULL.w && h >= TILE_FULL.h && (!withState || stateLines(h) >= 1)) return "full";
+  if (w >= TILE_SMALL.w && h >= TILE_SMALL.h) return "small";
+  if (w >= TILE_TINY.w && h >= TILE_TINY.h) return "tiny";
+  return "micro";
 }
