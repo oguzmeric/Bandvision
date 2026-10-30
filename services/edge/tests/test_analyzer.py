@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib.metadata
 import json
 import pathlib
 import subprocess
@@ -202,6 +203,22 @@ def test_system_status_shape(tmp_path: pathlib.Path) -> None:
         assert isinstance(body["uptimeS"], int) and body["uptimeS"] >= 0
         assert isinstance(body["version"], str) and body["version"]
         assert isinstance(body["commit"], str) and body["commit"]
+
+
+def test_system_status_version_is_edge_package_version(tmp_path: pathlib.Path) -> None:
+    """Sürüm kurulu dağıtımınkidir (pyproject `name = "bantvision-edge"`; "bantvision" adında bir dağıtım yok)."""
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        assert c.get("/api/v1/system/status").json()["version"] == importlib.metadata.version("bantvision-edge")
+
+
+def test_system_status_version_unknown_without_package(tmp_path: pathlib.Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+        assert c.get("/api/v1/system/status").json()["version"] == "?"
 
 
 def test_system_status_commit_from_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

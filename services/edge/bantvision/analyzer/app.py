@@ -173,9 +173,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/system/status", dependencies=[Auth])
     def system_status() -> dict[str, Any]:
-        # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır
+        # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır.
+        # Sürüm kurulu dağıtımın adıyla okunur (pyproject.toml `name`); paket kurulu değilse "?"
         try:
-            version = importlib.metadata.version("bantvision")
+            version = importlib.metadata.version("bantvision-edge")
         except importlib.metadata.PackageNotFoundError:
             version = "?"
         return {"cpuPercent": round(psutil.cpu_percent(interval=None), 1),
