@@ -15,7 +15,7 @@ export function menuPoint(e: { clientX?: number; clientY?: number; currentTarget
 export const isMenuKey = (e: React.KeyboardEvent) => (e.key === "F10" && e.shiftKey) || e.key === "ContextMenu";
 
 /**
- * Küçük bağlam menüsü (sekme ve kutu sağ tık menüsü): `role="menu"`, açılınca ilk etkin öğeye odak, ↑/↓/Home/End ile
+ * Küçük bağlam menüsü (sekme ve kutu sağ tık menüsü): `role="menu"`, açılınca ilk etkin öğeye (hepsi pasifse menüye) odak, ↑/↓/Home/End ile
  * gezinme, Esc ya da Tab ile kapanır, dışarı tıklayınca kapanır; kapanınca odak menüyü açan öğeye döner.
  * Ekrandan taşmaması için konum pencereye sığdırılır.
  */
@@ -36,7 +36,8 @@ export default function ContextMenu({ label, x, y, actions, onClose }: {
   useEffect(() => {
     const el = ref.current;
     opener.current = document.activeElement;
-    el?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    // İlk etkin öğeye; hepsi pasifse (ör. şablon işlemi sürerken) menünün kendisine: Esc / Tab yine kapatır
+    (el?.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? el)?.focus();
     const onDown = (e: PointerEvent) => { if (!el?.contains(e.target as Node)) onClose(); };
     const onResize = () => onClose();
     document.addEventListener("pointerdown", onDown, true);
@@ -63,7 +64,7 @@ export default function ContextMenu({ label, x, y, actions, onClose }: {
   };
 
   return (
-    <div ref={ref} role="menu" aria-label={label} onKeyDown={onKeyDown} onContextMenu={(e) => e.preventDefault()}
+    <div ref={ref} role="menu" aria-label={label} tabIndex={-1} onKeyDown={onKeyDown} onContextMenu={(e) => e.preventDefault()}
          style={{ left: pos.left, top: pos.top }}
          className="fixed z-[60] min-w-[170px] border border-pl-ctl bg-pl-bg py-1 text-[13px] text-pl-ink">
       {actions.map((a) => (

@@ -39,6 +39,7 @@ const RESTORED_CHANGED = "Şablon bu arada başka yerde değiştirildi; kaydeder
 const RESTORED_DELETED = "Şablon bu arada başka yerde silindi; değişiklikler kaydedilmemiş yeni sekmede.";
 const CHANGED_ELSEWHERE = "Bu şablon başka yerde değiştirildi. Üzerine yazılsın mı?";
 const NOT_FOUND = "Şablon bulunamadı; başka yerde silinmiş olabilir.";
+const BUSY_TEXT = "Başka bir şablon işlemi sürüyor; bitince yeniden deneyin.";
 
 /**
  * Sekmenin düzenleme geçmişi ve temeli: düzenleme başladığında şablonun sunucudaki `updatedAt` değeri (kaydedilmemiş yeni
@@ -136,8 +137,13 @@ export default function WatchView() {
   const [recorders, setRecorders] = useState<Source[]>([]);
   /** Kamera → kutu etiketi (kamera listesinden): durum gelmeden kutuda ad görünsün */
   const [labels, setLabels] = useState<Record<string, string>>({});
-  /** Kaydet / kopyala / sil / NVR'dan şablon sürerken tekrar tıklanamaz */
+  /**
+   * Şablonu yazan bir işlem sürüyor (Kaydet, Farklı kaydet, Yeniden adlandır, Kopyala, Sil, NVR'dan şablon): bunlar tek tek
+   * çalışır, biri sürerken ötekiler pasiftir (ör. Kaydet'in isteği sürerken ad değişip Kaydet'in eski adı geri yazmasın)
+   */
   const [busy, setBusy] = useState(false);
+  /** `busy`'nin hemen güncellenen kopyası: aynı çizimdeki ikinci tık da başlamasın */
+  const busyRef = useRef(false);
   const [info, setInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Düzen küçülünce düşen kameralar ya da "bütün kutular dolu" */
@@ -579,7 +585,7 @@ export default function WatchView() {
     setCurrentId(id);
   };
   const newTemplate = () => {
-    if (!layouts.length || busy || !leaveOk()) return;
+    if (!layouts.length || busyRef.current || !leaveOk()) return;
     clearMessages();
     const name = newName(views.map((v) => v.name));
     const id = `${LOCAL_PREFIX}${++localSeq.current}`;
@@ -613,11 +619,18 @@ export default function WatchView() {
     return go;
   };
   const added = (v: ViewTemplate) => `"${v.name}" şablonu eklendi.`;
-  const run = async (fn: () => Promise<void>) => {
-    if (busy) return;
+  /** Şablonu yazan işlemi tek başına çalıştırır (biri sürerken başlamaz); hata çağırana gider (ad penceresi kendinde gösterir) */
+  const exclusive = async (fn: () => Promise<void>): Promise<void> => {
+    if (busyRef.current) throw new Error(BUSY_TEXT);
+    busyRef.current = true;
     setBusy(true);
+    try { await fn(); } finally { busyRef.current = false; setBusy(false); }
+  };
+  /** Sayfadaki işlem (Kaydet, Kopyala, Sil, NVR'dan şablon): tek başına; hata sayfada yazar */
+  const run = async (fn: () => Promise<void>) => {
+    if (busyRef.current) return;
     clearMessages();
-    try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    try { await exclusive(fn); } catch (e) { setError((e as Error).message); }
   };
   const save = () => run(async () => {
     if (!present) return;
@@ -659,25 +672,27 @@ export default function WatchView() {
     }
   });
   const saveAs = () => {
-    if (!present) return;
+    if (!present || busyRef.current) return;
     const content = { layout: present.layout, tiles: present.tiles };
     const start = startOf();
     setNaming({
       title: "Farklı kaydet", initial: copyName(tabName ?? "", views.map((v) => v.name)),
-      submit: async (name) => {
+      submit: (name) => exclusive(async () => {
         const v = await api<ViewTemplate>("views", { method: "POST", json: { name, ...content } });
         setNaming(null);
         clearMessages();
         if (!adopt(v, start, true)) setInfo(added(v));
-      },
+      }),
     });
   };
   const renameTab = (id: string) => {
+    if (busyRef.current) return;
     if (isLocal(id)) {
-      setNaming({ title: "Yeniden adlandır", initial: fresh?.name ?? "", submit: async (name) => {
+      // Kaydedilmemiş yeni sekmenin adı (sunucuya ilk Kaydet'te yazılır; o sürerken değişmez)
+      setNaming({ title: "Yeniden adlandır", initial: fresh?.name ?? "", submit: (name) => exclusive(async () => {
         setFresh((f) => (f && f.id === id ? { ...f, name } : f));
         setNaming(null);
-      } });
+      }) });
       return;
     }
     const v = views.find((x) => x.id === id);
@@ -687,7 +702,7 @@ export default function WatchView() {
       // Yalnız ad değişir: sunucudaki GÜNCEL düzen ve kutular gider (başka yerdeki düzenleme geri alınmaz); bu sekmedeki
       // kaydedilmemiş düzenleme olduğu gibi kalır. Şablon düzenlemenin temelinden beri değişmediyse ad değişikliği kendi
       // değişikliğimizdir: temel yeni hâle geçer (Kaydet sormaz); değiştiyse temel kalır (Kaydet yine sorar)
-      submit: async (name) => {
+      submit: (name) => exclusive(async () => {
         const list = await api<ViewTemplate[]>("views");
         const cur = list.find((x) => x.id === v.id);
         if (!cur) throw new Error(NOT_FOUND);
@@ -695,12 +710,12 @@ export default function WatchView() {
         setViews((vs) => vs.map((x) => (x.id === n.id ? n : x)));
         setEdit((e) => (e && e.tabId === n.id && e.base === cur.updatedAt ? { ...e, base: n.updatedAt } : e));
         setNaming(null);
-      },
+      }),
     });
   };
   const copyTab = (id: string) => {
     const v = views.find((x) => x.id === id);
-    if (!v || !leaveOk()) return;
+    if (!v || busyRef.current || !leaveOk()) return;
     const start = startOf();
     void run(async () => {
       const c = await api<ViewTemplate>("views", { method: "POST", json: { name: copyName(v.name, views.map((x) => x.name)), layout: v.layout, tiles: v.tiles } });
@@ -709,7 +724,7 @@ export default function WatchView() {
   };
   const deleteTab = (id: string) => {
     const name = isLocal(id) ? fresh?.name : views.find((x) => x.id === id)?.name;
-    if (name == null || !window.confirm(`"${name}" şablonu silinsin mi?`)) return;
+    if (name == null || busyRef.current || !window.confirm(`"${name}" şablonu silinsin mi?`)) return;
     if (isLocal(id)) {
       clearMessages();
       setCurrentId(views.find((x) => x.id === remembered())?.id ?? views[0]?.id ?? null);
@@ -725,7 +740,7 @@ export default function WatchView() {
   };
   /** Kayıt cihazının tüm kanallarından (en çok 16) şablon kurar ve ona geçer */
   const fromRecorder = (sourceId: string) => {
-    if (!leaveOk()) return;
+    if (busyRef.current || !leaveOk()) return;
     const start = startOf();
     void run(async () => {
       const v = await api<ViewTemplate & { truncated: boolean; channelCount: number }>("views/from-recorder", { method: "POST", json: { sourceId } });
@@ -741,7 +756,7 @@ export default function WatchView() {
   const menuActions = (m: Menu): MenuAction[] => {
     if (m.kind === "tab") {
       return [
-        { label: "Yeniden adlandır", onSelect: () => renameTab(m.id) },
+        { label: "Yeniden adlandır", onSelect: () => renameTab(m.id), disabled: busy },
         { label: "Kopyala", onSelect: () => copyTab(m.id), disabled: isLocal(m.id) || busy },
         { label: "Sil", onSelect: () => deleteTab(m.id), disabled: busy },
       ];
