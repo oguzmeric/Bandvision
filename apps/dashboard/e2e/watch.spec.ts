@@ -18,8 +18,8 @@ async function login(page: Page) {
  * Görüntü bu adresten çözüldü: `currentSrc` beklenen yolu içerir ve boyutu var. `src` değişince tarayıcı yenisi gelene
  * dek eskisini gösterebilir; yalnız `naturalWidth` önceki akışın karesini de sayardı.
  */
-function decodedFrom(img: Locator, path: string): Promise<boolean> {
-  return img.evaluate((el: HTMLImageElement, p) => el.currentSrc.includes(p) && el.naturalWidth > 0, path);
+function decodedFrom(img: Locator, urlPart: string): Promise<boolean> {
+  return img.evaluate((el: HTMLImageElement, p) => el.currentSrc.includes(p) && el.naturalWidth > 0, urlPart);
 }
 
 test("izleme (gerçek yığın): API ile şablon, birleşik akış gelir, tek kamera akışı gelir", async ({ page }) => {

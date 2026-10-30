@@ -1350,10 +1350,13 @@ async function mockMatrix(page: Page, views: object[], statuses: Record<string, 
   await page.route("**/api/live/sources/b/channels", (r) => r.fulfill({ json: CHANNELS }));
 }
 
-/** Tarayıcının yazı boyutu ayarı (Chrome: Ayarlar → Yazı tipi boyutu): kök yazı boyutu `px` olur; sayfa yeniden yüklenmez */
+/**
+ * Tarayıcının yazı boyutu ayarı (Chrome: Ayarlar → Yazı tipi boyutu): kök yazı boyutu `px` olur; sayfa yeniden yüklenmez.
+ * Chrome bu ayarla sabit genişlikli yazıyı standarttan 3 px küçük tutar (16 → 13, 20 → 17, 24 → 21)
+ */
 async function setBrowserFont(page: Page, px: number) {
   const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Page.setFontSizes", { fontSizes: { standard: px, fixed: Math.round((px * 13) / 16) } });
+  await cdp.send("Page.setFontSizes", { fontSizes: { standard: px, fixed: px - 3 } });
 }
 const rootPx = (page: Page) => page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
 

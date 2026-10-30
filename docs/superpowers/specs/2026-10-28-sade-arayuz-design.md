@@ -95,7 +95,7 @@ Bugünkü panelde yalnız simgelerden oluşan dar bir yan çubuk var; sayfalar b
 - Yeni şablon varsayılan olarak 2×2 açılır.
 - Geri al ve Yinele yalnızca açık düzenleme oturumunda çalışır (sayfa yenilenince geçmiş silinir).
 - "Kaydet" tıklanana dek değişiklik sunucuya yazılmaz. Kaydedilmemiş değişiklikle sekme değiştirilince "Kaydedilmedi, çıkılsın mı?" sorulur.
-- Tarayıcının Geri/İleri tuşu sormaz; kaydedilmemiş değişiklikler bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir (geçmişe kayıt eklemek tarayıcıda geri dönüşü kilitleyebiliyordu).
+- Uygulama içindeki Geri/İleri sormaz (sayfa belgesinden çıkan Geri ise tarayıcının kendi "siteden ayrıl" sorusunu çıkarır); kaydedilmemiş değişiklikler bu tarayıcı sekmesinde saklanır ve Canlı izlemeye dönünce geri yüklenir (geçmişe kayıt eklemek tarayıcıda geri dönüşü kilitleyebiliyordu).
 - Kaydet, şablon bu düzenleme başladıktan sonra başka yerde değiştirildiyse üzerine yazmadan önce sorar (sunucuda sürüm koşulu yok; okuma ile yazma arasında kısa bir pencere kalır).
 - Görsel dil: TRASSIR'a yakın gri-mavi tonlar, sistem yazı tipi, ince kenarlıklar. Koyu tema bu projede yok.
 - **Analiz süzmesi.** Ürün sayımı / Kişi sayımı / Güvenlik alarmı aynı sayfanın (`/live`) `?tur=urun|kisi|guvenlik` ile süzülmüş halidir. Süzme oturumun profil yöntemine göre yapılır:
