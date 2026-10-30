@@ -1500,6 +1500,22 @@ test.describe("dokunmatik dar ekran (390 px)", () => {
     await expect(gridSrc(page)).toHaveAttribute("src", /\/views\/draft-1\/stream/);
   });
 
+  test("kutunun içindeki düğmeye (⋯, alarm etiketi) çift dokunmak tek kamerayı açmaz", async ({ page }) => {
+    await mock(page, STATUS);
+    await login(page);
+    const tiles = page.getByTestId("watch-tile");
+    await expect(tiles.nth(1)).toHaveAttribute("data-alarm", "true");
+    const single = page.getByRole("button", { name: "← Izgaraya dön" });
+    // art arda iki dokunuş (ör. iki kutunun aynı yerdeki ⋯'si) tarayıcıda çift tık olur
+    await tiles.nth(1).getByRole("button", { name: "Kutu işlemleri" }).dblclick();
+    await expect(page.getByRole("menu", { name: "Kutu işlemleri" })).toBeVisible();
+    await expect(single).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await tiles.nth(1).getByRole("button", { name: /^Alarmı aç/ }).dblclick();
+    await expect(single).toHaveCount(0);
+    await expect(tiles).toHaveCount(4);                                               // ızgara yerinde
+  });
+
   test("seçili kutunun ⋯ menüsünden ve Şablon editöründen boşaltılır", async ({ page }) => {
     await mock(page, STATUS);
     await login(page);

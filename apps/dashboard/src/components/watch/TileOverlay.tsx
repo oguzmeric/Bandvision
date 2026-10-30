@@ -61,7 +61,7 @@ const MOVES: Record<string, TileMove> = {
 /**
  * Birleşik görüntünün üstünde tek kutunun HTML katmanı: ad, durum, rozet, alarm çerçevesi; ayrıca düzenleme:
  *   - tıklama kutuyu seçer (sonra listeden tıklanan kamera buraya gelir); alarmlı kutuya tıklamak alarmı açar;
- *   - çift tık (dokunmatikte seçili kutuya yeniden dokunma) tek kamerayı açar;
+ *   - çift tık (dokunmatikte seçili kutuya yeniden dokunma) tek kamerayı açar; kutunun içindeki düğmede/bağlantıda değil;
  *   - klavye: ızgara tek sekme durağıdır (`active` kutu); ok tuşları / Home / End kutudan kutuya gezdirir (`onMove`),
  *     seçim odağı izlemez: Enter/Boşluk kutuyu seçer, seçili dolu kutuda tek kamerayı açar; seçim odak ızgaradan
  *     çıkınca da kalır (kamera listesine geçip kamera seçilebilsin);
@@ -140,7 +140,11 @@ function TileOverlay({ layout, index, grid, filled, tile, label, selected, activ
          onDragStart={(e) => { if (e.target !== e.currentTarget) return; e.dataTransfer.setData(TILE_MIME, String(index)); e.dataTransfer.effectAllowed = "move"; }}
          onDragOver={(e) => { if (accepts(e.dataTransfer)) e.preventDefault(); }}
          onDrop={(e) => { const d = dropOf(e.dataTransfer); if (!d) return; e.preventDefault(); onDropped(index, d); }}
-         onDoubleClick={() => filled && onOpen(index)}
+         // İç düğme/bağlantıdaki çift tık (ör. "⋯"ye art arda dokunmak, alarm etiketine çift tık) kutuyu açmaz
+         onDoubleClick={(e) => {
+           if (e.target !== e.currentTarget && (e.target as Element).closest("button, a")) return;
+           if (filled) onOpen(index);
+         }}
          onClick={() => {
            if (alarm) { onAlarm(alarm.id); return; }
            if (selected && filled && touchOnly()) onOpen(index);
