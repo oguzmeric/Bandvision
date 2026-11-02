@@ -79,6 +79,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     } as RequestInit);
     return passThrough(res);
   } catch (err) {
+    // Yükleme sürerken istemci ayrıldı (sekme kapandı, iptal): gövde akışı kopar ve fetch "aborted ECONNRESET" ile düşer; analiz
+    // sunucusu sağlam, "ulaşılamadı" diye günlüğe yazılmaz (canlı vekilindeki gibi)
+    if (req.signal.aborted) return new Response(null, { status: 499 });
     return unreachable(err);
   }
 }
