@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { bodyText } from "@/lib/failure";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 interface AccessView {
@@ -42,7 +43,7 @@ export default function AccessSettings() {
       const res = await fetch("/api/access", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled, password: pw || null }) });
       const body = await res.json();
-      if (!res.ok) return setMsg({ ok: false, text: body.detail ?? "Kaydedilemedi." });
+      if (!res.ok) return setMsg({ ok: false, text: bodyText(body) ?? "Kaydedilemedi." });
       setPw(""); setPw2(""); setV(body);
       setMsg({ ok: true, text: body.runner
         ? (enabled ? "Kaydedildi. Panel yeniden başlıyor; yerel ağ kipi için üretim derlemesi gerekirse 1-2 dakika sürebilir. Sayfayı sonra yenileyin."

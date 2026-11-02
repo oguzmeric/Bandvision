@@ -262,8 +262,9 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    const { detail: d, code } = (body ?? {}) as { detail?: unknown; code?: unknown };
-    throw new ApiError(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
+    // `detail`: analiz sunucusu ve vekil; `error`: panelin kendi reddi (oturum doldu, başka site, geçersiz adres)
+    const { detail: d, error: e, code } = (body ?? {}) as { detail?: unknown; error?: unknown; code?: unknown };
+    throw new ApiError(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d) : typeof e === "string" ? e
       : `İstek başarısız (HTTP ${res.status}).`, res.status, typeof code === "string" ? code : null);
   }
   return body as T;

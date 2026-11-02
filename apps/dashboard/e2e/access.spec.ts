@@ -29,6 +29,15 @@ test("ayarlar: ortam şifresi varken telefondan erişim açılır/kapanır; şif
   expect((await (await page.request.get("/api/access")).json()).enabled).toBe(false);
 });
 
+test("ayarlar: panelin kendi reddi ({error}) okunur metinle görünür, 'Kaydedilemedi.' yazılmaz", async ({ page }) => {
+  await login(page);
+  await expect(page.getByText("DASHBOARD_PASSWORD")).toBeVisible();
+  await page.route("**/api/access", (r) => (r.request().method() === "PUT"
+    ? r.fulfill({ status: 401, json: { error: "Giriş gerekli." } }) : r.continue()));
+  await page.getByRole("button", { name: "Telefondan erişimi aç" }).click();
+  await expect(page.getByRole("main").getByRole("status")).toHaveText("Giriş gerekli.");
+});
+
 test("ayarlar API: kısa şifre ve şifresiz açma reddedilir; şifre dosyada düz yazılmaz", async ({ page }) => {
   await page.goto("/settings");
   await page.getByLabel("Şifre").fill("e2e-test-sifresi");

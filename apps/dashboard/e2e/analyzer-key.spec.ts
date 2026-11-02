@@ -122,6 +122,7 @@ test("erişim anahtarı uyuşmuyor: Video ile test iş listesinde ve yüklemede 
   await page.getByTestId("file-input").setInputFiles({ name: "a.mp4", mimeType: "video/mp4", buffer: Buffer.alloc(16) });
   await page.getByRole("button", { name: "Analizi başlat" }).click();
   await expect(page.getByTestId("upload-error")).toHaveText(KEY_TEXT);
+  await expect(page.getByRole("link", { name: "Giriş yap" })).toHaveCount(0);       // anahtar sorunu: giriş işe yaramaz
 });
 
 test("erişim anahtarı uyuşmuyor: taslak yazımı durmaz, yeniden denenir (panelin 401'i gibi kesilmez)", async ({ page }) => {

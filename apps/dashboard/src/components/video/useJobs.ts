@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { type Failure, failureOf } from "@/lib/failure";
 import type { AnalysisJob } from "@/lib/types";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
@@ -13,14 +14,18 @@ const ACTIVE = new Set(["queued", "running"]);
  */
 export function useJobs() {
   const [jobs, setJobs] = useState<AnalysisJob[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
   const wakeRef = useRef<() => void>(() => {});
 
   const load = useCallback(async (): Promise<AnalysisJob[] | null> => {
     try {
       const res = await fetch("/api/jobs", { cache: "no-store" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.detail ?? `HTTP ${res.status}`);
+      const body: unknown = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(failureOf(res.status, body, `Liste alınamadı (HTTP ${res.status}).`));
+        return null;
+      }
+      if (!Array.isArray(body)) throw new Error("Liste okunamadı.");
       setJobs(body as AnalysisJob[]);
       setError(null);
       return body as AnalysisJob[];

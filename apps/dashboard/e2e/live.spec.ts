@@ -278,3 +278,14 @@ test("analiz süzmesi (sahte API): türde oturum yoksa boş durum Yeni analiz ba
   await page.getByRole("link", { name: "Yeni analiz" }).click();
   await expect(page).toHaveURL(/\/cameras\?tur=kisi$/);
 });
+
+test("panelin kendi reddi ({error}) okunur metinle görünür: 'İstek başarısız (HTTP …)' yazılmaz", async ({ page }) => {
+  await login(page);
+  let refusal: { status: number; error: string } = { status: 403, error: "Geçersiz adres." };
+  await page.route("**/api/live/sources", (r) => r.fulfill({ status: refusal.status, json: { error: refusal.error } }));
+  await page.reload();
+  await expect(page.getByRole("alert").filter({ hasText: "Geçersiz adres." })).toBeVisible();
+  refusal = { status: 401, error: "Giriş gerekli." };                                  // kendiliğinden yeniden denenir (≤ 5 sn)
+  await expect(page.getByRole("alert").filter({ hasText: "Giriş gerekli." })).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByText(/HTTP \d{3}/)).toHaveCount(0);
+});

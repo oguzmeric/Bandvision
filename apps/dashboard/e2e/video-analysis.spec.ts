@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -37,6 +37,47 @@ test("silme reddedilirse (502 analyzer_key) metin görünür, iş kalır", async
   await expect(detail.getByRole("alert").filter({ hasText: text })).toBeVisible();
   await expect(detail.getByRole("button", { name: "Sil" })).toBeEnabled();
   await expect(page.getByTestId("job-row")).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Giriş yap" })).toHaveCount(0);        // anahtar sorunu: giriş işe yaramaz
+});
+
+test("oturum dolunca (panelin kendi 401'i) yükleme, silme ve iş listesi 'oturum doldu' + giriş bağlantısı der; HTTP 401 yazmaz", async ({ page, context, request }) => {
+  const AUTH = "Oturum süresi doldu — yeniden giriş yapın.";
+  const made = await page.request.post("/api/jobs", { multipart: { file: { name: "ui_test_clip.mp4", mimeType: "video/mp4", buffer: fs.readFileSync(CLIP) } } });
+  expect(made.status()).toBe(202);
+  const id = ((await made.json()) as { id: string }).id;
+  try {
+    await page.goto("/videos");
+    const detail = page.getByTestId("job-detail");
+    await expect(detail).toContainText("ui_test_clip.mp4");
+    await context.clearCookies();                                                     // sayfa açıkken oturum doldu
+    const link = (where: Locator) => where.getByRole("link", { name: "Giriş yap" });
+    const href = "/login?next=%2Fvideos";
+
+    await page.getByTestId("file-input").setInputFiles(CLIP);
+    await page.getByRole("button", { name: "Analizi başlat" }).click();
+    const upload = page.getByTestId("upload-error");
+    await expect(upload).toContainText(AUTH);
+    await expect(link(upload)).toHaveAttribute("href", href);
+
+    page.once("dialog", (d) => d.accept());
+    await detail.getByRole("button", { name: "Sil" }).click();
+    const removal = detail.getByRole("alert");
+    await expect(removal).toContainText(AUTH);
+    await expect(link(removal)).toHaveAttribute("href", href);
+
+    const list = page.locator("section").filter({ has: page.getByRole("heading", { name: "Son analizler" }) }).getByRole("alert");
+    await expect(list).toContainText(AUTH, { timeout: 25_000 });                      // sonraki yoklamada (≤ 15 sn)
+    await expect(link(list)).toHaveAttribute("href", href);
+    await expect(page.getByText(/HTTP 401/)).toHaveCount(0);
+
+    await link(upload).click();                                                       // bağlantı çalışır: giriş yapınca /videos
+    await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+    await page.getByRole("button", { name: "Giriş yap" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
+    await expect(page.getByTestId("job-detail")).toContainText("ui_test_clip.mp4");   // iş silinmemişti
+  } finally {
+    await request.delete(`http://127.0.0.1:8091/api/v1/jobs/${id}`);                 // sonraki testler boş liste bekler
+  }
 });
 
 test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({ page }) => {

@@ -3,20 +3,23 @@
 import { useRef, useState } from "react";
 import GeometryDialog from "@/components/geometry/GeometryDialog";
 import { bytes } from "@/lib/format";
+import { type Failure, failureOf } from "@/lib/failure";
 import { clampLine, type Geometry } from "@/lib/geometry";
 import {
   ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
   type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
 } from "@/lib/types";
 
+import FailureText from "./FailureText";
+
 const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
 
-/** FastAPI hata gövdesi: {detail: "..."} ya da doğrulama listesi */
-function errorText(body: unknown, status: number): string {
+/** Hata gövdesi: {detail: "..."} (FastAPI, vekil), doğrulama listesi ya da panelin kendi reddi {error: "..."}; panelin 401'i
+ * (oturum doldu) metin değil `AUTH_LOST` */
+function errorOf(body: unknown, status: number): Failure {
   const d = (body as { detail?: unknown })?.detail;
-  if (typeof d === "string") return d;
   if (Array.isArray(d)) return d.map((x) => (x as { msg?: string }).msg ?? String(x)).join("; ");
-  return `Yükleme başarısız (HTTP ${status}).`;
+  return failureOf(status, body, `Yükleme başarısız (HTTP ${status}).`);
 }
 
 export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob) => void }) {
@@ -35,7 +38,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const people = preset === "people";
   const effectiveMode = people ? "detect" : (mode || PRESET_MODE[preset]);
   const [progress, setProgress] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Failure | null>(null);
 
   function pick(f: File | undefined | null) {
     if (!f) return;
@@ -104,7 +107,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
         if (input.current) input.current.value = "";
         onCreated(body as AnalysisJob);
       } else {
-        setError(errorText(body, xhr.status));
+        setError(errorOf(body, xhr.status));
       }
     };
     xhr.onerror = () => {
@@ -236,7 +239,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       )}
       <p className="mt-2 text-xs text-pl-faint">{people ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
 
-      {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
+      {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink"><FailureText failure={error} /></p>}
 
       {uploading ? (
         <div className="mt-3" aria-live="polite">
