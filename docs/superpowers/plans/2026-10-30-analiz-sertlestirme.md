@@ -132,6 +132,19 @@ Ports 3000/8090 are never touched.
 
 **R14** (added after the Task 1 review). The status bar keeps "yetki hatası" for both analyzer `401` and `403`: both are access refusals, so it is accurate. docs/13 gives the meaning of each.
 
+**R15** (added after the Task 2 review). Video uploads through the panel work up to the analyzer's limit (default 2 GB) without buffering.
+- **The bug, pre-existing:** Next 15.5.27 clones a request body for middleware with a 10 MB default. The route then gets 10 MB while re-sending the original `content-length`, so every upload above 10 MB fails with `UND_ERR_REQ_CONTENT_LENGTH_MISMATCH` and shows "Analiz sunucusuna ulaşılamadı…", with the right key too.
+- **Fix:** the exact path `/api/jobs` leaves the middleware `matcher`. Its `GET` and `POST` handlers call a shared gate first, the same decision the middleware makes for `/api/` paths (session, Host, R11), so statuses and bodies stay identical. `/api/jobs/...` stays under the middleware.
+- **Not chosen:** `experimental.middlewareClientMaxBodySize: "2gb"`. It was measured to take the panel to 1.2–1.8 GB of memory after a 512 MB upload.
+- **Fail fast:** before streaming, `POST /api/jobs` asks the analyzer `GET /api/v1/system/status` with a 5 s timeout. A `401` or `403` returns the R5 refusal at once, so a wrong key does not wait for a whole upload. Anything else proceeds to the upload, and a real failure surfaces there.
+
+**R16** (added after the Task 2 review). Token mode: an `/api/` request without the right token gets `401` before its body is read. Measured today: FastAPI parses the multipart body before the dependency runs, so an unauthenticated client can make the analyzer read a whole upload. A pure ASGI check does it, sharing one comparison function with `auth`, with the same text. `/healthz` and the non-API paths are unchanged, and the docs pages stay `404`.
+
+**R17** (added after the Task 2 review). Three smaller rulings:
+- R7's "the page recovers on its own" means every page whose first load failed retries on its own every 5 s while that error stands, through one shared hook, independent of the alarm feed. `NotifySettings` retries only when its first load failed, so typed values are never overwritten.
+- R13's strip set is the one JS `trim()` uses on both sides: the analyzer uses `_JS_WHITESPACE`.
+- A token that cannot be sent as a header value (control characters) sends no `Authorization`, so it reads as a key mismatch and never throws.
+
 ## Global Constraints
 
 - User-visible text is Turkish and verbatim from the rulings. Code identifiers are English. Comments match the surrounding file (Turkish).
