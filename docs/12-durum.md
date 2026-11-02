@@ -7,7 +7,7 @@ Repo: `github.com/oguzmeric/Bandvision` (2026-10-02'den beri geçici olarak **he
 
 | Konu | Durum |
 |---|---|
-| Repo | Zip'ten kalıcı klasöre (`C:\Users\MSI-LAPTOP\bantvision`) taşındı, git + GitHub (özel) |
+| Repo | Zip'ten kalıcı klasöre taşındı, git + GitHub (özel) |
 | CI `ci` | Her push'ta: edge çekirdek testleri + ruff, sözleşme doğrulaması |
 | CI `ios` | Her iOS değişikliğinde macOS'ta Xcode 26 ile imzasız Release derleme + **sıkı concurrency denetimi (uyarı = hata)** |
 | CI `testflight` | Elle tetiklenir (Actions → testflight → Run workflow): arşiv, otomatik imzalama, App Store Connect'e yükleme |

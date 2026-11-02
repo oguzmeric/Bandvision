@@ -145,12 +145,18 @@ Ports 3000/8090 are never touched.
 - R13's strip set is the one JS `trim()` uses on both sides: the analyzer uses `_JS_WHITESPACE`.
 - A token that cannot be sent as a header value (control characters) sends no `Authorization`, so it reads as a key mismatch and never throws.
 
+**R18** (added after the final review). The panel's `/_next/data/` paths get the same API gate as `/api/`. Next matches middleware on these paths and they reach API route handlers, but the middleware sees the unnormalized pathname, so a foreign `Origin` passed R11. The panel uses the App Router and has no `pages/` directory, so nothing legitimate uses these paths.
+
+**R19** (added after the final review). When the panel's own session has expired, `/videos` says so like every other page: `AUTH_TEXT` with the "Giriş yap" link, not `HTTP 401`. A panel refusal body `{error}` is read as text wherever `{detail}` is. An analyzer refusal (`analyzer_key`, `analyzer_host`) never gets a login link (R7).
+
+**R20** (added after the final review). The Origin table that `isLoopbackOrigin` and `is_loopback_origin` must agree on lives in one JSON file read by both test suites. The analyzer splits `Sec-Fetch-Site` on commas, as the panel does.
+
 ## Global Constraints
 
 - User-visible text is Turkish and verbatim from the rulings. Code identifiers are English. Comments match the surrounding file (Turkish).
 - No new npm or Python dependencies.
 - **Environment:**
-  - Work in worktree `C:/Users/MSI-LAPTOP/bantvision-sertlestirme`, branch `analiz-sertlestirme` from `main`.
+  - Work in a dedicated worktree, branch `analiz-sertlestirme` from `main`.
   - Python runs from the main venv with `PYTHONPATH=<worktree>/services/edge`. Never run `pip install -e` from the worktree.
   - `apps/dashboard/node_modules` is a junction to the main checkout's copy. Never delete through it.
   - Never touch ports 3000/8090; e2e uses 3100/3101/3102/8091/8092. Kill processes by PID only, never by image name.
