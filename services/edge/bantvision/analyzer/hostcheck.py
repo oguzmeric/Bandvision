@@ -9,8 +9,8 @@ sayfaları dahil) sırayla iki denetimden geçer:
    reddedilir (`HOST_REFUSED`).
 2. Başka site: `Host` denetimi bunu durdurmaz, çünkü her site 127.0.0.1'e geçerli `Host` ile doğrudan istek atabilir ve
    çok parçalı `POST` CORS ön uçuşu gerektirmez. `Origin` varsa bu bilgisayarın bir kaynağı (`is_loopback_origin`) ya da
-   ANALYZER_CORS_ORIGINS'teki bir değerle birebir aynı olmalıdır; `null`, başka şema, bozuk değer ya da birden çok `Origin`
-   reddedilir. `Origin` yoksa yalnızca `Sec-Fetch-Site: cross-site` reddedilir: panelin sunucu tarafı, curl ve başlatıcı bu
+   ANALYZER_CORS_ORIGINS'teki bir değerle birebir aynı olmalıdır; `null` (listede yazılı olsa da), başka şema, bozuk değer ya
+   da birden çok `Origin` reddedilir. `Origin` yoksa yalnızca `Sec-Fetch-Site: cross-site` reddedilir: panelin sunucu tarafı, curl ve başlatıcı bu
    başlıkları göndermez (`CROSS_SITE_REFUSED`).
 
 Ret: HTTP `403`; WebSocket kabul edilmeden 1008 koduyla kapanır.
@@ -103,7 +103,10 @@ class LocalOnlyMiddleware:
             return HOST_REFUSED
         origins = _header_values(scope, b"origin")
         if origins:                                                 # Origin varsa karar onundur
-            allowed = len(origins) == 1 and (is_loopback_origin(origins[0]) or origins[0] in self.allowed_origins)
+            # `null` listede yazılı olsa da reddedilir: her sitedeki korumalı iframe gönderir, tek bir siteyi göstermez
+            if len(origins) != 1 or origins[0].strip().lower() == "null":
+                return CROSS_SITE_REFUSED
+            allowed = is_loopback_origin(origins[0]) or origins[0] in self.allowed_origins
             return None if allowed else CROSS_SITE_REFUSED
         if any(v.strip().lower() == "cross-site" for v in _header_values(scope, b"sec-fetch-site")):
             return CROSS_SITE_REFUSED

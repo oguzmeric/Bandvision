@@ -192,6 +192,46 @@ def test_cors_wildcard_is_not_a_listed_origin(tmp_path: pathlib.Path) -> None:
         assert c.get("/healthz", headers={"origin": FOREIGN}).status_code == 403
 
 
+@pytest.mark.parametrize("origin", ["null", "NULL", "Null"])
+@pytest.mark.parametrize("beside", [(), ("https://panel.example",)], ids=["yalniz", "gercek-site-yaninda"])
+def test_null_origin_is_refused_even_when_listed(tmp_path: pathlib.Path, origin: str, beside: tuple[str, ...]) -> None:
+    """Her sitedeki korumalı iframe `null` gönderir: tek bir siteyi göstermez, listede yazılı olsa da reddedilir."""
+    listed = [origin, *beside]
+    preflight = {"origin": origin, "access-control-request-method": "POST"}
+    with local_client(create_app(Settings(data_dir=tmp_path, cors_origins=listed))) as c:
+        r = c.get("/healthz", headers={"origin": origin})
+        assert r.status_code == 403 and r.json() == {"detail": CROSS_SITE_TEXT}
+        assert c.post("/api/v1/jobs", files=BAD_VIDEO, headers={"origin": origin}).status_code == 403
+        assert c.options("/api/v1/live/sources", headers=preflight).status_code == 403
+        if beside:                                                      # listedeki gerçek site etkilenmez
+            r = c.get("/healthz", headers={"origin": beside[0]})
+            assert r.status_code == 200 and r.headers["access-control-allow-origin"] == beside[0]
+
+
+@pytest.mark.parametrize("listed", [("null",), ("null", "https://panel.example")], ids=["yalniz", "gercek-site-yaninda"])
+def test_middleware_refuses_listed_null_before_the_allow_list(listed: tuple[str, ...]) -> None:
+    http = _http_scope([(b"host", b"127.0.0.1:8090"), (b"origin", b"null")])
+    sent, reached = _drive(http, [{"type": "http.request", "body": b"", "more_body": False}], allowed_origins=listed)
+    assert reached == [] and sent[0]["status"] == 403 and CROSS_SITE_TEXT.encode() in sent[1]["body"]
+    # Başlık boşluklu gelse de (`ASGI` sunucusu kırpmadıysa) `null`dır
+    padded = _http_scope([(b"host", b"127.0.0.1:8090"), (b"origin", b" null ")])
+    sent, reached = _drive(padded, [{"type": "http.request", "body": b"", "more_body": False}],
+                           allowed_origins=(*listed, " null "))
+    assert reached == [] and sent[0]["status"] == 403
+    if len(listed) > 1:
+        real = _http_scope([(b"host", b"127.0.0.1:8090"), (b"origin", listed[1].encode())])
+        sent, reached = _drive(real, [], allowed_origins=listed)
+        assert reached == ["http"] and sent == []
+
+
+def test_websocket_with_listed_null_origin_is_closed_1008(tmp_path: pathlib.Path) -> None:
+    with local_client(_app_with_ws(tmp_path, cors_origins=["null"])) as c:
+        with pytest.raises(WebSocketDisconnect) as e, c.websocket_connect("/ws-test", headers={"host": "localhost",
+                                                                                                "origin": "null"}):
+            pass
+        assert e.value.code == 1008
+
+
 # ------------------------------------------------------------------ HTTP: Origin yok, Sec-Fetch-Site
 
 @pytest.mark.parametrize("site", ["cross-site", "CROSS-SITE"])

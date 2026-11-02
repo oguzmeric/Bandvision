@@ -145,7 +145,8 @@ def test_default_testclient_host_is_refused(tmp_path: pathlib.Path) -> None:
 
 # ------------------------------------------------------------------ (c) Host başlığı yok / birden çok: ara katman doğrudan
 
-def _drive(scope: dict[str, Any], incoming: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+def _drive(scope: dict[str, Any], incoming: list[dict[str, Any]],
+           allowed_origins: tuple[str, ...] = ()) -> tuple[list[dict[str, Any]], list[str]]:
     """Ara katmanı ağsız sürer: içteki uygulama çağrılırsa türü kaydedilir; gönderilen iletiler döner."""
     sent: list[dict[str, Any]] = []
     reached: list[str] = []
@@ -159,7 +160,7 @@ def _drive(scope: dict[str, Any], incoming: list[dict[str, Any]]) -> tuple[list[
     async def send(msg: Any) -> None:
         sent.append(msg)
 
-    anyio.run(LocalOnlyMiddleware(inner), scope, receive, send)
+    anyio.run(LocalOnlyMiddleware(inner, allowed_origins), scope, receive, send)
     return sent, reached
 
 
