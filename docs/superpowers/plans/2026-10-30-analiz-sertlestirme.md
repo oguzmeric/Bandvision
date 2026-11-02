@@ -109,7 +109,8 @@ Ports 3000/8090 are never touched.
 
 **R10** (added after the Task 1 review). No token configured: after the Host check passes, the same middleware refuses cross-site browser requests, HTTP and WebSocket.
 - `Origin` present: allowed only if it is a loopback origin (`http` or `https` scheme, an R1 accepted host, any port) or exactly equals an entry of `ANALYZER_CORS_ORIGINS`. `null`, other schemes, a malformed value or more than one `Origin` header are refused.
-- `Origin` absent: refused when `Sec-Fetch-Site` is `cross-site`. Everything else passes: the panel's server-side calls, curl and the launcher send no fetch metadata.
+- `null` is refused even when `ANALYZER_CORS_ORIGINS` lists it: every sandboxed iframe on any site sends `null`, so it does not identify one origin. `*` in that list likewise opens nothing, because no real `Origin` equals it.
+- `Origin` absent: refused when `Sec-Fetch-Site` is `cross-site`. Everything else passes: the panel's server-side calls, curl and the launcher send no `Sec-Fetch-Site`. (Node's `fetch` sends `Sec-Fetch-Mode`, which is ignored.)
 - HTTP refusal: `403`, JSON `{"detail": "Bu istek başka bir siteden geldiği için kabul edilmedi: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusu yalnızca bu bilgisayarın sayfalarından gelen istekleri kabul eder."}`. WebSocket refusal: closed before accept with code 1008.
 - Token mode is unchanged (R2).
 - **Why:** the Host check stops DNS rebinding only. A public page can call `http://127.0.0.1:8090` directly with a valid `Host`. `POST /api/v1/jobs` as multipart is a CORS "simple" request, and the Task 1 review measured it reaching the handler, so a page could queue jobs and fill the disk.
@@ -127,7 +128,7 @@ Ports 3000/8090 are never touched.
 - Analyzer: compare bytes. Today `secrets.compare_digest` raises on non-ASCII strings, so a non-ASCII token or header gives `500`.
 - Panel (Task 2): send the token's UTF-8 bytes as a ByteString. Today `Headers.set` throws on code points above 255.
 
-**R13** (added after the Task 1 review). A token made only of whitespace counts as no token, in `Settings.from_env`, so it neither passes the R3 guard nor turns off the R1 check. A refused start (R3) prints its message on the console and, when `--log` is given, in the log too.
+**R13** (added after the Task 1 review; amended after its re-review). Whitespace around `ANALYZER_TOKEN` is dropped on both sides: the analyzer with `str.strip()` in `token_from_env`, the panel with `trim()` in `analyzerHeaders`. Nothing left means no token, so a whitespace-only value neither passes the R3 guard nor turns off the R1 check. **Why both sides:** a trailing space from `set ANALYZER_TOKEN=abc ` is a typo, and `Headers` already trims the panel's value, so otherwise it reads as a key mismatch that nothing on screen explains. A refused start (R3) prints its message on the console and, when `--log` is given, in the log too.
 
 **R14** (added after the Task 1 review). The status bar keeps "yetki hatası" for both analyzer `401` and `403`: both are access refusals, so it is accurate. docs/13 gives the meaning of each.
 
@@ -275,6 +276,9 @@ Ports 3000/8090 are never touched.
     - `GET /watch` with `Sec-Fetch-Site: cross-site` still opens the page.
   - `apps/dashboard/src/lib/analyzer.ts` (R12): `analyzerHeaders` sends the token's UTF-8 bytes as a ByteString. Put the conversion in a pure function in `analyzerRefusal.mjs`, without `Buffer` because that module also reaches the client bundle, and unit-test it (`gizlişifre`, plain ASCII unchanged).
   - `apps/dashboard/README.md`, the `ANALYZER_URL` row: with no access key the address must be `127.0.0.1` or `localhost`.
+  - `analyzerHeaders` also drops whitespace around the token (R13), and a whitespace-only value sends no `Authorization`. Unit-test it through the same pure function as R12.
+  - `src/lib/systemStatus.mjs` ~46: the log line `HTTP 403: ANALYZER_TOKEN yanlış ya da eksik` is wrong for a Host refusal. Log the cause by status, 401 → key, 403 → address, and update its unit test. The status-bar text stays (R14).
+  - `isLoopbackOrigin` must match the analyzer's `is_loopback_origin`. Copy the `LOOPBACK_ORIGINS` table from `services/edge/tests/test_crosssite.py` into `hostCheck.test.mjs`. `services/edge/bantvision/analyzer/hostcheck.py` ~82 already names the panel function.
 
 **Interfaces:**
 - Consumes the Task 1 analyzer statuses: own `401` (token), own `403` (Host or cross-site, and the proxy never forwards `Origin`, so via the panel a `403` means Host), recorder errors `502`.
