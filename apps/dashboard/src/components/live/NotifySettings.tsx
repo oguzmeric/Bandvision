@@ -13,19 +13,25 @@ export default function NotifySettings() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  /** İlk yükleme başarısız: sunucudan ayar gelene dek kendiliğinden yeniden denenir. Ayar bir kez gelince hiç yeniden istenmez. */
+  /** Ayar sunucudan okunamadı: okunana dek kendiliğinden yeniden denenir. Ayar bir kez okununca (herhangi bir istekle) hata kalkar
+   * ve yeniden istenmez. */
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Kullanıcının değiştirdiği alanlar: geç gelen ayar üstüne yazmaz */
   const touched = useRef({ chatId: false, enabled: false });
-  const load = useCallback(() => api<NotifyConfig>("notify").then((c) => {
+  /** Sunucudan gelen ayar: dokunulmayan alanları doldurur, hatayı kaldırır. Ayarı okuyan HER istek buradan geçer; yoksa bir deneme
+   * düğmesinin yenilemesi `cfg`yi doldurup formu boş bırakır ve yeniden deneme durur. */
+  const apply = useCallback((c: NotifyConfig) => {
     setCfg(c);
     if (!touched.current.chatId) setChatId(c.chatId);
     if (!touched.current.enabled) setEnabled(c.enabled);
     setLoadError(null);
-  }).catch((e: Error) => setLoadError(e.message)), []);
+  }, []);
+  const load = useCallback(() => api<NotifyConfig>("notify").then(apply).catch((e: Error) => setLoadError(e.message)), [apply]);
   useEffect(() => { void load(); }, [load]);
-  useRetryWhileFailed(loadError !== null && cfg === null, load);
-  const line = msg ?? (loadError !== null && cfg === null ? { ok: false, text: loadError } : null);
+  useRetryWhileFailed(loadError !== null, load);
+  /** Ayar okunmadan form boştur: Kaydet o boş değerleri gönderip kayıtlı ayarı (bildirim açık, sohbet kimliği) silerdi */
+  const ready = cfg !== null && loadError === null;
+  const line = loadError !== null ? { ok: false, text: loadError } : msg;
   async function save() {
     try {
       const c = await api<NotifyConfig>("notify", { method: "PUT", json: { enabled, chatId, token: token === "" ? null : token } });
@@ -35,7 +41,7 @@ export default function NotifySettings() {
   async function run(path: string, ok: string) {
     try { await api(path, { method: "POST", json: {} }); setMsg({ ok: true, text: ok }); }
     catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
-    api<NotifyConfig>("notify").then(setCfg).catch(() => undefined);   // son gönderim hatası güncellensin
+    api<NotifyConfig>("notify").then(apply).catch(() => undefined);   // son gönderim hatası güncellensin
   }
   /** Kayıtlı anahtarı siler (token: ""); kayıtlı sohbet kimliği ve aç/kapa değişmez */
   async function removeToken() {
@@ -77,7 +83,8 @@ export default function NotifySettings() {
           </label>
         </div>
         <div className="flex flex-wrap gap-2 pt-2">
-          <button type="button" onClick={save} className="pl-btn pl-btn-primary h-8">Kaydet</button>
+          <button type="button" onClick={save} disabled={!ready} title={ready ? undefined : "Ayar henüz okunamadı"}
+                  className="pl-btn pl-btn-primary h-8">Kaydet</button>
           <button type="button" onClick={() => run("notify/test", "Deneme mesajı gönderildi.")} className="pl-btn h-8">Deneme mesajı gönder</button>
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="pl-btn h-8">Deneme alarmı</button>
         </div>

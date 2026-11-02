@@ -64,6 +64,26 @@ test("kendiliğinden düzelme: Bildirimler ilk yükleme başarısızsa yeniden d
   expect(await sameDocument(page)).toBe(true);
 });
 
+test("kendiliğinden düzelme: Bildirimler ilk yükleme başarısızken Kaydet kapalı; sunucu dönünce 'Deneme alarmı'na basmak formu boş bırakıp ayarı silmez", async ({ page }) => {
+  const puts: unknown[] = [];
+  const notify = await refusable(page, "**/api/live/notify", (r) => {
+    if (r.request().method() === "PUT") { puts.push(r.request().postDataJSON()); return r.fulfill({ json: { enabled: true, chatId: "-100", hasToken: true } }); }
+    return r.fulfill({ json: { enabled: true, chatId: "-100", hasToken: true } });
+  });
+  await page.route("**/api/live/alarms/test", (r) => r.fulfill({ json: {} }));
+  await login(page, "/notifications");
+  await expect(page.getByRole("status").filter({ hasText: KEY_TEXT })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Kaydet", exact: true })).toBeDisabled();   // ayar okunmadan kaydedilemez (boş form ayarı siler)
+  notify.refused = false;                                                    // sunucu döndü, ama 5 sn'lik yeniden deneme henüz gelmedi
+  await page.getByRole("button", { name: "Deneme alarmı" }).click();
+  await expect(page.getByText("Deneme alarmı oluşturuldu.")).toBeVisible();
+  await expect(page.getByLabel("Sohbet / grup kimliği")).toHaveValue("-100", { timeout: RETRY_MS });
+  await expect(page.getByLabel("Bildirimler açık")).toBeChecked();
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect(page.getByText("Kaydedildi.")).toBeVisible();
+  expect(puts).toEqual([{ enabled: true, chatId: "-100", token: null }]);    // sunucudaki değerler gider, boş değil
+});
+
 test("kendiliğinden düzelme: Bildirimler ilk yükleme başarılıysa yeniden istemez, yazılan değer kalır", async ({ page }) => {
   let calls = 0;
   await page.route("**/api/live/notify", (r) => {
