@@ -25,12 +25,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .hostcheck import LocalOnlyMiddleware
 from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
 
 _LOG = logging.getLogger(__name__)
 CHUNK = 1024 * 1024
+TOKEN_REFUSED = "Yetkisiz: geçerli bir erişim anahtarı gerekli."
 CLEANUP_INTERVAL_S = 3600.0                     # saatte bir: saklama süresi dolan iş ve alarm kayıtları
 MEDIA_TYPES = {"annotated.mp4": "video/mp4", "counts.csv": "text/csv; charset=utf-8",
                "profile.json": "application/json", "background.png": "image/png"}
@@ -82,6 +85,30 @@ def _bearer_bytes(token: str) -> bytes:
         return value.encode("utf-8", "surrogateescape")
     except UnicodeEncodeError:
         return value.encode("utf-8", "surrogatepass")
+
+
+def token_matches(authorization: str | None, token: str) -> bool:
+    """`Authorization` başlığı doğru anahtar mı. Baytlar karşılaştırılır: compare_digest ASCII dışı dizgede hata verirdi
+    (Türkçe karakterli anahtar ya da başlık 500 olurdu). Starlette başlığı latin-1 çözer: encode("latin-1") gönderilen
+    baytları geri verir; panel anahtarın UTF-8 baytlarını gönderir."""
+    return bool(authorization) and secrets.compare_digest(authorization.encode("latin-1"), _bearer_bytes(token))
+
+
+class ApiTokenMiddleware:
+    """Anahtar kipinde `/api/` isteğini gövdesi okunmadan reddeder. FastAPI bağımlılığı (`auth`) çok parçalı gövde
+    ayrıştırıldıktan sonra çalışır: anahtarsız bir istemci sunucuya bütün bir yüklemeyi okutabilirdi. Saf ASGI (akışlar
+    olduğu gibi geçer). `/healthz` ve API dışı yollar değişmez; yöntem ve yol hataları da (405, 404) anahtardan sonra gelir."""
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (scope["type"] == "http" and scope["path"].startswith("/api/")
+                and not token_matches(Headers(scope=scope).get("authorization"), self.token)):
+            await JSONResponse({"detail": TOKEN_REFUSED}, status_code=401)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def _git_commit() -> str:
@@ -157,6 +184,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         errors = [{k: v for k, v in e.items() if k not in ("input", "ctx", "url")} for e in exc.errors()]
         return JSONResponse(status_code=422, content={"detail": errors})
 
+    # Anahtar denetimi CORS'un İÇİNDE (önce eklenir: son eklenen en dıştadır): listedeki sitenin ön uçuşu anahtar göndermez,
+    # CORS yanıtlar; 401 de CORS başlığı taşır, site nedenini okuyabilir.
+    if settings.token:
+        app.add_middleware(ApiTokenMiddleware, token=settings.token)
     if settings.cors_origins:
         app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"],
                            allow_headers=["*"])
@@ -168,14 +199,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.add_middleware(LocalOnlyMiddleware, allowed_origins=settings.cors_origins)
 
     def auth(authorization: Annotated[str | None, Header()] = None) -> None:
-        if not settings.token:
-            return
-        # Baytlar karşılaştırılır: compare_digest ASCII dışı dizgede hata verirdi (Türkçe karakterli anahtar ya da başlık
-        # 500 olurdu). Starlette başlığı latin-1 çözer: encode("latin-1") gönderilen baytları geri verir; panel anahtarın
-        # UTF-8 baytlarını gönderir.
-        expected = _bearer_bytes(settings.token)
-        if not authorization or not secrets.compare_digest(authorization.encode("latin-1"), expected):
-            raise HTTPException(401, "Yetkisiz: geçerli bir erişim anahtarı gerekli.")
+        if settings.token and not token_matches(authorization, settings.token):
+            raise HTTPException(401, TOKEN_REFUSED)
 
     Auth = Depends(auth)
 

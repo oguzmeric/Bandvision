@@ -26,6 +26,8 @@ from collections.abc import Iterable
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .jobs import JS_WHITESPACE
+
 LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 HOST_REFUSED = ("Bu adres kabul edilmiyor: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusuna "
                 "yalnızca bu bilgisayardan (localhost, 127.0.0.1) bağlanılabilir.")
@@ -33,10 +35,6 @@ CROSS_SITE_REFUSED = ("Bu istek başka bir siteden geldiği için kabul edilmedi
                       "değilken analiz sunucusu yalnızca bu bilgisayarın sayfalarından gelen istekleri kabul eder.")
 WS_POLICY_VIOLATION = 1008
 
-# JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
-# (\x1c-\x1f ve \x85'i de atar, \ufeff'i atmaz): ayrıştırıcı panelinkiyle her girdide aynı sonucu versin diye açık küme.
-_JS_WHITESPACE = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-                  "\u2028\u2029\u202f\u205f\u3000\ufeff")
 # JS `/^\d{1,5}$/`: yalnızca ASCII rakam (Python'da `\d` Unicode rakamlarını da tutar; `$` sondaki satır sonunu geçer)
 _PORT = re.compile(r"[0-9]{1,5}")
 # Origin tarayıcının ürettiği biçimdedir: şema://ad[:port]; yol, kullanıcı bilgisi ve boşluk içermez. Bu yüzden `host_name`in
@@ -49,7 +47,7 @@ def host_name(header: str | None) -> str | None:
     port, kapanmamış köşeli parantez, köşeli parantezsiz IPv6…) None."""
     if not isinstance(header, str):
         return None
-    h = header.strip(_JS_WHITESPACE).lower()
+    h = header.strip(JS_WHITESPACE).lower()
     port = ""
     if h.startswith("["):
         end = h.find("]")

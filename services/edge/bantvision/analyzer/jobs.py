@@ -28,6 +28,10 @@ RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
 }
 PUBLIC_FILES = ("annotated.mp4", "counts.csv", "profile.json", "background.png")
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".ts"}
+# JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
+# (\x1c-\x1f ve \x85'i de atar, \ufeff'i atmaz): panelle aynı girdide aynı sonuç için açık küme (`Host` ayrıştırma, anahtar).
+JS_WHITESPACE = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+                 "\u2028\u2029\u202f\u205f\u3000\ufeff")
 
 
 def now() -> dt.datetime:
@@ -43,10 +47,10 @@ def parse_iso(s: str) -> dt.datetime:
 
 
 def token_from_env() -> str | None:
-    """Erişim anahtarı: ANALYZER_TOKEN, çevresindeki boşluk atılmış. Sondaki boşluk yazım hatasıdır ve panel de atar;
-    atılmasaydı ekranda nedeni görünmeyen bir anahtar uyuşmazlığı olurdu. Geriye bir şey kalmazsa None (anahtar yok):
-    boşluk anahtar sayılsaydı ağa açılma engeli ve Host denetimi kapanırdı."""
-    return os.environ.get("ANALYZER_TOKEN", "").strip() or None
+    """Erişim anahtarı: ANALYZER_TOKEN, çevresindeki boşluk atılmış. Sondaki boşluk yazım hatasıdır ve panel de atar (aynı
+    küme: JS `trim`); atılmasaydı ekranda nedeni görünmeyen bir anahtar uyuşmazlığı olurdu. Geriye bir şey kalmazsa None
+    (anahtar yok): boşluk anahtar sayılsaydı ağa açılma engeli ve Host denetimi kapanırdı."""
+    return os.environ.get("ANALYZER_TOKEN", "").strip(JS_WHITESPACE) or None
 
 
 @dataclass
