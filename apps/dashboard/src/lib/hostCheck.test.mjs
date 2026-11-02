@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CROSS_SITE_REFUSED, crossSiteRefused, hostName, isLoopbackHost, isLoopbackOrigin } from "./hostCheck.mjs";
+import { CROSS_SITE_REFUSED, crossSiteRefused, hostName, isApiPath, isLoopbackHost, isLoopbackOrigin } from "./hostCheck.mjs";
 
 test("hostName: ana makine adı (küçük harf, port ve IPv6 köşeli parantezi atılır); bozuk başlık null", () => {
   assert.equal(hostName("LOCALHOST:3000"), "localhost");
@@ -136,4 +136,15 @@ test("crossSiteRefused: Origin yoksa yalnızca Sec-Fetch-Site: cross-site redded
 
 test("CROSS_SITE_REFUSED: panelin ret metni", () => {
   assert.equal(CROSS_SITE_REFUSED, "Bu istek başka bir siteden geldiği için kabul edilmedi.");
+});
+
+test("isApiPath: /api/ ve Next'in /_next/data/ veri yolları API kapısından geçer; sayfalar ve Next iç dosyaları geçmez", () => {
+  for (const p of ["/api/jobs", "/api/live/views", "/api/jobs/abc", "/_next/data/BUILD/api/live/views.json",
+    "/_next/data/development/api/jobs/abc.json", "/_next/data/BUILD/watch.json", "/_next/data/x"]) {
+    assert.equal(isApiPath(p), true, p);
+  }
+  for (const p of ["/", "/watch", "/api", "/apix/y", "/login", "/_next/static/chunks/a.js", "/_next/data", "/_next/datax/y",
+    "/_next/image", "/brand/logo.png", "/x/api/jobs", "//api/jobs", "", undefined, null]) {
+    assert.equal(isApiPath(p), false, String(p));
+  }
 });

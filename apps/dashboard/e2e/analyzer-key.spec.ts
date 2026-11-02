@@ -24,6 +24,18 @@ const BOUNDARY = "e2e-sinir";
 
 test.use({ baseURL: PANEL });
 
+/** Yol olduğu gibi gönderilir (URL ayrıştırıcısı düzeltmesin) */
+const raw = (port: number, target: string, headers: Record<string, string> = {}, method = "GET") => new Promise<{ status: number; body: string }>((resolve, reject) => {
+  const q = http.request({ host: "127.0.0.1", port, path: target, method, headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+    let body = "";
+    res.setEncoding("utf8");
+    res.on("data", (c: string) => { body += c; });
+    res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+  });
+  q.on("error", reject);
+  q.end();
+});
+
 /** Gerçek klip + sonda MP4 `free` kutusu: Next'in 10 MB ara katman sınırını aşar, analiz sunucusu yine video diye okur */
 function paddedClip(file: string): string {
   const clip = readFileSync(CLIP);
@@ -215,17 +227,6 @@ test("yükleme bitmeden karar: yanlış anahtar 502 (videoyu beklemez), ret doğ
 });
 
 test("/api/jobs ara katman dışında ama denetimi atlanmaz: GET ve yol biçimleri", async ({ request }) => {
-  /** Yol olduğu gibi gönderilir (URL ayrıştırıcısı düzeltmesin) */
-  const raw = (port: number, target: string, headers: Record<string, string> = {}, method = "GET") => new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const q = http.request({ host: "127.0.0.1", port, path: target, method, headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (c: string) => { body += c; });
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
-    });
-    q.on("error", reject);
-    q.end();
-  });
   const NO_SESSION = JSON.stringify({ error: "Giriş gerekli." });
   const FOREIGN = { Origin: "https://evil.example" };
   // Tam yol: oturumsuz 401, başka site 403, yabancı ad 403
@@ -254,4 +255,35 @@ test("şifreli panel, başka site: kural değişmez, girişsiz API isteği 401",
   const res = await request.get("http://127.0.0.1:3100/api/live/views", { headers: { Origin: "https://evil.example" } });
   expect(res.status()).toBe(401);
   expect(await res.json()).toEqual({ error: "Giriş gerekli." });
+});
+
+test("/_next/data/ yolları da API kapısından geçer: başka site, yabancı ad ve oturumsuz istek reddedilir, iş silinmez", async ({ request }) => {
+  // Next bu yolları ara katmanda eşler ve API işleyicilerine ulaştırır; `skipMiddlewareUrlNormalize` ile ara katman önekli
+  // yolu görür. Öneklenmiş yol `/api/` sanılmayınca sayfa koluna düşer ve kapı atlanırdı. Yapı kimliği derlemeden gelir.
+  const build = readFileSync(path.resolve(__dirname, "../.next/BUILD_ID"), "utf8").trim();
+  const data = (p: string) => `/_next/data/${build}/api/${p}.json`;
+  const KEY = { Authorization: "Bearer e2e-dogru-anahtar" };
+  const made = await request.post(`${ANALYZER}/api/v1/jobs`, { headers: KEY, multipart: { file: { name: "a.mp4", mimeType: "video/mp4", buffer: readFileSync(CLIP) } } });
+  expect(made.status()).toBe(202);
+  const id = ((await made.json()) as { id: string }).id;
+  try {
+    const FOREIGN = { Origin: "https://evil.example" };
+    const crossSite = JSON.stringify(CROSS_SITE);
+    const paths = ["live/views", "live/sources", "jobs", `jobs/${id}`, "system", "access"];
+    for (const p of paths) {
+      expect(await raw(3102, data(p), FOREIGN), `3102 GET ${p} yabancı Origin`).toEqual({ status: 403, body: crossSite });
+      expect(await raw(3102, data(p), { "Sec-Fetch-Site": "cross-site" }), `3102 GET ${p} cross-site`).toEqual({ status: 403, body: crossSite });
+      expect(await raw(3102, data(p), { Host: "evil.example" }), `3102 GET ${p} yabancı ad`).toEqual({ status: 403, body: JSON.stringify({ error: "Geçersiz adres." }) });
+      expect(await raw(3100, data(p)), `3100 GET ${p} oturumsuz`).toEqual({ status: 401, body: JSON.stringify({ error: "Giriş gerekli." }) });
+    }
+    expect(await raw(3102, data(`jobs/${id}`), FOREIGN, "DELETE")).toEqual({ status: 403, body: crossSite });
+    expect(await raw(3100, data(`jobs/${id}`), {}, "DELETE")).toEqual({ status: 401, body: JSON.stringify({ error: "Giriş gerekli." }) });
+    expect((await request.get(`${ANALYZER}/api/v1/jobs/${id}`, { headers: KEY })).status()).toBe(200);   // iş yerinde
+    // Bu bilgisayarın kendi isteği kapıdan geçer (vekil yanlış anahtarla analiz sunucusuna gider: 502 + analyzer_key)
+    const own = await raw(3102, data("live/views"), { Origin: PANEL });
+    expect(own.status).toBe(502);
+    expect(JSON.parse(own.body).code).toBe("analyzer_key");
+  } finally {
+    await request.delete(`${ANALYZER}/api/v1/jobs/${id}`, { headers: KEY });
+  }
 });

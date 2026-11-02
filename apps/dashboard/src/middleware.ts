@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { isLoopbackHost } from "@/lib/hostCheck.mjs";
+import { isApiPath, isLoopbackHost } from "@/lib/hostCheck.mjs";
 import { apiRefusal } from "@/lib/panelGate";
 import { SESSION_COOKIE, authMode, expectedToken, sameToken } from "@/lib/session";
 
@@ -9,10 +9,11 @@ import { SESSION_COOKIE, authMode, expectedToken, sameToken } from "@/lib/sessio
  * Şifresiz kipte panel yalnızca bu bilgisayarda (127.0.0.1) dinler; yine de `Host` geri döngü adı (localhost,
  * 127.0.0.1, [::1]) değilse 403: kötü niyetli bir sitenin DNS yeniden bağlamayla (alan adını 127.0.0.1'e çevirip)
  * tarayıcı üzerinden panele ve API'ye ulaşması engellenir. API'de ayrıca başka siteden gelen tarayıcı isteği de 403 alır
- * (`apiRefusal`, kararın tamamı orada). Sayfalar etkilenmez: başka siteden gelen bağlantı paneli açar. Şifreli kipte kural
- * yok: oturum çerezi SameSite=Lax, başka siteden gelen yazma isteği çerezsiz gelir ve 401 alır. */
+ * (`apiRefusal`, kararın tamamı orada); Next'in `/_next/data/…` veri yolları da API sayılır (`isApiPath`). Sayfalar
+ * etkilenmez: başka siteden gelen bağlantı paneli açar. Şifreli kipte kural yok: oturum çerezi SameSite=Lax, başka
+ * siteden gelen yazma isteği çerezsiz gelir ve 401 alır. */
 export async function middleware(req: NextRequest) {
-  if (req.nextUrl.pathname.startsWith("/api/")) return (await apiRefusal(req)) ?? NextResponse.next();
+  if (isApiPath(req.nextUrl.pathname)) return (await apiRefusal(req)) ?? NextResponse.next();
   const mode = authMode();
   if (!mode) {
     if (isLoopbackHost(req.headers.get("host"))) return NextResponse.next();

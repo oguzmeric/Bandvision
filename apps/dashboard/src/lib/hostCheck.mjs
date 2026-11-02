@@ -55,3 +55,13 @@ export function crossSiteRefused(origin, secFetchSite) {
   if (origin !== null && origin !== undefined) return !isLoopbackOrigin(origin);
   return typeof secFetchSite === "string" && secFetchSite.split(",").some((v) => v.trim().toLowerCase() === "cross-site");
 }
+
+/**
+ * Ara katmanın API kapısından (`apiRefusal`) geçirdiği yol mu: `/api/` ve Next'in veri yolu `/_next/data/<yapı kimliği>/…`.
+ * İkincisi Next'te ara katmanda eşlenir ve API işleyicilerine ulaşır (`/_next/data/<id>/api/jobs/<iş>.json` bir `DELETE`i
+ * işleyiciye taşır), ama `skipMiddlewareUrlNormalize` ile ara katman önekli yolu görür; `/api/` öneki aranırsa sayfa koluna
+ * düşer ve Origin denetimi atlanırdı. Uygulama App Router kullanır (`pages/` yok): meşru hiçbir istek bu yolu kullanmaz.
+ */
+export function isApiPath(pathname) {
+  return typeof pathname === "string" && (pathname.startsWith("/api/") || pathname.startsWith("/_next/data/"));
+}
