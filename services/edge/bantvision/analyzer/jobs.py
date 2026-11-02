@@ -42,6 +42,13 @@ def parse_iso(s: str) -> dt.datetime:
     return dt.datetime.fromisoformat(s)                  # 3.11+: "Z" doğrudan okunur
 
 
+def token_from_env() -> str | None:
+    """Erişim anahtarı: ANALYZER_TOKEN tanımsız, boş ya da yalnızca boşluksa None (anahtar yok). Başka karakter içeren
+    değer olduğu gibi kalır (kırpılmaz). Boşluk anahtar sayılsaydı ağa açılma engeli ve Host denetimi kapanırdı."""
+    token = os.environ.get("ANALYZER_TOKEN", "")
+    return token if token.strip() else None
+
+
 @dataclass
 class Settings:
     data_dir: pathlib.Path
@@ -61,7 +68,7 @@ class Settings:
             data_dir=data,
             retention_days=float(os.environ.get("ANALYZER_RETENTION_DAYS", "7")),
             max_upload_mb=int(os.environ.get("ANALYZER_MAX_UPLOAD_MB", "2048")),
-            token=os.environ.get("ANALYZER_TOKEN") or None,
+            token=token_from_env(),
             cors_origins=cors,
             ffmpeg=os.environ.get("ANALYZER_FFMPEG") or None,
         )

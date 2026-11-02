@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import subprocess
 import sys
 from typing import Any
 
@@ -297,17 +299,71 @@ def launch(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> Launch:
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "ofis-pc", ""])
-@pytest.mark.parametrize("token", [None, ""])
+@pytest.mark.parametrize("token", [None, "", "   "])
 def test_launch_on_network_without_token_is_refused(launch: Launch, monkeypatch: pytest.MonkeyPatch,
                                                     capsys: pytest.CaptureFixture[str], host: str,
                                                     token: str | None) -> None:
     if token is not None:
-        monkeypatch.setenv("ANALYZER_TOKEN", token)                       # boş anahtar = anahtar yok (Settings gibi)
+        monkeypatch.setenv("ANALYZER_TOKEN", token)                       # boş ya da yalnızca boşluk = anahtar yok
     with pytest.raises(SystemExit) as e:
         launch("--host", host)
     assert e.value.code == 2
     assert capsys.readouterr().err.strip() == LAUNCH_REFUSED_TEXT
     assert launch.calls == []                                               # uvicorn.run hiç çağrılmadı
+
+
+def _refused_cli(tmp_path: pathlib.Path, log: pathlib.Path) -> subprocess.CompletedProcess[str]:
+    """Gerçek komut satırı (`--log` çıktıyı süreç düzeyinde yönlendirir: pytest'in içinde sınanmaz)."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "ANALYZER_DATA_DIR": str(tmp_path / "veri")}
+    env.pop("ANALYZER_TOKEN", None)
+    return subprocess.run([sys.executable, "-m", "bantvision.analyzer", "--host", "0.0.0.0", "--port", "8098",
+                           "--log", str(log)], capture_output=True, text=True, encoding="utf-8", env=env, timeout=120,
+                          cwd=pathlib.Path(__file__).resolve().parents[1], check=False)
+
+
+def test_refused_launch_with_log_prints_on_console_and_in_the_log(tmp_path: pathlib.Path) -> None:
+    """Reddedilen açılış sessiz kalmaz: ileti hem gerçek hata çıktısına hem günlük dosyasına yazılır (R13)."""
+    log = tmp_path / "logs" / "analyzer.log"
+    r = _refused_cli(tmp_path, log)
+    assert r.returncode == 2
+    assert r.stderr.strip() == LAUNCH_REFUSED_TEXT and r.stdout == ""
+    assert log.read_text(encoding="utf-8").strip() == LAUNCH_REFUSED_TEXT
+
+
+def test_refused_launch_with_unwritable_log_still_exits_2_with_the_message(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "dosya").write_text("klasör değil", encoding="utf-8")
+    r = _refused_cli(tmp_path, tmp_path / "dosya" / "analyzer.log")         # günlük klasörü açılamaz
+    assert r.returncode == 2
+    assert r.stderr.strip() == LAUNCH_REFUSED_TEXT
+
+
+@pytest.mark.parametrize(("value", "want"), [
+    ("", None),
+    ("   ", None),                                    # yalnızca boşluk: anahtar yok
+    ("\t \n", None),
+    ("gizli", "gizli"),
+    ("  gizli ", "  gizli "),                         # başka karakter varsa olduğu gibi kalır (kırpılmaz)
+    ("gizli şifre", "gizli şifre"),
+])
+def test_settings_from_env_whitespace_only_token_is_no_token(monkeypatch: pytest.MonkeyPatch, value: str,
+                                                             want: str | None) -> None:
+    monkeypatch.setenv("ANALYZER_TOKEN", value)
+    assert Settings.from_env().token == want
+
+
+def test_settings_from_env_without_token_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANALYZER_TOKEN", raising=False)
+    assert Settings.from_env().token is None
+
+
+def test_whitespace_only_token_leaves_the_host_check_on(launch: Launch, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Yalnızca boşluktan oluşan anahtar Host denetimini kapatmaz ve anahtar gibi kabul edilmez (R13)."""
+    monkeypatch.setenv("ANALYZER_TOKEN", "   ")
+    (call,) = launch()
+    assert call["app"].state.settings.token is None
+    c = local_client(call["app"])                                           # ömür başlamaz: istek ara katmanda biter
+    assert c.get("/healthz", headers={"host": "evil.example"}).status_code == 403
+    assert c.get("/healthz").status_code == 200
 
 
 def test_launch_on_network_with_token_starts(launch: Launch, monkeypatch: pytest.MonkeyPatch) -> None:
