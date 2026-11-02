@@ -240,6 +240,27 @@ def test_no_origin_cross_site_fetch_is_refused(client: Any, site: str) -> None:
     assert r.status_code == 403 and r.json() == {"detail": CROSS_SITE_TEXT}
 
 
+@pytest.mark.parametrize("lines", [
+    (b"same-origin", b"cross-site"),                 # yalnızca ikinci satır
+    (b"none", b"same-site", b"cross-site"),
+    (b"cross-site", b"same-origin"),
+    (b" cross-site ",),                              # sunucu kırpmadıysa boşluklu değer
+    (b"\tcross-site\t",),
+    (b"CROSS-SITE",),                                # büyük harf
+    (b" Cross-Site ",),
+], ids=["ikinci-satir", "ucuncu-satir", "ilk-satir", "bosluklu", "sekmeli", "buyuk-harf", "bosluklu-karisik"])
+def test_any_sec_fetch_site_line_saying_cross_site_is_refused(lines: tuple[bytes, ...]) -> None:
+    scope = _http_scope([(b"host", b"127.0.0.1:8090"), *((b"sec-fetch-site", v) for v in lines)])
+    sent, reached = _drive(scope, [{"type": "http.request", "body": b"", "more_body": False}])
+    assert reached == [] and sent[0]["status"] == 403 and CROSS_SITE_TEXT.encode() in sent[1]["body"]
+
+
+def test_two_sec_fetch_site_lines_through_the_whole_app(client: Any) -> None:
+    r = client.get("/healthz", headers=[("sec-fetch-site", "same-origin"), ("sec-fetch-site", "cross-site")])
+    assert r.status_code == 403 and r.json() == {"detail": CROSS_SITE_TEXT}
+    assert client.get("/healthz", headers=[("sec-fetch-site", "same-origin"), ("sec-fetch-site", "none")]).status_code == 200
+
+
 @pytest.mark.parametrize("site", ["same-site", "same-origin", "none"])
 def test_no_origin_other_fetch_metadata_passes(client: Any, site: str) -> None:
     assert client.get("/healthz", headers={"sec-fetch-site": site}).status_code == 200
