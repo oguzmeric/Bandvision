@@ -16,6 +16,7 @@ import {
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
 import CameraList, { type CamState } from "./CameraList";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 import ConnectionProblem from "./ConnectionProblem";
 import ContextMenu, { type MenuAction } from "./ContextMenu";
 import EditorMenu, { EDITOR_ID } from "./EditorMenu";
@@ -159,10 +160,12 @@ export default function WatchView() {
    */
   const [rem, setRem] = useState(ROOT_PX);
   const remRef = useRef<HTMLSpanElement>(null);
-  /** Analiz sunucusuyla konuşulamıyor (liste ya da durum yoklaması başarısız): sunucu yok ya da oturum doldu; düzelince kalkar */
+  /** Analiz sunucusuyla konuşulamıyor (liste ya da durum yoklaması başarısız): sunucu yok, oturum doldu ya da sunucu panelin
+   * anahtarını veya adresini reddetti; düzelince kalkar */
   const [problem, setProblem] = useState<Problem | null>(null);
   /** Kayıt cihazları ("NVR'dan şablon" için) */
   const [recorders, setRecorders] = useState<Source[]>([]);
+  const [recordersFailed, setRecordersFailed] = useState(false);
   /** Kamera → kutu etiketi (kamera listesinden): durum gelmeden kutuda ad görünsün */
   const [labels, setLabels] = useState<Record<string, string>>({});
   /**
@@ -422,10 +425,11 @@ export default function WatchView() {
   const hasPresent = present !== null;
   useEffect(() => { if (!hasPresent) setSingle(null); }, [hasPresent]);   // şablon kalmadıysa tek kamera da kapanır
   // Kayıt cihazları: şablon listesi alınabildikten sonra (sunucu ayakta), "NVR'dan şablon" seçici için
-  useEffect(() => {
-    if (!loaded) return;
-    api<Source[]>("sources").then((s) => setRecorders(s.filter((x) => x.kind === "recorder"))).catch(() => undefined);
-  }, [loaded]);
+  const loadRecorders = useCallback(() => api<Source[]>("sources")
+    .then((s) => { setRecorders(s.filter((x) => x.kind === "recorder")); setRecordersFailed(false); })
+    .catch(() => setRecordersFailed(true)), []);
+  useEffect(() => { if (loaded) void loadRecorders(); }, [loaded, loadRecorders]);
+  useRetryWhileFailed(recordersFailed, loadRecorders);
   // Seçili kutu düzen küçülünce kalmadıysa seçim kalkar
   const tileCount = layout?.cells.length ?? 0;
   useEffect(() => { setSelected((s) => (s !== null && s >= tileCount ? null : s)); }, [tileCount]);

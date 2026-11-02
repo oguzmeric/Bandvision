@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, stamp, type NotifyConfig } from "@/lib/live";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 const field = "pl-input h-8 w-full";
 
@@ -12,9 +13,19 @@ export default function NotifySettings() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => {
-    api<NotifyConfig>("notify").then((c) => { setCfg(c); setChatId(c.chatId); setEnabled(c.enabled); }).catch((e: Error) => setMsg({ ok: false, text: e.message }));
-  }, []);
+  /** İlk yükleme başarısız: sunucudan ayar gelene dek kendiliğinden yeniden denenir. Ayar bir kez gelince hiç yeniden istenmez. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Kullanıcının değiştirdiği alanlar: geç gelen ayar üstüne yazmaz */
+  const touched = useRef({ chatId: false, enabled: false });
+  const load = useCallback(() => api<NotifyConfig>("notify").then((c) => {
+    setCfg(c);
+    if (!touched.current.chatId) setChatId(c.chatId);
+    if (!touched.current.enabled) setEnabled(c.enabled);
+    setLoadError(null);
+  }).catch((e: Error) => setLoadError(e.message)), []);
+  useEffect(() => { void load(); }, [load]);
+  useRetryWhileFailed(loadError !== null && cfg === null, load);
+  const line = msg ?? (loadError !== null && cfg === null ? { ok: false, text: loadError } : null);
   async function save() {
     try {
       const c = await api<NotifyConfig>("notify", { method: "PUT", json: { enabled, chatId, token: token === "" ? null : token } });
@@ -54,12 +65,14 @@ export default function NotifySettings() {
         </div>
         <div className="pl-row">
           <label htmlFor="notify-chat">Sohbet / grup kimliği</label>
-          <input id="notify-chat" aria-label="Sohbet / grup kimliği" className={field} value={chatId} placeholder="-1001234567890" onChange={(e) => setChatId(e.target.value)} />
+          <input id="notify-chat" aria-label="Sohbet / grup kimliği" className={field} value={chatId} placeholder="-1001234567890"
+                 onChange={(e) => { touched.current.chatId = true; setChatId(e.target.value); }} />
         </div>
         <div className="pl-row">
           <span>Durum</span>
           <label className="flex items-center gap-2">
-            <input type="checkbox" aria-label="Bildirimler açık" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="h-4 w-4 accent-pl-accent" />
+            <input type="checkbox" aria-label="Bildirimler açık" checked={enabled} onChange={(e) => { touched.current.enabled = true; setEnabled(e.target.checked); }}
+                   className="h-4 w-4 accent-pl-accent" />
             Bildirimler açık
           </label>
         </div>
@@ -68,7 +81,7 @@ export default function NotifySettings() {
           <button type="button" onClick={() => run("notify/test", "Deneme mesajı gönderildi.")} className="pl-btn h-8">Deneme mesajı gönder</button>
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="pl-btn h-8">Deneme alarmı</button>
         </div>
-        {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{msg.text}</p>}
+        {line && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${line.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{line.text}</p>}
         {cfg?.lastError && (
           <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-nok-line bg-white px-3 py-1.5 text-[12.5px] text-nok-ink">
             Son gönderim hatası ({stamp(cfg.lastError.at)}): {cfg.lastError.text}

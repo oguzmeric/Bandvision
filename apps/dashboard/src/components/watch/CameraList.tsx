@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAlarmCenter } from "@/components/live/AlarmCenter";
 import { api, type Channel, type LiveSession, type Source } from "@/lib/live";
 import { refKey } from "@/lib/templateEdit.mjs";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 import type { TileRef } from "@/lib/views";
 
 /** Sürüklenen kamera (listeden kutuya): `{ ref, name }` JSON */
@@ -77,26 +78,16 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
     catch (e) { setChannels((x) => ({ ...x, [s.id]: (e as Error).message })); }
     finally { pending.current.delete(s.id); }
   }, []);
-  const load = useCallback(() => {
+  const fetchList = useCallback(() => api<Source[]>("sources").then((s) => {
     setError(null);
-    api<Source[]>("sources").then((s) => {
-      setSources(s);
-      onSources?.(s);
-      for (const r of s) if (r.kind === "recorder") void fetchChannels(r);
-    }).catch((e: Error) => setError(e.message));
-  }, [onSources, fetchChannels]);
+    setSources(s);
+    onSources?.(s);
+    for (const r of s) if (r.kind === "recorder") void fetchChannels(r);
+  }).catch((e: Error) => setError(e.message)), [onSources, fetchChannels]);
+  /** "Yeniden dene" ve ilk yükleme: hata satırı kalkar, "yükleniyor" görünür. Arka plandaki yeniden deneme satırı silmez. */
+  const load = useCallback(() => { setError(null); void fetchList(); }, [fetchList]);
   useEffect(() => { load(); }, [load]);
-
-  // Liste alınamadıysa ve alarm yoklaması koptuktan sonra düzeldiyse (sunucu döndü, anahtar ya da adres düzeltildi) yeniden
-  // istenir: panelin tek yoklaması kullanılır, "Yeniden dene" beklenmez ve eski hata satırı kalmaz
-  const feedDown = center?.problem != null;
-  const wasDown = useRef(false);
-  const failed = useRef(false);
-  failed.current = error !== null;
-  useEffect(() => {
-    if (wasDown.current && !feedDown && failed.current) load();
-    wasDown.current = feedDown;
-  }, [feedDown, load]);
+  useRetryWhileFailed(error !== null, fetchList);
 
   useEffect(() => {
     if (!sources || !onLabels) return;

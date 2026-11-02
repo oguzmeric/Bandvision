@@ -1,17 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ANALYZER_STATE_TEXT, fetchSystem, type SystemInfo } from "@/lib/system";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
-/** Analiz sunucusunun sürümü ve git özeti; sunucu çalışmıyorsa "—" ve nedeni. */
+/** Analiz sunucusunun sürümü ve git özeti; sunucu çalışmıyorsa "—" ve nedeni (çalışana dek kendiliğinden yeniden sorulur). */
 export default function AnalyzerVersion() {
   const [info, setInfo] = useState<SystemInfo | null | undefined>(undefined);
 
-  useEffect(() => {
-    const ctrl = new AbortController();
-    void fetchSystem(ctrl.signal).then((v) => { if (!ctrl.signal.aborted) setInfo(v); });
-    return () => ctrl.abort();
+  const ctrl = useRef<AbortController | null>(null);
+  const load = useCallback(() => {
+    const c = ctrl.current;
+    return c && fetchSystem(c.signal).then((v) => { if (!c.signal.aborted) setInfo(v); });
   }, []);
+  useEffect(() => {
+    ctrl.current = new AbortController();
+    void load();
+    return () => ctrl.current?.abort();
+  }, [load]);
+  useRetryWhileFailed(info === null || (info !== undefined && info.analyzer !== "up"), load);
 
   let text: string;
   if (info === undefined) text = "Yükleniyor…";

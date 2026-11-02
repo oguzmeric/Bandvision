@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnalysisJob } from "@/lib/types";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 const ACTIVE = new Set(["queued", "running"]);
 
 /**
  * İş listesi yoklaması: sürmekte olan iş varken 1,5 sn'de bir, yoksa 15 sn'de bir.
- * Tek döngü; `wake()` beklemeyi keser, istek sürüyorsa bittiğinde hemen bir tur daha atılır.
+ * Tek döngü; `wake()` beklemeyi keser, istek sürüyorsa bittiğinde hemen bir tur daha atılır. Liste alınamıyorsa 5 sn'de bir
+ * denenir (hata satırı 15 sn'lik yoklamayı beklemesin).
  */
 export function useJobs() {
   const [jobs, setJobs] = useState<AnalysisJob[] | null>(null);
@@ -65,5 +67,6 @@ export function useJobs() {
   }, [load]);
 
   const wake = useCallback(() => wakeRef.current(), []);
+  useRetryWhileFailed(error !== null, wake);
   return { jobs, error, wake };
 }

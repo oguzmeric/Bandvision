@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { KIND_TITLE, kindOfMode, parseKind } from "@/lib/analysisKind";
 import { api, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 import SourceForm from "./SourceForm";
 import Thumb from "./Thumb";
 import StartSessionDialog from "./StartSessionDialog";
@@ -97,10 +98,12 @@ export default function CamerasView() {
   const [sessions, setSessions] = useState<LiveSession[]>([]);
 
   const load = useCallback(() => {
-    api<Source[]>("sources").then((s) => { setSources(s); setError(null); }).catch((e: Error) => setError(e.message));
     api<LiveSession[]>("sessions").then(setSessions).catch(() => undefined);
+    return api<Source[]>("sources").then((s) => { setSources(s); setError(null); }).catch((e: Error) => setError(e.message));
   }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
+  // Kaynak listesi hiç alınamadıysa kendiliğinden yeniden istenir (sunucu döndü, anahtar düzeltildi)
+  useRetryWhileFailed(error !== null && sources === null, load);
 
   async function remove(s: Source) {
     if (!confirm(`"${s.name}" silinsin mi? Kayıtlı şifresi de silinir.`)) return;

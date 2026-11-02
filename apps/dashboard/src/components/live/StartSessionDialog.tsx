@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { KIND_CATEGORY, type AnalysisKind } from "@/lib/analysisKind";
 import { api, type CatalogCategory, type LiveSession, type Profile } from "@/lib/live";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 /** Profil hangi sayım türünde (telefondaki ProductCatalog.contains ile aynı) */
 export function categoryOf(p: Profile): string {
@@ -50,12 +51,16 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /** Profil listesi alınamadı: alınana dek kendiliğinden yeniden denenir (sunucu döndü, anahtar düzeltildi) */
+  const [listFailed, setListFailed] = useState(false);
+  const loadLists = useCallback(() => Promise.all([api<Profile[]>("profiles"), api<CatalogCategory[]>("catalog")])
+    .then(([p, c]) => { setProfiles(p); setCatalog(c); setListFailed(false); setError(null); })
+    .catch((e: Error) => { setListFailed(true); setError(e.message); }), []);
   useEffect(() => {
     dialog.current?.showModal();
-    Promise.all([api<Profile[]>("profiles"), api<CatalogCategory[]>("catalog")])
-      .then(([p, c]) => { setProfiles(p); setCatalog(c); })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+    void loadLists();
+  }, [loadLists]);
+  useRetryWhileFailed(listFailed, loadLists);
 
   async function addPreset(key: string) {
     try {

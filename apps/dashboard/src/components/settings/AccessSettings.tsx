@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 interface AccessView {
   enabled: boolean; hasPassword: boolean; envPassword: boolean; lanActive: boolean; runner: boolean; addresses: string[];
@@ -16,8 +17,20 @@ export default function AccessSettings() {
   const [pw2, setPw2] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [qr, setQr] = useState<string | null>(null);
-  const load = async () => setV(await (await fetch("/api/access", { cache: "no-store" })).json());
-  useEffect(() => { load().catch(() => setMsg({ ok: false, text: "Ayarlar okunamadı." })); }, []);
+  /** Ayarlar okunamadı: okunana dek söylenir ve kendiliğinden yeniden denenir */
+  const [readFailed, setReadFailed] = useState(false);
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/access", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setV(await res.json());
+      setReadFailed(false);
+    } catch {
+      setReadFailed(true);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  useRetryWhileFailed(readFailed, load);
   useEffect(() => {
     const url = v?.addresses[0];
     if (v?.lanActive && url) QRCode.toDataURL(url, { margin: 1, width: 220 }).then(setQr).catch(() => setQr(null));
@@ -40,7 +53,7 @@ export default function AccessSettings() {
       setMsg({ ok: false, text: "Panel yeniden başlıyor olabilir; birkaç saniye sonra sayfayı yenileyin." });
     }
   };
-  if (!v) return null;
+  if (!v) return readFailed ? <p role="status" className="pl-section max-w-[760px] text-nok-ink">Ayarlar okunamadı.</p> : null;
   return (
     <section className="pl-section max-w-[760px]">
       <h2>Erişim ve şifre</h2>
