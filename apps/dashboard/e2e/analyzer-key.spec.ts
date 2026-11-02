@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -13,8 +16,52 @@ const KEY_TEXT = "Analiz sunucusu erişim anahtarı uyuşmuyor — panelde ve an
 const CROSS_SITE = { error: "Bu istek başka bir siteden geldiği için kabul edilmedi." };
 const JOB = "00000000-0000-4000-8000-000000000000";
 const VIDEO = { file: { name: "a.mp4", mimeType: "video/mp4", buffer: Buffer.alloc(16) } };
+/** Şifreli panel (doğru anahtar: analiz sunucusu 8091 anahtarsız) */
+const PASSWORD_PANEL = "http://127.0.0.1:3100";
+const CLIP = path.resolve(__dirname, "../../ios/BantSayacUITests/ui_test_clip.mp4");
+const BIG = 12 * 1024 * 1024;
+const BOUNDARY = "e2e-sinir";
 
 test.use({ baseURL: PANEL });
+
+/** Gerçek klip + sonda MP4 `free` kutusu: Next'in 10 MB ara katman sınırını aşar, analiz sunucusu yine video diye okur */
+function paddedClip(file: string): string {
+  const clip = readFileSync(CLIP);
+  const pad = Buffer.alloc(BIG - clip.length);
+  pad.writeUInt32BE(pad.length, 0);
+  pad.write("free", 4, "latin1");
+  writeFileSync(file, Buffer.concat([clip, pad]));
+  return file;
+}
+
+/**
+ * Ham yükleme: başlıklar ve 12 MB gövdenin yalnızca 1 MB'ı; kalanı HİÇ gönderilmez. Yanıt ancak panel gövdeyi beklemeden
+ * karar verirse gelir (yanlış anahtar bütün videoyu beklemez, ret bağlantıyı koparmaz).
+ */
+function partialUpload(port: number, headers: Record<string, string> = {}): Promise<{ status: number; body: unknown }> {
+  const part = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="a.mp4"\r\nContent-Type: video/mp4\r\n\r\n`;
+  const lines = { Host: `127.0.0.1:${port}`, "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`, "Content-Length": String(BIG), ...headers };
+  const head = ["POST /api/jobs HTTP/1.1", ...Object.entries(lines).map(([k, v]) => `${k}: ${v}`), "", ""].join("\r\n");
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1");
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error("yanıt gövde bitmeden gelmedi")); }, 10_000);
+    let got = Buffer.alloc(0);
+    socket.on("error", (e) => { clearTimeout(timer); reject(e); });
+    socket.on("data", (chunk) => {
+      got = Buffer.concat([got, chunk]);
+      const text = got.toString("utf8");
+      const m = /^HTTP\/1\.1 (\d+)[\s\S]*?\r\n\r\n([\s\S]*)$/.exec(text);
+      const json = m && /(\{[\s\S]*\})/.exec(m[2]);
+      if (!m || !json) return;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ status: Number(m[1]), body: JSON.parse(json[1]) });
+    });
+    socket.write(head);
+    socket.write(part);
+    socket.write(Buffer.alloc(1024 * 1024));
+  });
+}
 
 test("erişim anahtarı uyuşmuyor: analiz sunucusu 401 verir, vekil bütün yollarda 502 + analyzer_key döner", async ({ request }) => {
   // Gerçek sunucu: yanlış anahtara 401, doğrusuna 200 (ret sunucunun kendi anahtar denetiminden)
@@ -78,7 +125,8 @@ test("erişim anahtarı uyuşmuyor: taslak yazımı durmaz, yeniden denenir (pan
   const writes: Array<{ status: number; code: unknown }> = [];
   page.on("response", async (res) => {
     if (res.request().method() !== "POST" || new URL(res.url()).pathname !== "/api/live/views/drafts") return;
-    writes.push({ status: res.status(), code: ((await res.json()) as { code?: unknown }).code });
+    const body = (await res.json().catch(() => undefined)) as { code?: unknown } | undefined;
+    writes.push({ status: res.status(), code: body?.code });
   });
   await page.goto("/watch");
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
@@ -118,6 +166,88 @@ test("şifresiz panel, başka site: API isteği 403 (Origin, null, Sec-Fetch-Sit
   const page = await request.get("/watch", { headers: { "Sec-Fetch-Site": "cross-site" } });
   expect(page.status()).toBe(200);
   expect(page.headers()["content-type"]).toContain("text/html");
+});
+
+test.describe("10 MB üstü video", () => {
+  let dir = "";
+  let big = "";
+  test.beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "bv-e2e-klip-"));
+    big = paddedClip(path.join(dir, "uzun.mp4"));
+  });
+  test.afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("doğru anahtarla 12 MB yüklenir: 202, iş listede (şifreli panel)", async ({ page }) => {
+    await page.goto(`${PASSWORD_PANEL}/videos`);
+    await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+    await page.getByRole("button", { name: "Giriş yap" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
+    await page.getByTestId("file-input").setInputFiles(big);
+    const answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/jobs" && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Analizi başlat" }).click();
+    const res = await answered;
+    expect(res.status()).toBe(202);
+    const job = (await res.json()) as { id: string; video: { sizeBytes: number } };
+    expect(job.video.sizeBytes).toBe(BIG);
+    await expect(page.getByTestId("job-detail")).toContainText("uzun.mp4");
+    const del = await page.request.delete(`${PASSWORD_PANEL}/api/jobs/${job.id}`);       // sonraki testler boş liste bekler
+    expect(del.status()).toBe(204);
+    await expect(page.getByText("Henüz analiz yok")).toBeVisible();
+  });
+
+  test("anahtar uyuşmuyorsa 12 MB'ta da 502 + analyzer_key; /videos metni gösterir", async ({ page, request }) => {
+    const file = { name: "uzun.mp4", mimeType: "video/mp4", buffer: readFileSync(big) };
+    const res = await request.post("/api/jobs", { multipart: { file } });
+    expect(res.status()).toBe(502);
+    expect(await res.json()).toEqual({ detail: KEY_TEXT, code: "analyzer_key" });
+    await page.goto("/videos");
+    await page.getByTestId("file-input").setInputFiles(big);
+    await page.getByRole("button", { name: "Analizi başlat" }).click();
+    await expect(page.getByTestId("upload-error")).toHaveText(KEY_TEXT);
+  });
+});
+
+test("yükleme bitmeden karar: yanlış anahtar 502 (videoyu beklemez), ret doğru JSON ile gelir", async () => {
+  expect(await partialUpload(3102)).toEqual({ status: 502, body: { detail: KEY_TEXT, code: "analyzer_key" } });
+  expect(await partialUpload(3102, { Origin: "https://evil.example" })).toEqual({ status: 403, body: CROSS_SITE });
+  expect(await partialUpload(3102, { Host: "evil.example" })).toEqual({ status: 403, body: { error: "Geçersiz adres." } });
+  expect(await partialUpload(3100)).toEqual({ status: 401, body: { error: "Giriş gerekli." } });
+});
+
+test("/api/jobs ara katman dışında ama denetimi atlanmaz: GET ve yol biçimleri", async ({ request }) => {
+  /** Yol olduğu gibi gönderilir (URL ayrıştırıcısı düzeltmesin) */
+  const raw = (port: number, target: string, headers: Record<string, string> = {}, method = "GET") => new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const q = http.request({ host: "127.0.0.1", port, path: target, method, headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c: string) => { body += c; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    q.on("error", reject);
+    q.end();
+  });
+  const NO_SESSION = JSON.stringify({ error: "Giriş gerekli." });
+  const FOREIGN = { Origin: "https://evil.example" };
+  // Tam yol: oturumsuz 401, başka site 403, yabancı ad 403
+  expect(await raw(3100, "/api/jobs")).toEqual({ status: 401, body: NO_SESSION });
+  expect(await raw(3102, "/api/jobs", FOREIGN)).toEqual({ status: 403, body: JSON.stringify(CROSS_SITE) });
+  expect(await raw(3102, "/api/jobs", { Host: "evil.example" })).toEqual({ status: 403, body: JSON.stringify({ error: "Geçersiz adres." }) });
+  expect((await raw(3102, "/api/jobs")).status).toBe(502);
+  // Başka yöntemler de aynı kapıdan geçer; geçince Next'in yanıtıyla aynı (405, OPTIONS 204)
+  for (const method of ["PUT", "DELETE", "PATCH", "OPTIONS"]) {
+    expect(await raw(3100, "/api/jobs", {}, method), `3100 ${method}`).toEqual({ status: 401, body: NO_SESSION });
+    expect(await raw(3102, "/api/jobs", FOREIGN, method), `3102 ${method}`).toEqual({ status: 403, body: JSON.stringify(CROSS_SITE) });
+    expect(await raw(3102, "/api/jobs", {}, method), `3102 ${method} geçer`).toEqual({ status: method === "OPTIONS" ? 204 : 405, body: "" });
+  }
+  // Yol biçimleri hiçbirini atlatmaz. Sorgu ve ara katmanın gördüğü biçimler reddedilir; sondaki ve çift eğik çizgiyi Next
+  // tam yola yönlendirir (308), orada yine aynı karar verilir.
+  const redirected = { status: 308, body: "/api/jobs" };
+  for (const [target, want] of [["/api/jobs?x=1", null], ["/api/jobs%2f", null], ["/api/./jobs", null],
+    ["/api/jobs/", redirected], ["//api/jobs", redirected]] as Array<[string, typeof redirected | null]>) {
+    expect(await raw(3100, target), `3100 ${target}`).toEqual(want ?? { status: 401, body: NO_SESSION });
+    expect(await raw(3102, target, FOREIGN), `3102 ${target}`).toEqual(want ?? { status: 403, body: JSON.stringify(CROSS_SITE) });
+  }
+  expect(await request.get("/api/jobs/00000000-0000-4000-8000-000000000000", { headers: FOREIGN }).then((r) => r.status())).toBe(403);
 });
 
 test("şifreli panel, başka site: kural değişmez, girişsiz API isteği 401", async ({ request }) => {
