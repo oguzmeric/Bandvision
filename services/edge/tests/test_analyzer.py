@@ -130,6 +130,23 @@ def test_token_required_when_configured(tmp_path: pathlib.Path) -> None:
         assert c.get("/healthz").status_code == 200
 
 
+def test_non_ascii_token_is_compared_as_utf8_bytes(tmp_path: pathlib.Path) -> None:
+    """Türkçe karakterli anahtar çalışır: başlığın baytları anahtarın UTF-8 baytlarıyla karşılaştırılır (500 yok)."""
+    app = create_app(Settings(data_dir=tmp_path, token="gizlişifre"))
+    with local_client(app, raise_server_exceptions=False) as c:
+        assert c.get("/api/v1/jobs", headers={"Authorization": "Bearer gizlişifre".encode()}).status_code == 200
+        for wrong in (b"Bearer yanlis", "Bearer gizlişifrex".encode(), b"Bearer gizlisifre", b"gizli"):
+            assert c.get("/api/v1/jobs", headers={"Authorization": wrong}).status_code == 401, wrong
+        assert c.get("/api/v1/jobs").status_code == 401
+
+
+def test_non_ascii_header_under_ascii_token_is_401(tmp_path: pathlib.Path) -> None:
+    with local_client(create_app(Settings(data_dir=tmp_path, token="gizli")), raise_server_exceptions=False) as c:
+        r = c.get("/api/v1/jobs", headers={"Authorization": "Bearer gizlişifre".encode()})
+        assert r.status_code == 401 and r.json()["detail"] == "Yetkisiz: geçerli bir erişim anahtarı gerekli."
+        assert c.get("/api/v1/jobs", headers={"Authorization": b"Bearer gizli"}).status_code == 200
+
+
 def test_unknown_ids_and_files_are_404(client: TestClient) -> None:
     assert client.get("/api/v1/jobs/../../etc/passwd").status_code == 404
     assert client.get("/api/v1/jobs/not-a-uuid").status_code == 404

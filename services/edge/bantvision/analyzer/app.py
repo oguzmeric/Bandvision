@@ -157,8 +157,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def auth(authorization: Annotated[str | None, Header()] = None) -> None:
         if not settings.token:
             return
-        expected = f"Bearer {settings.token}"
-        if not authorization or not secrets.compare_digest(authorization, expected):
+        # Baytlar karşılaştırılır: compare_digest ASCII dışı dizgede hata verirdi (Türkçe karakterli anahtar ya da başlık
+        # 500 olurdu). Starlette başlığı latin-1 çözer: encode("latin-1") gönderilen baytları geri verir; panel anahtarın
+        # UTF-8 baytlarını gönderir.
+        expected = f"Bearer {settings.token}".encode()
+        if not authorization or not secrets.compare_digest(authorization.encode("latin-1"), expected):
             raise HTTPException(401, "Yetkisiz: geçerli bir erişim anahtarı gerekli.")
 
     Auth = Depends(auth)
