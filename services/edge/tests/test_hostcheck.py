@@ -346,11 +346,12 @@ def test_refused_launch_with_unwritable_log_still_exits_2_with_the_message(tmp_p
     ("   ", None),                                    # yalnızca boşluk: anahtar yok
     ("\t \n", None),
     ("gizli", "gizli"),
-    ("  gizli ", "  gizli "),                         # başka karakter varsa olduğu gibi kalır (kırpılmaz)
-    ("gizli şifre", "gizli şifre"),
+    ("  gizli ", "gizli"),                            # çevresindeki boşluk atılır (yazım hatası, panel de atar)
+    ("\tgizli\n", "gizli"),
+    ("gizli şifre", "gizli şifre"),                   # içindeki boşluk kalır
+    (" gizli şifre ", "gizli şifre"),
 ])
-def test_settings_from_env_whitespace_only_token_is_no_token(monkeypatch: pytest.MonkeyPatch, value: str,
-                                                             want: str | None) -> None:
+def test_settings_from_env_strips_the_token(monkeypatch: pytest.MonkeyPatch, value: str, want: str | None) -> None:
     monkeypatch.setenv("ANALYZER_TOKEN", value)
     assert Settings.from_env().token == want
 
@@ -368,6 +369,18 @@ def test_whitespace_only_token_leaves_the_host_check_on(launch: Launch, monkeypa
     c = local_client(call["app"])                                           # ömür başlamaz: istek ara katmanda biter
     assert c.get("/healthz", headers={"host": "evil.example"}).status_code == 403
     assert c.get("/healthz").status_code == 200
+
+
+def test_token_with_surrounding_whitespace_means_the_stripped_token(launch: Launch,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """`  gizli ` anahtarı `gizli` demektir (R13): sondaki boşluk yazım hatasıdır, panel de `trim()` ile atar."""
+    monkeypatch.setenv("ANALYZER_TOKEN", "  gizli ")
+    (call,) = launch("--host", "0.0.0.0")                                   # anahtar var: ağa açılabilir
+    assert call["app"].state.settings.token == "gizli"
+    c = local_client(call["app"])
+    assert c.get("/api/v1/jobs", headers={"Authorization": "Bearer gizli"}).status_code == 200
+    assert c.get("/api/v1/jobs", headers={"Authorization": "Bearer   gizli "}).status_code == 401
+    assert c.get("/api/v1/jobs").status_code == 401
 
 
 def test_launch_on_network_with_token_starts(launch: Launch, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -43,10 +43,10 @@ def parse_iso(s: str) -> dt.datetime:
 
 
 def token_from_env() -> str | None:
-    """Erişim anahtarı: ANALYZER_TOKEN tanımsız, boş ya da yalnızca boşluksa None (anahtar yok). Başka karakter içeren
-    değer olduğu gibi kalır (kırpılmaz). Boşluk anahtar sayılsaydı ağa açılma engeli ve Host denetimi kapanırdı."""
-    token = os.environ.get("ANALYZER_TOKEN", "")
-    return token if token.strip() else None
+    """Erişim anahtarı: ANALYZER_TOKEN, çevresindeki boşluk atılmış. Sondaki boşluk yazım hatasıdır ve panel de atar;
+    atılmasaydı ekranda nedeni görünmeyen bir anahtar uyuşmazlığı olurdu. Geriye bir şey kalmazsa None (anahtar yok):
+    boşluk anahtar sayılsaydı ağa açılma engeli ve Host denetimi kapanırdı."""
+    return os.environ.get("ANALYZER_TOKEN", "").strip() or None
 
 
 @dataclass
