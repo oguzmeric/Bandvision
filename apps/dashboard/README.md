@@ -65,8 +65,8 @@ Elle (geliştirme):
 
 | Ortam değişkeni | Varsayılan | Açıklama |
 |---|---|---|
-| `ANALYZER_URL` | `http://127.0.0.1:8090` | Analiz sunucusu adresi |
-| `ANALYZER_TOKEN` | — | Sunucuda token tanımlıysa aynısı (yalnızca sunucu tarafında kullanılır) |
+| `ANALYZER_URL` | `http://127.0.0.1:8090` | Analiz sunucusu adresi. Erişim anahtarı yokken `127.0.0.1` ya da `localhost` olmalı (analiz sunucusu başka adı reddeder) |
+| `ANALYZER_TOKEN` | — | Sunucuda token tanımlıysa aynısı (yalnızca sunucu tarafında kullanılır; çevresindeki boşluk atılır, Türkçe karakter içerebilir) |
 | `DASHBOARD_PASSWORD` | — | Tanımlıysa panelin tüm sayfaları ve API'si tek şifreyle korunur (oturum 7 gün; şifre değişince tüm oturumlar düşer); Telefondan erişim sayfasındaki panel şifresinden önceliklidir. Tanımlı değilse ve telefondan erişim kapalıysa panel şifresizdir ama yalnızca bu bilgisayardan açılır |
 | `PANEL_ACCESS_FILE`, `PANEL_STATE_FILE` | `.local/access.json`, `.local/panel-state.json` | Erişim ayarı ve başlatıcı durum dosyası (testler geçici klasöre yönlendirir) |
 | `BV_COMMIT` | — | Hakkında'da gösterilen git kısa özeti; tanımlı değilse `git rev-parse --short HEAD`, o da olmazsa "?" (analiz sunucusu da aynı değişkeni okur) |

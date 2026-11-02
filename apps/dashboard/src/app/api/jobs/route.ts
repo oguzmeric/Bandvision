@@ -29,6 +29,9 @@ export async function POST(req: Request): Promise<Response> {
       body: req.body,
       // Node fetch akan gövde için gerekli
       duplex: "half",
+      // Yoksa Node fetch 401'de gövdeyi kimlikle yeniden göndermeye kalkar, akan gövde tekrarlanamadığı için ağ hatası verir
+      // ("expected non-null body source"): erişim anahtarı reddi "analiz sunucusuna ulaşılamadı" görünürdü
+      credentials: "omit",
     } as RequestInit & { duplex: "half" });
     return passThrough(res);
   } catch (err) {

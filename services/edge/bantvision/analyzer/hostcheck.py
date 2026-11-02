@@ -10,8 +10,8 @@ sayfaları dahil) sırayla iki denetimden geçer:
 2. Başka site: `Host` denetimi bunu durdurmaz, çünkü her site 127.0.0.1'e geçerli `Host` ile doğrudan istek atabilir ve
    çok parçalı `POST` CORS ön uçuşu gerektirmez. `Origin` varsa bu bilgisayarın bir kaynağı (`is_loopback_origin`) ya da
    ANALYZER_CORS_ORIGINS'teki bir değerle birebir aynı olmalıdır; `null` (listede yazılı olsa da), başka şema, bozuk değer ya
-   da birden çok `Origin` reddedilir. `Origin` yoksa yalnızca `Sec-Fetch-Site: cross-site` reddedilir: panelin sunucu tarafı, curl ve başlatıcı bu
-   başlıkları göndermez (`CROSS_SITE_REFUSED`).
+   da birden çok `Origin` reddedilir. `Origin` yoksa yalnızca `Sec-Fetch-Site: cross-site` reddedilir: panelin sunucu
+   tarafı, curl ve başlatıcı bu başlıkları göndermez (`CROSS_SITE_REFUSED`).
 
 Ret: HTTP `403`; WebSocket kabul edilmeden 1008 koduyla kapanır.
 

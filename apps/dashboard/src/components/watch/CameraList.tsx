@@ -87,6 +87,17 @@ export default function CameraList({ used, stateOf, onPick, onSources, onLabels 
   }, [onSources, fetchChannels]);
   useEffect(() => { load(); }, [load]);
 
+  // Liste alınamadıysa ve alarm yoklaması koptuktan sonra düzeldiyse (sunucu döndü, anahtar ya da adres düzeltildi) yeniden
+  // istenir: panelin tek yoklaması kullanılır, "Yeniden dene" beklenmez ve eski hata satırı kalmaz
+  const feedDown = center?.problem != null;
+  const wasDown = useRef(false);
+  const failed = useRef(false);
+  failed.current = error !== null;
+  useEffect(() => {
+    if (wasDown.current && !feedDown && failed.current) load();
+    wasDown.current = feedDown;
+  }, [feedDown, load]);
+
   useEffect(() => {
     if (!sources || !onLabels) return;
     const m: Record<string, string> = {};

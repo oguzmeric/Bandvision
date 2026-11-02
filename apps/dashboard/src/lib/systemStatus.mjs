@@ -1,9 +1,11 @@
 /** Durum şeridi: analiz sunucusunun yanıtını sınıflandıran işlevler (route.ts ve birim testi kullanır). */
+import { refusalFor } from "./analyzerRefusal.mjs";
 
 /**
- * `/api/v1/system/status` yanıtı/hatası → "up" (çalışıyor), "auth" (erişim anahtarı yanlış/eksik: 401/403), "old" (404:
- * bu ucu olmayan eski analiz sunucusu; çağıran `/healthz`'e bakar), "down" (ağ hatası, zaman aşımı, 5xx ya da başka bir
- * hata kodu). "auth" asla "down" diye bildirilmez: kullanıcı ANALYZER_TOKEN'ı düzeltmeli.
+ * `/api/v1/system/status` yanıtı/hatası → "up" (çalışıyor), "auth" (erişim reddedildi: 401 anahtar yanlış ya da eksik,
+ * 403 adres), "old" (404: bu ucu olmayan eski analiz sunucusu; çağıran `/healthz`'e bakar), "down" (ağ hatası, zaman aşımı,
+ * 5xx ya da başka bir hata kodu). "auth" asla "down" diye bildirilmez: kullanıcı ANALYZER_TOKEN'ı ya da ANALYZER_URL'i
+ * düzeltmeli; nedeni günlükte yazar.
  */
 export function classify(r) {
   if (!r || "error" in r) return "down";
@@ -43,7 +45,7 @@ export async function analyzerSummary(get) {
   const res = await get("/api/v1/system/status");
   const state = classify(res);
   if (state === "auth") {
-    return { analyzer: "auth", log: { message: `HTTP ${res.status}: ANALYZER_TOKEN yanlış ya da eksik`, what: "analiz sunucusu erişimi reddetti" } };
+    return { analyzer: "auth", log: { message: `HTTP ${res.status}: ${refusalFor(res.status).detail}`, what: "analiz sunucusu erişimi reddetti" } };
   }
   if (state === "old") {
     const h = await get("/healthz");

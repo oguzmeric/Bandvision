@@ -31,6 +31,8 @@ function dropDraft(id: string): void {
  * yeniden denenir; başarınca ileti kalkar. Panelin kendi 401'i (oturum doldu) bir kez görülünce sayfa yenilenene dek
  * taslağa hiçbir istek (POST/PUT/DELETE) gitmez ve yeniden denenmez: oturum olmadan hepsi 401 alırdı, 2 sn'de bir
  * tekrarlanırken giriş sayfasına geçmek ya da sekmeyi kapatmak süren isteği yarıda keser (panel günlüğünde "aborted").
+ * Analiz sunucusunun reddi (anahtar, adres) 401 değildir: vekilden 502 + kod gelir ve öteki 5xx'ler gibi sessizce yeniden
+ * denenir (nedeni sayfanın durum yoklaması söyler); ayar düzeltilince taslak açılır.
  * Düzenleme sessionStorage'da durur; giriş tam sayfa gezinmesidir, durumu yeniden kurar.
  */
 export function useDraft(owner: string | null, edit: DraftBody | null, sessionLost = false): {
@@ -53,7 +55,8 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
   /** Oturum düştü (401): sayfa kapanırken silme isteği gönderilmez (girişsiz istek 401 alırdı; taslak 10 dk'da silinir) */
   const noSession = useRef(sessionLost);
   noSession.current = sessionLost;
-  /** Taslak isteği panelin 401'ini aldı (oturum doldu): sayfa yenilenene dek taslağa istek gitmez, yeniden denenmez */
+  /** Taslak isteği panelin 401'ini aldı (oturum doldu; analiz sunucusunun reddi 502 gelir, buraya düşmez): sayfa yenilenene
+   * dek taslağa istek gitmez, yeniden denenmez */
   const authLost = useRef(false);
   /** Sayfadan çıkarken (kapanış, söküm) taslağı siler; oturum düştüyse göndermez */
   const leaving = (id: string) => { if (!noSession.current && !authLost.current) dropDraft(id); };
@@ -98,10 +101,10 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
             setError(e.message);
             retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e instanceof ApiError && e.status === 401) {
-            // oturum doldu: sayfanın durum yoklaması bunu söyler ("Giriş yap"); taslağa bir daha istek gitmez, yeniden denenmez
+            // panelin 401'i, oturum doldu: sayfanın durum yoklaması bunu söyler ("Giriş yap"); taslağa bir daha istek gitmez, yeniden denenmez
             authLost.current = true;
           } else if (!(e instanceof ApiError) || e.status >= 500) {
-            // sunucu yok: sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
+            // sunucu yok ya da panelin isteğini reddetti (502 + kod): sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
             retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e.status === 404 && target) {
             // taslak sunucuda yok: yenisi açılır (kimlik o ana dek kalır). `lost` bu arada bırakmış da olabilir.

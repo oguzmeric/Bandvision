@@ -13,6 +13,11 @@ const WEB_PORT = 3100;
 /** İkinci panel: telefondan erişimin ŞİFRE ÖZETİ kipi (DASHBOARD_PASSWORD yok; e2e/access-hash.spec.ts) */
 const HASH_PORT = 3101;
 const DATA_DIR = path.join(os.tmpdir(), `bv-e2e-${process.pid}`);
+/** İkinci analiz sunucusu ve üçüncü panel: erişim anahtarı uyuşmuyor (e2e/analyzer-key.spec.ts). Sunucu doğru anahtarı, panel yanlış
+ * anahtarı kullanır; panel şifresizdir (yalnızca bu bilgisayar). Anahtarlar deneme değeridir, gerçek değildir. */
+const KEY_ANALYZER_PORT = 8092;
+const KEY_WEB_PORT = 3102;
+const KEY_DATA_DIR = path.join(os.tmpdir(), `bv-e2e-${process.pid}-key`);
 /** Testte panel şifreyle korunur (e2e/auth.spec.ts); gerçek şifre değildir. */
 export const PANEL_PASSWORD = "e2e-test-sifresi";
 /** Özet kipi sunucusunun giriş şifresi (e2e/access-hash.spec.ts aynısını kullanır); gerçek şifre değildir. */
@@ -65,6 +70,23 @@ export default defineConfig({
              DASHBOARD_PASSWORD: "", PANEL_PASSWORD_HASH: HASH_MODE.hash, PANEL_PASSWORD_SALT: HASH_MODE.salt,
              PANEL_SESSION_SECRET: newSecret(), PANEL_ACCESS_FILE: path.join(DATA_DIR, "panel-access-hash.json"),
              PANEL_STATE_FILE: path.join(DATA_DIR, "panel-state-hash.json") },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: `${PYTHON} -m bantvision.analyzer --port ${KEY_ANALYZER_PORT}`,
+      cwd: path.resolve(__dirname, "../../services/edge"),
+      url: `http://127.0.0.1:${KEY_ANALYZER_PORT}/healthz`,
+      env: { ANALYZER_DATA_DIR: KEY_DATA_DIR, PYTHONIOENCODING: "utf-8", ANALYZER_TOKEN: "e2e-dogru-anahtar" },
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command: `npx next start -p ${KEY_WEB_PORT} -H 127.0.0.1`,
+      url: `http://127.0.0.1:${KEY_WEB_PORT}/videos`,
+      env: { ANALYZER_URL: `http://127.0.0.1:${KEY_ANALYZER_PORT}`, ANALYZER_TOKEN: "e2e-yanlis-anahtar", NEXT_TELEMETRY_DISABLED: "1",
+             DASHBOARD_PASSWORD: "", PANEL_ACCESS_FILE: path.join(DATA_DIR, "panel-access-key.json"),
+             PANEL_STATE_FILE: path.join(DATA_DIR, "panel-state-key.json") },
       reuseExistingServer: false,
       timeout: 60_000,
     },

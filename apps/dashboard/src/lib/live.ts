@@ -242,9 +242,10 @@ function validationMessage(errors: unknown[]): string {
   return [...new Set(msgs)].join(" ");
 }
 
-/** HTTP hatası: `status` ile 401 (oturum süresi doldu) ya da 502 (analiz sunucusu yok) ayırt edilir */
+/** HTTP hatası: `status` ile 401 (panelin kendi "oturum süresi doldu"su) ya da 502 (analiz sunucusu yok) ayırt edilir.
+ * `code`: vekilin 502 gövdesindeki kod (analiz sunucusu reddetti: `analyzer_key`, `analyzer_host`), yoksa null. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code: string | null = null) {
     super(message);
     this.name = "ApiError";
   }
@@ -261,9 +262,9 @@ export async function api<T>(path: string, init?: RequestInit & { json?: unknown
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    const d = (body as { detail?: unknown } | null)?.detail;
+    const { detail: d, code } = (body ?? {}) as { detail?: unknown; code?: unknown };
     throw new ApiError(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
-      : `İstek başarısız (HTTP ${res.status}).`, res.status);
+      : `İstek başarısız (HTTP ${res.status}).`, res.status, typeof code === "string" ? code : null);
   }
   return body as T;
 }

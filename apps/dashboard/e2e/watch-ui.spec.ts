@@ -551,6 +551,72 @@ test("izleme: şablon yoklaması 3 ardışık hatadan sonra uyarır; 401 ile sun
   await expect.poll(() => ks, { timeout: 15_000 }).toContain("1");    // düzelince akış baştan
 });
 
+const KEY_TEXT = "Analiz sunucusu erişim anahtarı uyuşmuyor — panelde ve analiz sunucusunda aynı ANALYZER_TOKEN ayarlanmalı.";
+const HOST_TEXT = "Analiz sunucusu panelin bağlandığı adresi reddetti — erişim anahtarı yokken ANALYZER_URL 127.0.0.1 ya da localhost olmalı.";
+/** Vekilin reddi (502 + kod) açıkken bütün `/api/live/` istekleri onu alır; kapanınca normal sahte yanıtlara düşer */
+async function refusals(page: Page, detail: string, code: string) {
+  const state = { on: false };
+  await page.route("**/api/live/**", (r) => (state.on ? r.fulfill({ status: 502, json: { detail, code } }) : r.fallback()));
+  return state;
+}
+/** Reddin sayfadaki hâli: metin satırı (yeniden deneniyor yok), giriş bağlantısı ve oturum yazısı yok, alarm şeridi metni söyler */
+async function expectRefusal(page: Page, text: string) {
+  await expect(page.getByRole("status").and(page.getByText(text, { exact: true }))).toBeVisible();
+  await expect(page.getByTestId("alarm-feed-warning")).toHaveText(`Alarmlar alınamıyor — ${text}`);
+  await expect(page.getByRole("link", { name: "Giriş yap" })).toHaveCount(0);
+  await expect(page.getByText("Oturum süresi doldu")).toHaveCount(0);
+  await expect(page.getByText("analiz sunucusuna ulaşılamıyor")).toHaveCount(0);        // DOWN da (büyük/küçük harf fark etmez)
+}
+async function expectNoRefusal(page: Page, text: string) {
+  await expect(page.getByText(text)).toHaveCount(0);                                    // durum satırı, alarm şeridi, Kameralar listesi
+}
+
+test("izleme: analiz sunucusu adresi reddederse (502 analyzer_host) metin çıkar, giriş bağlantısı yok; düzelince kendiliğinden kalkar", async ({ page }) => {
+  await mock(page, STATUS);
+  const refused = await refusals(page, HOST_TEXT, "analyzer_host");
+  const ks = await streamKeys(page, "**/api/live/views/v1/stream**");
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  refused.on = true;                                                 // durum yoklaması ve alarm yoklaması reddi alır
+  await expectRefusal(page, HOST_TEXT);
+  refused.on = false;
+  await expectNoRefusal(page, HOST_TEXT);
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await expect.poll(() => ks, { timeout: 15_000 }).toContain("1");   // düzelince akış baştan
+});
+
+test("izleme: sayfa adres reddiyle açılırsa (şablon listesi) metin çıkar, 'Henüz şablon yok' denmez; düzelince sekmeler gelir", async ({ page }) => {
+  await mock(page, STATUS);
+  const refused = await refusals(page, HOST_TEXT, "analyzer_host");
+  refused.on = true;
+  await login(page);
+  await expectRefusal(page, HOST_TEXT);
+  await expect(page.locator("p", { hasText: "Henüz şablon yok" })).toHaveCount(0);
+  refused.on = false;
+  await expect(page.getByRole("tab", { name: "Giriş katı" })).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });   // ≈5 sn sonra
+  await expectNoRefusal(page, HOST_TEXT);
+  await expect(page.getByTestId("watch-tile")).toHaveCount(4);
+  await expect(camera(page, "Kapı")).toBeVisible();                                     // Kameralar listesi "Yeniden dene" beklemeden dolar
+});
+
+test("izleme: tek kamerada erişim anahtarı reddi (502 analyzer_key) metin çıkarır, giriş bağlantısı yok; düzelince kendiliğinden kalkar", async ({ page }) => {
+  await mock(page, STATUS);
+  await page.route("**/api/live/cameras/status**", (r) => r.fulfill({ json: LIVE_CAM }));
+  const refused = await refusals(page, KEY_TEXT, "analyzer_key");
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  await page.getByTestId("watch-tile").nth(0).dblclick();
+  await expect(page.getByRole("heading", { name: "Kapı" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);             // canlı
+  refused.on = true;
+  await expectRefusal(page, KEY_TEXT);
+  refused.on = false;
+  await expectNoRefusal(page, KEY_TEXT);
+  await expect(page.getByRole("heading", { name: "Kapı" })).toBeVisible();             // tek kamerada kalır
+  await expect(page.getByRole("main").getByRole("status")).toHaveCount(0);             // canlı: yazı kalkar
+});
+
 test("izleme: ızgara akışı sekme görünürken 15 dk'da bir baştan açılır (sessiz takılmaya karşı)", async ({ page }) => {
   await mock(page, STATUS);
   const ks = await streamKeys(page, "**/api/live/views/v1/stream**");

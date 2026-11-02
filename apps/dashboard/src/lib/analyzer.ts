@@ -1,4 +1,5 @@
 import "server-only";
+import { bearerHeader, refusalFor } from "./analyzerRefusal.mjs";
 
 /**
  * Analiz sunucusu (services/edge, `python -m bantvision.analyzer`) ile sunucu tarafında konuşur.
@@ -12,8 +13,8 @@ export function analyzerUrl(path: string): string {
 
 export function analyzerHeaders(extra?: HeadersInit): Headers {
   const h = new Headers(extra);
-  const token = process.env.ANALYZER_TOKEN;
-  if (token) h.set("Authorization", `Bearer ${token}`);
+  const bearer = bearerHeader(process.env.ANALYZER_TOKEN);
+  if (bearer) h.set("Authorization", bearer);
   return h;
 }
 
@@ -45,8 +46,18 @@ export function unreachable(err: unknown): Response {
   );
 }
 
-/** Yukarı akış yanıtını, yalnızca güvenli başlıkları taşıyarak tarayıcıya aktarır. */
+/**
+ * Yukarı akış yanıtını, yalnızca güvenli başlıkları taşıyarak tarayıcıya aktarır. Analiz sunucusunun reddi (401 anahtar,
+ * 403 adres) aktarılmaz: 401 tarayıcıda panelin kendi "oturum doldu"su sanılırdı. Gövdesi atılır, nedeni günlüğe yazılır,
+ * sayfa 502 + `{detail, code}` alır (docs/13-web-platform.md "Analiz sunucusu API" → Güvenlik).
+ */
 export function passThrough(res: Response, keep: string[] = ["content-type"]): Response {
+  const refusal = refusalFor(res.status);
+  if (refusal) {
+    void res.body?.cancel().catch(() => undefined);
+    logRateLimited(new Error(`HTTP ${res.status}`), "analiz sunucusu panelin isteğini reddetti");
+    return Response.json(refusal, { status: 502 });
+  }
   const headers = new Headers();
   for (const name of keep) {
     const v = res.headers.get(name);

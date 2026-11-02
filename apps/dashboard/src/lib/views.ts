@@ -1,4 +1,5 @@
 /** Çoklu izleme (analiz sunucusu `/api/v1/live/views…`; sözleşme contracts/view-layouts.json, view-template.schema.json) */
+import { problemFrom, type AnalyzerProblem } from "./analyzerRefusal.mjs";
 import { ApiError, type AlarmType } from "./live";
 
 export interface ViewLayout { id: string; name: string; cols: number; rows: number; cells: Array<[number, number, number, number]> }
@@ -74,10 +75,11 @@ export function streamSize(el: HTMLElement): { w: number; h: number } {
   return { w: round(r.width), h: round(r.height) };
 }
 
-/** Analiz sunucusuyla konuşulamıyor: oturum süresi doldu (401) ya da sunucuya ulaşılamıyor */
-export type Problem = "auth" | "down";
+/** Analiz sunucusuyla konuşulamıyor: panelin oturumu doldu ("auth": 401), sunucu panelin erişim anahtarını ("key") ya da
+ * bağlandığı adresi ("host") reddetti (vekilin 502 + kodu), ya da sunucuya ulaşılamıyor ("down") */
+export type Problem = AnalyzerProblem;
 export function problemOf(e: unknown): Problem {
-  return e instanceof ApiError && e.status === 401 ? "auth" : "down";
+  return e instanceof ApiError ? problemFrom(e.status, e.code) : "down";
 }
 
 /** Kutunun/kameranın bağlantı durumu metni; "Kamera silinmiş." ve "Sınır aşıldı…" kendi başına anlaşılır, öneksiz gösterilir */

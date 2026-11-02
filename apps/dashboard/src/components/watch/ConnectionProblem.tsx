@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { KEEP_UNSAVED_ATTR } from "@/components/UnsavedGuard";
+import { refusalText } from "@/lib/analyzerRefusal.mjs";
 import type { Problem } from "@/lib/views";
 
 export const DOWN_TEXT = "Analiz sunucusuna ulaşılamıyor; yeniden deneniyor…";
@@ -9,12 +10,16 @@ export const AUTH_TEXT = "Oturum süresi doldu — yeniden giriş yapın.";
 
 /**
  * Analiz sunucusuyla konuşulamıyor: sunucu yok ("yeniden deneniyor") ile oturum süresi dolmuş (401: yeniden denemek
- * işe yaramaz, giriş sayfasına bağlantı) ayrı söylenir; `AlarmBanner` ile aynı ayrım. Yalnız metin; kabı çağıran çizer.
+ * işe yaramaz, giriş sayfasına bağlantı) ayrı söylenir; `AlarmBanner` ile aynı ayrım. Analiz sunucusu panelin anahtarını
+ * ya da adresini reddettiyse ("key", "host") yalnızca ne düzeltileceği yazar: giriş işe yaramaz, kendiliğinden de düzelmez
+ * (yoklama sürer, ayar düzeltilince yazı kalkar). Yalnız metin; kabı çağıran çizer.
  * "Giriş yap" kaydedilmemiş düzenlemeyi sormadan korur: girişten sonra Canlı izlemeye dönünce geri yüklenir.
  */
 export default function ConnectionProblem({ problem }: { problem: Problem }) {
   const path = usePathname();
   if (problem === "down") return <>{DOWN_TEXT}</>;
+  const refused = refusalText(problem);
+  if (refused) return <>{refused}</>;
   return (
     <>
       {AUTH_TEXT}{" "}

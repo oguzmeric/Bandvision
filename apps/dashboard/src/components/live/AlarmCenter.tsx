@@ -2,7 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { desktopReady, playBeep, readPref } from "@/lib/attention";
-import { ALARM_LABELS, ApiError, api, safetyHealth, WATCH_WARN_AFTER_S, type Alarm, type LiveSession } from "@/lib/live";
+import { ALARM_LABELS, api, safetyHealth, WATCH_WARN_AFTER_S, type Alarm, type LiveSession } from "@/lib/live";
+import { problemOf, type Problem } from "@/lib/views";
 import AlarmViewer from "./AlarmViewer";
 
 const POLL_MS = 2000;
@@ -23,8 +24,8 @@ export interface Unwatched { id: string; name: string; reason: string }
 interface AlarmCenterValue {
   /** Onaylanmamış alarmlar, yeniden eskiye */
   alarms: Alarm[];
-  /** Alarm akışı koptu: oturum süresi doldu (401) ya da analiz sunucusu yok */
-  problem: "auth" | "down" | null;
+  /** Alarm akışı koptu: oturum süresi doldu (401), analiz sunucusu reddetti (anahtar, adres) ya da analiz sunucusu yok */
+  problem: Problem | null;
   /** 60 sn'den uzun süredir izlenmeyen güvenlik kameraları */
   unwatched: Unwatched[];
   /** Son alınan canlı oturum listesi (panel genelinde tek yoklama; ör. Canlı izleme kamera listesinin durum noktaları) */
@@ -71,7 +72,7 @@ function saveShown(shown: Set<string>): void {
  */
 export default function AlarmCenter({ children }: { children: React.ReactNode }) {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
-  const [problem, setProblem] = useState<"auth" | "down" | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [ackFailed, setAckFailed] = useState<string | null>(null);
   const [unwatched, setUnwatched] = useState<Unwatched[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
@@ -105,7 +106,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
       } catch (e) {
         if (!alive) return;
         fails += 1;
-        if (fails >= FAILS_BEFORE_WARNING) setProblem(e instanceof ApiError && e.status === 401 ? "auth" : "down");
+        if (fails >= FAILS_BEFORE_WARNING) setProblem(problemOf(e));
       } finally {
         busy = false;
         if (alive) {

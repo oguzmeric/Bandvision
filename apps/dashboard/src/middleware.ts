@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { isLoopbackHost } from "@/lib/hostCheck.mjs";
+import { CROSS_SITE_REFUSED, crossSiteRefused, isLoopbackHost } from "@/lib/hostCheck.mjs";
 import { SESSION_COOKIE, authMode, expectedToken, sameToken } from "@/lib/session";
 
 /** Şifre kipi açıksa (DASHBOARD_PASSWORD ya da telefondan erişimin şifre özeti) giriş yapılmamış istekler: sayfada aynı
@@ -7,12 +7,21 @@ import { SESSION_COOKIE, authMode, expectedToken, sameToken } from "@/lib/sessio
  * kaybolmaz), API'de 401.
  * Şifresiz kipte panel yalnızca bu bilgisayarda (127.0.0.1) dinler; yine de `Host` geri döngü adı (localhost,
  * 127.0.0.1, [::1]) değilse 403: kötü niyetli bir sitenin DNS yeniden bağlamayla (alan adını 127.0.0.1'e çevirip)
- * tarayıcı üzerinden panele ve API'ye ulaşması engellenir. */
+ * tarayıcı üzerinden panele ve API'ye ulaşması engellenir. API'de ayrıca başka siteden gelen tarayıcı isteği de 403 alır
+ * (`crossSiteRefused`): vekil isteği sunucu tarafından, `Origin`'siz iletir, analiz sunucusunun denetimi bunu göremez.
+ * Sayfalar etkilenmez: başka siteden gelen bağlantı paneli açar. Şifreli kipte kural yok: oturum çerezi SameSite=Lax,
+ * başka siteden gelen yazma isteği çerezsiz gelir ve 401 alır. */
 export async function middleware(req: NextRequest) {
   const mode = authMode();
   if (!mode) {
-    if (isLoopbackHost(req.headers.get("host"))) return NextResponse.next();
-    if (req.nextUrl.pathname.startsWith("/api/")) {
+    const isApi = req.nextUrl.pathname.startsWith("/api/");
+    if (isLoopbackHost(req.headers.get("host"))) {
+      if (isApi && crossSiteRefused(req.headers.get("origin"), req.headers.get("sec-fetch-site"))) {
+        return NextResponse.json({ error: CROSS_SITE_REFUSED }, { status: 403 });
+      }
+      return NextResponse.next();
+    }
+    if (isApi) {
       return NextResponse.json({ error: "Geçersiz adres." }, { status: 403 });
     }
     return new NextResponse("Geçersiz adres.", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });

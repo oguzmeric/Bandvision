@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { KEEP_UNSAVED_ATTR } from "@/components/UnsavedGuard";
+import { refusalText } from "@/lib/analyzerRefusal.mjs";
 import { ALARM_LABELS, stamp } from "@/lib/live";
 import { useAlarmCenter } from "./AlarmCenter";
 
@@ -12,8 +13,8 @@ const SHOWN = 3;
  * Her panel sayfasında, sayfa kaydırılsa da üstte (yapışkan): onaylanmamış güvenlik alarmları ve 60 sn'den uzun süredir
  * izlenmeyen güvenlik kameraları. Veri `AlarmCenter`'ın tek yoklamasından gelir (ikinci yoklama yok). Alarm penceresi
  * küçültülse de alarm burada kalır; "Kaydı izle" pencereyi o alarmda yeniden açar.
- * Şerit çoğu zaman tek alarm kanalıdır (Telegram varsayılan kapalı): alarm akışı koparsa (oturum süresi doldu,
- * analiz sunucusu yok) eski liste sessizce kalmaz, sarı uyarı satırı çıkar.
+ * Şerit çoğu zaman tek alarm kanalıdır (Telegram varsayılan kapalı): alarm akışı koparsa (oturum süresi doldu, analiz
+ * sunucusu yok, analiz sunucusu panelin anahtarını ya da adresini reddetti) eski liste sessizce kalmaz, sarı uyarı satırı çıkar.
  */
 export default function AlarmBanner() {
   const center = useAlarmCenter();
@@ -23,6 +24,7 @@ export default function AlarmBanner() {
   const { alarms, problem, unwatched, ackFailed, ack, open } = center;
 
   const next = pathname + (search ? `?${search}` : "");
+  const refused = problem && refusalText(problem);
   const warning = problem && (
     <p role="status" data-testid="alarm-feed-warning" className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">
       {problem === "auth" ? (
@@ -31,7 +33,7 @@ export default function AlarmBanner() {
           {/* Oturum düştü: kaydedilmemiş düzenleme (Canlı izleme) sorulmadan saklı kalır, girişten sonra geri yüklenir */}
           <a href={`/login?next=${encodeURIComponent(next)}`} {...{ [KEEP_UNSAVED_ATTR]: "" }} className="font-semibold underline">Giriş yap</a>
         </>
-      ) : "Alarmlar alınamıyor — analiz sunucusuna ulaşılamıyor."}
+      ) : refused ? `Alarmlar alınamıyor — ${refused}` : "Alarmlar alınamıyor — analiz sunucusuna ulaşılamıyor."}
     </p>
   );
   const ackError = ackFailed !== null && alarms.some((a) => a.id === ackFailed);

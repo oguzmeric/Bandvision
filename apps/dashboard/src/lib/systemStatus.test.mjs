@@ -72,6 +72,17 @@ test("analyzerSummary: 404 ve /healthz de çalışmıyor (ya da analiz sunucusu 
   }
 });
 
+test("analyzerSummary: günlük iletisi reddin nedenini söyler (401 anahtar, 403 adres); iki durumda da 'auth'", async () => {
+  const key = await analyzerSummary(fake({ [STATUS]: { status: 401, body: null } }).get);
+  assert.equal(key.analyzer, "auth");
+  assert.match(key.log.message, /^HTTP 401: .*ANALYZER_TOKEN/);
+  assert.doesNotMatch(key.log.message, /ANALYZER_URL/);
+  const host = await analyzerSummary(fake({ [STATUS]: { status: 403, body: null } }).get);
+  assert.equal(host.analyzer, "auth");
+  assert.match(host.log.message, /^HTTP 403: .*ANALYZER_URL/);
+  assert.doesNotMatch(host.log.message, /yanlış ya da eksik/);
+});
+
 test("analyzerSummary: 401/403 auth, 5xx down, bozuk gövde down; hepsinde günlük iletisi var", async () => {
   for (const [status, body, want] of [[401, null, "auth"], [403, null, "auth"], [500, null, "down"], [200, { cpuPercent: "x" }, "down"]]) {
     const s = await analyzerSummary(fake({ [STATUS]: { status, body } }).get);

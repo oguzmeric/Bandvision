@@ -9,9 +9,9 @@ const TIMEOUT_MS = 5000;
 
 /**
  * Durum şeridi için sistem özeti: analiz sunucusunun işlemci yükü ve çalışma süresi + sürümler (`analyzerSummary`).
- * `analyzer`: "up" | "down" (ağ hatası, zaman aşımı, 5xx, bozuk gövde) | "auth" (401/403: ANALYZER_TOKEN yanlış ya da
- * eksik). Durum ucu olmayan eski analiz sunucusu (404) `/healthz` çalışıyorsa "up" ve bilinmeyen alanlar (işlemci ve süre
- * null, sürüm ve özet "?"). Hepsi 200 döner (şerit durumu gösterir, hata sayılmaz). Panel oturum denetimi ara katmanda
+ * `analyzer`: "up" | "down" (ağ hatası, zaman aşımı, 5xx, bozuk gövde) | "auth" (401: ANALYZER_TOKEN yanlış ya da eksik;
+ * 403: adres reddedildi). Durum ucu olmayan eski analiz sunucusu (404) `/healthz` çalışıyorsa "up" ve bilinmeyen alanlar
+ * (işlemci ve süre null, sürüm ve özet "?"). Hepsi 200 döner (şerit durumu gösterir, hata sayılmaz). Panel oturum denetimi ara katmanda
  * (middleware) yapılır. İstemci istek sürerken giderse (sayfa kapandı, yoklama iptal edildi) analiz sunucusuna giden istek
  * de kesilir ve bu günlüğe "ulaşılamadı" diye YAZILMAZ; gerçek ulaşılamama ve zaman aşımı dakikada en çok bir kez yazılır.
  */

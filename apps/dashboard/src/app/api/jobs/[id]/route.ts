@@ -1,4 +1,5 @@
 import { analyzerHeaders, analyzerUrl, passThrough, unreachable } from "@/lib/analyzer";
+import { refusalFor } from "@/lib/analyzerRefusal.mjs";
 import { isJobId } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ export async function DELETE(_req: Request, { params }: Ctx): Promise<Response> 
   if (!isJobId(id)) return notFound();
   try {
     const res = await fetch(analyzerUrl(`/api/v1/jobs/${id}`), { method: "DELETE", headers: analyzerHeaders() });
-    return new Response(null, { status: res.status });
+    return refusalFor(res.status) ? passThrough(res) : new Response(null, { status: res.status });
   } catch (err) {
     return unreachable(err);
   }
