@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
+from conftest import local_client
 
 from bantvision.analyzer import Settings, create_app
 from bantvision.live import viewer as viewer_mod
@@ -424,7 +424,7 @@ def test_drop_after_update_recreates_reader_with_new_opener() -> None:
 def test_source_endpoints_drop_viewers(tmp_path: pathlib.Path) -> None:
     """PUT/DELETE /sources: çalışan izleme okuyucusu kapanır; düzenlemede yeni adresle açılır, silmede açılmaz."""
     body = {"kind": "camera", "brand": "hikvision", "host": "10.9.9.1", "username": "u", "password": "p"}
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as client:
         live = client.app.state.live
         opened: list[str] = []
 

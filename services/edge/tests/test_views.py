@@ -8,6 +8,7 @@ import sys
 from typing import Any
 
 import pytest
+from conftest import local_client
 from fastapi.testclient import TestClient
 
 from bantvision.analyzer import Settings, create_app
@@ -17,7 +18,7 @@ from bantvision.live.views import ViewsBusy, ViewStore
 
 @pytest.fixture()
 def client(tmp_path: pathlib.Path) -> TestClient:
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         yield c
 
 

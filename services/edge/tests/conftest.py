@@ -7,15 +7,28 @@ YÜKLENMEZ (CI'da önbellek yok: indirme GitHub'a giderdi; yerelde gerçek model
   yükleyicisi) başarısız sayılır.
 - İndirme yardımcısının kendi testleri `urlopen`'ı kendileri sahteler (o testte yasak devre dışı kalır, test bitince
   geri gelir). Gerçek model duman testi önbellekteki dosyayı doğrudan açar (yoksa atlanır, asla indirmez).
+
+Ayrıca `local_client`: analiz sunucusunun test istemcisi (`from conftest import local_client`).
 """
 from __future__ import annotations
 
 import urllib.request
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+from starlette.types import ASGIApp
 
 _ATTEMPTS: list[str] = []
+
+
+def local_client(app: ASGIApp, **kw: Any) -> TestClient:
+    """Bu bilgisayarın adıyla (`Host: 127.0.0.1`) istek atan TestClient. Erişim anahtarı tanımlı değilken analiz sunucusu
+    yalnızca geri döngü adlarını kabul eder (bantvision/analyzer/hostcheck.py); TestClient'ın varsayılan adı `testserver`
+    `403` alır ve üretim kodunda ona ayrıcalık yoktur. WebSocket bağlantısı `base_url`'i kullanmaz (Starlette hep
+    `ws://testserver`'a bağlanır): orada `Host` başlığı açıkça verilir."""
+    return TestClient(app, base_url="http://127.0.0.1", **kw)
 
 
 def _forbidden(url: object, *_a: object, **_k: object) -> object:

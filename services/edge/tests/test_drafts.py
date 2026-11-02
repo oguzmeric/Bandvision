@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import local_client
 
 from bantvision.analyzer import Settings, create_app
 from bantvision.live.drafts import FULL_MSG, MAX_DRAFTS, DraftsFull, DraftStore
@@ -106,7 +106,7 @@ def _files(root: pathlib.Path) -> dict[str, float]:
 def test_draft_endpoints_write_nothing_to_the_data_folder(tmp_path: pathlib.Path) -> None:
     """Uçtan uca: taslak açmak, güncellemek, durumunu sormak ve silmek veri klasöründe hiçbir dosya yazmaz/değiştirmez
     (şablonlar views.json'a yazılır; taslak oraya ya da başka bir yere yazılsa test kırılır)."""
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         before = _files(tmp_path)
         base = "/api/v1/live/views/drafts"
         d = c.post(base, json={"layout": "1", "tiles": [None]}).json()
@@ -139,7 +139,7 @@ def test_created_and_updated_at_are_epoch_seconds_like_templates() -> None:
 
 
 def test_api_draft_times_are_epoch_seconds(tmp_path: pathlib.Path) -> None:
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         t0 = time.time()
         d = c.post("/api/v1/live/views/drafts", json={"layout": "1", "tiles": [None]}).json()
         t1 = time.time()
@@ -160,7 +160,7 @@ def test_at_most_32_drafts_the_33rd_is_refused_existing_ones_keep_working() -> N
 
 def test_api_33rd_draft_is_503_turkish_and_existing_draft_still_works(tmp_path: pathlib.Path) -> None:
     base = "/api/v1/live/views/drafts"
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         ids = [c.post(base, json={"layout": "1", "tiles": [None]}).json()["id"] for _ in range(32)]
         r = c.post(base, json={"layout": "1", "tiles": [None]})
         assert r.status_code == 503 and r.json()["detail"] == FULL_MSG
@@ -174,7 +174,7 @@ def test_api_33rd_draft_is_503_turkish_and_existing_draft_still_works(tmp_path: 
 def test_reaper_starts_on_first_create_and_stops_with_the_server(tmp_path: pathlib.Path) -> None:
     app = create_app(Settings(data_dir=tmp_path))
     mgr = app.state.live
-    with TestClient(app) as c:
+    with local_client(app) as c:
         assert mgr._drafts_reaper is None                     # taslak yokken iş parçacığı da yok
         c.post("/api/v1/live/views/drafts", json={"layout": "1", "tiles": [None]})
         reaper = mgr._drafts_reaper

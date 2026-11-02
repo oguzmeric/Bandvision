@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 import pytest
+from conftest import local_client
 from fastapi.testclient import TestClient
 
 from bantvision.analyzer import Settings, create_app
@@ -20,7 +21,7 @@ SECRET = "Gizli-Sifre-42"
 
 @pytest.fixture()
 def client(tmp_path: pathlib.Path) -> TestClient:
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         yield c
 
 
@@ -874,7 +875,7 @@ def test_switching_session_away_from_safety_closes_its_alarm(
 def test_app_shutdown_closes_open_alarms(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from bantvision.live.alarms import AlarmStore
 
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         _sess, _sid = _safety_session_with_fake(c, monkeypatch)
         a = wait_for(lambda: c.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
     assert AlarmStore(tmp_path).get(a["id"])["endedAt"] is not None
@@ -1007,7 +1008,7 @@ def test_cleanup_loop_survives_failures(tmp_path: pathlib.Path, monkeypatch: pyt
 
     monkeypatch.setattr(JobStore, "expire", jobs_expire)
     monkeypatch.setattr(AlarmStore, "expire", alarms_expire)
-    with TestClient(create_app(Settings(data_dir=tmp_path))):
+    with local_client(create_app(Settings(data_dir=tmp_path))):
         wait_for(lambda: calls["jobs"] >= 4, timeout=10)
         assert any(t.name == "analiz-temizlik" and t.is_alive() for t in threading.enumerate())
         wait_for(lambda: calls["alarms"] >= 2, timeout=10)           # iş hatasına rağmen alarm temizliği de denenir
@@ -1578,7 +1579,7 @@ def _watch(tmp_path: pathlib.Path) -> list[dict[str, Any]]:
 def test_safety_session_is_restored_after_analyzer_restart(tmp_path: pathlib.Path,
                                                             monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         sess, sid = _safety_session_with_fake(c, monkeypatch)
         src_id, prof_id = sess.source_id, sess.profile_id
         prof = c.get(f"/api/v1/live/sessions/{sid}").json()["profile"]
@@ -1593,7 +1594,7 @@ def test_safety_session_is_restored_after_analyzer_restart(tmp_path: pathlib.Pat
     assert len(_watch(tmp_path)) == 1                               # kapanış kaydı silmez: sonraki açılışta geri gelir
 
     app = _app_with_fakes(tmp_path)
-    with TestClient(app) as c:
+    with local_client(app) as c:
         (v,) = c.get("/api/v1/live/sessions").json()                # yalnızca güvenlik oturumu geri geldi
         assert (v["sourceId"], v["channelId"], v["profileId"], v["name"]) == (src_id, None, prof_id, "Tezgah")
         assert v["profile"]["countMode"] == "safety" and v["profile"]["safety"]["handsUp"]["seconds"] == 5
@@ -1608,7 +1609,7 @@ def test_deleted_or_switched_away_safety_sessions_are_not_restored(tmp_path: pat
     from bantvision.core import Profile
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         _s1, sid1 = _safety_session_with_fake(c, monkeypatch)
         _s2, sid2 = _safety_session_with_fake(c, monkeypatch)
         assert len(_watch(tmp_path)) == 2
@@ -1618,7 +1619,7 @@ def test_deleted_or_switched_away_safety_sessions_are_not_restored(tmp_path: pat
         r = c.put(f"/api/v1/live/sessions/{sid2}/profile", json=Profile.jeweler().to_dict())
         assert r.status_code == 200 and len(_watch(tmp_path)) == 1                    # güvenliğe geri döndü
         c.put(f"/api/v1/live/sessions/{sid2}/profile", json=Profile.people().to_dict())
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         assert c.get("/api/v1/live/sessions").json() == []
 
 
@@ -1628,7 +1629,7 @@ def test_switched_into_safety_without_saving_is_restored_as_safety(tmp_path: pat
     from bantvision.core import Profile
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         src = c.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
                                                           name="Kasa")).json()
         egg = next(p for p in c.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
@@ -1636,7 +1637,7 @@ def test_switched_into_safety_without_saving_is_restored_as_safety(tmp_path: pat
         assert _watch(tmp_path) == []
         assert c.put(f"/api/v1/live/sessions/{sid}/profile", json=Profile.jeweler().to_dict()).status_code == 200
         assert len(_watch(tmp_path)) == 1
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         (v,) = c.get("/api/v1/live/sessions").json()
         assert v["profile"]["countMode"] == "safety" and v["profileId"] == egg["id"] and v["name"] == "Kasa"
         assert v["profile"]["name"] == "Kuyumcu güvenliği"           # çalışan profilin adı (şablonun "Yumurta"sı değil)
@@ -1647,13 +1648,13 @@ def test_watched_camera_whose_source_was_deleted_is_dropped_and_app_starts(
     import logging
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         _safety_session_with_fake(c, monkeypatch)
     good = _watch(tmp_path)[0]
     gone = {**good, "sourceId": "silinmis-kaynak", "name": "Eski kamera"}
     broken = {**good, "channelId": "9", "profileId": "yok", "profile": None, "name": "Profilsiz"}   # profil yok
     (tmp_path / "live" / "watch.json").write_text(json.dumps([gone, broken, good]), encoding="utf-8")
-    with caplog.at_level(logging.WARNING), TestClient(_app_with_fakes(tmp_path)) as c:
+    with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
         (v,) = c.get("/api/v1/live/sessions").json()                  # diğer kayıtlar engel olmadı
         assert v["sourceId"] == good["sourceId"] and v["profile"]["countMode"] == "safety"
         assert c.get("/healthz").json()["ok"]
@@ -1720,14 +1721,14 @@ def test_watched_record_with_broken_profile_snapshot_is_dropped_as_corrupt(
     import logging
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         _safety_session_with_fake(c, monkeypatch)
     good = _watch(tmp_path)[0]
     broken = [{**good, "channelId": "7", "name": "Bozuk çizgi", "profile": {"countMode": "safety", "countLine": {"a": {}}}},
               {**good, "channelId": "8", "name": "Bozuk süre",
                "profile": {"countMode": "safety", "safety": {"handsUp": {"seconds": "abc"}}}}]
     (tmp_path / "live" / "watch.json").write_text(json.dumps([*broken, good]), encoding="utf-8")
-    with caplog.at_level(logging.WARNING), TestClient(_app_with_fakes(tmp_path)) as c:
+    with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
         (v,) = c.get("/api/v1/live/sessions").json()
         assert v["sourceId"] == good["sourceId"] and v["channelId"] is None
     assert [w["name"] for w in _watch(tmp_path)] == ["Tezgah"]
@@ -1949,7 +1950,7 @@ def test_clip_endpoint_serves_webm_supports_range_and_404(client: TestClient) ->
 def test_alarm_media_routes_get_head_405_allow_and_token(tmp_path: pathlib.Path, name: str) -> None:
     """Alarm kaydı ve resmi: GET ve HEAD şemada ayrı işlemlerdir ama tek kaynak gibi davranır. Başka yöntem 405 ve
     `Allow: GET, HEAD`; HEAD, GET'in başlıklarını (tür, uzunluk, Range) gövdesiz verir; anahtarsız 401, kayıp 404."""
-    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
         auth = {"Authorization": "Bearer gizli"}
         mgr = c.app.state.live
         jpeg = b"\xff\xd8\xff\xe0resim"
@@ -2142,11 +2143,11 @@ def test_watched_cameras_are_restored_once_the_locked_watch_json_becomes_readabl
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
     monkeypatch.setattr(LiveManager, "WATCH_RETRY_S", 0.2)
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         _sess, _sid = _safety_session_with_fake(c, monkeypatch)
     (w,) = _watch(tmp_path)
     locked = _lock_watch_json(monkeypatch)
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         time.sleep(0.6)
         assert c.get("/api/v1/live/sessions").json() == []                      # kilitli: henüz açılmadı
         locked[0] = False
@@ -2214,11 +2215,11 @@ def test_locked_watch_json_retry_stops_at_shutdown_and_opens_nothing(tmp_path: p
 
     monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
     monkeypatch.setattr(LiveManager, "WATCH_RETRY_S", 0.3)
-    with TestClient(_app_with_fakes(tmp_path)) as c:
+    with local_client(_app_with_fakes(tmp_path)) as c:
         _safety_session_with_fake(c, monkeypatch)
     locked = _lock_watch_json(monkeypatch)
     app = _app_with_fakes(tmp_path)
-    with TestClient(app):
+    with local_client(app):
         mgr = app.state.live
         assert mgr._watch_unread
     locked[0] = False                                                           # kilit kapanıştan sonra kalktı
@@ -2343,9 +2344,11 @@ def test_view_stream_ends_when_template_is_deleted_mid_stream(client: TestClient
     assert not reader.is_alive() and result["status"] == 200 and result["frames"] >= 1
 
 
-def _asgi_stream_until_disconnect(client: TestClient, path: str, query: bytes, parts_before_leaving: int) -> int:
+def _asgi_stream_until_disconnect(client: TestClient, path: str, query: bytes, parts_before_leaving: int,
+                                  host: bytes = b"127.0.0.1") -> int:
     """Akış uç noktasını doğrudan ASGI ile sürer (ağ yok): `parts_before_leaving` parça gelince istemci kopar
-    (Next vekilinin tarayıcı `<img>` kaynağını değiştirince yaptığı gibi). Gönderilen parça sayısını döner."""
+    (Next vekilinin tarayıcı `<img>` kaynağını değiştirince yaptığı gibi). Gönderilen parça sayısını döner. `host`:
+    `Host` başlığı (anahtarsız kipte analiz sunucusu yalnızca bu bilgisayarın adlarını kabul eder)."""
     import anyio
 
     parts = 0
@@ -2371,8 +2374,8 @@ def _asgi_stream_until_disconnect(client: TestClient, path: str, query: bytes, p
 
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
                  "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": query,
-                 "root_path": "", "headers": [(b"host", b"testserver")], "client": ("127.0.0.1", 50000),
-                 "server": ("testserver", 80)}
+                 "root_path": "", "headers": [(b"host", host)], "client": ("127.0.0.1", 50000),
+                 "server": ("127.0.0.1", 80)}
         with anyio.fail_after(30):
             await client.app(scope, receive, send)
 

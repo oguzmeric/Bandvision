@@ -15,6 +15,7 @@ import warnings
 from typing import Any
 
 import pytest
+from conftest import local_client
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -55,7 +56,7 @@ def wait_done(client: TestClient, job_id: str, timeout: float = 240) -> dict[str
 
 @pytest.fixture()
 def client(tmp_path: pathlib.Path) -> TestClient:
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         yield c
 
 
@@ -115,14 +116,14 @@ def test_rejects_bad_uploads(client: TestClient, tmp_path: pathlib.Path) -> None
 
 
 def test_upload_size_limit(tmp_path: pathlib.Path) -> None:
-    with TestClient(create_app(Settings(data_dir=tmp_path, max_upload_mb=0))) as c, CLIP.open("rb") as fh:
+    with local_client(create_app(Settings(data_dir=tmp_path, max_upload_mb=0))) as c, CLIP.open("rb") as fh:
         r = c.post("/api/v1/jobs", files={"file": ("a.mp4", fh, "video/mp4")})
     assert r.status_code == 413
     assert not any((tmp_path / "jobs").iterdir())
 
 
 def test_token_required_when_configured(tmp_path: pathlib.Path) -> None:
-    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
         assert c.get("/api/v1/jobs").status_code == 401
         assert c.get("/api/v1/jobs", headers={"Authorization": "Bearer yanlis"}).status_code == 401
         assert c.get("/api/v1/jobs", headers={"Authorization": "Bearer gizli"}).status_code == 200
@@ -199,7 +200,7 @@ def test_people_options_validate_against_contract() -> None:
 
 
 def test_system_status_shape(tmp_path: pathlib.Path) -> None:
-    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
         assert c.get("/api/v1/system/status").status_code == 401
         r = c.get("/api/v1/system/status", headers={"Authorization": "Bearer gizli"})
         assert r.status_code == 200
@@ -215,7 +216,7 @@ def test_system_status_without_psutil_reports_cpu_null(tmp_path: pathlib.Path, m
                                                         caplog: pytest.LogCaptureFixture) -> None:
     """Eski kurulumda psutil yoksa durum ucu yine 200 döner: işlemci yükü bilinmiyor (`null`), uyarı günlüğe bir kez."""
     monkeypatch.setitem(sys.modules, "psutil", None)                  # `import psutil` ImportError verir
-    with caplog.at_level(logging.WARNING), TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with caplog.at_level(logging.WARNING), local_client(create_app(Settings(data_dir=tmp_path))) as c:
         for _ in range(2):
             r = c.get("/api/v1/system/status")
             assert r.status_code == 200
@@ -234,7 +235,9 @@ def test_analyzer_starts_and_serves_status_without_psutil(tmp_path: pathlib.Path
         from fastapi.testclient import TestClient
         from bantvision.analyzer.app import create_app
         from bantvision.analyzer.jobs import Settings
-        with TestClient(create_app(Settings(data_dir=pathlib.Path(sys.argv[1])))) as c:
+        # conftest.local_client ile aynı (ayrı süreçte conftest yok): anahtarsız kipte Host bu bilgisayarın adı olmalı
+        app = create_app(Settings(data_dir=pathlib.Path(sys.argv[1])))
+        with TestClient(app, base_url="http://127.0.0.1") as c:
             r = c.get("/api/v1/system/status")
             print(json.dumps({"status": r.status_code, "body": r.json()}))
     """)
@@ -258,7 +261,7 @@ def test_system_status_version_reads_distribution_named_in_pyproject(tmp_path: p
 
     monkeypatch.setattr(importlib.metadata, "version", installed)
     assert importlib.metadata.version("pytest") == real("pytest")             # başka paketler etkilenmez
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["version"] == project["version"]
 
 
@@ -274,13 +277,13 @@ def test_system_status_version_unknown_without_package(tmp_path: pathlib.Path,
 
     monkeypatch.setattr(importlib.metadata, "version", missing)
     assert importlib.metadata.version("pytest") == real("pytest")
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["version"] == "?"
 
 
 def test_system_status_commit_from_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BV_COMMIT", "abc1234")
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         assert c.get("/api/v1/system/status").json()["commit"] == "abc1234"
 
 
@@ -289,7 +292,7 @@ API_DOCS = ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json")
 
 def test_api_docs_not_served_with_token(tmp_path: pathlib.Path) -> None:
     """Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz'dir: API belge sayfaları ve şema sunulmaz."""
-    with TestClient(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path, token="gizli"))) as c:
         for path in API_DOCS:
             assert c.get(path).status_code == 404, path
             assert c.get(path, headers={"Authorization": "Bearer gizli"}).status_code == 404, path
@@ -299,7 +302,7 @@ def test_api_docs_not_served_with_token(tmp_path: pathlib.Path) -> None:
 
 def test_api_docs_served_without_token(tmp_path: pathlib.Path) -> None:
     """Anahtarsız (yerel geliştirme) belge sayfaları eskisi gibi açık."""
-    with TestClient(create_app(Settings(data_dir=tmp_path))) as c:
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         for path in API_DOCS:
             assert c.get(path).status_code == 200, path
         assert "/api/v1/system/status" in c.get("/openapi.json").json()["paths"]

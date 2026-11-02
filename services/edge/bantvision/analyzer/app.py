@@ -1,7 +1,8 @@
 """Video analiz sunucusu (FastAPI) — docs/13-web-platform.md, sözleşme: contracts/analysis-job.schema.json.
 
 Çalıştırma: `python -m bantvision.analyzer` (ortam: ANALYZER_DATA_DIR, ANALYZER_RETENTION_DAYS, ANALYZER_MAX_UPLOAD_MB,
-ANALYZER_TOKEN, ANALYZER_CORS_ORIGINS, ANALYZER_FFMPEG).
+ANALYZER_TOKEN, ANALYZER_CORS_ORIGINS, ANALYZER_FFMPEG). ANALYZER_TOKEN yokken yalnızca bu bilgisayarın adlarıyla
+(`localhost`, `127.0.0.1`, `[::1]`) konuşur (`hostcheck.py`) ve ağa açılmaz (`__main__.py`).
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .hostcheck import LoopbackHostMiddleware
 from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
 
 _LOG = logging.getLogger(__name__)
@@ -129,7 +131,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         live.notifier.stop()
 
     # Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz kalır: API belge sayfaları (/docs, /redoc) ve şema
-    # (/openapi.json) sunulmaz. Anahtarsız (yerel geliştirme) açıktır.
+    # (/openapi.json) sunulmaz. Anahtarsız (yerel geliştirme) açıktır, ama yalnızca bu bilgisayarın adlarıyla (aşağıda
+    # Host denetimi).
     no_docs: dict[str, Any] = {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.token else {}
     app = FastAPI(title="BantVision analiz sunucusu", version="1", lifespan=lifespan, **no_docs)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
@@ -145,6 +148,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.cors_origins:
         app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"],
                            allow_headers=["*"])
+    # Anahtarsız kipte Host denetimi (DNS yeniden bağlama savunması, hostcheck.py): /healthz ve belge sayfaları dahil
+    # her istek. CORS'tan SONRA eklenir: Starlette'de son eklenen ara katman en dıştadır, yani yabancı adla gelen CORS
+    # ön uçuşu (OPTIONS) da CORS'un 200'ünü değil 403'ü alır. Anahtar tanımlıyken Host denetimi yok (anahtar korur).
+    if not settings.token:
+        app.add_middleware(LoopbackHostMiddleware)
 
     def auth(authorization: Annotated[str | None, Header()] = None) -> None:
         if not settings.token:
