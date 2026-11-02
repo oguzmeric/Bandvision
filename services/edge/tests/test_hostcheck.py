@@ -3,7 +3,9 @@
 - Erişim anahtarı (ANALYZER_TOKEN) yokken her HTTP ve WebSocket isteği yalnızca bu bilgisayarın adlarıyla (`localhost`,
   `127.0.0.1`, `[::1]`) kabul edilir; başka ad `403` (DNS yeniden bağlama savunması). Anahtar varken denetim yok.
 - Anahtarsız sunucu ağa açılmaz (`--host` geri döngü dışı + anahtar yok → çıkış kodu 2).
-- Kayıt cihazının şifre reddi `502` (analiz sunucusunun tek `401`'i kendi anahtar denetimi, tek `403`'ü Host denetimi).
+- Kayıt cihazının şifre reddi `502` (analiz sunucusunun tek `401`'i kendi anahtar denetimi).
+
+Başka siteden gelen tarayıcı istekleri: tests/test_crosssite.py.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ from bantvision.analyzer import __main__ as analyzer_main
 from bantvision.analyzer.hostcheck import (
     HOST_REFUSED,
     LOOPBACK_NAMES,
-    LoopbackHostMiddleware,
+    LocalOnlyMiddleware,
     host_name,
     is_loopback_host,
 )
@@ -156,7 +158,7 @@ def _drive(scope: dict[str, Any], incoming: list[dict[str, Any]]) -> tuple[list[
     async def send(msg: Any) -> None:
         sent.append(msg)
 
-    anyio.run(LoopbackHostMiddleware(inner), scope, receive, send)
+    anyio.run(LocalOnlyMiddleware(inner), scope, receive, send)
     return sent, reached
 
 

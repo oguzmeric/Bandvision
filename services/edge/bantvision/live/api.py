@@ -281,7 +281,8 @@ class NotSafetyProfile(LookupError):
 def _err(e: Exception) -> HTTPException:
     """Kayıt cihazı / kamera hatası → her zaman 502 (iletisi Türkçe, şifresiz). Cihazın şifre reddi (`unauthorized`,
     "Kullanıcı adı ya da şifre hatalı.") de 502'dir, 401 değil: analiz sunucusunun tek 401'i kendi erişim anahtarı
-    denetimi (analyzer/app.py `auth`), tek 403'ü Host denetimidir (analyzer/hostcheck.py)."""
+    denetimi (analyzer/app.py `auth`), 403'leri yalnızca anahtarsız kipin Host ve başka site denetimidir
+    (analyzer/hostcheck.py)."""
     if isinstance(e, rec.RecorderError):
         return HTTPException(502, str(e))
     return HTTPException(502, f"Kaynağa ulaşılamadı: {e}")

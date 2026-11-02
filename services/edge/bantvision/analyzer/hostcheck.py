@@ -1,17 +1,27 @@
-"""`Host` başlığı denetimi (DNS yeniden bağlama savunması; docs/13-web-platform.md "Analiz sunucusu API" → Güvenlik).
+"""Anahtarsız analiz sunucusu yalnızca bu bilgisayarla konuşur (docs/13-web-platform.md "Analiz sunucusu API" → Güvenlik).
 
-Erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusu yalnızca bu bilgisayarın adlarıyla konuşur: her HTTP ve
-WebSocket isteğinde (sağlık ucu `/healthz` ve API belge sayfaları dahil) `Host` `localhost`, `127.0.0.1` ya da `[::1]`
-olmalıdır (büyük/küçük harf ve port fark etmez). Kötü niyetli bir site kendi alan adını 127.0.0.1'e çevirip ziyaretçinin
-tarayıcısı üzerinden analiz sunucusuna ulaşamaz, varlığını bile yoklayamaz. Başka ad, `Host`'suz, bozuk ya da birden
-çok `Host` içeren HTTP isteği `403` (`HOST_REFUSED`) alır; WebSocket kabul edilmeden 1008 koduyla kapanır.
+Erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken her HTTP ve WebSocket isteği (sağlık ucu `/healthz` ve API belge
+sayfaları dahil) sırayla iki denetimden geçer:
 
-Ayrıştırıcı panelin `apps/dashboard/src/lib/hostCheck.mjs` `hostName` işleviyle birebir aynıdır (aynı girdi → aynı ad).
+1. `Host` (DNS yeniden bağlama savunması): `localhost`, `127.0.0.1` ya da `[::1]` olmalıdır (büyük/küçük harf ve port fark
+   etmez). Kötü niyetli bir site kendi alan adını 127.0.0.1'e çevirse de ziyaretçinin tarayıcısı üzerinden hiçbir veriye ve
+   denetime ulaşamaz; görebildiği yalnızca ret yanıtıdır. Başka ad, `Host`'suz, bozuk ya da birden çok `Host` içeren istek
+   reddedilir (`HOST_REFUSED`).
+2. Başka site: `Host` denetimi bunu durdurmaz, çünkü her site 127.0.0.1'e geçerli `Host` ile doğrudan istek atabilir ve
+   çok parçalı `POST` CORS ön uçuşu gerektirmez. `Origin` varsa bu bilgisayarın bir kaynağı (`is_loopback_origin`) ya da
+   ANALYZER_CORS_ORIGINS'teki bir değerle birebir aynı olmalıdır; `null`, başka şema, bozuk değer ya da birden çok `Origin`
+   reddedilir. `Origin` yoksa yalnızca `Sec-Fetch-Site: cross-site` reddedilir: panelin sunucu tarafı, curl ve başlatıcı bu
+   başlıkları göndermez (`CROSS_SITE_REFUSED`).
+
+Ret: HTTP `403`; WebSocket kabul edilmeden 1008 koduyla kapanır.
+
+`host_name` panelin `apps/dashboard/src/lib/hostCheck.mjs` `hostName` işleviyle birebir aynıdır (aynı girdi → aynı ad).
 Ara katman saf ASGI'dir (BaseHTTPMiddleware değil): MJPEG akışları ve `Range` yanıtları olduğu gibi geçer.
 """
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -19,6 +29,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 HOST_REFUSED = ("Bu adres kabul edilmiyor: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusuna "
                 "yalnızca bu bilgisayardan (localhost, 127.0.0.1) bağlanılabilir.")
+CROSS_SITE_REFUSED = ("Bu istek başka bir siteden geldiği için kabul edilmedi: erişim anahtarı (ANALYZER_TOKEN) tanımlı "
+                      "değilken analiz sunucusu yalnızca bu bilgisayarın sayfalarından gelen istekleri kabul eder.")
 WS_POLICY_VIOLATION = 1008
 
 # JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
@@ -27,6 +39,9 @@ _JS_WHITESPACE = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u
                   "\u2028\u2029\u202f\u205f\u3000\ufeff")
 # JS `/^\d{1,5}$/`: yalnızca ASCII rakam (Python'da `\d` Unicode rakamlarını da tutar; `$` sondaki satır sonunu geçer)
 _PORT = re.compile(r"[0-9]{1,5}")
+# Origin tarayıcının ürettiği biçimdedir: şema://ad[:port]; yol, kullanıcı bilgisi ve boşluk içermez. Bu yüzden `host_name`in
+# hoş gördüğü biçimler (`[localhost]`, boş port) burada bozuktur. re.ASCII: büyük/küçük harf eşlemesi `ſ`'yi `s` saymasın.
+_LOOPBACK_ORIGIN = re.compile(r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?", re.ASCII | re.IGNORECASE)
 
 
 def host_name(header: str | None) -> str | None:
@@ -62,25 +77,45 @@ def is_loopback_host(header: str | None) -> bool:
     return host_name(header) in LOOPBACK_NAMES
 
 
-def _host_header(scope: Scope) -> str | None:
-    """İsteğin tek `Host` başlığı; yoksa ya da birden çoksa (RFC 9112: geçersiz istek) None."""
-    values = [v for k, v in scope.get("headers") or () if k.lower() == b"host"]
-    return values[0].decode("latin-1") if len(values) == 1 else None
+def is_loopback_origin(origin: str | None) -> bool:
+    """`Origin` bu bilgisayarın bir kaynağı mı: `http` ya da `https`, geri döngü adı, port olsun olmasın, yol yok. `null`,
+    başka şema ve bozuk değer False. Panelin `isLoopbackOrigin` işleviyle aynıdır (tablo: tests/test_crosssite.py)."""
+    return isinstance(origin, str) and _LOOPBACK_ORIGIN.fullmatch(origin) is not None
 
 
-class LoopbackHostMiddleware:
-    """Anahtarsız kipte `Host` geri döngü adı olmayan HTTP/WebSocket isteğini uygulamaya ulaştırmadan reddeder.
-    `lifespan` (ve öteki kapsam türleri) olduğu gibi geçer."""
+def _header_values(scope: Scope, name: bytes) -> list[str]:
+    return [v.decode("latin-1") for k, v in scope.get("headers") or () if k.lower() == name]
 
-    def __init__(self, app: ASGIApp) -> None:
+
+class LocalOnlyMiddleware:
+    """Anahtarsız kipte bu bilgisayardan gelmeyen HTTP/WebSocket isteğini uygulamaya ulaştırmadan reddeder (modül açıklaması).
+    `allowed_origins`: ANALYZER_CORS_ORIGINS (izin verilen yabancı siteler). `lifespan` ve öteki kapsam türleri olduğu gibi
+    geçer."""
+
+    def __init__(self, app: ASGIApp, allowed_origins: Iterable[str] = ()) -> None:
         self.app = app
+        self.allowed_origins = frozenset(allowed_origins)
+
+    def _refusal(self, scope: Scope) -> str | None:
+        """Ret iletisi; istek kabul ediliyorsa None. Önce `Host`, sonra başka site denetimi."""
+        hosts = _header_values(scope, b"host")
+        if len(hosts) != 1 or not is_loopback_host(hosts[0]):       # yok ya da birden çok (RFC 9112: geçersiz istek)
+            return HOST_REFUSED
+        origins = _header_values(scope, b"origin")
+        if origins:                                                 # Origin varsa karar onundur
+            allowed = len(origins) == 1 and (is_loopback_origin(origins[0]) or origins[0] in self.allowed_origins)
+            return None if allowed else CROSS_SITE_REFUSED
+        if any(v.strip().lower() == "cross-site" for v in _header_values(scope, b"sec-fetch-site")):
+            return CROSS_SITE_REFUSED
+        return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket") or is_loopback_host(_host_header(scope)):
+        refusal = self._refusal(scope) if scope["type"] in ("http", "websocket") else None
+        if refusal is None:
             await self.app(scope, receive, send)
             return
         if scope["type"] == "http":
-            await JSONResponse({"detail": HOST_REFUSED}, status_code=403)(scope, receive, send)
+            await JSONResponse({"detail": refusal}, status_code=403)(scope, receive, send)
             return
         # WebSocket: bağlantı kabul edilmeden kapanır (ASGI: sunucu el sıkışmasını HTTP 403 ile reddeder). Gerekçe metni
         # kapanış iletisinin 123 baytına sığmadığı için yalnızca kod gönderilir.
