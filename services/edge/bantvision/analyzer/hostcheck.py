@@ -77,7 +77,7 @@ def is_loopback_host(header: str | None) -> bool:
 
 def is_loopback_origin(origin: str | None) -> bool:
     """`Origin` bu bilgisayarın bir kaynağı mı: `http` ya da `https`, geri döngü adı, port olsun olmasın, yol yok. `null`,
-    başka şema ve bozuk değer False. Panelin `isLoopbackOrigin` işleviyle aynıdır (tablo: tests/test_crosssite.py)."""
+    başka şema ve bozuk değer False. Panelin `isLoopbackOrigin` işleviyle aynıdır (ortak tablo: contracts/loopback-origins.json)."""
     return isinstance(origin, str) and _LOOPBACK_ORIGIN.fullmatch(origin) is not None
 
 
@@ -106,7 +106,10 @@ class LocalOnlyMiddleware:
                 return CROSS_SITE_REFUSED
             allowed = is_loopback_origin(origins[0]) or origins[0] in self.allowed_origins
             return None if allowed else CROSS_SITE_REFUSED
-        if any(v.strip().lower() == "cross-site" for v in _header_values(scope, b"sec-fetch-site")):
+        # Her satır ve satır içindeki her virgüllü parça ayrı değerlendirilir: panel `Headers.get` ile satırları ", " ile birleştirip
+        # böler; tek satırda `same-origin, cross-site` de aynı sonucu vermeli (contracts/loopback-origins.json)
+        if any(part.strip().lower() == "cross-site"
+               for v in _header_values(scope, b"sec-fetch-site") for part in v.split(",")):
             return CROSS_SITE_REFUSED
         return None
 

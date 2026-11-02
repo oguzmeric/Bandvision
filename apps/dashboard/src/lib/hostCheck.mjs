@@ -37,7 +37,7 @@ export function isLoopbackHost(hostHeader) {
 const ORIGIN = /^https?:\/\/((?:[a-z0-9.]+|\[::1\])(?::[0-9]{1,5})?)$/i;
 
 /** `Origin` bu bilgisayarın bir kaynağı mı: `http` ya da `https`, geri döngü adı, port olsun olmasın, yol yok. `null`, başka
- * şema ve bozuk değer false. Analiz sunucusunun `is_loopback_origin` işleviyle aynıdır (hostCheck.test.mjs'teki tablo). */
+ * şema ve bozuk değer false. Analiz sunucusunun `is_loopback_origin` işleviyle aynıdır (ortak tablo: contracts/loopback-origins.json). */
 export function isLoopbackOrigin(origin) {
   const m = typeof origin === "string" ? ORIGIN.exec(origin) : null;
   return m !== null && isLoopbackHost(m[1]);

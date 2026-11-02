@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { CROSS_SITE_REFUSED, crossSiteRefused, hostName, isApiPath, isLoopbackHost, isLoopbackOrigin } from "./hostCheck.mjs";
 
@@ -23,93 +24,21 @@ test("isLoopbackHost: şifresiz (yalnızca bu bilgisayar) kipte yalnızca geri d
   }
 });
 
-// Analiz sunucusunun tablosu (services/edge/tests/test_crosssite.py LOOPBACK_ORIGINS): aynı girdi → aynı sonuç.
-const LOOPBACK_ORIGINS = [
-  // http ya da https, kabul edilen ad, port olsun olmasın
-  ["http://localhost", true],
-  ["https://localhost", true],
-  ["http://localhost:3000", true],
-  ["https://localhost:8443", true],
-  ["http://127.0.0.1", true],
-  ["https://127.0.0.1", true],
-  ["http://127.0.0.1:3000", true],
-  ["http://[::1]", true],
-  ["https://[::1]", true],
-  ["http://[::1]:3000", true],
-  ["http://localhost:65535", true],
-  ["http://localhost:99999", true],   // Host kuralı gibi: 5 haneye kadar her port
-  ["HTTP://LOCALHOST:3000", true],   // büyük/küçük harf fark etmez
-  ["HttpS://LocalHost", true],
-  // yok, boş, `null`
-  [null, false],
-  [42, false],
-  ["", false],
-  ["null", false],
-  ["NULL", false],
-  // başka şema
-  ["file://", false],
-  ["file:///C:/sayfa.html", false],
-  ["chrome-extension://abc", false],
-  ["ftp://localhost", false],
-  ["ws://localhost:3000", false],
-  ["wss://localhost", false],
-  // şema biçimi bozuk ya da yok
-  ["localhost", false],
-  ["localhost:3000", false],
-  ["127.0.0.1:3000", false],
-  ["//localhost", false],
-  ["http:/localhost", false],
-  ["http//localhost", false],
-  ["http:localhost", false],
-  ["http://", false],
-  ["https://", false],
-  // yol, sorgu, parça
-  ["http://localhost/", false],
-  ["http://localhost/x", false],
-  ["http://localhost:3000/", false],
-  ["http://localhost?x=1", false],
-  ["http://localhost#x", false],
-  // bozuk port
-  ["http://localhost:", false],
-  ["http://localhost:abc", false],
-  ["http://localhost:123456", false],
-  ["http://localhost:3000:1", false],
-  ["http://localhost:+80", false],
-  // başka ad, benzer görünenler dahil
-  ["https://evil.example", false],
-  ["http://evil.example", false],
-  ["https://localhost.evil.example", false],
-  ["http://127.0.0.1.evil.example", false],
-  ["http://localhost.", false],
-  ["http://127.0.0.2", false],
-  ["http://0.0.0.0", false],
-  ["http://evil.example#localhost", false],
-  ["http://evil.example/localhost", false],
-  // kullanıcı bilgisi
-  ["http://user@localhost", false],
-  ["http://user:sifre@localhost:3000", false],
-  ["http://localhost@evil.example", false],
-  // IPv6 biçimleri: yalnızca köşeli parantezli kısa yazım
-  ["http://::1", false],
-  ["http://[::1", false],
-  ["http://::1]", false],
-  ["http://[::2]", false],
-  ["http://[0:0:0:0:0:0:0:1]", false],
-  ["http://[localhost]", false],   // Host ayrıştırıcısının kabul ettiği biçim Origin'de bozuktur
-  ["http://[127.0.0.1]:3000", false],
-  // boşluk ve satır sonu: kırpılmaz
-  [" http://localhost", false],
-  ["http://localhost ", false],
-  ["http://localhost\n", false],
-  ["http:// localhost", false],
-  ["http://local host", false],
-  // ASCII dışı: büyük/küçük harf eşlemesiyle ASCII'ye benzeyen harf kabul edilmez
-  ["http://localhoſt", false],
-  ["httpſ://localhost", false],
-];
+// Analiz sunucusuyla ORTAK tablo (services/edge/tests/test_crosssite.py aynı dosyayı okur): aynı girdi → aynı sonuç.
+const SHARED = JSON.parse(readFileSync(new URL("../../../../contracts/loopback-origins.json", import.meta.url), "utf8"));
 
-test("isLoopbackOrigin: analiz sunucusunun is_loopback_origin tablosuyla aynı", () => {
-  for (const [origin, want] of LOOPBACK_ORIGINS) assert.equal(isLoopbackOrigin(origin), want, JSON.stringify(origin));
+test("isLoopbackOrigin: analiz sunucusunun is_loopback_origin tablosuyla aynı (ortak dosya)", () => {
+  assert.ok(SHARED.loopbackOrigins.length >= 70);
+  for (const { origin, loopback } of SHARED.loopbackOrigins) assert.equal(isLoopbackOrigin(origin), loopback, JSON.stringify(origin));
+});
+
+test("crossSiteRefused: Sec-Fetch-Site ortak tablosu (virgüllü tek satır dahil), analiz sunucusuyla aynı sonuç", () => {
+  assert.ok(SHARED.secFetchSite.length >= 20);
+  for (const { lines, refused } of SHARED.secFetchSite) {
+    // Headers.get birden çok satırı ", " ile birleştirir; satır yoksa null
+    const value = lines.length === 0 ? null : lines.join(", ");
+    assert.equal(crossSiteRefused(null, value), refused, JSON.stringify(lines));
+  }
 });
 
 test("crossSiteRefused: Origin varsa karar onundur; geri döngü kaynağı geçer, başka her değer reddedilir", () => {

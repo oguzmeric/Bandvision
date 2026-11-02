@@ -5,6 +5,7 @@ doğrudan istek atabilir. Çok parçalı `POST /api/v1/jobs` CORS ön uçuşu ge
 """
 from __future__ import annotations
 
+import json
 import pathlib
 from typing import Any
 
@@ -22,90 +23,11 @@ CROSS_SITE_TEXT = ("Bu istek başka bir siteden geldiği için kabul edilmedi: e
 FOREIGN = "https://evil.example"
 BAD_VIDEO = {"file": ("a.mp4", b"\x00" * 16, "video/mp4")}   # işleyiciye ulaşırsa 400 "okunamadı" (iş kalmaz)
 
-# Panelin `isLoopbackOrigin`'i (apps/dashboard/src/lib/hostCheck.mjs) bu tablodan yazılır: aynı girdi → aynı sonuç.
-LOOPBACK_ORIGINS: list[tuple[Any, bool]] = [
-    # http ya da https, kabul edilen ad, port olsun olmasın
-    ("http://localhost", True),
-    ("https://localhost", True),
-    ("http://localhost:3000", True),
-    ("https://localhost:8443", True),
-    ("http://127.0.0.1", True),
-    ("https://127.0.0.1", True),
-    ("http://127.0.0.1:3000", True),
-    ("http://[::1]", True),
-    ("https://[::1]", True),
-    ("http://[::1]:3000", True),
-    ("http://localhost:65535", True),
-    ("http://localhost:99999", True),                # Host kuralı gibi: 5 haneye kadar her port
-    ("HTTP://LOCALHOST:3000", True),                 # büyük/küçük harf fark etmez
-    ("HttpS://LocalHost", True),
-    # yok, boş, `null`
-    (None, False),
-    (42, False),
-    ("", False),
-    ("null", False),
-    ("NULL", False),
-    # başka şema
-    ("file://", False),
-    ("file:///C:/sayfa.html", False),
-    ("chrome-extension://abc", False),
-    ("ftp://localhost", False),
-    ("ws://localhost:3000", False),
-    ("wss://localhost", False),
-    # şema biçimi bozuk ya da yok
-    ("localhost", False),
-    ("localhost:3000", False),
-    ("127.0.0.1:3000", False),
-    ("//localhost", False),
-    ("http:/localhost", False),
-    ("http//localhost", False),
-    ("http:localhost", False),
-    ("http://", False),
-    ("https://", False),
-    # yol, sorgu, parça
-    ("http://localhost/", False),
-    ("http://localhost/x", False),
-    ("http://localhost:3000/", False),
-    ("http://localhost?x=1", False),
-    ("http://localhost#x", False),
-    # bozuk port
-    ("http://localhost:", False),
-    ("http://localhost:abc", False),
-    ("http://localhost:123456", False),
-    ("http://localhost:3000:1", False),
-    ("http://localhost:+80", False),
-    # başka ad, benzer görünenler dahil
-    ("https://evil.example", False),
-    ("http://evil.example", False),
-    ("https://localhost.evil.example", False),
-    ("http://127.0.0.1.evil.example", False),
-    ("http://localhost.", False),
-    ("http://127.0.0.2", False),
-    ("http://0.0.0.0", False),
-    ("http://evil.example#localhost", False),
-    ("http://evil.example/localhost", False),
-    # kullanıcı bilgisi
-    ("http://user@localhost", False),
-    ("http://user:sifre@localhost:3000", False),
-    ("http://localhost@evil.example", False),
-    # IPv6 biçimleri: yalnızca köşeli parantezli kısa yazım
-    ("http://::1", False),
-    ("http://[::1", False),
-    ("http://::1]", False),
-    ("http://[::2]", False),
-    ("http://[0:0:0:0:0:0:0:1]", False),
-    ("http://[localhost]", False),                   # Host ayrıştırıcısının kabul ettiği biçim Origin'de bozuktur
-    ("http://[127.0.0.1]:3000", False),
-    # boşluk ve satır sonu: kırpılmaz
-    (" http://localhost", False),
-    ("http://localhost ", False),
-    ("http://localhost\n", False),
-    ("http:// localhost", False),
-    ("http://local host", False),
-    # ASCII dışı: büyük/küçük harf eşlemesiyle ASCII'ye benzeyen harf kabul edilmez
-    ("http://localhoſt", False),
-    ("httpſ://localhost", False),
-]
+# Panelin `isLoopbackOrigin`/`crossSiteRefused` (apps/dashboard/src/lib/hostCheck.mjs) ile ORTAK tablo: iki test takımı da aynı
+# dosyayı okur, aynı girdi → aynı sonuç (contracts/loopback-origins.json).
+SHARED = json.loads((pathlib.Path(__file__).resolve().parents[3] / "contracts" / "loopback-origins.json").read_text(encoding="utf-8"))
+LOOPBACK_ORIGINS: list[tuple[Any, bool]] = [(r["origin"], r["loopback"]) for r in SHARED["loopbackOrigins"]]
+SEC_FETCH_SITE: list[tuple[list[str], bool]] = [(r["lines"], r["refused"]) for r in SHARED["secFetchSite"]]
 
 
 def test_refusal_text_is_verbatim_and_separate_from_the_host_text() -> None:
@@ -259,6 +181,17 @@ def test_two_sec_fetch_site_lines_through_the_whole_app(client: Any) -> None:
     r = client.get("/healthz", headers=[("sec-fetch-site", "same-origin"), ("sec-fetch-site", "cross-site")])
     assert r.status_code == 403 and r.json() == {"detail": CROSS_SITE_TEXT}
     assert client.get("/healthz", headers=[("sec-fetch-site", "same-origin"), ("sec-fetch-site", "none")]).status_code == 200
+
+
+@pytest.mark.parametrize(("lines", "refused"), SEC_FETCH_SITE, ids=[" | ".join(r[0]) or "yok" for r in SEC_FETCH_SITE])
+def test_shared_sec_fetch_site_table(lines: list[str], refused: bool) -> None:
+    """Panelle ortak tablo (virgüllü tek satır dahil: `same-origin, cross-site`, Headers.get iki satırı böyle birleştirir)."""
+    scope = _http_scope([(b"host", b"127.0.0.1:8090"), *((b"sec-fetch-site", v.encode()) for v in lines)])
+    sent, reached = _drive(scope, [{"type": "http.request", "body": b"", "more_body": False}])
+    if refused:
+        assert reached == [] and sent[0]["status"] == 403 and CROSS_SITE_TEXT.encode() in sent[1]["body"]
+    else:
+        assert reached == ["http"]
 
 
 @pytest.mark.parametrize("site", ["same-site", "same-origin", "none"])
