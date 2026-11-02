@@ -1,6 +1,7 @@
 """Analiz sunucusu başlatıcısı: `--log` ile tüm çıktı konsol yerine dosyaya gider (konsolda seçim sunucuyu dondurmasın)."""
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -17,7 +18,8 @@ def test_redirect_output_captures_python_and_native_writes(tmp_path: pathlib.Pat
         "os.write(2, b'native-fd2\\n')\n"           # FFmpeg gibi yerel kodun doğrudan yazdığı
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8",
-                       cwd=pathlib.Path(__file__).resolve().parents[1], check=False)
+                       cwd=pathlib.Path(__file__).resolve().parents[1], check=False,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert r.returncode == 0, r.stderr
     assert r.stdout == "" and r.stderr == ""                     # konsola hiçbir şey gitmez
     text = log.read_text(encoding="utf-8")
@@ -26,5 +28,6 @@ def test_redirect_output_captures_python_and_native_writes(tmp_path: pathlib.Pat
 
 def test_log_option_is_documented() -> None:
     r = subprocess.run([sys.executable, "-m", "bantvision.analyzer", "--help"], capture_output=True, text=True,
-                       encoding="utf-8", cwd=pathlib.Path(__file__).resolve().parents[1], check=False)
+                       encoding="utf-8", cwd=pathlib.Path(__file__).resolve().parents[1], check=False,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert r.returncode == 0 and "--log" in r.stdout

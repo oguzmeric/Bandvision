@@ -33,6 +33,7 @@ from bantvision.analyzer.hostcheck import (
     host_name,
     is_loopback_host,
 )
+from bantvision.live import recorders as rec
 
 # Kararlardaki metinler (birebir; sabitler de bunlara eşit olmalı)
 HOST_REFUSED_TEXT = ("Bu adres kabul edilmiyor: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusuna "
@@ -385,26 +386,71 @@ def test_launch_on_loopback_without_token_starts(launch: Launch, args: tuple[str
 
 # ------------------------------------------------------------------ (i) kayıt cihazı şifre reddi 502 (401 değil)
 
-def test_recorder_password_rejection_is_502_with_same_message(tmp_path: pathlib.Path,
-                                                              monkeypatch: pytest.MonkeyPatch) -> None:
-    """test_live.py'nin sahteli uygulaması; kayıt cihazı kanal listesinde ve küçük resimde şifreyi reddeder."""
-    from test_live import _app_with_fakes
+class Rejecting:
+    """Şifreyi her çağrıda reddeden kayıt cihazı istemcisi: istek gerçek yoldan geçer (LiveManager.recorder → istemci)."""
 
-    from bantvision.live import recorders as rec
-
-    def unauthorized(*_a: Any, **_k: Any) -> Any:
+    def channels(self) -> list[rec.RecorderChannel]:
         raise rec.RecorderError.unauthorized()
 
+    def stream_url(self, *_a: Any) -> str:
+        raise rec.RecorderError.unauthorized()
+
+    def snapshot(self, *_a: Any) -> bytes:
+        raise rec.RecorderError.unauthorized()
+
+    def keep_alive(self, *_a: Any) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class RejectsOnlySnapshot(Rejecting):
+    """Kanal listesi gelir, küçük resim şifre hatası verir (`LiveManager._snapshot`in "unauthorized" yolu)."""
+
+    def channels(self) -> list[rec.RecorderChannel]:
+        return [rec.RecorderChannel("1", "K", 1, True)]
+
+
+def _recorder_source(c: TestClient) -> str:
+    r = c.post("/api/v1/live/sources", json={"kind": "recorder", "recorderBrand": "hikvision", "host": "nvr.example",
+                                             "username": "u", "password": "p", "name": "NVR"})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_recorder_password_rejection_is_502_with_same_message(tmp_path: pathlib.Path) -> None:
+    """test_live.py'nin sahteli uygulaması; kayıt cihazı istemcisi her çağrıda şifreyi reddeder."""
+    from test_live import _app_with_fakes
+
     app = _app_with_fakes(tmp_path)
-    monkeypatch.setattr(app.state.live, "channels", unauthorized)
-    monkeypatch.setattr(app.state.live, "snapshot", unauthorized)
+    app.state.live.recorder = lambda src: Rejecting()
     with local_client(app) as c:
-        r = c.post("/api/v1/live/sources", json={"kind": "recorder", "recorderBrand": "hikvision", "host": "nvr.example",
-                                                 "username": "u", "password": "p", "name": "NVR"})
-        assert r.status_code == 201, r.text
-        sid = r.json()["id"]
-        for resp in (c.get(f"/api/v1/live/sources/{sid}/channels"),
-                     c.post("/api/v1/live/views/from-recorder", json={"sourceId": sid}),
-                     c.get(f"/api/v1/live/sources/{sid}/snapshot?channel=1")):
-            assert resp.status_code == 502, resp.request.url
-            assert resp.json() == {"detail": RECORDER_UNAUTHORIZED_TEXT}, resp.request.url
+        sid = _recorder_source(c)
+        profile = c.get("/api/v1/live/profiles").json()[0]["id"]
+        calls = {
+            "kanallar": lambda: c.get(f"/api/v1/live/sources/{sid}/channels"),
+            "yenile": lambda: c.get(f"/api/v1/live/sources/{sid}/channels?refresh=true"),
+            "şablon": lambda: c.post("/api/v1/live/views/from-recorder", json={"sourceId": sid}),
+            "küçük resim": lambda: c.get(f"/api/v1/live/sources/{sid}/snapshot?channel=1"),
+            "oturum": lambda: c.post("/api/v1/live/sessions", json={"sourceId": sid, "channelId": "1",
+                                                                    "profileId": profile}),
+        }
+        for name, call in calls.items():
+            r = call()
+            assert r.status_code == 502, name
+            assert r.json() == {"detail": RECORDER_UNAUTHORIZED_TEXT}, name
+        assert c.get("/api/v1/live/sessions").json() == []
+
+
+def test_recorder_snapshot_password_rejection_is_not_reported_as_no_signal(tmp_path: pathlib.Path) -> None:
+    """Kanal listesi çalışırken küçük resmin şifre reddi "görüntü gelmiyor" sayılmaz ve hatırlanmaz (`_snapshot`)."""
+    from test_live import _app_with_fakes
+
+    app = _app_with_fakes(tmp_path)
+    app.state.live.recorder = lambda src: RejectsOnlySnapshot()
+    with local_client(app) as c:
+        sid = _recorder_source(c)
+        for _ in range(2):
+            r = c.get(f"/api/v1/live/sources/{sid}/snapshot?channel=1")
+            assert r.status_code == 502 and r.json() == {"detail": RECORDER_UNAUTHORIZED_TEXT}

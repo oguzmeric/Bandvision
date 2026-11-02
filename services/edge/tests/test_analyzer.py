@@ -5,6 +5,7 @@ import datetime as dt
 import importlib.metadata
 import json
 import logging
+import os
 import pathlib
 import subprocess
 import sys
@@ -259,7 +260,8 @@ def test_analyzer_starts_and_serves_status_without_psutil(tmp_path: pathlib.Path
             print(json.dumps({"status": r.status_code, "body": r.json()}))
     """)
     out = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True, encoding="utf-8",
-                         timeout=120, cwd=pathlib.Path(__file__).resolve().parents[1], check=False)
+                         timeout=120, cwd=pathlib.Path(__file__).resolve().parents[1], check=False,
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert out.returncode == 0, out.stderr[-2000:]
     res = json.loads(out.stdout.strip().splitlines()[-1])
     assert res["status"] == 200 and res["body"]["cpuPercent"] is None

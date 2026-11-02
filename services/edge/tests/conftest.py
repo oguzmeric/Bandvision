@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import urllib.request
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastapi.testclient import TestClient
-from starlette.types import ASGIApp
+
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
+    from starlette.types import ASGIApp
 
 _ATTEMPTS: list[str] = []
 
@@ -27,7 +29,10 @@ def local_client(app: ASGIApp, **kw: Any) -> TestClient:
     """Bu bilgisayarın adıyla (`Host: 127.0.0.1`) istek atan TestClient. Erişim anahtarı tanımlı değilken analiz sunucusu
     yalnızca geri döngü adlarını kabul eder (bantvision/analyzer/hostcheck.py); TestClient'ın varsayılan adı `testserver`
     `403` alır ve üretim kodunda ona ayrıcalık yoktur. WebSocket bağlantısı `base_url`'i kullanmaz (Starlette hep
-    `ws://testserver`'a bağlanır): orada `Host` başlığı açıkça verilir."""
+    `ws://testserver`'a bağlanır): orada `Host` başlığı açıkça verilir. fastapi burada yüklenir: çekirdek testleri onsuz
+    da çalışır (`.[dev]` onu kurmaz)."""
+    from fastapi.testclient import TestClient
+
     return TestClient(app, base_url="http://127.0.0.1", **kw)
 
 
