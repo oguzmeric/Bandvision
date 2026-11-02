@@ -25,6 +25,7 @@ function Stat({ label, value, hint, hero }: { label: string; value: string; hint
 
 export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDeleted: () => void }) {
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const r = job.result;
   const files = new Set(r?.files ?? []);
   const fileUrl = (name: string) => `/api/jobs/${job.id}/files/${name}`;
@@ -39,9 +40,18 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
   async function remove() {
     if (!confirm(`"${job.video.name}" analizi ve dosyaları silinsin mi?`)) return;
     setDeleting(true);
-    const res = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" });
-    setDeleting(false);
-    if (res.ok || res.status === 404) onDeleted();
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" });
+      if (res.ok || res.status === 404) return onDeleted();
+      const body: unknown = await res.json().catch(() => null);
+      const detail = (body as { detail?: unknown } | null)?.detail;
+      setDeleteError(typeof detail === "string" ? detail : `Silinemedi (HTTP ${res.status}).`);
+    } catch {
+      setDeleteError("Bağlantı hatası: silinemedi.");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const accuracy = r?.truth && r.errorPct !== null ? `%${num(Math.max(0, 100 - Math.abs(r.errorPct)), 1)}` : "—";
@@ -63,6 +73,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
           <button type="button" onClick={remove} disabled={deleting} className="pl-btn h-8 text-nok-ink">{deleting ? "Siliniyor…" : "Sil"}</button>
         </div>
       </header>
+      {deleteError && <p role="alert" className="mb-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{deleteError}</p>}
 
       {(job.status === "queued" || job.status === "running") && (
         <div className="rounded-[2px] border border-pl-line-soft bg-pl-side p-3" aria-live="polite">

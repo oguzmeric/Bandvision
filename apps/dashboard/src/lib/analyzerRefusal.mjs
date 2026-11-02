@@ -35,14 +35,18 @@ export function refusalText(problem) {
   return null;
 }
 
+/** Başlık değerinde bulunamayan denetim karakterleri (RFC 9110; sekme hariç). `Headers` CR, LF ve NUL'da hata verir. */
+const NOT_A_HEADER_VALUE = /[\0-\x08\x0a-\x1f\x7f]/;
+
 /**
  * `Authorization` değeri; anahtar yoksa null (başlık gönderilmez). Çevresindeki boşluk atılır, geriye bir şey kalmazsa
- * anahtar yoktur (analiz sunucusu da aynısını yapar). HTTP başlığı bayt dizisidir ve `Headers` 255'ten büyük kod noktasında
- * hata verir: Türkçe karakterli anahtar UTF-8 baytlarıyla (her bayt bir karakter, ByteString) gönderilir; analiz sunucusu da
- * bu baytlarla karşılaştırır.
+ * anahtar yoktur (analiz sunucusu da `trim` kümesiyle aynısını yapar). Başlıkta gönderilemeyen anahtar (denetim karakteri)
+ * da null: istek anahtarsız gider, analiz sunucusunun 401'i anahtar uyuşmazlığı olarak görünür, hiçbir yol hata atmaz.
+ * HTTP başlığı bayt dizisidir ve `Headers` 255'ten büyük kod noktasında hata verir: Türkçe karakterli anahtar UTF-8
+ * baytlarıyla (her bayt bir karakter, ByteString) gönderilir; analiz sunucusu da bu baytlarla karşılaştırır.
  */
 export function bearerHeader(token) {
   const trimmed = typeof token === "string" ? token.trim() : "";
-  if (!trimmed) return null;
+  if (!trimmed || NOT_A_HEADER_VALUE.test(trimmed)) return null;
   return Array.from(new TextEncoder().encode(`Bearer ${trimmed}`), (b) => String.fromCharCode(b)).join("");
 }

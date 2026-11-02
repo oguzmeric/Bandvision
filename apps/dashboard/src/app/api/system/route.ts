@@ -26,7 +26,7 @@ export async function GET(req: Request): Promise<Response> {
       cache: "no-store",
       signal: ctrl.signal,
     }));
-    if (s.log) logRateLimited(new Error(s.log.message), s.log.what);
+    if (s.log) logRateLimited(s.log.message, s.log.what);
     if (s.analyzer !== "up") return Response.json({ analyzer: s.analyzer });
     return Response.json({
       analyzer: "up",

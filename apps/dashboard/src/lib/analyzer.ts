@@ -55,7 +55,7 @@ export function passThrough(res: Response, keep: string[] = ["content-type"]): R
   const refusal = refusalFor(res.status);
   if (refusal) {
     void res.body?.cancel().catch(() => undefined);
-    logRateLimited(new Error(`HTTP ${res.status}`), "analiz sunucusu panelin isteğini reddetti");
+    logRateLimited(`HTTP ${res.status}`, "analiz sunucusu panelin isteğini reddetti");
     return Response.json(refusal, { status: 502 });
   }
   const headers = new Headers();

@@ -61,6 +61,26 @@ test("bearerHeader: çevresindeki boşluk atılır, içindeki kalır; geriye bir
   for (const empty of ["", " ", " \t\r\n ", " 　", undefined, null]) assert.equal(bearerHeader(empty), null, JSON.stringify(empty));
 });
 
+test("bearerHeader: başlık değeri olamayan anahtar (denetim karakteri) null: atmaz, anahtar uyuşmazlığı gibi görünür", () => {
+  for (const bad of ["a\nb", "a\rb", "a\0b", "a\x01b", "a\x1fb", "a\x7fb", "gizli\nşifre"]) {
+    assert.equal(bearerHeader(bad), null, JSON.stringify(bad));
+  }
+  // Sekme başlık değerinin içinde geçerlidir; U+0085 UTF-8'de C2 85 olur (ASCII dışı bayt, geçerli)
+  assert.equal(bearerHeader("a\tb"), "Bearer a\tb");
+  assert.doesNotThrow(() => new Headers().set("Authorization", bearerHeader("a\tb")));
+  assert.doesNotThrow(() => new Headers().set("Authorization", bearerHeader("abc\u0085")));
+});
+
+test("bearerHeader: çevresinden atılan küme analiz sunucusununkiyle aynı (JS trim: BOM atılır, U+0085 kalır)", () => {
+  // Aynı biçimler: services/edge/tests/test_token_gate.py test_token_from_env_strips_the_js_trim_set
+  const utf8 = (s) => Buffer.from(`Bearer ${s}`, "utf8").toString("latin1");
+  for (const [raw, want] of [["\ufeffabc", "abc"], ["abc\ufeff", "abc"], ["abc\u0085", "abc\u0085"], ["\u0085abc", "\u0085abc"],
+    ["\u00a0abc\u3000", "abc"], [" abc\t\r\n", "abc"], ["a b", "a b"]]) {
+    assert.equal(bearerHeader(raw), utf8(want), JSON.stringify(raw));
+  }
+  assert.equal(bearerHeader(" \t\r\n\u00a0\u3000\ufeff"), null);
+});
+
 test("bearerHeader: fetch anahtarın UTF-8 baytlarını olduğu gibi gönderir (analiz sunucusu bu baytlarla karşılaştırır)", async (t) => {
   let raw = "";
   const server = createServer((req, res) => {

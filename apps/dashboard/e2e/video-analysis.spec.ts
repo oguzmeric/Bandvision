@@ -21,6 +21,24 @@ test.beforeEach(async ({ page }) => {
   await login(page);
 });
 
+test("silme reddedilirse (502 analyzer_key) metin görünür, iş kalır", async ({ page }) => {
+  const text = "Analiz sunucusu erişim anahtarı uyuşmuyor — panelde ve analiz sunucusunda aynı ANALYZER_TOKEN ayarlanmalı.";
+  const id = "00000000-0000-4000-8000-000000000000";
+  const at = "2026-11-02T10:00:00Z";
+  const job = { schema: "bantvision.analysis-job.v1", id, status: "failed", createdAt: at, updatedAt: at, expiresAt: at,
+    video: { name: "a.mp4", sizeBytes: 16 }, options: {}, progress: 0, error: "Hata." };
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [job] }));
+  await page.route(`**/api/jobs/${id}`, (r) => r.fulfill({ status: 502, json: { detail: text, code: "analyzer_key" } }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  await expect(detail).toContainText("a.mp4");
+  page.once("dialog", (d) => d.accept());
+  await detail.getByRole("button", { name: "Sil" }).click();
+  await expect(detail.getByRole("alert").filter({ hasText: text })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "Sil" })).toBeEnabled();
+  await expect(page.getByTestId("job-row")).toHaveCount(1);
+});
+
 test("video yükle → analiz → işaretli video, sayım ve CSV; sil", async ({ page }) => {
   await page.goto("/videos");
   await expect(page.getByRole("heading", { level: 1, name: "Video ile test" })).toBeVisible();
