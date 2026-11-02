@@ -15,6 +15,7 @@ import tomllib
 import warnings
 from typing import Any
 
+import anyio
 import pytest
 from conftest import local_client
 from fastapi.testclient import TestClient
@@ -146,6 +147,53 @@ def test_non_ascii_header_under_ascii_token_is_401(tmp_path: pathlib.Path) -> No
         r = c.get("/api/v1/jobs", headers={"Authorization": "Bearer gizlişifre".encode()})
         assert r.status_code == 401 and r.json()["detail"] == "Yetkisiz: geçerli bir erişim anahtarı gerekli."
         assert c.get("/api/v1/jobs", headers={"Authorization": b"Bearer gizli"}).status_code == 200
+
+
+def _asgi_status(app: Any, headers: list[tuple[bytes, bytes]]) -> int:
+    """`GET /api/v1/jobs` doğrudan ASGI ile: TestClient başlığı hep UTF-8'e çevirir, UTF-8 olmayan ham bayt gönderemez."""
+    statuses: list[int] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg: Any) -> None:
+        if msg["type"] == "http.response.start":
+            statuses.append(msg["status"])
+
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET", "scheme": "http",
+             "path": "/api/v1/jobs", "raw_path": b"/api/v1/jobs", "query_string": b"", "root_path": "",
+             "headers": headers, "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8090)}
+    anyio.run(app, scope, receive, send)
+    return statuses[0]
+
+
+@pytest.mark.parametrize("surrogate", [0xD800, 0xDBFF, 0xDC00, 0xDFFF])
+def test_token_with_lone_surrogate_is_401_not_500(tmp_path: pathlib.Path, surrogate: int) -> None:
+    """Kodlanamayan anahtar 500 vermez. Başka değer de eşleşmez: `ignore` `Bearer gizli`yi, `replace` `Bearer gizli?`yi,
+    `backslashreplace` kaçış metnini kabul ederdi."""
+    app = create_app(Settings(data_dir=tmp_path, token="gizli" + chr(surrogate)))
+    with local_client(app, raise_server_exceptions=False) as c:
+        assert c.get("/api/v1/jobs").status_code == 401
+        for wrong in (b"Bearer gizli", b"Bearer gizli?", f"Bearer gizli{chr(92)}u{surrogate:04x}".encode()):
+            assert c.get("/api/v1/jobs", headers={"Authorization": wrong}).status_code == 401, wrong
+        assert c.get("/healthz").status_code == 200
+
+
+def test_surrogateescape_token_matches_its_original_bytes(tmp_path: pathlib.Path) -> None:
+    """POSIX'te UTF-8 olmayan ortam değeri bu biçimde gelir: süreç hangi baytlarla başladıysa, istemci onları gönderince
+    eşleşir."""
+    original = b"gizli\xff\xfe"
+    app = create_app(Settings(data_dir=tmp_path, token=original.decode("utf-8", "surrogateescape")))
+    assert _asgi_status(app, [(b"authorization", b"Bearer " + original)]) == 200
+    for wrong in (b"Bearer gizli", b"Bearer gizli??", b"Bearer gizli\xff"):
+        assert _asgi_status(app, [(b"authorization", wrong)]) == 401, wrong
+    assert _asgi_status(app, []) == 401
+
+
+def test_token_mixing_escape_and_lone_surrogates_does_not_raise(tmp_path: pathlib.Path) -> None:
+    app = create_app(Settings(data_dir=tmp_path, token="gizli" + chr(0xDCFF) + chr(0xD800)))
+    assert _asgi_status(app, []) == 401
+    assert _asgi_status(app, [(b"authorization", b"Bearer gizli\xff")]) == 401
 
 
 def test_unknown_ids_and_files_are_404(client: TestClient) -> None:

@@ -72,6 +72,18 @@ class OptionsIn(_Strict):
     bgRange: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
+def _bearer_bytes(token: str) -> bytes:
+    """Beklenen `Authorization` başlığının baytları; hata vermez (kodlanamayan anahtar 500 değil 401 olur). Önce
+    surrogateescape: POSIX'te UTF-8 olmayan ortam değeri bu biçimde gelir, süreç hangi baytlarla başladıysa onları verir ve
+    istemci aynı baytları gönderince eşleşir. Kaçış aralığı dışındaki tek vekil (ör. U+D800) onda hata verir; surrogatepass
+    hiçbir dizgede hata vermez. `ignore` ve `replace` kullanılmaz: anahtarı değiştirip başka değerlerin eşleşmesine yol açar."""
+    value = f"Bearer {token}"
+    try:
+        return value.encode("utf-8", "surrogateescape")
+    except UnicodeEncodeError:
+        return value.encode("utf-8", "surrogatepass")
+
+
 def _git_commit() -> str:
     """Kısa git özeti: ortamda BV_COMMIT varsa o, yoksa paket klasöründe `git rev-parse --short HEAD` (hata → "?")."""
     env = os.environ.get("BV_COMMIT", "").strip()
@@ -161,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Baytlar karşılaştırılır: compare_digest ASCII dışı dizgede hata verirdi (Türkçe karakterli anahtar ya da başlık
         # 500 olurdu). Starlette başlığı latin-1 çözer: encode("latin-1") gönderilen baytları geri verir; panel anahtarın
         # UTF-8 baytlarını gönderir.
-        expected = f"Bearer {settings.token}".encode()
+        expected = _bearer_bytes(settings.token)
         if not authorization or not secrets.compare_digest(authorization.encode("latin-1"), expected):
             raise HTTPException(401, "Yetkisiz: geçerli bir erişim anahtarı gerekli.")
 
