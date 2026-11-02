@@ -40,7 +40,7 @@
   - a malformed `Host`: empty, bad port, unclosed bracket, unbracketed IPv6.
 - **HTTP refusal:** `403`, JSON `{"detail": "Bu adres kabul edilmiyor: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusuna yalnızca bu bilgisayardan (localhost, 127.0.0.1) bağlanılabilir."}`.
 - **WebSocket refusal:** the connection is closed before accept, with code 1008.
-- **Why `/healthz` too:** the launcher and Playwright probe `http://127.0.0.1:<port>/healthz`, so they still pass. A rebinding page cannot even fingerprint the analyzer, and one rule is simpler to reason about.
+- **Why `/healthz` too:** the launcher and Playwright probe `http://127.0.0.1:<port>/healthz`, so they still pass. A rebinding page gets no data or control from any route, and one rule is simpler to reason about. (It can still read the `403` body itself, so this is not a claim that the server cannot be detected.)
 - **Cost if wrong:** a tool that probes `/healthz` under another name gets `403`.
 
 **R2.** Token configured: no Host check, exactly as today. The token guards every route except `/healthz`, and the docs pages stay off.
@@ -106,6 +106,30 @@ Ports 3000/8090 are never touched.
 - Every existing `TestClient(` in `services/edge/tests` switches to it.
 - Production code has no allowance for `testserver`.
 - A test proves that the default TestClient host (`testserver`) gets `403` in no-token mode.
+
+**R10** (added after the Task 1 review). No token configured: after the Host check passes, the same middleware refuses cross-site browser requests, HTTP and WebSocket.
+- `Origin` present: allowed only if it is a loopback origin (`http` or `https` scheme, an R1 accepted host, any port) or exactly equals an entry of `ANALYZER_CORS_ORIGINS`. `null`, other schemes, a malformed value or more than one `Origin` header are refused.
+- `Origin` absent: refused when `Sec-Fetch-Site` is `cross-site`. Everything else passes: the panel's server-side calls, curl and the launcher send no fetch metadata.
+- HTTP refusal: `403`, JSON `{"detail": "Bu istek başka bir siteden geldiği için kabul edilmedi: erişim anahtarı (ANALYZER_TOKEN) tanımlı değilken analiz sunucusu yalnızca bu bilgisayarın sayfalarından gelen istekleri kabul eder."}`. WebSocket refusal: closed before accept with code 1008.
+- Token mode is unchanged (R2).
+- **Why:** the Host check stops DNS rebinding only. A public page can call `http://127.0.0.1:8090` directly with a valid `Host`. `POST /api/v1/jobs` as multipart is a CORS "simple" request, and the Task 1 review measured it reaching the handler, so a page could queue jobs and fill the disk.
+- **Cost if wrong:** a tool that sends a foreign `Origin` must be listed in `ANALYZER_CORS_ORIGINS`.
+
+**R11** (added after the Task 1 review). The panel gets the same rule in passwordless mode, in `src/middleware.ts`, for `/api/` paths only.
+- `Origin` present: must be a loopback origin. `Origin` absent: refused when `Sec-Fetch-Site` is `cross-site`.
+- Refusal: `403`, JSON `{"error": "Bu istek başka bir siteden geldiği için kabul edilmedi."}`.
+- Pages are not affected, so a link from another site still opens the panel.
+- Password mode is unchanged: the session cookie is `SameSite=Lax`, so cross-site writes get `401`.
+- The decision is a pure function in `src/lib/hostCheck.mjs`, unit tested.
+- **Why:** the proxy would otherwise be the same hole. `POST /api/jobs` reaches the analyzer from the panel's server side, with no `Origin`.
+
+**R12** (added after the Task 1 review). A non-ASCII `ANALYZER_TOKEN` (e.g. `gizlişifre`) works end to end, because the R3 message steers Turkish users to set one.
+- Analyzer: compare bytes. Today `secrets.compare_digest` raises on non-ASCII strings, so a non-ASCII token or header gives `500`.
+- Panel (Task 2): send the token's UTF-8 bytes as a ByteString. Today `Headers.set` throws on code points above 255.
+
+**R13** (added after the Task 1 review). A token made only of whitespace counts as no token, in `Settings.from_env`, so it neither passes the R3 guard nor turns off the R1 check. A refused start (R3) prints its message on the console and, when `--log` is given, in the log too.
+
+**R14** (added after the Task 1 review). The status bar keeps "yetki hatası" for both analyzer `401` and `403`: both are access refusals, so it is accurate. docs/13 gives the meaning of each.
 
 ## Global Constraints
 
@@ -242,8 +266,18 @@ Ports 3000/8090 are never touched.
   ```
   Also check how `/videos` shows job errors. It must show the R5 detail text.
 
+  **Added after the Task 1 review:**
+  - `apps/dashboard/src/middleware.ts` and `src/lib/hostCheck.mjs` + `hostCheck.test.mjs` (R11): add `crossSiteRefused(origin, secFetchSite)` and `isLoopbackOrigin(origin)`. Unit-test them with the same origin table as the analyzer's `is_loopback_origin` in `services/edge/bantvision/analyzer/hostcheck.py`, and add an e2e on the passwordless panel (`3102`) using Playwright's `request` with explicit headers:
+    - `POST /api/jobs` with `Origin: https://evil.example` → 403 with the R11 text;
+    - `Origin: null` → 403;
+    - `GET /api/live/views` with `Sec-Fetch-Site: cross-site` → 403;
+    - the same requests with `Origin: http://127.0.0.1:3102` or no headers pass the check and reach the proxy (502 `analyzer_key` on this panel);
+    - `GET /watch` with `Sec-Fetch-Site: cross-site` still opens the page.
+  - `apps/dashboard/src/lib/analyzer.ts` (R12): `analyzerHeaders` sends the token's UTF-8 bytes as a ByteString. Put the conversion in a pure function in `analyzerRefusal.mjs`, without `Buffer` because that module also reaches the client bundle, and unit-test it (`gizlişifre`, plain ASCII unchanged).
+  - `apps/dashboard/README.md`, the `ANALYZER_URL` row: with no access key the address must be `127.0.0.1` or `localhost`.
+
 **Interfaces:**
-- Consumes the Task 1 analyzer statuses: own `401` (token), own `403` (Host), recorder errors `502`.
+- Consumes the Task 1 analyzer statuses: own `401` (token), own `403` (Host or cross-site, and the proxy never forwards `Origin`, so via the panel a `403` means Host), recorder errors `502`.
 - Produces in `analyzerRefusal.mjs`:
   - `export const ANALYZER_REFUSALS = { analyzer_key: "<R5 401 text>", analyzer_host: "<R5 403 text>" }`;
   - `export function refusalFor(status)` → `{ code, detail } | null`: 401 → key, 403 → host, else null;
