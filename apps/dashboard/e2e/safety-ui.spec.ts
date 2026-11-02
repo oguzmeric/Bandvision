@@ -507,14 +507,9 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
 test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekleri; kayıt hazır olunca video ve zaman çizelgesi; Yanlış alarm", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;
-  const list: FakeAlarm[] = [
-    { id: "b3", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 9, firedAt: now - 6,
-      endedAt: now - 2, acked: false, notify: "sent", image: true, clip: false, clipStartedAt: null },
-    { id: "b2", sessionId: null, camera: "Depo", type: "lying", startedAt: now - 140, firedAt: now - 130, endedAt: now - 100,
-      acked: false, notify: "disabled", image: false, clip: false },
-    { id: "b1", sessionId: "abc123", camera: "Kasa", type: "hands_up", startedAt: now - 300, firedAt: now - 297, endedAt: now - 290,
-      acked: false, notify: "failed", image: true, clip: false, clipFailed: true },
-  ];
+  // Liste boş başlar, sayfa açıldıktan SONRA dolar: login'den kalan sayfanın yoklaması dolu listeyi görürse alarmlar o sayfada
+  // "gösterildi" sayılır (oturum belleği, sayfa yenilense de) ve goto sonrası pencere açılmazdı
+  const list: FakeAlarm[] = [];
   const calls = await fakeFeed(page, list);
   const clipAsked: string[] = [];
   let release: ((status: number) => void) | null = null;
@@ -524,6 +519,15 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
     return route.fulfill({ status, json: { detail: "Olay kaydı yok." } });
   });
   await page.goto("/notifications");
+  await expect.poll(() => calls.polls).toBeGreaterThan(0);
+  list.push(
+    { id: "b3", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 9, firedAt: now - 6,
+      endedAt: now - 2, acked: false, notify: "sent", image: true, clip: false, clipStartedAt: null },
+    { id: "b2", sessionId: null, camera: "Depo", type: "lying", startedAt: now - 140, firedAt: now - 130, endedAt: now - 100,
+      acked: false, notify: "disabled", image: false, clip: false },
+    { id: "b1", sessionId: "abc123", camera: "Kasa", type: "hands_up", startedAt: now - 300, firedAt: now - 297, endedAt: now - 290,
+      acked: false, notify: "failed", image: true, clip: false, clipFailed: true },
+  );
   const modal = modalOf(page);
   const counter = modal.getByTestId("alarm-counter");
   const prev = modal.getByRole("button", { name: "Önceki alarm" });
@@ -643,10 +647,12 @@ test("alarm penceresi kısa ekranda kırpılmaz: başlık ve düğmeler penceren
   await login(page);
   await page.setViewportSize({ width: 1000, height: 420 });
   const now = Date.now() / 1000;
-  const list: FakeAlarm[] = [{ id: "k1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 4,
-                               firedAt: now - 1, endedAt: null, acked: false, notify: "disabled", image: true, clipPending: true }];
-  await fakeFeed(page, list);
+  const list: FakeAlarm[] = [];                                               // sayfa açıldıktan sonra dolar (yukarıdaki teste bak)
+  const calls = await fakeFeed(page, list);
   await page.goto("/notifications");
+  await expect.poll(() => calls.polls).toBeGreaterThan(0);
+  list.push({ id: "k1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 4,
+              firedAt: now - 1, endedAt: null, acked: false, notify: "disabled", image: true, clipPending: true });
   const modal = modalOf(page);
   await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
   const m = await modal.evaluate((d) => {
