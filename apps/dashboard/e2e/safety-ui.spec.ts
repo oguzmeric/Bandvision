@@ -810,12 +810,15 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
     mk("o1", "hands_up", "Depo", now - 10 * 86400),                                   // varsayılan 7 günün dışında
   ];
   const asked: URLSearchParams[] = [];
+  // Onaylanmamış l1 sayfa açıldıktan SONRA görünür: login'den kalan sayfanın yoklaması onu görürse o sayfada "gösterildi" sayılır
+  // (oturum belleği) ve goto sonrası pencere açılmazdı
+  let opened = false;
   // analiz sunucusu gibi süzer (since/until/type/active/limit); en yeni önce
   await page.route(/\/api\/live\/alarms\?/, (route) => {
     const q = new URL(route.request().url()).searchParams;
     if (q.has("limit")) asked.push(q);
     const since = q.get("since"), until = q.get("until"), type = q.get("type");
-    const out = all.filter((a) => (!since || a.firedAt >= Number(since)) && (!until || a.firedAt <= Number(until))
+    const out = all.filter((a) => (opened || a.acked) && (!since || a.firedAt >= Number(since)) && (!until || a.firedAt <= Number(until))
       && (!type || a.type === type) && (q.get("active") !== "1" || !a.acked));
     return route.fulfill({ json: out.sort((x, y) => y.firedAt - x.firedAt).slice(0, Number(q.get("limit") ?? 50)) });
   });
@@ -823,6 +826,7 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
   await page.route(/\/api\/live\/alarms\/[^/]+\/clip\.webm$/, () => new Promise<void>(() => undefined));  // yükleniyor kalır
 
   await page.goto("/notifications");
+  opened = true;
   // kenar çubuğu: "Alarmlar", İzleme grubunda "Canlı izleme"den hemen sonra
   const nav = page.getByRole("navigation", { name: "Ana menü" });
   const labels = await nav.locator("a, button[data-soon]").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
