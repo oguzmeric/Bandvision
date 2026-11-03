@@ -136,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         while not stop_cleanup.wait(CLEANUP_INTERVAL_S):
             # iki iş ayrı korunur: biri patlarsa diğeri yine denenir ve döngü (iş parçacığı) ölmez
             for name, task in (("iş kayıtları", store.expire),
+                               ("silinen işler", store.retry_removals),
                                ("alarm günlüğü", lambda: live.alarms.expire(time.time()))):
                 try:
                     task()
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        store.sweep_orphans()                                # silmesi bitememiş iş klasörleri
         store.expire()
         try:                                                 # 7 günden eski alarm ve resimler açılışta da silinir
             live.alarms.expire(time.time())
@@ -306,8 +308,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/api/v1/jobs/{job_id}", status_code=204, dependencies=[Auth])
     def delete_job(job_id: str) -> None:
         job_or_404(job_id)
-        worker.cancel(job_id)
-        store.delete(job_id)
+        worker.delete(job_id)
 
     return app
 

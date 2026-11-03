@@ -22,6 +22,7 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 - **Analiz sunucusu**, telefondaki ve masaüstündeki ile **aynı Python referans çekirdeğini** kullanır (`bantvision.video`): otomatik kalibrasyon, sayım, işaretli video, özet, CSV. Tarayıcı oynatabilsin diye işaretli video **H.264 (yuv420p, faststart)** olarak üretilir.
 - İşler tek tek işlenir (CPU yoğun), kuyruk diskte kalıcıdır; sunucu yeniden başlarsa yarım kalan iş "başarısız: sunucu yeniden başladı" olur, kullanıcı yeniden başlatır.
 - Saklama: `ANALYZER_RETENTION_DAYS` (varsayılan 7); süresi dolan işin dosyaları silinir, iş kaydı `expired` olarak özetiyle kalır.
+- Silme: çalışan iş silinince önce süreci (analiz ya da ffmpeg) durur, bitmesi beklenir, sonra klasör kaldırılır. Dosya hâlâ açıksa birkaç saniye yeniden denenir; bitmezse saatlik temizlikte yeniden denenir, kaydı olmayan iş klasörleri de sunucu açılışında kaldırılır.
 
 ## Sözleşmeler
 - **Analiz işi:** `contracts/analysis-job.schema.json` (`bantvision.analysis-job.v1`), `02-contracts.md` §7.

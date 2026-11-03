@@ -6,8 +6,10 @@ işaretli video tarayıcıda oynasın diye H.264'e (yuv420p, faststart) çevrili
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
+import logging
 import os
 import pathlib
 import queue
@@ -15,8 +17,9 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,6 +35,11 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".m
 # (\x1c-\x1f ve \x85'i de atar, \ufeff'i atmaz): panelle aynı girdide aynı sonuç için açık küme (`Host` ayrıştırma, anahtar).
 JS_WHITESPACE = ("\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
                  "\u2028\u2029\u202f\u205f\u3000\ufeff")
+CANCEL_WAIT_S = 10.0     # öldürülen sürecin bitmesi için en çok bu kadar beklenir
+REMOVE_ATTEMPTS = 20     # açık dosya silinemez (Windows): klasör kısa aralıklarla yeniden denenir (en çok ~5 sn)
+REMOVE_WAIT_S = 0.25
+
+_LOG = logging.getLogger(__name__)
 
 
 def now() -> dt.datetime:
@@ -128,6 +136,7 @@ class JobStore:
         self.root = settings.data_dir / "jobs"
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._forgotten: set[str] = set()   # silinmiş ama klasörü henüz gitmemiş işler
 
     def dir(self, job_id: str) -> pathlib.Path:
         uuid.UUID(job_id)  # yol enjeksiyonuna karşı: yalnızca UUID
@@ -148,15 +157,17 @@ class JobStore:
         self.save(job)
         return job, d / f"input{suffix}"
 
-    def save(self, job: dict[str, Any]) -> None:
+    def save(self, job: dict[str, Any]) -> bool:
+        """Kaydı yazar; iş silinmişse yazmaz (`False`), klasörü henüz gitmemiş olsa da kayıt geri gelmez."""
         with self._lock:
             job["updatedAt"] = iso(now())
             d = self.dir(job["id"])
-            if not d.exists():
-                return  # silinmiş
+            if job["id"] in self._forgotten or not d.exists():
+                return False
             tmp = d / "job.json.tmp"
             tmp.write_text(json.dumps(job, ensure_ascii=False, indent=1), encoding="utf-8")
             os.replace(tmp, d / "job.json")
+            return True
 
     def get(self, job_id: str) -> dict[str, Any] | None:
         try:
@@ -164,7 +175,7 @@ class JobStore:
         except ValueError:
             return None
         with self._lock:
-            if not p.exists():
+            if job_id in self._forgotten or not p.exists():
                 return None
             return json.loads(p.read_text(encoding="utf-8"))
 
@@ -179,16 +190,62 @@ class JobStore:
 
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
-            jobs = [json.loads(p.read_text(encoding="utf-8")) for p in self.root.glob("*/job.json")]
+            jobs = [json.loads(p.read_text(encoding="utf-8")) for p in self.root.glob("*/job.json")
+                    if p.parent.name not in self._forgotten]
         return sorted(jobs, key=lambda j: j["createdAt"], reverse=True)
 
-    def delete(self, job_id: str) -> bool:
+    def forget(self, job_id: str) -> bool:
+        """İş hemen silinmiş sayılır (listede yok, yazmalar geri getirmez); dosyalar `remove_files` ile gider."""
         with self._lock:
             d = self.dir(job_id)
             if not d.exists():
                 return False
-            shutil.rmtree(d, ignore_errors=True)
+            self._forgotten.add(job_id)
+            with contextlib.suppress(OSError):
+                (d / "job.json").unlink(missing_ok=True)
             return True
+
+    def remove_files(self, job_id: str) -> bool:
+        """Klasörü siler; açık dosya varsa kısa süre yeniden dener. Bitmezse `retry_removals` ve açılış temizliği."""
+        d = self.dir(job_id)
+        for attempt in range(REMOVE_ATTEMPTS):
+            if attempt:
+                time.sleep(REMOVE_WAIT_S)
+            shutil.rmtree(d, ignore_errors=True)
+            if not d.exists():
+                return True
+        _LOG.warning("Silinen işin klasörü kaldırılamadı, sonra yeniden denenecek: %s", job_id)
+        return False
+
+    def delete(self, job_id: str) -> bool:
+        if not self.forget(job_id):
+            return False
+        self.remove_files(job_id)
+        return True
+
+    def retry_removals(self) -> None:
+        """Silinmiş ama klasörü kalmış işler için bir deneme daha (saatlik temizlik)."""
+        with self._lock:
+            pending = list(self._forgotten)
+        for job_id in pending:
+            d = self.dir(job_id)
+            shutil.rmtree(d, ignore_errors=True)
+            if not d.exists():
+                with self._lock:
+                    self._forgotten.discard(job_id)
+
+    def sweep_orphans(self) -> list[str]:
+        """Açılışta (henüz yükleme yokken): kaydı olmayan iş klasörleri kaldırılır. Silinenlerin adları döner."""
+        removed: list[str] = []
+        for d in self.root.iterdir():
+            try:
+                is_job_dir = d.is_dir() and str(uuid.UUID(d.name)) == d.name
+            except ValueError:
+                continue
+            if is_job_dir and not (d / "job.json").exists():
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(d.name)
+        return removed
 
     def file(self, job_id: str, name: str) -> pathlib.Path | None:
         if name not in PUBLIC_FILES:
@@ -216,7 +273,7 @@ class JobStore:
 
 
 class Worker:
-    """Tek işçi (analiz CPU yoğun): kuyruktan sırayla işler; silinen iş çalışıyorsa süreci sonlandırır."""
+    """Tek işçi (analiz CPU yoğun): kuyruktan sırayla işler; silinen iş çalışıyorsa süreci (analiz ya da ffmpeg) sonlandırır."""
 
     def __init__(self, store: JobStore, on_change: Callable[[dict[str, Any]], None] | None = None) -> None:
         self.store = store
@@ -249,10 +306,23 @@ class Worker:
     def submit(self, job_id: str) -> None:
         self.queue.put(job_id)
 
+    def delete(self, job_id: str) -> None:
+        """Önce kayıt gider (işçi ölen süreci "başarısız" saymasın), sonra süreç durur, sonra dosyalar silinir."""
+        self.store.forget(job_id)
+        self.cancel(job_id)
+        self.store.remove_files(job_id)
+
     def cancel(self, job_id: str) -> None:
+        """Süreci durdurur ve bitmesini bekler: `kill` hemen döner, süreç bitene dek dosyaları açık kalır."""
         with self._lock:
-            if self._current and self._current[0] == job_id:
-                self._current[1].kill()
+            proc = self._current[1] if self._current and self._current[0] == job_id else None
+            if proc:
+                proc.kill()
+        if proc:
+            try:
+                proc.wait(timeout=CANCEL_WAIT_S)
+            except subprocess.TimeoutExpired:
+                _LOG.warning("İptal edilen işin süreci zamanında bitmedi: %s", job_id)
 
     def cancel_current(self) -> None:
         with self._lock:
@@ -273,7 +343,27 @@ class Worker:
         if job and self.on_change:
             self.on_change(job)
 
+    @contextlib.contextmanager
+    def _tracked(self, job_id: str, proc: subprocess.Popen[Any]) -> Iterator[None]:
+        """Süreç iptal edilebilir olur. Kayıttan önce silindiyse silme onu göremedi: burada durdurulur."""
+        with self._lock:
+            self._current = (job_id, proc)
+        try:
+            if self.store.get(job_id) is None:
+                proc.kill()
+            yield
+        finally:
+            with self._lock:
+                self._current = None
+
     def process(self, job_id: str) -> None:
+        try:
+            self._process(job_id)
+        finally:
+            if self.store.get(job_id) is None:   # analiz sürerken silindi: süreç artık dosya tutmuyor
+                self.store.remove_files(job_id)
+
+    def _process(self, job_id: str) -> None:
         job = self.store.get(job_id)
         if job is None or job["status"] != "queued":
             return
@@ -295,9 +385,7 @@ class Worker:
         tail: list[str] = []
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", env=env)
-        with self._lock:
-            self._current = (job_id, proc)
-        try:
+        with self._tracked(job_id, proc):
             assert proc.stdout is not None
             for line in proc.stdout:
                 line = line.strip()
@@ -310,9 +398,6 @@ class Worker:
                 elif line:
                     tail = (tail + [line])[-8:]
             code = proc.wait()
-        finally:
-            with self._lock:
-                self._current = None
 
         if self.store.get(job_id) is None:  # analiz sürerken silindi
             return
@@ -325,7 +410,7 @@ class Worker:
         files: list[str] = []
         try:
             if (raw / "isaretli.mp4").exists():
-                self._encode_h264(raw / "isaretli.mp4", out / "annotated.mp4")
+                self._encode_h264(job_id, raw / "isaretli.mp4", out / "annotated.mp4")
                 files.append("annotated.mp4")
             for src, dst in RESULT_FILES.items():
                 if (raw / src).exists():
@@ -354,7 +439,8 @@ class Worker:
         }.items() if v})
         job.update(status="done", result=result, progress=1.0)
         job.pop("stage", None)
-        self.store.save(job)
+        if not self.store.save(job):
+            return
         self._changed(job)
         # Girdi videosu artık gerekmez (yeniden analiz için kullanıcı yeniden yükler); yer kaplamasın
         for p in d.iterdir():
@@ -378,7 +464,17 @@ class Worker:
             p = max(0.0, min(1.0, float(msg["progress"]))) * 0.95
             self._changed(self.store.update(job_id, progress=round(p, 4)))
 
-    def _encode_h264(self, src: pathlib.Path, dst: pathlib.Path) -> None:
-        subprocess.run([self.settings.ffmpeg_exe(), "-v", "error", "-y", "-i", str(src), "-an",
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-                        "-movflags", "+faststart", str(dst)], check=True, capture_output=True, timeout=3600)
+    def _encode_h264(self, job_id: str, src: pathlib.Path, dst: pathlib.Path) -> None:
+        cmd = [self.settings.ffmpeg_exe(), "-v", "error", "-y", "-i", str(src), "-an",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+               "-movflags", "+faststart", str(dst)]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with self._tracked(job_id, proc):
+            try:
+                output, errors = proc.communicate(timeout=3600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output, errors)
