@@ -181,12 +181,20 @@ def _import_ort() -> Any:
     return onnxruntime
 
 
+_dml_warned = False
+
+
 def dml_available(*, _ort: Any = None) -> bool:
-    """R4: DirectML sağlayıcısı onnxruntime'da var mı? onnxruntime hiç yüklenemezse False."""
+    """R4: DirectML sağlayıcısı onnxruntime'da var mı? onnxruntime yüklenemez ya da sağlayıcı sorgusu hata verirse
+    False (hatanın türü ve iletisi bir kez uyarı olarak günlüğe yazılır)."""
+    global _dml_warned
     try:
         ort = _ort if _ort is not None else _import_ort()
         return DML in ort.get_available_providers()
-    except Exception:  # noqa: BLE001 — onnxruntime yüklenemiyor ya da bozuk: DirectML yok say
+    except Exception as e:  # noqa: BLE001 — onnxruntime yüklenemiyor ya da bozuk: DirectML yok say
+        if not _dml_warned:
+            _dml_warned = True
+            log.warning("DirectML sorgulanamadı, ekran kartı yok sayılıyor: %s: %s", type(e).__name__, e)
         return False
 
 
@@ -300,6 +308,7 @@ class GuardedSession:
         self._path = path
         self._configure = configure
         self._lock = threading.Lock()
+        self._broken: str | None = None                       # işlemci yeniden kurulumu da başarısız: kalıcı hata
         self._state: tuple[Any, Used] = (session, used)       # tek atamayla değişir: oturum ve used birlikte
 
     @property
@@ -309,7 +318,13 @@ class GuardedSession:
     def get_inputs(self) -> list[Any]:
         return self._state[0].get_inputs()
 
+    def _broken_error(self) -> RuntimeError:
+        return RuntimeError(f"Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı "
+                            f"({self._broken})")
+
     def run(self, output_names: Any, feeds: Mapping[str, Any]) -> Any:
+        if self._broken is not None:                          # kalıcı hata: yeniden deneme ve günlük seli yok
+            raise self._broken_error()
         state = self._state
         session, used = state
         try:
@@ -317,11 +332,20 @@ class GuardedSession:
         except Exception as e:
             if used.kind != "gpu":
                 raise
+            if self._broken is not None:                      # başka bir çağrı yeniden kurulumu zaten bozdu
+                raise self._broken_error() from None
             log.exception("Ekran kartında çalışırken hata; işlemciye geçiliyor (%s)", used.name)
             reason = _reason(e)
         with self._lock:
+            if self._broken is not None:
+                raise self._broken_error()
             if self._state is state:                          # başka bir çağrı zaten düşürmediyse
-                cpu = _cpu_session(self._ort, self._path, self._configure)
+                try:
+                    cpu = _cpu_session(self._ort, self._path, self._configure)
+                except Exception as e2:
+                    self._broken = _reason(e2)
+                    log.exception("İşlemci oturumu kurulamadı; model kullanılamıyor")
+                    raise
                 self._state = (cpu, cpu_used(_n4(reason)))
             session = self._state[0]
         return session.run(output_names, feeds)
@@ -334,17 +358,22 @@ def open_session(model_path: str | os.PathLike[str], configure: Callable[[Any], 
     sessizce işlemciye düşerse (get_providers()[0] DirectML değil) işlemci oturumu + N3 notu döner."""
     ort = _ort if _ort is not None else _import_ort()
     path = os.fspath(model_path)
-    gpus = list_gpus() if _gpus is None else _gpus
+    if _gpus is not None:
+        gpus = _gpus
+    else:
+        gpus = [] if choice == CPU_ID else list_gpus()        # "cpu" iken DXGI hiç sorgulanmaz
     gpu, note = resolve(choice, gpus, _ort=ort)
     if gpu is None:
         return GuardedSession(ort, path, configure, _cpu_session(ort, path, configure), cpu_used(note))
+    providers: list[str] | None = None
     try:
         session = _gpu_session(ort, path, configure, gpu)
         providers = list(session.get_providers())
         if not providers or providers[0] != DML:
             raise RuntimeError("DirectML etkinleşmedi")
     except Exception as e:
-        log.exception("Ekran kartı oturumu açılamadı (%s); işlemci kullanılıyor", gpu.name)
+        log.exception("Ekran kartı oturumu açılamadı (%s); işlemci kullanılıyor (ONNX Runtime'ın bildirdiği "
+                      "sağlayıcılar: %s)", gpu.name, providers)
         cpu = _cpu_session(ort, path, configure)
         return GuardedSession(ort, path, configure, cpu, cpu_used(_n3(_reason(e))))
     return GuardedSession(ort, path, configure, session, Used("gpu", gpu.id, gpu.name, None))

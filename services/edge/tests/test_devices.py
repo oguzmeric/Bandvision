@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -44,6 +46,8 @@ class FakeSession:
 
     def run(self, output_names, feeds):
         self.runs.append((output_names, feeds))
+        if self.is_gpu and self.ort.gpu_run_hook is not None:
+            self.ort.gpu_run_hook()
         if self.is_gpu and self.ort.run_error is not None:
             raise self.ort.run_error
         if not self.is_gpu and self.ort.cpu_run_error is not None:
@@ -65,15 +69,19 @@ class FakeOrt:
         self.available = [DML, CPU] if dml else [CPU]
         self.report_cpu, self.ctor_error = report_cpu, ctor_error
         self.run_error, self.cpu_run_error = run_error, cpu_run_error
+        self.gpu_run_hook: Callable[[], None] | None = None     # GPU run içinde çağrılır (engelleme için)
+        self.cpu_ctor_error: Exception | None = None            # işlemci (DirectML'siz) kurucu hatası
         self.sessions: list[FakeSession] = []
 
     def get_available_providers(self) -> list[str]:
         return list(self.available)
 
     def InferenceSession(self, path, so=None, providers=None) -> FakeSession:
-        if self.ctor_error is not None and any(
-                (p[0] if isinstance(p, tuple) else p) == DML for p in providers):
+        is_gpu = any((p[0] if isinstance(p, tuple) else p) == DML for p in providers)
+        if self.ctor_error is not None and is_gpu:
             raise self.ctor_error
+        if self.cpu_ctor_error is not None and not is_gpu:
+            raise self.cpu_ctor_error
         s = FakeSession(self, str(path), so, list(providers))
         self.sessions.append(s)
         return s
@@ -95,6 +103,7 @@ class Configure:
 def _temiz(monkeypatch):
     monkeypatch.setattr(devices, "_cache", None)
     monkeypatch.setattr(devices, "_dxgi_warned", False)
+    monkeypatch.setattr(devices, "_dml_warned", False)
     before = devices.default_choice()
     yield
     devices.set_default_choice(before)
@@ -324,6 +333,80 @@ def test_run_error_after_fallback_on_cpu_propagates():
     with pytest.raises(ValueError, match="cpu de hata"):
         s.run(None, {})
     assert s.used.note is not None and s.used.note.startswith("Ekran kartı çalışırken hata verdi")
+
+
+def test_concurrent_gpu_failures_build_one_cpu_session():
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    barrier = threading.Barrier(2, timeout=10)
+    ort.gpu_run_hook = barrier.wait                                      # iki çağrı da GPU'da hata alsın
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    results: list[float] = []
+
+    def call() -> None:
+        results.append(float(s.run(None, {})[0][0]))
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert results == [3.0, 3.0]                                         # ikisi de işlemci sonucunu aldı
+    assert len(ort.sessions) == 2 and [x.is_gpu for x in ort.sessions] == [True, False]
+    assert s.used.kind == "cpu" and (s.used.note or "").startswith("Ekran kartı çalışırken hata verdi")
+
+
+def test_failing_cpu_rebuild_is_terminal_and_quiet(caplog):
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    ort.cpu_ctor_error = MemoryError("bellek yok")
+    with caplog.at_level(logging.ERROR, logger="bantvision.devices"):
+        with pytest.raises(MemoryError):                                 # o çağrı için asıl hata
+            s.run(None, {})
+        n_logs = len(caplog.records)
+        for _ in range(3):                                               # sonrası: net hata, yeni günlük yok
+            with pytest.raises(RuntimeError, match="Model kullanılamıyor.*bellek yok"):
+                s.run(None, {})
+    assert len(caplog.records) == n_logs
+    assert sum(1 for r in caplog.records if r.exc_info and "İşlemci oturumu kurulamadı" in r.getMessage()) == 1
+    assert len(ort.sessions) == 1 and len(ort.sessions[0].runs) == 1     # GPU yeniden denenmedi
+
+
+def test_cpu_choice_does_not_enumerate_dxgi(monkeypatch):
+    monkeypatch.setattr(devices, "list_gpus", lambda *a, **k: pytest.fail("DXGI sorgulanmamalı"))
+    monkeypatch.setattr(devices, "_dxgi_rows", lambda: pytest.fail("DXGI sorgulanmamalı"))
+    s = devices.open_session("m.onnx", Configure(), "cpu", _ort=FakeOrt())
+    assert s.used == devices.cpu_used()
+
+
+def test_silent_fallback_log_lists_reported_providers(caplog):
+    with caplog.at_level(logging.ERROR, logger="bantvision.devices"):
+        s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=FakeOrt(report_cpu=True),
+                                 _gpus=gpus2())
+    msg = next(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+    assert "CPUExecutionProvider" in msg
+    assert s.used.note == "Ekran kartında açılamadı (DirectML etkinleşmedi); işlemci kullanılıyor."
+
+
+def test_dml_available_failures_return_false_and_warn_once(monkeypatch, caplog):
+    class Boom:
+        def get_available_providers(self):
+            raise OSError("sağlayıcı sorgusu bozuk")
+
+    with caplog.at_level(logging.WARNING, logger="bantvision.devices"):
+        assert devices.dml_available(_ort=Boom()) is False
+        assert devices.dml_available(_ort=Boom()) is False
+    warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1 and "OSError" in warns[0].getMessage() and "bozuk" in warns[0].getMessage()
+
+    def no_import():
+        raise ImportError("onnxruntime yok")
+
+    monkeypatch.setattr(devices, "_dml_warned", False)
+    monkeypatch.setattr(devices, "_import_ort", no_import)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="bantvision.devices"):
+        assert devices.dml_available() is False
+    assert "ImportError" in caplog.records[0].getMessage()
 
 
 # --------------------------------------------------------------- 10-11. varsayılan ve regex
