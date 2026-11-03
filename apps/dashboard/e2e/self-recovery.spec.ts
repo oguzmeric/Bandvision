@@ -84,6 +84,17 @@ test("kendiliğinden düzelme: Bildirimler ilk yükleme başarısızken Kaydet k
   expect(puts).toEqual([{ enabled: true, chatId: "-100", token: null }]);    // sunucudaki değerler gider, boş değil
 });
 
+test("kendiliğinden düzelme: Bildirimler ayar okunamazken 'Deneme alarmı'nın sonucu da görünür; okuma hatası kalır", async ({ page }) => {
+  await refusable(page, "**/api/live/notify", (r) => r.fulfill({ json: { enabled: true, chatId: "-100", hasToken: true } }), "GET");
+  await page.route("**/api/live/alarms/test", (r) => r.fulfill({ json: {} }));
+  await login(page, "/notifications");
+  const loadLine = page.getByRole("status").filter({ hasText: KEY_TEXT });
+  await expect(loadLine).toBeVisible();
+  await page.getByRole("button", { name: "Deneme alarmı" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Deneme alarmı oluşturuldu." })).toBeVisible();
+  await expect(loadLine).toBeVisible();                                       // ayar hâlâ okunamıyor: söylemeye devam eder
+});
+
 test("kendiliğinden düzelme: Bildirimler ilk yükleme başarılıysa yeniden istemez, yazılan değer kalır", async ({ page }) => {
   let calls = 0;
   await page.route("**/api/live/notify", (r) => {

@@ -31,7 +31,8 @@ export default function NotifySettings() {
   useRetryWhileFailed(loadError !== null, load);
   /** Ayar okunmadan form boştur: Kaydet o boş değerleri gönderip kayıtlı ayarı (bildirim açık, sohbet kimliği) silerdi */
   const ready = cfg !== null && loadError === null;
-  const line = loadError !== null ? { ok: false, text: loadError } : msg;
+  /** Okuma hatası ve son işlemin sonucu ayrı satırlar: biri ötekini gizlemez */
+  const lines = [loadError !== null ? { ok: false, text: loadError } : null, msg].filter((l) => l !== null);
   async function save() {
     try {
       const c = await api<NotifyConfig>("notify", { method: "PUT", json: { enabled, chatId, token: token === "" ? null : token } });
@@ -88,7 +89,9 @@ export default function NotifySettings() {
           <button type="button" onClick={() => run("notify/test", "Deneme mesajı gönderildi.")} className="pl-btn h-8">Deneme mesajı gönder</button>
           <button type="button" onClick={() => run("alarms/test", "Deneme alarmı oluşturuldu.")} className="pl-btn h-8">Deneme alarmı</button>
         </div>
-        {line && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${line.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{line.text}</p>}
+        {lines.map((line, i) => (
+          <p key={i} role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${line.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{line.text}</p>
+        ))}
         {cfg?.lastError && (
           <p data-testid="notify-last-error" className="mt-2 rounded-[2px] border border-nok-line bg-white px-3 py-1.5 text-[12.5px] text-nok-ink">
             Son gönderim hatası ({stamp(cfg.lastError.at)}): {cfg.lastError.text}
