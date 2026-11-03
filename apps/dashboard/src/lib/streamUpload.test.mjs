@@ -19,16 +19,20 @@ async function upstream(t, status) {
   return { url: `http://127.0.0.1:${server.address().port}/`, received: () => received };
 }
 
-/** `total` MB'lık akan gövde; bitmeden hemen önce (çöp toplanmış olarak) bellekte kaç ArrayBuffer MB kaldığını bildirir */
-function measuredBody(total, onLast) {
+/** Çöp toplanmış olarak süreçteki ArrayBuffer MB'ı */
+function arrayBuffersMb() {
   v8.setFlagsFromString("--expose-gc");
-  const gc = vm.runInNewContext("gc");
+  vm.runInNewContext("gc")();
+  return process.memoryUsage().arrayBuffers / MB;
+}
+
+/** `total` MB'lık akan gövde; bitmeden hemen önce bellekte kaç ArrayBuffer MB olduğunu bildirir */
+function measuredBody(total, onLast) {
   let sent = 0;
   return new ReadableStream({
     pull(controller) {
       if (sent === total) {
-        gc();
-        onLast(process.memoryUsage().arrayBuffers / MB);
+        onLast(arrayBuffersMb());
         controller.close();
         return;
       }
@@ -40,14 +44,17 @@ function measuredBody(total, onLast) {
 
 test("STREAM_BODY_INIT: akan gövde bellekte birikmez (fetch `tee` ile kopyalamaz)", async (t) => {
   const { url, received } = await upstream(t, 202);
-  const total = 128;
+  const total = 256;
+  // Mutlak değer ortama göre oynar: başlangıca göre artış ölçülür. Yoldaki tamponlar (sahte sunucu aynı süreçte) birkaç on MB
+  // tutabilir; hata (tee) ise gövdenin tamamını tutar: eşik ikisini ayırır.
+  const before = arrayBuffersMb();
   let held = Infinity;
-  const body = measuredBody(total, (mb) => { held = mb; });
+  const body = measuredBody(total, (mb) => { held = mb - before; });
   const res = await fetch(url, { method: "POST", body, ...STREAM_BODY_INIT });
   await res.arrayBuffer();
   assert.equal(res.status, 202);
   assert.equal(received(), total * MB);
-  assert.ok(held < 32, `gövde bitmeden bellekte ${held.toFixed(0)} MB kaldı`);
+  assert.ok(held < total / 2, `gövde bitmeden bellekte ${held.toFixed(0)} MB birikti`);
 });
 
 test("STREAM_BODY_INIT: akan gövdeye 401 ağ hatası olmaz, yanıt olarak döner", async (t) => {
