@@ -119,7 +119,7 @@ Web'den yüklenen videonun analizi (`13-web-platform.md`). Analiz sunucusu (`ban
 | `video` | ad, bayt; analizden sonra `seconds`, `fps`, `width`, `height` |
 | `options` | isteğe bağlı: `preset` (`generic/egg/flour/box/people`), `countMode` (`people` için `detect`), `countAnchor` (`detect`: `center` tepeden / `bottom` yandan), `productLength` (profildeki anlamıyla), `truth` (iki yönlüde doğru giriş), `direction` (iki yönlüde giriş yönü), `roi`, `roiPolygon`, `countLine` (profil şemasındakiyle aynı), `line`, `bgRange` |
 | `progress`, `stage` | 0–1; `calibrating` / `counting` / `encoding` |
-| `result` | `count` (iki yönlüde giriş), `countOut` (yalnızca iki yönlü sayımda: çıkış), `truth`, `errorPct`, `calibration`, `processingFps`, `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`). İki yönlü sayımda `counts.csv` sütunları `zaman_sn;iz;yon;giris_toplam;cikis_toplam` (`yon`: `giris`/`cikis`) |
+| `result` | `count` (iki yönlüde giriş), `countOut` (yalnızca iki yönlü sayımda: çıkış), `truth`, `errorPct`, `calibration`, `processingFps`, `device` (yalnızca model kullanan analizde, yani kişi/araç tanımada: `{kind: cpu|gpu, name, note}`; `note` ekran kartından işlemciye düşüldüyse nedeni, yoksa null), `files` (yalnızca `annotated.mp4`, `counts.csv`, `profile.json`, `background.png`). İki yönlü sayımda `counts.csv` sütunları `zaman_sn;iz;yon;giris_toplam;cikis_toplam` (`yon`: `giris`/`cikis`) |
 | `expiresAt` | oluşturma + saklama süresi (varsayılan 7 gün) |
 
 `done` ise `result`, `failed` ise `error` zorunlu. Örnekler: `examples/analysis-job-*.json`.

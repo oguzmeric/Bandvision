@@ -318,6 +318,9 @@ class GuardedSession:
     def get_inputs(self) -> list[Any]:
         return self._state[0].get_inputs()
 
+    def get_outputs(self) -> list[Any]:
+        return self._state[0].get_outputs()
+
     def _broken_error(self) -> RuntimeError:
         return RuntimeError(f"Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı "
                             f"({self._broken})")

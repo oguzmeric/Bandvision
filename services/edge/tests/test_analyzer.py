@@ -385,3 +385,70 @@ def test_openapi_schema_has_no_warnings_and_unique_operation_ids(tmp_path: pathl
     assert len(ops) == len(set(ops))
     for path in ("/api/v1/live/alarms/{alarm_id}/clip.webm", "/api/v1/live/alarms/{alarm_id}/image.jpg"):
         assert set(schema["paths"][path]) == {"get", "head"}, path
+
+
+class _FakeProc:
+    def __init__(self) -> None:
+        self.stdout: list[str] = []
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        pass
+
+
+def _run_fake_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, summary: dict[str, Any],
+                  worker_kwargs: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Gerçek video süreci yerine sahte Popen: komut satırını yakalar, `ozet.json`'u verilen özetle yazar."""
+    from bantvision.analyzer import jobs
+    store = JobStore(Settings(data_dir=tmp_path))
+    job, path = store.create("a.mp4", 10, {}, ".mp4")
+    path.write_bytes(b"x")
+    cmds: list[list[str]] = []
+
+    def fake_popen(cmd: list[str], **kw: Any) -> _FakeProc:
+        cmds.append(cmd)
+        raw = pathlib.Path(cmd[cmd.index("--out") + 1])
+        (raw / "ozet.json").write_text(json.dumps(summary), encoding="utf-8")
+        return _FakeProc()
+
+    monkeypatch.setattr(jobs.subprocess, "Popen", fake_popen)
+    worker = Worker(store, **worker_kwargs)
+    worker.process(job["id"])
+    done = store.get(job["id"])
+    assert done is not None
+    return cmds[0], done
+
+
+SUMMARY = {"video": "a.mp4", "fps": 30.0, "seconds": 3.0, "size": [64, 48], "count": 4, "truth": None,
+           "errorPct": None, "calibration": {}, "processingFps": 50.0}
+
+
+def test_worker_passes_device_choice_to_video_tool(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd, done = _run_fake_job(tmp_path, monkeypatch, SUMMARY, {"device_choice": lambda: "auto"})
+    assert cmd[cmd.index("--device") + 1] == "auto"
+    assert done["status"] == "done" and "device" not in done["result"]
+
+
+def test_worker_device_choice_defaults_to_cpu(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cmd, _ = _run_fake_job(tmp_path, monkeypatch, SUMMARY, {})
+    assert cmd[cmd.index("--device") + 1] == "cpu"
+
+
+def test_worker_copies_summary_device_to_result(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                job_validator: Draft202012Validator) -> None:
+    dev = {"kind": "gpu", "name": "NVIDIA Laptop GPU", "note": None}
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SUMMARY, "device": dev}, {"device_choice": lambda: "auto"})
+    assert done["result"]["device"] == dev
+    assert_contract(job_validator, done)
+
+
+@pytest.mark.parametrize("bad", [None, "gpu", {"kind": "tpu", "name": "x"}, {"kind": "gpu", "name": 3},
+                                 {"kind": "gpu"}, {"kind": "cpu", "name": "İşlemci", "note": 5}],
+                         ids=str)
+def test_worker_omits_malformed_summary_device(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                               job_validator: Draft202012Validator, bad: Any) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SUMMARY, "device": bad}, {})
+    assert done["status"] == "done" and "device" not in done["result"]
+    assert_contract(job_validator, done)

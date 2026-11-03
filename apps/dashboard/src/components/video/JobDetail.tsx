@@ -14,10 +14,10 @@ const STAGE: Record<string, string> = {
   encoding: "İşaretli video hazırlanıyor",
 };
 
-function Stat({ label, value, hint, hero }: { label: string; value: string; hint?: string; hero?: boolean }) {
+function Stat({ label, value, hint, hero, wide }: { label: string; value: string; hint?: string; hero?: boolean; wide?: boolean }) {
   return (
     // ızgara hücresi: hücreler arasındaki 1 px çizgi ızgaranın zemininden gelir; ana sayı vurgu renginde
-    <div className={`px-3 py-2 ${hero ? "bg-pl-sel" : "bg-white"}`}>
+    <div className={`px-3 py-2 ${hero ? "bg-pl-sel" : "bg-white"} ${wide ? "col-span-2 lg:col-span-1" : ""}`}>
       <small className="block text-xs text-pl-muted">{label}</small>
       <b className={`text-2xl font-semibold tracking-tight ${hero ? "text-pl-accent" : ""}`}>{value}</b>
       {hint && <span className="ml-1.5 text-xs font-semibold text-pl-muted">{hint}</span>}
@@ -96,7 +96,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
 
       {r && (
         <>
-          <div className="mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-[2px] border border-pl-line-soft bg-pl-line-soft lg:grid-cols-4">
+          <div className={`mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-[2px] border border-pl-line-soft bg-pl-line-soft ${r.device ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
             {twoWay ? (
               <>
                 <Stat hero label="Giriş" value={int(r.count)} />
@@ -110,7 +110,9 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
             )}
             <Stat label="Doğruluk" value={accuracy} hint={r.truth && r.errorPct !== null ? signedPct(r.errorPct) : undefined} />
             <Stat label="İşleme hızı" value={r.processingFps ? int(r.processingFps) : "—"} hint="kare/sn" />
+            {r.device && <Stat wide label="Cihaz" value={r.device.kind === "gpu" ? "Ekran kartı" : "İşlemci"} hint={r.device.name} />}
           </div>
+          {r.device?.note && <p className="mb-3 text-xs text-pl-muted" data-testid="device-note">{r.device.note}</p>}
 
           <div className="grid gap-3 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)]">
             <div className="overflow-hidden rounded-[2px] bg-[#111]">

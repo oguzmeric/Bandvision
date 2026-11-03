@@ -44,6 +44,9 @@ class FakeSession:
     def get_inputs(self) -> list[str]:
         return ["input"]
 
+    def get_outputs(self) -> list[str]:
+        return ["output"]
+
     def run(self, output_names, feeds):
         self.runs.append((output_names, feeds))
         if self.is_gpu and self.ort.gpu_run_hook is not None:
@@ -270,6 +273,7 @@ def test_open_session_missing_gpu_and_no_directml_fall_back_with_notes(monkeypat
 def test_get_inputs_delegates():
     s = devices.open_session("m.onnx", Configure(), "cpu", _ort=FakeOrt(), _gpus=[])
     assert s.get_inputs() == ["input"]
+    assert s.get_outputs() == ["output"]                                 # model üstverisi (gerçek model testi)
 
 
 # --------------------------------------------------------------- 6-7. açılış düşüşleri

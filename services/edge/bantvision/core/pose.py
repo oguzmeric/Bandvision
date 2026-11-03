@@ -1,4 +1,4 @@
-"""Poz tahmini: MoveNet SinglePose Thunder (Google, Apache-2.0), ONNX Runtime (CPU). Kişi kutusu başına çalışır.
+"""Poz tahmini: MoveNet SinglePose Thunder (Google, Apache-2.0), ONNX Runtime (işlemci ya da ekran kartı, core/devices.py). Kişi kutusu başına çalışır.
 
 Kutu 1,25× genişletilip kareye çevrilir (dışı siyah), 256×256 RGB int32 girdi; çıkış 17×(y, x, güven) normalize →
 görüntü pikseline geri çevrilir. Model ilk kullanımda GitHub sürümünden indirilir, SHA-256 doğrulanır.
@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import os
 import pathlib
+from typing import Any
 
 import cv2
 import numpy as np
 
+from . import devices
 from .model_download import DOWNLOAD_DEADLINE_S, DOWNLOAD_TIMEOUT_S, download_verified
 from .pose_model import INPUT_SIZE, MODEL_NAME, MODEL_SHA256, MODEL_URL
 
@@ -61,14 +63,21 @@ def ensure_pose_model(deadline_s: float = DOWNLOAD_DEADLINE_S) -> pathlib.Path:
 
 
 class PoseEstimator:
-    def __init__(self, path: pathlib.Path | None = None) -> None:
-        import onnxruntime as ort
+    def __init__(self, path: pathlib.Path | None = None, device: str | None = None) -> None:
+        """`device`: "auto" | "cpu" | kart kimliği; verilmezse süreç varsayılanı (`devices.default_choice()`)."""
 
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
-        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        self._session = ort.InferenceSession(str(path or ensure_pose_model()), so, providers=["CPUExecutionProvider"])
+        def configure(so: Any) -> None:
+            so.intra_op_num_threads = max(1, min(4, (os.cpu_count() or 2) // 2))
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+
+        choice = device if device is not None else devices.default_choice()
+        self._session = devices.open_session(path or ensure_pose_model(), configure, choice)
         self._input = self._session.get_inputs()[0].name
+
+    @property
+    def used(self) -> devices.Used:
+        """Gerçekte çalışan cihaz (ekran kartı ya da işlemci + varsa düşüş notu)."""
+        return self._session.used
 
     def estimate(self, bgr: np.ndarray, box_px: tuple[float, float, float, float]) -> np.ndarray:
         crop = square_crop(box_px)

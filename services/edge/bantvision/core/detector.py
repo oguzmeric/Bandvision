@@ -1,6 +1,6 @@
 """Nesne tanıma (kişi, araç, hayvan) — docs/03-algorithm.md §4.10.
 
-Hazır YOLOX-S modeli (Megvii, Apache-2.0; COCO sınıfları), ONNX Runtime ile işlemcide çalışır (PyTorch gerekmez).
+Hazır YOLOX-S modeli (Megvii, Apache-2.0; COCO sınıfları), ONNX Runtime ile işlemcide ya da ekran kartında (core/devices.py) çalışır (PyTorch gerekmez).
 Model depoda tutulmaz: ilk kullanımda resmi sürümden indirilir ve SHA-256 ile doğrulanır. Konum:
 `BANTVISION_MODEL_DIR` (varsayılan: kullanıcı önbelleği).
 """
@@ -9,10 +9,12 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
 
+from . import devices
 from .model_download import download_verified
 
 MODEL_NAME = "yolox_s.onnx"
@@ -55,15 +57,22 @@ def ensure_model() -> pathlib.Path:
 
 
 class ObjectDetector:
-    def __init__(self, path: pathlib.Path | None = None) -> None:
-        import onnxruntime as ort  # isteğe bağlı bağımlılık (analyzer/detect extra)
+    def __init__(self, path: pathlib.Path | None = None, device: str | None = None) -> None:
+        """`device`: "auto" | "cpu" | kart kimliği; verilmezse süreç varsayılanı (`devices.default_choice()`)."""
 
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, min(6, (os.cpu_count() or 2) // 2))
-        # Boşta dönerek bekleme kapalı: canlı sayımda okuyucu, sunucu ve başka oturumlarla işlemci paylaşılır
-        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        self.session = ort.InferenceSession(str(path or ensure_model()), so, providers=["CPUExecutionProvider"])
+        def configure(so: Any) -> None:
+            so.intra_op_num_threads = max(1, min(6, (os.cpu_count() or 2) // 2))
+            # Boşta dönerek bekleme kapalı: canlı sayımda okuyucu, sunucu ve başka oturumlarla işlemci paylaşılır
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+
+        choice = device if device is not None else devices.default_choice()
+        self.session = devices.open_session(path or ensure_model(), configure, choice)
         self._grid, self._stride = _grids(INPUT)
+
+    @property
+    def used(self) -> devices.Used:
+        """Gerçekte çalışan cihaz (ekran kartı ya da işlemci + varsa düşüş notu)."""
+        return self.session.used
 
     def detect(self, bgr: np.ndarray, classes: list[str], conf: float = 0.35, iou: float = 0.45) -> list[Detection]:
         """Görüntü koordinatında (piksel) kutular; yalnızca istenen sınıflar."""

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .core import Pipeline, Profile
+from .core import Pipeline, Profile, devices
 from .core.detector import CLASS_IDS, GROUPS
 from .core.lineframe import nearest_direction
 from .core.linescan import LineScanCounter, active_region, flow_profile, frame_moving, match_shift, motion_map
@@ -501,6 +501,7 @@ class RunResult:
     total_out: int = 0                           # tanıma: çıkış sayısı (total = giriş)
     per_minute_out: dict[int, int] = field(default_factory=dict)
     crossings: list[tuple[float, int, str, int, int]] = field(default_factory=list)  # (zaman, iz, yön, giriş, çıkış)
+    device: devices.Used | None = None           # tanıma: modelin çalıştığı cihaz (model kurulmadıysa None)
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
@@ -632,7 +633,7 @@ def count_detect(info: VideoInfo, profile: Profile, out_path: pathlib.Path | Non
         print(f"\r  işleniyor %100  giriş={pipe.total}  çıkış={pipe.total_out}          ")
     return RunResult(pipe.total, per_min, [(c[0], c[1], 1, c[3]) for c in crossings if c[2] == "giris"], n,
                      time.perf_counter() - t0, total_out=pipe.total_out, per_minute_out=per_min_out,
-                     crossings=crossings)
+                     crossings=crossings, device=pipe.detect.used)
 
 
 # ---------------------------------------------------------------- CLI
@@ -694,6 +695,12 @@ def build_profile(a: argparse.Namespace) -> Profile:
     return p
 
 
+def _device_arg(value: str) -> str:
+    if not devices.valid_choice(value):
+        raise argparse.ArgumentTypeError(f"geçersiz cihaz seçimi {value!r} (auto, cpu ya da gpu-xxxx-xxxx)")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m bantvision.video", description=__doc__.split("\n\n")[0])
     ap.add_argument("video")
@@ -730,9 +737,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
+    ap.add_argument("--device", type=_device_arg, default="cpu", metavar="auto|cpu|gpu-…",
+                    help="model cihazı (yalnız tanıma): auto, cpu ya da ekran kartı kimliği (gpu-10de-28a1); "
+                         "varsayılan cpu")
     ap.add_argument("--progress-json", action="store_true",
                     help="makinece okunur ilerleme: stdout'a JSON satırları (stage/progress; analiz sunucusu)")
     a = ap.parse_args(argv)
+    devices.set_default_choice(a.device)         # model sınıfları device=None iken bunu kullanır (model kurulmadan önce)
 
     def emit(**kw: object) -> None:
         if a.progress_json:
@@ -791,6 +802,8 @@ def main(argv: list[str] | None = None) -> int:
                         "notes": cal.notes},
         "processingFps": round(res.frames / res.seconds, 1) if res.seconds else None,
     }
+    if res.device is not None:                   # yalnız model gerçekten kurulduysa (ürün sayımı model kullanmaz)
+        summary["device"] = {"kind": res.device.kind, "name": res.device.name, "note": res.device.note}
     if detect:
         summary.update({"countOut": res.total_out, "truthOut": a.truth_out, "classes": profile.detectClasses,
                         "range": [a.start, a.end]})

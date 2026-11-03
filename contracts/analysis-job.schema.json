@@ -61,6 +61,17 @@
         "errorPct": { "type": ["number", "null"] },
         "calibration": { "type": "object" },
         "processingFps": { "type": ["number", "null"] },
+        "device": {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "description": "Modelin çalıştığı cihaz (yalnız model kullanan analizlerde)",
+          "properties": {
+            "kind": { "enum": ["cpu", "gpu"] },
+            "name": { "type": "string" },
+            "note": { "type": ["string", "null"], "description": "Ekran kartından işlemciye düşüldüyse nedeni (Türkçe)" }
+          }
+        },
         "files": {
           "type": "array",
           "items": { "enum": ["annotated.mp4", "counts.csv", "profile.json", "background.png"] },

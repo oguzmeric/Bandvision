@@ -57,6 +57,8 @@ export interface AnalysisJob {
       notes?: string[];
     };
     processingFps: number | null;
+    /** Modelin çalıştığı cihaz (yalnız model kullanan analizlerde) */
+    device?: { kind: "cpu" | "gpu"; name: string; note?: string | null };
     files: ResultFile[];
   };
   error?: string;

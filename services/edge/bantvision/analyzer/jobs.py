@@ -23,6 +23,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core import devices
+
 SCHEMA = "bantvision.analysis-job.v1"
 RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
     "sayimlar.csv": "counts.csv",
@@ -272,11 +274,23 @@ class JobStore:
         return expired
 
 
+def _valid_device(raw: Any) -> dict[str, Any] | None:
+    """Özetteki `device` sözleşme şeklindeyse (kind cpu/gpu, name metin, note metin/null) kopyası; değilse None."""
+    if not isinstance(raw, dict) or raw.get("kind") not in ("cpu", "gpu") or not isinstance(raw.get("name"), str):
+        return None
+    note = raw.get("note")
+    if note is not None and not isinstance(note, str):
+        return None
+    return {"kind": raw["kind"], "name": raw["name"], "note": note}
+
+
 class Worker:
     """Tek işçi (analiz CPU yoğun): kuyruktan sırayla işler; silinen iş çalışıyorsa süreci (analiz ya da ffmpeg) sonlandırır."""
 
-    def __init__(self, store: JobStore, on_change: Callable[[dict[str, Any]], None] | None = None) -> None:
+    def __init__(self, store: JobStore, on_change: Callable[[dict[str, Any]], None] | None = None,
+                 device_choice: Callable[[], str] = lambda: "cpu") -> None:
         self.store = store
+        self.device_choice = device_choice       # iş başlarken okunur: "Video ile test" modelleri bu cihazda çalışır
         self.settings = store.settings
         self.queue: queue.Queue[str] = queue.Queue()
         self._current: tuple[str, subprocess.Popen[str]] | None = None
@@ -284,6 +298,15 @@ class Worker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.on_change = on_change
+
+    def _device_arg(self) -> str:
+        """Ayardaki "video" seçimi; okunamaz ya da geçersizse işlemci (iş hiçbir zaman bu yüzden başarısız olmaz)."""
+        try:
+            choice = self.device_choice()
+        except Exception:  # noqa: BLE001 — ayar okunamıyorsa iş yine işlemcide çalışır
+            _LOG.warning("Video cihaz seçimi okunamadı; işlemci kullanılıyor", exc_info=True)
+            return "cpu"
+        return choice if devices.valid_choice(choice) else "cpu"
 
     def recover(self) -> None:
         """Açılışta: kuyruktakiler yeniden sıraya, yarım kalanlar başarısız (sonuç dosyaları güvenilmez)."""
@@ -378,7 +401,8 @@ class Worker:
         self._changed(self.store.update(job_id, status="running", stage="calibrating", progress=0.0))
 
         cmd = [self.settings.python, "-m", "bantvision.video", str(inputs[0]), "--out", str(raw),
-               "--progress-json", "--out-width", str(self.settings.out_width), *options_to_args(job["options"])]
+               "--progress-json", "--out-width", str(self.settings.out_width),
+               "--device", self._device_arg(), *options_to_args(job["options"])]
         env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(pathlib.Path(__file__).resolve().parents[2]),
                                                           env.get("PYTHONPATH")]))
@@ -430,6 +454,9 @@ class Worker:
         }
         if summary.get("countOut") is not None:                  # iki yönlü sayım (kişi): çıkış
             result["countOut"] = int(summary["countOut"])
+        device = _valid_device(summary.get("device"))            # yalnız model kullanan analizlerde var
+        if device is not None:
+            result["device"] = device
         job = self.store.get(job_id)
         if job is None:
             return

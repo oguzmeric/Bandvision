@@ -29,6 +29,11 @@
       "expectedArea": 0.0131
     },
     "processingFps": 212.4,
+    "device": {
+      "kind": "cpu",
+      "name": "İşlemci",
+      "note": null
+    },
     "files": [
       "annotated.mp4",
       "counts.csv",

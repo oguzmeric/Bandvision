@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import cv2
 import numpy as np
@@ -148,6 +149,11 @@ class DetectCounter:
         if self._detector is None:
             self._detector = ObjectDetector()
         return self._detector
+
+    @property
+    def used(self) -> Any:
+        """Tanıyıcı gerçekten kurulduysa çalıştığı cihaz (`devices.Used`), kurulmadıysa None."""
+        return getattr(self._detector, "used", None) if self._detector is not None else None
 
     def reset(self) -> None:
         self.tracker.reset()
