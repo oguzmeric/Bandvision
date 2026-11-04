@@ -200,16 +200,17 @@ class SharedModel:
 
     Model (indirme dahil) ARKA PLAN iş parçacığında yüklenir (`warm()` ya da ilk kullanım): o sürece çağrılar engellemeden
     "sonuç yok" döner (oturumların görüntüsü ve durdurma/silme takılmaz). Çıkarım kilidi yükleme sırasında tutulmaz.
-    Yükleme hatasında Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state`: "loading" | "ready" |
-    "error" (modelin hizmet durumu; güvenlik izleme sağlığı buna bakar); `error`: son yükleme hatası (Türkçe, kullanıcıya
-    gösterilir).
+    Yükleme hatasında Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state` / `error` HİZMET
+    sağlığıdır (güvenlik izleme sağlığı buna bakar): `state` "loading" | "ready" | "error"; "error" yalnızca hizmette
+    model yokken; `error`: o durumdaki yükleme hatası (Türkçe, kullanıcıya gösterilir).
 
     Cihaz seçimi (`set_choice`; "auto" | "cpu" | kart kimliği, "auto" yükleme anında donanıma göre çözülür): model hiç
     yüklenmediyse yalnızca seçim saklanır. Yüklüyse yeni model arka planda kurulurken ESKİ model hizmete devam eder; hazır
-    olunca `_infer` altında değiştirilir (güvenlik alarmı boşluk yaşamaz). Yükleme sürerken seçim yeniden değişirse biten
-    sonuç atılır ve son seçim yüklenir. Değişim yüklemesi başarısızsa eski model hizmette kalır, `state` "error" olur ve
-    `RETRY_S` sonra (ya da yeni bir seçimde hemen) yeni seçimle yeniden denenir. `status()`: Cihaz ayarları sayfasının
-    gördüğü durum."""
+    olunca `_infer` altında değiştirilir (güvenlik alarmı boşluk yaşamaz; süren çıkarım bitmeden değişmez). Yükleme
+    sürerken seçim yeniden değişirse biten sonuç atılır ve son seçim yüklenir. Değişim yüklemesi başarısızsa eski model
+    hizmette kalır (`state` "ready" kalır), hata ayrıca tutulur (`status()` notu) ve `RETRY_S` sonra (ya da yeni bir
+    seçimde hemen) yeni seçimle yeniden denenir; hizmetteki modelin seçimine geri dönülürse hata silinir. `status()`:
+    Cihaz ayarları sayfasının gördüğü durum."""
 
     RETRY_S = 60.0
     LABEL = "Model"                                     # hata iletisinde: "<LABEL> yüklenemedi: <neden>"
@@ -225,6 +226,7 @@ class SharedModel:
         self._choice = choice                           # istenen seçim
         self._state = "loading"
         self._error = ""
+        self._swap_error = ""                           # eski model hizmetteyken yeni seçimin yükleme hatası
         self._failed_at = 0.0
         self._loading = False                           # yükleme iş parçacığı sürüyor (bitiş kararı `_lock` altında)
         self._ever_started = False
@@ -237,7 +239,7 @@ class SharedModel:
 
     @property
     def error(self) -> str:
-        """Son yükleme hatası (Türkçe); hata yoksa boş."""
+        """Hizmette model yokkenki son yükleme hatası (Türkçe); hata yoksa boş."""
         with self._lock:
             return self._error
 
@@ -278,23 +280,28 @@ class SharedModel:
 
     def status(self) -> dict[str, Any]:
         """Cihaz ayarları sayfası için: `state` "idle" (hiç yüklenmedi) | "loading" (ilk yükleme ya da cihaz değişimi
-        sürüyor) | "ready" | "error"; `device` hazırken hizmetteki modelin cihazı ({id, kind, name}), değilse None; `note`
-        hazırken düşüş notu (N1–N4), hatada Türkçe hata iletisi. İç oturum kalıcı olarak bozulduysa da "error"."""
+        sürüyor) | "ready" | "error"; `device` hizmetteki modelin cihazı ({id, kind, name}; değişim sürerken eskisi), model
+        yoksa None; `note` hizmetteki modelin düşüş notu (N1–N4), değişim başarısızsa "Seçilen cihaza geçilemedi…",
+        hizmette model yokken ya da iç oturum kalıcı olarak bozulduysa ("error") Türkçe hata iletisi."""
         with self._lock:
             if not self._ever_started:
                 return {"state": "idle", "device": None, "note": None}
-            if self._state == "error":
-                return {"state": "error", "device": None, "note": self._error}
             inner = self._inner
-            if inner is None or self._loading:
+            if inner is None:
+                if self._state == "error":
+                    return {"state": "error", "device": None, "note": self._error}
                 return {"state": "loading", "device": None, "note": None}
+            state = "loading" if self._loading else "ready"
+            swap_error = "" if self._loading else self._swap_error
         broken = getattr(inner, "broken", None)
         if broken:
             return {"state": "error", "device": None, "note": str(broken)}
         used = getattr(inner, "used", None)
-        if used is None:
-            return {"state": "ready", "device": None, "note": None}
-        return {"state": "ready", "device": {"id": used.id, "kind": used.kind, "name": used.name}, "note": used.note}
+        device = None if used is None else {"id": used.id, "kind": used.kind, "name": used.name}
+        note = None if used is None else used.note
+        if swap_error:
+            note = f"Seçilen cihaza geçilemedi: {swap_error}; önceki cihazda çalışmaya devam ediyor."
+        return {"state": state, "device": device, "note": note}
 
     def _ready(self) -> Any:
         """Hazır model ya da None (o zaman yükleme başlatılır). Seçim hizmetteki modelinkinden farklıysa (başarısız
@@ -307,26 +314,44 @@ class SharedModel:
     def _start_loading(self, force: bool = False) -> None:
         with self._lock:
             if self._inner is not None and self._inner_choice == self._choice:
-                return                                  # okuyucu `_inner`'ı None görüp kilide gelene dek yükleme bitmiş olabilir
+                self._swap_error = ""                   # hizmetteki modelin seçimine dönüldü: değişim hatası geçersiz
+                return                                  # (okuyucu `_inner`'ı None görüp kilide gelene dek yükleme bitmiş olabilir)
             if self._loading:
                 return                                  # süren yükleme bitmeden seçimi yeniden okur
-            if not force and self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
+            failed = self._state == "error" or bool(self._swap_error)
+            if not force and failed and self._clock() - self._failed_at < self.RETRY_S:
                 return
             self._ever_started = True
-            self._state = "loading" if self._inner is None else "ready"   # değişimde eski model hizmette
+            if self._inner is None:
+                self._state = "loading"                 # değişimde eski model hizmette: `state` "ready" kalır
             self._loading = True
             self._thread = threading.Thread(target=self._load, name=self.THREAD, daemon=True)
             self._thread.start()
 
     def _load(self) -> None:
-        """Yükleme iş parçacığı: istenen seçimi yükler; bu arada seçim değiştiyse sonucu atıp son seçimi yükler. Bitiş
-        kararı `_lock` altında verilir: `set_choice` ile yarışta seçim değişikliği ya burada görülür ya da (`_loading`
-        düştükten sonra) yeni bir yükleme başlatır."""
+        """Yükleme iş parçacığı. Beklenmedik bir çıkışta (ör. `BaseException`) `_loading` takılı kalmaz: hata günlüğe
+        yazılır ve yükleme hatası gibi işlenir (RETRY_S sonra yeniden denenir)."""
+        try:
+            self._load_loop()
+        except BaseException as e:  # noqa: BLE001 — iş parçacığının sonu: durum tutarlı kalsın, ayrıntı günlükte
+            msg = f"{self.LABEL} yüklenemedi: {failure_reason(e)}"
+            _LOG.error("%s [%s: %s]", msg, type(e).__name__, e, exc_info=True)
+            with self._lock:
+                self._loading, self._failed_at = False, self._clock()
+                if self._inner is None:
+                    self._state, self._error = "error", msg
+                else:
+                    self._swap_error = msg
+
+    def _load_loop(self) -> None:
+        """İstenen seçimi yükler; bu arada seçim değiştiyse sonucu atıp son seçimi yükler. Bitiş kararı `_lock` altında
+        verilir: `set_choice` ile yarışta seçim değişikliği ya burada görülür ya da (`_loading` düştükten sonra) yeni bir
+        yükleme başlatır."""
         while True:
             with self._lock:
                 choice = self._choice
                 if self._inner is not None and self._inner_choice == choice:   # hizmetteki modele geri dönüldü
-                    self._state, self._error, self._loading = "ready", "", False
+                    self._state, self._error, self._swap_error, self._loading = "ready", "", "", False
                     return
             try:
                 inner = self._loader(choice)
@@ -335,19 +360,22 @@ class SharedModel:
                 _LOG.error("%s [%s: %s]", msg, type(e).__name__, e)   # önce günlük, sonra durum: "error" görenin günlüğü de vardır
                 with self._lock:
                     if self._choice == choice:
-                        self._state, self._error, self._failed_at = "error", msg, self._clock()
-                        self._loading = False
+                        self._failed_at, self._loading = self._clock(), False
+                        if self._inner is None:
+                            self._state, self._error = "error", msg
+                        else:
+                            self._swap_error = msg      # eski model hizmette: hizmet sağlığı bozulmaz
                         return
                 continue                                # bu arada seçim değişti: son seçim denenir
             with self._infer, self._lock:               # sıra hep _infer → _lock (çıkarım _lock'u tutmaz)
                 if self._choice == choice:
                     old = self._inner
                     self._inner, self._inner_choice = inner, choice
-                    self._state, self._error, self._loading = "ready", "", False
+                    self._state, self._error, self._swap_error, self._loading = "ready", "", "", False
                     if old is not None:
                         _LOG.info("%s yeni cihaza geçti (seçim: %s)", self.LABEL, choice)
                     return
-            # eski seçimin sonucu atılır, son seçim yüklenir
+            del inner                                   # eski seçimin sonucu hemen bırakılır (kartta oturum birikmesin)
 
 
 class SharedDetector(SharedModel):
@@ -434,6 +462,7 @@ class LiveManager:
         self.pose.set_choice(choices["pose"])
         self.make_bench_detector: Callable[[str], Any] = _bench_detector   # hız testi modeli (testlerde sahte)
         self._bench_lock = threading.Lock()                 # aynı anda tek hız testi
+        self._devices_lock = threading.Lock()               # devices.json kaydı/yeniden okuması + modellere uygulanması
         self.alarms = AlarmStore(root)
         self.views = ViewStore(root)
         self.viewers = ViewHub(self._view_opener, self._session_for)
@@ -919,9 +948,22 @@ class LiveManager:
 
     # ------------------------------------------------------------------ cihaz ayarları
 
+    def _apply_device_choices(self, choices: dict[str, str]) -> None:
+        """`_devices_lock` altında: canlı modellere kayıtlı (çözülmemiş) seçimi verir."""
+        self.detector.set_choice(choices["detector"])
+        self.pose.set_choice(choices["pose"])
+
     def devices_view(self) -> dict[str, Any]:
         """`GET /devices` gövdesi: ekran kartı desteği, cihaz listesi (iç alanlar `index`/`luid` çıkmaz), "auto"nun o
-        anki karşılığı, kayıtlı seçimler ve canlı modellerin gerçekte çalıştığı cihaz."""
+        anki karşılığı, kayıtlı seçimler ve canlı modellerin gerçekte çalıştığı cihaz. devices.json açılışta kilitli
+        olduğu için okunamadıysa burada yeniden denenir; okununca seçimleri canlı modellere uygulanır."""
+        with self._devices_lock:
+            fresh = self.device_settings.refresh()
+            if fresh is not None:
+                self._apply_device_choices(fresh)
+        return self._devices_body()
+
+    def _devices_body(self) -> dict[str, Any]:
         available, reason = devices.gpu_support()
         gpus = devices.list_gpus()
         return {
@@ -934,11 +976,13 @@ class LiveManager:
         }
 
     def save_devices(self, choices: dict[str, str]) -> dict[str, Any]:
-        """Seçimleri kaydeder, canlı modellere kayıtlı (çözülmemiş) seçimi verir; `DeviceSettingsBusy` yazılamadıysa."""
-        saved = self.device_settings.save(choices)
-        self.detector.set_choice(saved["detector"])
-        self.pose.set_choice(saved["pose"])
-        return self.devices_view()
+        """Seçimleri kaydeder, canlı modellere kayıtlı (çözülmemiş) seçimi verir; `DeviceSettingsBusy` yazılamadıysa.
+        Kayıt ve uygulama tek kilit altında: üst üste gelen iki kayıtta dosya ile canlı modeller ayrışmaz. Açılışta
+        okunamamış dosyanın içeriği yerine kullanıcının gönderdiği seçimler kazanır."""
+        with self._devices_lock:
+            saved = self.device_settings.save(choices)
+            self._apply_device_choices(saved)
+        return self._devices_body()
 
     BENCH_FRAME_SHAPE: ClassVar[tuple[int, int, int]] = (720, 1280, 3)
     BENCH_WARMUP: ClassVar[int] = 3

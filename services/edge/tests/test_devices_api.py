@@ -26,6 +26,8 @@ DEFAULTS = {"detector": "auto", "pose": "auto", "video": "auto"}
 NVIDIA = Gpu("gpu-10de-28a1", "NVIDIA Laptop GPU", 5920, 0, "0x00000000_0x0000a1b2")
 INTEL = Gpu("gpu-8086-a7a0", "Intel Graphics", 128, 1, "0x00000000_0x0000c3d4")
 N4 = "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); işlemci kullanılıyor."
+SWAP_FAILED = ("Seçilen cihaza geçilemedi: Kişi tanıma modeli yüklenemedi: Model indirilemedi (bağlantı hatası); "
+               "önceki cihazda çalışmaya devam ediyor.")
 
 
 def wait_for(fn: Any, timeout: float = 10.0) -> Any:
@@ -97,7 +99,7 @@ def test_store_corrupt_file_is_moved_aside(tmp_path: pathlib.Path, text: str,
     with caplog.at_level(logging.ERROR):
         s = DeviceSettings(tmp_path)
     assert s.choices() == DEFAULTS
-    assert not f.exists() and (tmp_path / "devices.json.bozuk").read_bytes() == raw
+    assert not f.exists() and (tmp_path / "devices.json.corrupt").read_bytes() == raw
     assert any(r.levelno == logging.ERROR and "bozuk" in r.getMessage() for r in caplog.records)
 
 
@@ -129,7 +131,7 @@ def test_store_locked_read_gives_defaults_and_leaves_file(tmp_path: pathlib.Path
     with caplog.at_level(logging.ERROR):
         s = DeviceSettings(tmp_path)
     assert s.choices() == DEFAULTS
-    assert real_read(f, encoding="utf-8") == original and not (tmp_path / "devices.json.bozuk").exists()
+    assert real_read(f, encoding="utf-8") == original and not (tmp_path / "devices.json.corrupt").exists()
     assert any(r.levelno == logging.ERROR and "okunamadı" in r.getMessage() for r in caplog.records)
     new = {"detector": "gpu-10de-28a1", "pose": "auto", "video": "cpu"}
     assert s.save(new) == new                                           # kullanıcı az önce seçti: yazılır
@@ -147,6 +149,43 @@ def test_store_write_failure_raises_and_keeps_memory(tmp_path: pathlib.Path, mon
     with pytest.raises(devices_store.DeviceSettingsBusy):
         s.save({"detector": "cpu", "pose": "cpu", "video": "cpu"})
     assert s.choices() == DEFAULTS
+
+
+SAVED = {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1"}
+
+
+def lock_first_reads(monkeypatch: pytest.MonkeyPatch, n: int) -> list[tuple[float, ...] | None]:
+    """devices.json'un ilk `n` okuması "unreadable" (kilitli) döner; sonrakiler gerçek okumadır."""
+    from bantvision.live import devices_store
+
+    real = devices_store.read_json
+    seen: list[tuple[float, ...] | None] = []
+
+    def fake(path: pathlib.Path, delays: tuple[float, ...] | None = None) -> jsonfile.JsonRead:
+        seen.append(delays)
+        if len(seen) <= n:
+            return jsonfile.JsonRead(None, "unreadable")
+        return real(path, delays)
+
+    monkeypatch.setattr(devices_store, "read_json", fake)
+    return seen
+
+
+def test_store_refresh_rereads_a_file_locked_at_start(tmp_path: pathlib.Path,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "devices.json").write_text(json.dumps({"choices": SAVED}), encoding="utf-8")
+    seen = lock_first_reads(monkeypatch, 2)
+    s = DeviceSettings(tmp_path)
+    assert s.unread and s.choices() == DEFAULTS
+    assert s.refresh() is None and s.unread                             # hâlâ kilitli
+    assert s.refresh() == SAVED and not s.unread and s.choices() == SAVED
+    assert s.refresh() is None                                          # bir kez okunduysa yeniden okunmaz
+    assert seen[1:] == [(), ()]                                         # yeniden denemeler beklemesiz
+
+
+def test_store_refresh_is_a_no_op_after_a_normal_read(tmp_path: pathlib.Path) -> None:
+    s = DeviceSettings(tmp_path)
+    assert not s.unread and s.refresh() is None
 
 
 # ---------------------------------------------------------------- SharedModel: cihaz değişimi
@@ -189,7 +228,8 @@ def test_slow_swap_keeps_old_model_serving_until_new_is_ready() -> None:
         for _ in range(5):                                              # değişim sürerken eski model hizmette
             assert det.detect("bgr", ["person"]) == ["cpu"]
         assert det.state == "ready"                                     # güvenlik izlemesi sağlıklı kalır
-        assert det.status() == {"state": "loading", "device": None, "note": None}
+        assert det.status() == {"state": "loading", "device": {"id": "cpu", "kind": "cpu", "name": "İşlemci"},
+                                "note": None}                           # eski cihaz hizmette, yenisi yükleniyor
     finally:
         gate.set()
     wait_for(lambda: det.status()["state"] == "ready")
@@ -266,19 +306,149 @@ def test_failed_swap_keeps_old_model_and_reports_error_then_retries_new_choice()
     det.warm()
     wait_for(lambda: det.state == "ready")
     det.set_choice("gpu-10de-28a1")
-    wait_for(lambda: det.state == "error")
-    assert det.error == "Kişi tanıma modeli yüklenemedi: Model indirilemedi (bağlantı hatası)"
-    assert det.status() == {"state": "error", "device": None, "note": det.error}
+    wait_for(lambda: len(calls) == 2 and det.status()["state"] == "ready")
+    assert det.state == "ready" and det.error == ""                     # hizmet sağlığı: eski model çalışıyor
+    assert det.status() == {"state": "ready", "device": {"id": "cpu", "kind": "cpu", "name": "İşlemci"},
+                            "note": SWAP_FAILED}
     assert det.detect("bgr", ["person"]) == ["cpu"]                     # eski model hizmette
     assert det.choice == "gpu-10de-28a1"                                # kayıtlı seçim korunur
-    det.warm()                                                          # bekleme süresi dolmadan yeniden denenmez
+    for _ in range(5):                                                  # bekleme süresi dolmadan yeniden denenmez
+        det.warm()
+        det.detect("bgr", ["person"])
     time.sleep(0.1)
-    assert calls == ["cpu", "gpu-10de-28a1"]
+    assert calls == ["cpu", "gpu-10de-28a1"] and det.state == "ready"
     fail[0] = False
     now[0] += 61.0
     det.detect("bgr", ["person"])                                       # bekleme dolunca yeni seçimle yeniden denenir
-    wait_for(lambda: det.status()["state"] == "ready")
+    wait_for(lambda: det.detect("bgr", ["person"]) == ["gpu-10de-28a1"])
     assert calls == ["cpu", "gpu-10de-28a1", "gpu-10de-28a1"] and det.error == ""
+    assert det.status() == {"state": "ready", "device": {"id": "gpu-10de-28a1", "kind": "gpu",
+                                                        "name": "Kart gpu-10de-28a1"}, "note": None}
+
+
+def test_failed_swap_then_reverting_to_serving_choice_clears_the_failure() -> None:
+    """NVIDIA hizmette → Intel seçildi, yüklenemedi → yeniden NVIDIA: durum temiz, yükleyici çağrılmaz."""
+    calls: list[str] = []
+
+    def loader(choice: str) -> Model:
+        calls.append(choice)
+        if choice == "gpu-8086-a7a0":
+            raise OSError("ağ yok")
+        return Model(choice)
+
+    det = SharedDetector(loader=loader)
+    det.set_choice("gpu-10de-28a1")
+    det.warm()
+    wait_for(lambda: det.state == "ready")
+    det.set_choice("gpu-8086-a7a0")
+    wait_for(lambda: det.status()["note"] == SWAP_FAILED)
+    det.set_choice("gpu-10de-28a1")
+    assert det.state == "ready" and det.error == ""
+    assert det.status() == {"state": "ready", "device": {"id": "gpu-10de-28a1", "kind": "gpu",
+                                                        "name": "Kart gpu-10de-28a1"}, "note": None}
+    time.sleep(0.1)
+    assert calls == ["gpu-10de-28a1", "gpu-8086-a7a0"]
+
+
+def test_failed_first_load_without_a_model_is_an_error() -> None:
+    det = SharedDetector(loader=lambda _c: (_ for _ in ()).throw(OSError("ağ yok")))
+    det.warm()
+    wait_for(lambda: det.state == "error")
+    assert det.error == "Kişi tanıma modeli yüklenemedi: Model indirilemedi (bağlantı hatası)"
+    assert det.status() == {"state": "error", "device": None, "note": det.error}
+
+
+def test_base_exception_in_loader_does_not_leave_loading_stuck(caplog: pytest.LogCaptureFixture) -> None:
+    class Boom(BaseException):
+        pass
+
+    now, calls = [1000.0], []
+
+    def loader(choice: str) -> Model:
+        calls.append(choice)
+        if len(calls) == 1:
+            raise Boom("dur")
+        return Model(choice)
+
+    det = SharedDetector(loader=loader, clock=lambda: now[0])
+    with caplog.at_level(logging.ERROR):
+        det.warm()
+        wait_for(lambda: det.state == "error")
+    assert det.status()["state"] == "error" and det.error.startswith("Kişi tanıma modeli yüklenemedi")
+    assert any("Boom" in r.getMessage() for r in caplog.records)
+    now[0] += 61.0
+    det.warm()                                                          # `_loading` takılı kalmadı: yeniden denenir
+    wait_for(lambda: det.state == "ready")
+    assert calls == ["cpu", "cpu"]
+
+
+def test_discarded_model_is_released_before_the_last_choice_loads() -> None:
+    import gc
+    import weakref
+
+    gate, started = threading.Event(), threading.Event()
+    made: list[weakref.ref[Model]] = []
+    alive_when_last_loaded: list[bool] = []
+
+    def loader(choice: str) -> Model:
+        if choice == "gpu-10de-28a1":
+            gc.collect()
+            alive_when_last_loaded.append(made[-1]() is not None)
+        m = Model(choice)
+        made.append(weakref.ref(m))
+        if choice == "gpu-8086-a7a0":
+            started.set()
+            assert gate.wait(30)
+        return m
+
+    det = SharedDetector(loader=loader)
+    det.set_choice("cpu")
+    det.warm()
+    wait_for(lambda: det.state == "ready")
+    det.set_choice("gpu-8086-a7a0")
+    assert started.wait(5)
+    det.set_choice("gpu-10de-28a1")
+    gate.set()
+    wait_for(lambda: det.detect("bgr", ["person"]) == ["gpu-10de-28a1"])
+    assert alive_when_last_loaded == [False]                            # atılan Intel modeli bırakılmıştı
+
+
+def test_swap_waits_for_an_inflight_detect() -> None:
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(Model):
+        def detect(self, *_a: Any, **_k: Any) -> list[str]:
+            entered.set()
+            assert release.wait(30)
+            return [self.choice]
+
+    loaded = threading.Event()
+
+    def loader(choice: str) -> Model:
+        if choice == "cpu":
+            return Slow(choice)
+        loaded.set()
+        return Model(choice)
+
+    det = SharedDetector(loader=loader)
+    det.set_choice("cpu")
+    det.warm()
+    wait_for(lambda: det.state == "ready")
+    out: list[Any] = []
+    t = threading.Thread(target=lambda: out.append(det.detect("bgr", ["person"])))
+    t.start()
+    try:
+        assert entered.wait(5)
+        det.set_choice("gpu-10de-28a1")
+        assert loaded.wait(5)
+        time.sleep(0.2)                                                 # yeni model hazır ama çıkarım sürüyor
+        assert det.status()["state"] == "loading"                       # değişim çıkarım bitene dek bekler
+        assert det.inner_used == used_for("cpu")
+    finally:
+        release.set()
+        t.join(10)
+    assert out == [["cpu"]]
+    wait_for(lambda: det.status()["state"] == "ready")
     assert det.detect("bgr", ["person"]) == ["gpu-10de-28a1"]
 
 
@@ -454,6 +624,80 @@ def test_put_devices_write_failure_is_503(client: TestClient, monkeypatch: pytes
     r = client.put("/api/v1/live/devices", json={"choices": {"detector": "cpu", "pose": "cpu", "video": "cpu"}})
     assert r.status_code == 503 and "kaydedilemedi" in r.json()["detail"]
     assert client.app.state.live.detector.choice == "auto"             # type: ignore[attr-defined]
+
+
+def test_get_devices_rereads_a_file_locked_at_start_and_applies_it(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, windows_gpus: None,
+        loads: list[tuple[str, str]]) -> None:
+    (tmp_path / "devices.json").write_text(json.dumps({"choices": SAVED}), encoding="utf-8")
+    lock_first_reads(monkeypatch, 1)
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
+        live = c.app.state.live                                         # type: ignore[attr-defined]
+        assert live.detector.choice == "auto" and live.pose.choice == "auto"   # açılışta kilitli: varsayılanlar
+        live.detector.warm()
+        wait_for(lambda: live.detector.status()["state"] == "ready")
+        r = c.get("/api/v1/live/devices")
+        assert r.status_code == 200 and r.json()["choices"] == SAVED
+        assert live.detector.choice == "gpu-8086-a7a0" and live.pose.choice == "cpu"
+        wait_for(lambda: live.detector.detect("bgr", ["person"]) == ["gpu-8086-a7a0"])   # okunan seçime geçti
+        assert c.app.state.worker._device_arg() == "gpu-10de-28a1"     # type: ignore[attr-defined]
+        assert json.loads((tmp_path / "devices.json").read_text(encoding="utf-8")) == {"choices": SAVED}
+
+
+def test_put_devices_body_wins_over_a_file_locked_at_start(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, windows_gpus: None,
+        loads: list[tuple[str, str]]) -> None:
+    (tmp_path / "devices.json").write_text(json.dumps({"choices": SAVED}), encoding="utf-8")
+    lock_first_reads(monkeypatch, 1)
+    body = {"detector": "cpu", "pose": "gpu-10de-28a1", "video": "auto"}
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
+        live = c.app.state.live                                         # type: ignore[attr-defined]
+        r = c.put("/api/v1/live/devices", json={"choices": body})
+        assert r.status_code == 200 and r.json()["choices"] == body
+        assert live.detector.choice == "cpu" and live.pose.choice == "gpu-10de-28a1"
+        assert c.get("/api/v1/live/devices").json()["choices"] == body  # sonra dosya yeniden okunup ezilmez
+        assert live.detector.choice == "cpu"
+    assert json.loads((tmp_path / "devices.json").read_text(encoding="utf-8")) == {"choices": body}
+
+
+def test_overlapping_puts_leave_file_and_models_in_agreement(client: TestClient, tmp_path: pathlib.Path,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """İlk kayıt dosyayı yazdı, modellere uygularken takıldı: ikinci kayıt araya girip dosyayı ve modelleri kendi
+    seçimine çekip sonra ilkinin uygulaması bitse dosya B, modeller A kalırdı. Kilit ikinciyi bekletir."""
+    live = client.app.state.live                                        # type: ignore[attr-defined]
+    real_set = live.detector.set_choice
+    applying, release = threading.Event(), threading.Event()
+
+    def slow_set(choice: str) -> None:
+        if choice == "gpu-8086-a7a0":
+            applying.set()
+            assert release.wait(30)
+        real_set(choice)
+
+    monkeypatch.setattr(live.detector, "set_choice", slow_set)
+    a = {"detector": "gpu-8086-a7a0", "pose": "gpu-8086-a7a0", "video": "gpu-8086-a7a0"}
+    b = {"detector": "cpu", "pose": "cpu", "video": "cpu"}
+    out: dict[str, int] = {}
+    ta = threading.Thread(target=lambda: out.update(a=client.put("/api/v1/live/devices",
+                                                                 json={"choices": a}).status_code))
+    ta.start()
+    tb: threading.Thread | None = None
+    try:
+        assert applying.wait(10)
+        tb = threading.Thread(target=lambda: out.update(b=client.put("/api/v1/live/devices",
+                                                                     json={"choices": b}).status_code))
+        tb.start()
+        time.sleep(0.3)
+        on_disk = json.loads((tmp_path / "devices.json").read_text(encoding="utf-8"))["choices"]
+        assert on_disk == a                                             # ikinci kayıt ilkinin bitmesini bekliyor
+    finally:
+        release.set()
+        ta.join(30)
+        if tb is not None:
+            tb.join(30)
+    assert out == {"a": 200, "b": 200}
+    on_disk = json.loads((tmp_path / "devices.json").read_text(encoding="utf-8"))["choices"]
+    assert on_disk == b and live.detector.choice == b["detector"] and live.pose.choice == b["pose"]
 
 
 def test_benchmark_times_a_fresh_detector(client: TestClient) -> None:
