@@ -27,6 +27,7 @@ from ..core import Profile, devices
 from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
+from . import open_gate
 from . import recorders as rec
 from .alarms import AlarmStore
 from .clips import ClipWriter
@@ -1029,12 +1030,13 @@ _GRAB_SLOTS = threading.BoundedSemaphore(2)   # aynı anda en çok 2 RTSP küç�
 
 def grab_jpeg(url: str, timeout: float = 10.0) -> bytes:
     result: dict[str, bytes] = {}
+    deadline = time.monotonic() + timeout
 
     def run() -> None:
         if not _GRAB_SLOTS.acquire(timeout=timeout):
             return
         try:
-            _grab(url, result)
+            _grab(url, result, deadline)
         finally:
             _GRAB_SLOTS.release()
 
@@ -1046,8 +1048,13 @@ def grab_jpeg(url: str, timeout: float = 10.0) -> bytes:
     return result["jpeg"]
 
 
-def _grab(url: str, result: dict[str, bytes]) -> None:
-    cap = open_capture(url)
+def _grab(url: str, result: dict[str, bytes], deadline: float = float("inf")) -> None:
+    """İlk tam kare JPEG olarak `result`'a. Açılış sırası (`open_gate`) beklerken süre dolduysa (istek çoktan 502
+    döndü) kimsenin beklemediği açılış yapılmaz."""
+    with open_gate.GATE.hold(open_gate.VIEWER):
+        if time.monotonic() > deadline:
+            return
+        cap = open_capture(url)
     try:
         for _ in range(30):                                 # ilk tam kareye kadar (anahtar kare)
             ok, frame = cap.read()

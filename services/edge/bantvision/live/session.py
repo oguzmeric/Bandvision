@@ -41,7 +41,8 @@ _LOG = logging.getLogger(__name__)
 # kapalı kamerada açılış 30 sn takılıyordu.
 _FFMPEG_OPTIONS = "rtsp_transport;tcp|timeout;5000000"
 # OpenCV'nin kendi açılış/okuma sınırı (varsayılan 30 sn; yukarıdaki FFmpeg `timeout` bunu kısaltmıyor). Ölçüm (yerel
-# ağdaki kayıt cihazı): sağlam kanal 1,4–2,1 sn'de açılır, sinyalsiz kanal sınır dolana dek bekletir.
+# ağdaki kayıt cihazı): sağlam kanal 1,4–2,1 sn'de açılır, sinyalsiz kanal sınır dolana dek bekletir. Açılış sınırı
+# TRASSIR jetonunun ömründen (~10 sn) kısa kalmalı: jeton açılış başında alınır.
 OPEN_TIMEOUT_MS = 8000
 READ_TIMEOUT_MS = 10000
 
@@ -120,10 +121,10 @@ def open_capture(url: str, level: int | None = None) -> cv2.VideoCapture:
     lower = url.lower()
     if not lower.startswith(("rtsp://", "http://", "https://")):
         return cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-    if lower.startswith("rtsp://"):
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _FFMPEG_OPTIONS
     params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS, cv2.CAP_PROP_READ_TIMEOUT_MSEC, READ_TIMEOUT_MS]
     with open_gate.GATE.hold(open_gate.current_priority() if level is None else level):
+        if lower.startswith("rtsp://"):
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _FFMPEG_OPTIONS
         return cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
 
 
@@ -436,19 +437,29 @@ class LiveSession:
     def _read_loop(self) -> None:
         backoff = 1.0
         file_offset = 0.0                                    # dosya başa sarınca zaman geriye gitmesin
+        got_frames = True                                    # ilk deneme öncelikli; görüntü vermeyen sonra sıraya
         while not self._stop.is_set():
             self._switch.clear()
-            try:
-                with self._lock:
-                    open_url = self._open_url
-                url = open_url()
-            except Exception as e:  # noqa: BLE001 — adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
-                self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {e}")
+            level = open_gate.SESSION if got_frames else open_gate.SESSION_RETRY
+            # Adres (TRASSIR jetonu) kapıya girdikten sonra alınır: kuyrukta beklerken dolmasın (open_gate)
+            with open_gate.GATE.hold(level):
+                try:
+                    with self._lock:
+                        open_url = self._open_url
+                    url = open_url()
+                except Exception as e:  # noqa: BLE001 — adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
+                    url, failure = "", e
+                else:
+                    failure = None
+                cap = open_capture(url, level) if failure is None else None
+            if cap is None:
+                got_frames = False
+                self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {failure}")
                 self._wait_reconnect(backoff)
                 backoff = min(backoff * 2, 15.0)
                 continue
-            cap = open_capture(url, open_gate.SESSION)
             if not cap.isOpened():
+                got_frames = False
                 cap.release()
                 self._set_state("reconnecting", "Görüntü açılamadı; yeniden deneniyor.")
                 self._wait_reconnect(backoff)
@@ -482,6 +493,7 @@ class LiveSession:
                     last_ping = time.monotonic()
                     threading.Thread(target=self._ping, args=(url,), daemon=True).start()
             cap.release()
+            got_frames = n > 0
             clips = self._clips
             if clips is not None:                           # kamera koptuysa süresi dolan yakalamalar beklemesin
                 clips.flush_due(time.monotonic())

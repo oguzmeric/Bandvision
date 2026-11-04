@@ -130,10 +130,13 @@ Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve
   - **Sıra:** açılışlar artık önceliklidir:
     1. analiz oturumu (sayım, güvenlik);
     2. izleme ve küçük resim;
-    3. son denemesi hiç kare vermemiş izleme okuyucusu.
+    3. son denemesi hiç kare vermemiş analiz oturumu (gece kapalı kameradaki güvenlik oturumu duvarı tıkamasın);
+    4. son denemesi hiç kare vermemiş izleme okuyucusu.
 
     Eşit öncelikte geliş sırası korunur.
-  - **Sonuç:** analiz oturumu en çok bir açılış süresi bekler (aynı ölçümde 7 sn).
+  - **Sonuç:** tek başına bekleyen analiz oturumu en çok bir açılış süresi bekler (aynı ölçümde 7 sn). Aynı anda birkaç oturum yeniden bağlanıyorsa sırayla girerler.
+  - **Kayıt cihazı adresi:** TRASSIR'ın yaklaşık 10 sn geçerli jetonu sıraya girildikten sonra alınır, kuyrukta beklerken dolmaz. Açılış sınırı (8 sn) bu süreden kısa tutulur.
+  - **Küçük resim isteği:** süresi dolup 502 dönmüşse, sırası geldiğinde artık açılış yapmaz.
 - **Windows:** sunucu kendini güç kısmasından (verimlilik modu / EcoQoS) çıkarır (`live/power.py`); arka planda tanıma kare başına 65 ms'den ~350 ms'ye çıkıp canlı sayım 13'ten 2–3 kare/sn'ye düşüyordu. Sistem ayarı değişmez.
 - **Test:** `ANALYZER_ALLOW_FILE_SOURCES=1` iken "Özel RTSP" adresine yerel video dosyası yazılabilir (başa sararak "kamera" gibi oynar). Yalnızca test/e2e içindir; bayraksız sunucu dosya okumaz.
 
