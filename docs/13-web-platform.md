@@ -135,7 +135,12 @@ Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve
 
     Eşit öncelikte geliş sırası korunur.
   - **Sonuç:** tek başına bekleyen analiz oturumu en çok bir açılış süresi bekler (aynı ölçümde 7 sn). Aynı anda birkaç oturum yeniden bağlanıyorsa sırayla girerler.
-  - **Kayıt cihazı adresi:** TRASSIR'ın yaklaşık 10 sn geçerli jetonu sıraya girildikten sonra alınır, kuyrukta beklerken dolmaz. Açılış sınırı (8 sn) bu süreden kısa tutulur.
+  - **Kayıt cihazı adresi** (`open_gate.resolve_and_open`):
+    - Adres önce sıranın dışında alınır. Ulaşılamayan kayıt cihazının HTTP zaman aşımı (8 sn) sırayı tutmaz.
+    - Kuyrukta 5 sn'den uzun beklendiyse, sıra gelince adres yeniden alınır. TRASSIR'ın jetonu yaklaşık 10 sn geçerlidir; kuyrukta dolmaz.
+    - Açılış sınırı (8 sn) jeton süresinden kısa tutulur.
+    - Dosya kaynakları sıraya girmez.
+    - Kaynağı değiştirilen oturumun ilk denemesi yine önceliklidir.
   - **Küçük resim isteği:** süresi dolup 502 dönmüşse, sırası geldiğinde artık açılış yapmaz.
 - **Windows:** sunucu kendini güç kısmasından (verimlilik modu / EcoQoS) çıkarır (`live/power.py`); arka planda tanıma kare başına 65 ms'den ~350 ms'ye çıkıp canlı sayım 13'ten 2–3 kare/sn'ye düşüyordu. Sistem ayarı değişmez.
 - **Test:** `ANALYZER_ALLOW_FILE_SOURCES=1` iken "Özel RTSP" adresine yerel video dosyası yazılabilir (başa sararak "kamera" gibi oynar). Yalnızca test/e2e içindir; bayraksız sunucu dosya okumaz.
