@@ -141,8 +141,8 @@ class GpuLoad:
         self._have = False
 
     def percent(self, luid: str) -> float | None:
-        if self._factory is None and sys.platform != "win32":
-            return None
+        if sys.platform != "win32":
+            return None                                                  # arka uç (sahte dahil) hiç kurulmaz
         with self._lock:
             if self._closed or self._clock() < self._retry_at:
                 return None

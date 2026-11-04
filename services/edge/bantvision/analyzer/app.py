@@ -148,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        nonlocal gpu_sampler
         store.sweep_orphans()                                # silmesi bitememiş iş klasörleri
         store.expire()
         try:                                                 # 7 günden eski alarm ve resimler açılışta da silinir
@@ -160,21 +161,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         t = threading.Thread(target=cleanup_loop, name="analiz-temizlik", daemon=True)
         t.start()
         yield
-        stop_cleanup.set()
-        live.stop_background()                               # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
-        live.mosaics.stop()                                  # birleşik izleme akışları (okuyuculardan önce)
-        live.viewers.stop()                                  # izleme okuyucuları (kameralar bırakılır)
-        worker.stop()
-        sessions = list(live.sessions.values())
-        # İzlenen güvenlik kameraları listesi (watch.json) korunur: sonraki açılışta yeniden açılırlar
-        for s in sessions:                                   # canlı oturumlar kapanırken kamerayı bırak
-            s.stop()
-        for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)
-            live.close_alarms(s.id)
-        live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
-        live.notifier.stop()
-        if gpu_sampler is not None:
-            gpu_sampler.close()                              # PDH sorgusu
+        try:
+            stop_cleanup.set()
+            live.stop_background()                               # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
+            live.mosaics.stop()                                  # birleşik izleme akışları (okuyuculardan önce)
+            live.viewers.stop()                                  # izleme okuyucuları (kameralar bırakılır)
+            worker.stop()
+            sessions = list(live.sessions.values())
+            # İzlenen güvenlik kameraları listesi (watch.json) korunur: sonraki açılışta yeniden açılırlar
+            for s in sessions:                                   # canlı oturumlar kapanırken kamerayı bırak
+                s.stop()
+            for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)
+                live.close_alarms(s.id)
+            live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
+            live.notifier.stop()
+        finally:                                             # önceki bir stop() hata verse de PDH sorgusu kapanır
+            with gpu_sampler_lock:
+                sampler, gpu_sampler = gpu_sampler, None     # yeniden girilen lifespan taze örnekleyici kurar
+            if sampler is not None:
+                sampler.close()
 
     # Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz kalır: API belge sayfaları (/docs, /redoc) ve şema
     # (/openapi.json) sunulmaz. Anahtarsız (yerel geliştirme) açıktır, ama yalnızca bu bilgisayardan (aşağıda

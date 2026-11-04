@@ -283,6 +283,7 @@ class _FakeGpuLoad:
     instances = 0
     asked: ClassVar[list[str]] = []
     value: float | None = 37.5
+    closed = 0
 
     def __init__(self) -> None:
         type(self).instances += 1
@@ -292,12 +293,12 @@ class _FakeGpuLoad:
         return type(self).value
 
     def close(self) -> None:
-        pass
+        type(self).closed += 1
 
 
 def _fake_gpus(monkeypatch: pytest.MonkeyPatch, gpus: list[Any], auto: str = "cpu") -> type[_FakeGpuLoad]:
     from bantvision.core import devices, gpu_load
-    _FakeGpuLoad.instances, _FakeGpuLoad.asked, _FakeGpuLoad.value = 0, [], 37.5
+    _FakeGpuLoad.instances, _FakeGpuLoad.asked, _FakeGpuLoad.value, _FakeGpuLoad.closed = 0, [], 37.5, 0
     monkeypatch.setattr(devices, "list_gpus", lambda *a, **k: list(gpus))
     monkeypatch.setattr(devices, "auto_choice", lambda *a, **k: auto)
     monkeypatch.setattr(gpu_load, "GpuLoad", _FakeGpuLoad)
@@ -341,6 +342,28 @@ def test_system_status_gpu_follows_detector_then_pose_then_auto(tmp_path: pathli
         fake.value = None                                                         # yük bilinmiyor: ad yine var
         assert c.get("/api/v1/system/status").json()["gpu"] == {"name": "NVIDIA kart", "percent": None}
     assert fake.instances == 1                                                    # uygulama başına tek örnekleyici
+
+
+def test_lifespan_shutdown_closes_gpu_sampler_even_if_stop_raises(tmp_path: pathlib.Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kapanışta önceki bir stop() hata verse de PDH sorgusu kapanır; yeniden girilen lifespan taze örnekleyici kurar."""
+    fake = _fake_gpus(monkeypatch, [_gpu("gpu-10de-28a1", "NVIDIA kart", "0x00000000_0x000153a6")],
+                      auto="gpu-10de-28a1")
+    app = create_app(Settings(data_dir=tmp_path))
+
+    def boom() -> None:
+        raise RuntimeError("worker durmadı")
+
+    monkeypatch.setattr(app.state.worker, "stop", boom)
+    c = local_client(app)
+    with pytest.raises(RuntimeError, match="worker durmadı"), c:
+        assert c.get("/api/v1/system/status").json()["gpu"]["percent"] == 37.5
+    assert fake.instances == 1 and fake.closed == 1
+    monkeypatch.undo()
+    _fake_gpus(monkeypatch, [_gpu("gpu-10de-28a1", "NVIDIA kart", "0x00000000_0x000153a6")], auto="gpu-10de-28a1")
+    with local_client(app) as c2:                                                 # aynı uygulama, yeni lifespan
+        assert c2.get("/api/v1/system/status").json()["gpu"]["percent"] == 37.5
+    assert _FakeGpuLoad.instances == 1 and _FakeGpuLoad.closed == 1
 
 
 def test_system_status_gpu_id_not_listed_is_null(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

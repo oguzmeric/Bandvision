@@ -85,11 +85,17 @@ class Clock:
         self.t += s
 
 
+@pytest.fixture
+def as_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sahte PDH ile sınanan yol Windows yoludur: platform win32 gibi davranır (CI'da ubuntu'da da çalışsın)."""
+    monkeypatch.setattr(gpu_load.sys, "platform", "win32")
+
+
 def make(fake: FakePdh, clock: Clock) -> GpuLoad:
     return GpuLoad(_backend_factory=lambda: fake, _clock=clock, _sleep=clock.sleep)
 
 
-def test_first_call_collects_twice_100ms_apart_then_once_per_call() -> None:
+def test_first_call_collects_twice_100ms_apart_then_once_per_call(as_windows: None) -> None:
     fake = FakePdh([[(name(1, LUID, 0), 1.0)], [(name(1, LUID, 0), 7.0)], [(name(1, LUID, 0), 9.0)]])
     clock = Clock()
     g = make(fake, clock)
@@ -100,7 +106,7 @@ def test_first_call_collects_twice_100ms_apart_then_once_per_call() -> None:
     assert fake.collects == 3 and clock.slept == [0.1]
 
 
-def test_close_calls_reuse_the_last_sample() -> None:
+def test_close_calls_reuse_the_last_sample(as_windows: None) -> None:
     fake = FakePdh([[(name(1, LUID, 0), 4.0)]] * 5)
     clock = Clock()
     g = make(fake, clock)
@@ -110,7 +116,7 @@ def test_close_calls_reuse_the_last_sample() -> None:
     assert fake.collects == n
 
 
-def test_pdh_failure_gives_none_with_a_single_warning(caplog: pytest.LogCaptureFixture) -> None:
+def test_pdh_failure_gives_none_with_a_single_warning(as_windows: None, caplog: pytest.LogCaptureFixture) -> None:
     clock = Clock()
 
     def boom() -> FakePdh:
@@ -124,31 +130,46 @@ def test_pdh_failure_gives_none_with_a_single_warning(caplog: pytest.LogCaptureF
     assert sum("okunamadı" in m for m in caplog.messages) == 1
 
 
-def test_read_failure_recovers_after_retry_window() -> None:
+def test_read_failure_recovers_after_retry_window(as_windows: None) -> None:
+    """Aynı örnek, bekleme süresi geçince arka uç yeniden okunabiliyorsa yeniden ölçer."""
     clock = Clock()
+    broken = {"on": True}
+    backends: list[FakePdh] = []
 
     class Flaky(FakePdh):
         def read(self) -> list[tuple[str, float]]:
-            if self.collects == 2:
+            if broken["on"]:
                 raise OSError("okuma")
             return super().read()
 
-    flaky = Flaky([[(name(1, LUID, 0), 6.0)]] * 5)
-    g = make(flaky, clock)
-    assert g.percent(LUID) is None and flaky.closed          # hata: sorgu kapatıldı, None
+    def factory() -> FakePdh:
+        backends.append(Flaky([[(name(1, LUID, 0), 6.0)]] * 5))
+        return backends[-1]
+
+    g = GpuLoad(_backend_factory=factory, _clock=clock, _sleep=clock.sleep)
+    assert g.percent(LUID) is None and backends[0].closed    # hata: sorgu kapatıldı, None
     clock.t += 1.0
     assert g.percent(LUID) is None                           # bekleme süresinde denenmez
+    assert len(backends) == 1
     clock.t += 60.0
-    g2 = GpuLoad(_backend_factory=lambda: FakePdh([[(name(1, LUID, 0), 6.0)]]), _clock=clock, _sleep=clock.sleep)
-    assert g2.percent(LUID) == 6.0
+    broken["on"] = False
+    assert g.percent(LUID) == 6.0                            # aynı örnek yeni bir arka uçla kurtarıldı
+    assert len(backends) == 2
 
 
-def test_non_windows_is_always_none_and_imports_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_windows_is_always_none_and_never_builds_a_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gpu_load.sys, "platform", "linux")
-    before = set(sys.modules)
+    calls: list[int] = []
+
+    def factory() -> FakePdh:
+        calls.append(1)
+        raise AssertionError("Windows dışında arka uç kurulmamalı")
+
+    g = GpuLoad(_backend_factory=factory)
+    assert g.percent(LUID) is None
+    assert g.percent(LUID) is None
     assert GpuLoad().percent(LUID) is None
-    assert GpuLoad().percent(LUID) is None
-    assert not [m for m in set(sys.modules) - before if m.startswith("ctypes")]
+    assert calls == []
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="PDH yalnız Windows'ta")
