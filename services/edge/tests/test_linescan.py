@@ -182,6 +182,7 @@ def test_video_tool_end_to_end(tmp_path: pathlib.Path) -> None:
     assert summary["calibration"]["countMode"] == "linescan"
     assert summary["calibration"]["direction"] == "down"
     assert summary["count"] == sc.truth(0.5)
+    assert "device" not in summary                  # şerit taramada model yok
     prof = json.loads((out / "profil.json").read_text(encoding="utf-8"))
     assert prof["countMode"] == "linescan" and prof["productLength"] > 0
 

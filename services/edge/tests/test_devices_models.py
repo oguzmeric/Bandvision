@@ -67,7 +67,7 @@ def test_explicit_device_is_passed_to_open_session(cls: Any, opened: list[dict[s
                                                    tmp_path: pathlib.Path) -> None:
     m = cls(path=tmp_path / "x.onnx", device="auto")
     assert [c["choice"] for c in opened] == ["auto"]
-    assert opened[0]["path"] == str(tmp_path / "x.onnx") or opened[0]["path"] == tmp_path / "x.onnx"
+    assert opened[0]["path"] == tmp_path / "x.onnx"              # kod yolu olduğu gibi (Path) iletir
     assert m.used == GPU_USED
 
 
@@ -99,7 +99,7 @@ def test_pose_uses_model_module_download_path_only_without_explicit_path(
         opened: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     monkeypatch.setattr(pose, "ensure_pose_model", lambda: tmp_path / "p.onnx")
     PoseEstimator(device="cpu")
-    assert str(opened[0]["path"]) == str(tmp_path / "p.onnx")
+    assert opened[0]["path"] == tmp_path / "p.onnx"
 
 
 # ---------------------------------------------------------------- video aracı
@@ -124,15 +124,19 @@ def test_invalid_device_is_a_usage_error(tmp_path: pathlib.Path, capsys: pytest.
 
 
 class FakeDetector:
-    used = devices.Used("gpu", "gpu-10de-28a1", "NVIDIA Laptop GPU", "örnek not")
+    """İlk tanımadan sonra `used` ekran kartından işlemciye düşer (N4): ozet.json'daki cihaz koşunun SONUNDA okunmalı."""
+    built_with: str = ""
 
     def __init__(self, path: Any = None, device: str | None = None) -> None:
         FakeDetector.built_with = device if device is not None else devices.default_choice()
+        self.used = devices.Used("gpu", "gpu-10de-28a1", "NVIDIA Laptop GPU", None)
 
     def detect(self, bgr: Any, classes: list[str], conf: float = 0.35, iou: float = 0.45) -> list[Any]:
+        self.used = devices.cpu_used(DROP_NOTE)
         return []
 
-    built_with: str = ""
+
+DROP_NOTE = "Ekran kartı çalışırken hata verdi (örnek); işlemci kullanılıyor."
 
 
 def test_detect_mode_records_device_and_sets_default(tmp_path: pathlib.Path,
@@ -144,7 +148,7 @@ def test_detect_mode_records_device_and_sets_default(tmp_path: pathlib.Path,
                      "--device", "auto"])
     assert rc == 0
     s = json.loads((out / "ozet.json").read_text(encoding="utf-8"))
-    assert s["device"] == {"kind": "gpu", "name": "NVIDIA Laptop GPU", "note": "örnek not"}
+    assert s["device"] == {"kind": "cpu", "name": "İşlemci", "note": DROP_NOTE}   # koşu sonundaki `used`
     assert FakeDetector.built_with == "auto"
     assert devices.default_choice() == "auto"
 

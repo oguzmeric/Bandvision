@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
 import cv2
 import numpy as np
 
+from . import devices
 from .detector import ObjectDetector
 from .lineframe import LineFrame
 from .people_track import MotTrack, MotTracker, iou
@@ -151,7 +151,7 @@ class DetectCounter:
         return self._detector
 
     @property
-    def used(self) -> Any:
+    def used(self) -> devices.Used | None:
         """Tanıyıcı gerçekten kurulduysa çalıştığı cihaz (`devices.Used`), kurulmadıysa None."""
         return getattr(self._detector, "used", None) if self._detector is not None else None
 
