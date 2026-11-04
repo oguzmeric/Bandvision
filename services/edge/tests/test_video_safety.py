@@ -153,12 +153,84 @@ def test_rule_options_on_a_counting_preset_are_refused(src: pathlib.Path, tmp_pa
     assert "yalnızca güvenlik alarmı videosunda" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("args", [["--truth", "3"], ["--truth-out", "1"], ["--direction", "down"], ["--line", "0.5"],
+                                  ["--count-line", "0,0,1,1"], ["--roi", "0,0,1,1"],
+                                  ["--roi-polygon", "0,0;1,0;1,1"], ["--bg-range", "0,1"],
+                                  ["--product-length", "0.2"], ["--anchor", "bottom"],
+                                  ["--expected-area", "0.01"], ["--threshold", "20"], ["--bg-percentile", "15"]])
+def test_counting_options_on_safety_are_refused_without_leaving_output(
+        src: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], args: list[str]) -> None:
+    out = tmp_path / "o"
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(out), "--preset", "safety", *args])
+    assert e.value.code == 2
+    assert "Güvenlik alarmı videosunda sayım ayarları kullanılmaz." in capsys.readouterr().err
+    assert not out.exists()                                            # reddedilen koşu boş klasör bırakmaz
+
+
+def test_refused_rule_options_leave_no_output_folder(src: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    out = tmp_path / "o"
+    for argv in (["--preset", "people", "--no-lying"], ["--preset", "safety", "--no-hands-up", "--no-lying"]):
+        with pytest.raises(SystemExit):
+            video.main([str(src), "--out", str(out), *argv])
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("args", [["--conf", "0.5"], ["--rotation", "0"], ["--width", "480"]])
+def test_conf_rotation_width_stay_allowed_on_safety(fakes: None, src: pathlib.Path, tmp_path: pathlib.Path,
+                                                    args: list[str]) -> None:
+    s, _ = run(src, tmp_path, *args)
+    assert s["count"] == 1
+
+
 def test_alarm_still_active_at_video_end_ends_at_video_end(fakes: None, monkeypatch: pytest.MonkeyPatch,
                                                            src: pathlib.Path, tmp_path: pathlib.Path) -> None:
     monkeypatch.setattr(video, "PoseEstimator", pose_for((2.0, 99.0)))
     s, _ = run(src, tmp_path)
     assert s["count"] == 1
     assert s["alarms"][0]["endS"] == pytest.approx(10.0, abs=0.05)     # null değil, video sonu
+
+
+def test_pose_ending_within_grace_before_video_end_keeps_its_own_end(
+        fakes: None, monkeypatch: pytest.MonkeyPatch, src: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """Eller 8,5'te iner ama 3 sn tolerans video sonundan sonra dolar: bitiş video sonu (10,0) değil 8,5."""
+    monkeypatch.setattr(video, "PoseEstimator", pose_for((2.0, 8.5)))
+    s, _ = run(src, tmp_path)
+    assert s["count"] == 1
+    assert s["alarms"][0]["endS"] == pytest.approx(8.5, abs=0.05)
+
+
+def test_two_episodes_on_one_track_get_their_own_ends(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aynı izde [1,5) ve [9,13) sn: iki alarm, bitişler 5,0 ve 13,0 (ilk bölüm toleransla biter, ikincisi karışmaz)."""
+    path = tmp_path / "uzun.mp4"
+    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
+    for _ in range(int(FPS * 20)):
+        w.write(np.full((H, W, 3), 40, np.uint8))
+    w.release()
+    orig = video.read_frames
+
+    def spy(info: Any, start: float = 0.0, end: float | None = None, step: int = 1) -> Any:
+        for k, t, f in orig(info, start, end, step):
+            Clock.t = t
+            yield k, t, f
+
+    class TwoEpisodes:
+        def __init__(self, path: Any = None, device: str | None = None) -> None:
+            pass
+
+        def estimate(self, _bgr: np.ndarray, _box: object) -> np.ndarray:
+            up = 1.0 <= Clock.t < 5.0 or 9.0 <= Clock.t < 13.0
+            return hands_up_kp() if up else standing_kp()
+
+    monkeypatch.setattr(video, "read_frames", spy)
+    monkeypatch.setattr(video, "ObjectDetector", OnePerson)
+    monkeypatch.setattr(video, "PoseEstimator", TwoEpisodes)
+    s, _ = run(path, tmp_path)
+    assert s["count"] == 2
+    a, b = s["alarms"]
+    assert a["trackId"] == b["trackId"]
+    assert a["startS"] == pytest.approx(1.0, abs=0.15) and a["endS"] == pytest.approx(5.0, abs=0.05)
+    assert b["startS"] == pytest.approx(9.0, abs=0.15) and b["endS"] == pytest.approx(13.0, abs=0.05)
 
 
 def test_end_option_closes_open_alarm_at_range_end(fakes: None, monkeypatch: pytest.MonkeyPatch,
@@ -222,7 +294,7 @@ def test_csv_and_outputs(fakes: None, src: pathlib.Path, tmp_path: pathlib.Path)
     rows = list(csv.reader((out / "alarmlar.csv").open(encoding="utf-8"), delimiter=";"))
     assert rows[0] == ["baslangic_sn", "alarm_sn", "bitis_sn", "tur", "iz"]
     a = s["alarms"][0]
-    assert rows[1] == [str(a["startS"]), str(a["atS"]), str(a["endS"]), "handsUp", str(a["trackId"])]
+    assert rows[1] == [str(a["startS"]), str(a["atS"]), str(a["endS"]), "Eller yukarı", str(a["trackId"])]
     assert (out / "profil.json").exists()
     assert json.loads((out / "profil.json").read_text(encoding="utf-8"))["countMode"] == "safety"
 

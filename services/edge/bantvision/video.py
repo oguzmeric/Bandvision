@@ -65,6 +65,7 @@ MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek s�
            "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)",
            "safety": "güvenlik alarmı (poz: eller yukarı, yerde yatan kişi)"}
 SAFETY_KINDS = {"hands_up": "handsUp", "lying": "lying"}   # çekirdek adı → sözleşme adı
+SAFETY_LABELS_TR = {"handsUp": "Eller yukarı", "lying": "Yerde yatan kişi"}   # alarmlar.csv "tur" sütunu (kullanıcı indirir)
 SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0)}   # ad, en az, en çok (sn)
 MAX_ALARM_IMAGES = 50                                       # alarm resmi sınırı (sonrakiler resimsiz listelenir)
 MAX_ALARMS = 500                                            # listedeki alarm sınırı (`count` gerçek toplam kalır)
@@ -732,8 +733,8 @@ def count_safety(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_p
         writer.release()
     an.end_all()                                              # açık bölümler kapanır; açık alarmlar aşağıda video sonunda
     video_end = round(min(last_t + frame_s, end if end is not None else info.duration), 1)
-    for o in open_alarms.values():
-        o["rec"]["endS"] = video_end
+    for o in open_alarms.values():                            # tolerans içinde (video sonundan önce) inen poz kendi sonuyla
+        o["rec"]["endS"] = min(video_end, round(o["last"] + frame_s, 1))
     if callable(progress):
         progress(1.0, total)
     elif progress:
@@ -823,7 +824,7 @@ def _seconds_arg(kind: str) -> Callable[[str], float]:
 
 # Güvenlik alarmı sayım yapmaz: bu seçenekler verilirse reddedilir (analiz sunucusu aynı iletiyle 422 verir)
 _COUNTING_OPTIONS = ("truth", "truth_out", "direction", "line", "count_line", "roi", "roi_polygon", "bg_range",
-                     "product_length", "anchor")
+                     "product_length", "anchor", "expected_area", "threshold", "bg_percentile")
 
 
 def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, profile: Profile) -> None:
@@ -873,7 +874,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--product-length", type=float,
                     help="şerit tarama: tek ürün boyu, ROI'nin akış uzunluğuna oranla (vermezsen otomatik öğrenilir)")
     ap.add_argument("--bg-range", help="boş bandın göründüğü aralık (sn), ör. 0,1.5; bant çok doluysa gerekli")
-    ap.add_argument("--bg-percentile", type=float, default=50.0,
+    ap.add_argument("--bg-percentile", type=float,
                     help="bant hiç boşalmıyorsa arka plan yüzdeliği: ürün banttan parlak → 15, koyu → 85 (varsayılan 50)")
     ap.add_argument("--threshold", type=int,
                     help="arka plan fark eşiği (5-120); vermezsen gürültüden otomatik (hareketli zeminde yüksek çıkabilir)")
@@ -899,11 +900,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(kw), flush=True)
 
     src = pathlib.Path(a.video)
+    profile = build_profile(a)
+    apply_safety_options(ap, a, profile)         # reddedilen seçenek birleşimi çıktı klasörü bırakmasın
     info = probe(src)
     out_dir = pathlib.Path(a.out) if a.out else src.with_name(src.stem + "_analiz")
     out_dir.mkdir(parents=True, exist_ok=True)
-    profile = build_profile(a)
-    apply_safety_options(ap, a, profile)
     safety = profile.countMode == "safety"
 
     print(f"Video: {src.name}  {info.width}x{info.height}  {info.fps:.1f} fps  {info.duration:.1f} sn")
@@ -912,7 +913,8 @@ def main(argv: list[str] | None = None) -> int:
     bg_range = tuple(float(v) for v in a.bg_range.split(",")) if a.bg_range else None
     cal = calibrate(info, profile, a.calib_seconds, fixed_direction=bool(a.direction) or profile.countLine is not None,
                     fixed_area=a.expected_area is not None or profile.expectedArea > 0,
-                    bg_range=bg_range, bg_percentile=a.bg_percentile, threshold=a.threshold)  # type: ignore[arg-type]
+                    bg_range=bg_range, bg_percentile=50.0 if a.bg_percentile is None else a.bg_percentile,
+                    threshold=a.threshold)  # type: ignore[arg-type]
     detect = profile.countMode == "detect"
     if not detect and not safety:                # tanımada görüntü saklanmaz (kişisel veri)
         cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
@@ -975,7 +977,7 @@ def main(argv: list[str] | None = None) -> int:
         wr = csv.writer(fh, delimiter=";")
         if safety:
             wr.writerow(["baslangic_sn", "alarm_sn", "bitis_sn", "tur", "iz"])
-            wr.writerows([al["startS"], al["atS"], al["endS"], al["kind"], al["trackId"]] for al in res.alarms)
+            wr.writerows([al["startS"], al["atS"], al["endS"], SAFETY_LABELS_TR[str(al["kind"])], al["trackId"]] for al in res.alarms)
         elif detect:
             wr.writerow(["zaman_sn", "iz", "yon", "giris_toplam", "cikis_toplam"])
             wr.writerows(res.crossings)
