@@ -1,7 +1,7 @@
 "use client";
 
 import { duration, signedPct, when } from "@/lib/format";
-import type { AnalysisJob } from "@/lib/types";
+import { isSafetyJob, type AnalysisJob } from "@/lib/types";
 
 const STAGE: Record<string, string> = { calibrating: "Kalibrasyon", counting: "Sayılıyor", encoding: "Video hazırlanıyor" };
 
@@ -16,7 +16,7 @@ export function StatusPill({ job }: { job: AnalysisJob }) {
           {ok ? `${r.count} / ${r.truth}` : signedPct(r.errorPct ?? 0)}</span>;
       }
       return <span className={`${base} bg-ok-50 text-ok-ink`}>
-        {r?.countOut !== undefined ? `${r.count} giriş · ${r.countOut} çıkış` : `${r?.count ?? 0} adet`}</span>;
+        {isSafetyJob(job) ? `${r?.count ?? 0} alarm` : r?.countOut !== undefined ? `${r.count} giriş · ${r.countOut} çıkış` : `${r?.count ?? 0} adet`}</span>;
     }
     case "running":
     case "queued":

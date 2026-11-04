@@ -260,6 +260,18 @@ Bilgisayar tarafı yol haritasının 2. projesi (sıra: sade arayüz → **ekran
   - Ekran kartındaki bir modelin çağrıları sıraya girer (DirectML bir oturumda eşzamanlı çalıştırmaya izin vermez); işlemcide sıra yoktur.
   - Ürün sayımı ekran kartından yararlanmaz (model kullanmaz).
 
+## 5j. Video ile test: araç, hayvan ve güvenlik alarmı (web, 2026-11-04)
+
+Video ile test sayfasının "Ürün" listesine **Araç (giriş / çıkış)**, **Hayvan (giriş / çıkış)** ve **Güvenlik alarmı (poz)** geldi (ayrıntı: `13-web-platform.md` "Video ile test"; sözleşme `02-contracts.md` §7).
+
+- **Ne var:**
+  - **Araç ve hayvan:** kişi gibi iki yönlü tanıma ile sayım; aynı form ve aynı Giriş / Çıkış görünümü.
+  - **Güvenlik alarmı:** canlıdaki güvenlik kamerasıyla aynı motor ve kurallar (eller yukarı 3–5 sn, yerde yatan kişi 5–30 sn), video zamanıyla; sonuçta alarm listesi (başlangıç, tür, süre, alarm anı resmi) ve tablodan işaretli videoyu o ana sarma. `alarms.csv` indirilebilir.
+  - **Bütünlük:** karışık seçenek (güvenlikte sayım ayarı, sayımda kural ayarı, iki kural da kapalı) `422`; en çok 500 alarm listelenir, ilk 50'sinin resmi vardır, `count` gerçek toplamdır; süresi dolan işte liste kalır, resimler gider.
+  - **Dosya vekili:** `alarms.csv` ve `alarm-N.jpg` tam eşleşmeyle geçer (`src/lib/resultFile.mjs`).
+- **Doğrulama durumu:** birim testleri (sahte tanıma ve poz modeli; panelde `safetyAlarms`, `resultFile`) ve sahte iş yanıtlı Playwright testleri. Gerçek modellerle bir güvenlik ve bir araç videosu **uçtan uca denenmedi**; doğruluk ölçümü yok, başarım iddiası yok.
+- **Ölçüm BEKLİYOR:** gerçek bir güvenlik kamerası videosunda canlı oturumla aynı alarm anlarının çıkması (aynı video, aynı süreler), araç ve hayvan videosunda sayı doğruluğu.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.

@@ -5,12 +5,18 @@ import GeometryDialog from "@/components/geometry/GeometryDialog";
 import { bytes } from "@/lib/format";
 import { type Failure, failureOf } from "@/lib/failure";
 import { clampLine, type Geometry } from "@/lib/geometry";
+import { ALARM_LABELS, defaultSafetyForm, SAFETY_RULES, safetyOptions } from "@/lib/safetyAlarms.mjs";
 import {
-  ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE,
+  ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE, TWO_WAY_PRESETS,
   type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
 } from "@/lib/types";
 
 import FailureText from "./FailureText";
+
+/** İki yönlü ön ayarın yardım metnindeki çoğul adı (yalın, tamlayan) */
+const TWO_WAY_NOUNS: Partial<Record<Preset, [string, string]>> = {
+  people: ["kişiler", "kişilerin"], vehicle: ["araçlar", "araçların"], animal: ["hayvanlar", "hayvanların"],
+};
 
 const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
 
@@ -35,8 +41,11 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const [anchor, setAnchor] = useState<CountAnchor>("center");
   const [geom, setGeom] = useState<Geometry | null>(null);       // null: tüm görüntü, çizgi ortada
   const [editing, setEditing] = useState(false);
-  const people = preset === "people";
-  const effectiveMode = people ? "detect" : (mode || PRESET_MODE[preset]);
+  const twoWay = TWO_WAY_PRESETS.includes(preset);
+  const safety = preset === "safety";
+  const [rules, setRules] = useState(defaultSafetyForm);
+  const effectiveMode = twoWay ? "detect" : (mode || PRESET_MODE[preset]);
+  const [noun, nounOf] = TWO_WAY_NOUNS[preset] ?? ["kişiler", "kişilerin"];
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<Failure | null>(null);
 
@@ -53,11 +62,12 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   }
 
   function options(): JobOptions | string {
+    if (safety) return safetyOptions(rules);   // güvenlikte sayım ayarı (doğru adet, yön, alan, boş bant) hiç gönderilmez
     const o: JobOptions = { preset };
-    if (!people && mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
+    if (!twoWay && mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
     if (truth.trim()) {
       const n = Number(truth);
-      if (!Number.isInteger(n) || n < 1) return `${people ? "Doğru giriş" : "Doğru adet"} pozitif bir tam sayı olmalı.`;
+      if (!Number.isInteger(n) || n < 1) return `${twoWay ? "Doğru giriş" : "Doğru adet"} pozitif bir tam sayı olmalı.`;
       o.truth = n;
     }
     if (direction) o.direction = direction;
@@ -68,7 +78,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       else o.line = geom.linePosition;
       o.direction = geom.direction;
     }
-    if (people) {
+    if (twoWay) {
       o.countAnchor = anchor;
     } else if (bgStart.trim() || bgEnd.trim()) {
       const a = Number(bgStart.replace(",", ".")), b = Number(bgEnd.replace(",", "."));
@@ -162,7 +172,31 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
           {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => <option key={p} value={p}>{PRESET_LABELS[p]}</option>)}
         </select>
       </label>
-      {people ? (
+      {safety ? (
+        <fieldset className="mt-2.5">
+          <legend className={lbl}>Kurallar</legend>
+          {(["handsUp", "lying"] as const).map((key) => {
+            const rule = SAFETY_RULES[key], f = rules[key];
+            const set = (patch: Partial<typeof f>) => setRules({ ...rules, [key]: { ...f, ...patch } });
+            return (
+              <div key={key} className="mt-1.5 flex items-center justify-between gap-3">
+                <label className="flex min-w-0 items-center gap-2">
+                  <input type="checkbox" checked={f.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+                  <span>{ALARM_LABELS[key]}</span>
+                </label>
+                <span className="flex shrink-0 items-center gap-1.5 text-xs text-pl-muted">
+                  <input className="pl-input h-8 w-16" inputMode="decimal" value={f.seconds} disabled={!f.enabled}
+                         aria-label={`${ALARM_LABELS[key]} süresi (sn)`} onChange={(e) => set({ seconds: e.target.value })} />
+                  sn · {rule.min}–{rule.max}
+                </span>
+              </div>
+            );
+          })}
+          <p className="mt-2 text-xs text-pl-faint">
+            Videodaki herkese uygulanır; canlıdaki güvenlik kamerasıyla aynı kurallar ve aynı analiz.
+          </p>
+        </fieldset>
+      ) : twoWay ? (
         <>
           <label className={`${lbl} mt-2.5`}>Kamera
             <select aria-label="Kamera konumu" className={`${field} mt-1`} value={anchor}
@@ -171,7 +205,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
             </select>
           </label>
           <p className="mt-1 text-xs text-pl-faint">
-            Giren ve çıkan kişiler ayrı sayılır; görüntü saklanmaz. Sayım çizgisi yataydır: kişilerin tamamen geçtiği
+            Giren ve çıkan {noun} ayrı sayılır; görüntü saklanmaz. Sayım çizgisi yataydır: {nounOf} tamamen geçtiği
             yere koy (kapı eşiğine değil).
           </p>
         </>
@@ -190,15 +224,16 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
           </p>
         </>
       )}
+      {!safety && (<>
       <div className="mt-2.5 grid grid-cols-2 gap-2.5">
-        <label className={lbl}>{people ? "Doğru giriş" : "Doğru adet"} <span className="text-pl-faint">(isteğe bağlı)</span>
-          <input className={`${field} mt-1`} inputMode="numeric" placeholder={people ? "12" : "100"} value={truth}
+        <label className={lbl}>{twoWay ? "Doğru giriş" : "Doğru adet"} <span className="text-pl-faint">(isteğe bağlı)</span>
+          <input className={`${field} mt-1`} inputMode="numeric" placeholder={twoWay ? "12" : "100"} value={truth}
                  onChange={(e) => setTruth(e.target.value.replace(/\D/g, ""))} />
         </label>
-        <label className={lbl}>{people ? "Giriş yönü" : "Akış yönü"}
-          <select aria-label={people ? "Giriş yönü" : "Akış yönü"} className={`${field} mt-1`} value={geom ? geom.direction : direction}
+        <label className={lbl}>{twoWay ? "Giriş yönü" : "Akış yönü"}
+          <select aria-label={twoWay ? "Giriş yönü" : "Akış yönü"} className={`${field} mt-1`} value={geom ? geom.direction : direction}
                   disabled={!!geom?.countLine} onChange={(e) => changeDirection(e.target.value as Direction | "")}>
-            <option value="" disabled={!!geom}>{people ? "Yukarıdan aşağı (varsayılan)" : "Otomatik bul"}</option>
+            <option value="" disabled={!!geom}>{twoWay ? "Yukarıdan aşağı (varsayılan)" : "Otomatik bul"}</option>
             {(Object.keys(DIRECTION_LABELS) as Direction[]).map((d) => <option key={d} value={d}>{DIRECTION_LABELS[d]}</option>)}
           </select>
         </label>
@@ -224,10 +259,10 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
         </div>
       </div>
       {editing && file && (
-        <GeometryDialog file={file} initial={geom} twoWay={people} allowAngled={effectiveMode !== "linescan"}
+        <GeometryDialog file={file} initial={geom} twoWay={twoWay} allowAngled={effectiveMode !== "linescan"}
                         onSave={(g) => { setGeom(g); setDirection(g.direction); }} onClose={() => setEditing(false)} />
       )}
-      {people ? null : (
+      {twoWay ? null : (
       <details className="mt-2.5">
         <summary className="cursor-pointer text-pl-muted">Gelişmiş: boş bant aralığı</summary>
         <p className="mt-2 text-xs text-pl-faint">Bant çok doluysa, videoda bandın boş göründüğü aralığı yaz (saniye). Arka plan oradan öğrenilir.</p>
@@ -237,7 +272,9 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
         </div>
       </details>
       )}
-      <p className="mt-2 text-xs text-pl-faint">{people ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
+      <p className="mt-2 text-xs text-pl-faint">{twoWay ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
+      </>)}
+      {safety && <p className="mt-2 text-xs text-pl-faint">Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>}
 
       {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink"><FailureText failure={error} /></p>}
 

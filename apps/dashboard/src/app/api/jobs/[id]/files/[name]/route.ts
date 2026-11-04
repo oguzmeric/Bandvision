@@ -1,15 +1,16 @@
 import { analyzerHeaders, analyzerUrl, passThrough, unreachable } from "@/lib/analyzer";
-import { isJobId, RESULT_FILES, type ResultFile } from "@/lib/types";
+import { isResultFile } from "@/lib/resultFile.mjs";
+import { isJobId } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string; name: string }> };
 
-/** Sonuç dosyaları; Range başlığı aktarılır (video oynatıcıda ileri/geri sarma). */
+/** Sonuç dosyaları (sabit adlar, alarms.csv ve alarm-N.jpg; `isResultFile`); Range başlığı aktarılır (video oynatıcıda ileri/geri sarma). */
 export async function GET(req: Request, { params }: Ctx): Promise<Response> {
   const { id, name } = await params;
-  if (!isJobId(id) || !RESULT_FILES.includes(name as ResultFile)) {
+  if (!isJobId(id) || !isResultFile(name)) {
     return Response.json({ detail: "Dosya bulunamadı." }, { status: 404 });
   }
   const range = req.headers.get("range");

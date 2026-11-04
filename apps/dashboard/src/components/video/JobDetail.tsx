@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { type Failure, failureOf } from "@/lib/failure";
 import { bytes, duration, int, num, signedPct, when } from "@/lib/format";
-import { ANCHOR_LABELS, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
+import { alarmRows, rulesSummary } from "@/lib/safetyAlarms.mjs";
+import { ANCHOR_LABELS, DIRECTION_LABELS, isSafetyJob, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
 import CountChart from "./CountChart";
 import FailureText from "./FailureText";
 import { StatusPill } from "./JobList";
@@ -29,7 +30,8 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<Failure | null>(null);
   const r = job.result;
-  const files = new Set(r?.files ?? []);
+  const files = new Set<string>(r?.files ?? []);
+  const video = useRef<HTMLVideoElement>(null);
   const fileUrl = (name: string) => `/api/jobs/${job.id}/files/${name}`;
   const meta = [
     job.video.width && job.video.height ? `${job.video.width}×${job.video.height}` : null,
@@ -38,6 +40,14 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
     bytes(job.video.sizeBytes),
     job.options.preset ? `${PRESET_LABELS[job.options.preset]} profili` : null,
   ].filter(Boolean).join(" · ");
+
+  /** Alarm satırı: işaretli videoyu alarmın başladığı ana sarar ve oynatır */
+  function seek(startS: number) {
+    const v = video.current;
+    if (!v) return;
+    v.currentTime = startS;
+    v.play().catch(() => { /* kullanıcı tıklamasıyla başladığı için reddedilmez; sarma yine de yapıldı */ });
+  }
 
   async function remove() {
     if (!confirm(`"${job.video.name}" analizi ve dosyaları silinsin mi?`)) return;
@@ -57,6 +67,9 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
 
   const accuracy = r?.truth && r.errorPct !== null ? `%${num(Math.max(0, 100 - Math.abs(r.errorPct)), 1)}` : "—";
   const twoWay = r?.countOut !== undefined;
+  const safety = isSafetyJob(job);
+  const alarms = alarmRows(r);
+  const seekable = files.has("annotated.mp4");
 
   return (
     <section className="pl-section mb-0 min-w-0 pb-2.5" aria-labelledby="job-title" data-testid="job-detail">
@@ -70,6 +83,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
         </div>
         <div className="flex flex-wrap gap-1.5">
           {files.has("counts.csv") && <a href={fileUrl("counts.csv")} className="pl-btn h-8">CSV indir</a>}
+          {files.has("alarms.csv") && <a href={fileUrl("alarms.csv")} className="pl-btn h-8">Alarm CSV indir</a>}
           {files.has("profile.json") && <a href={fileUrl("profile.json")} download="profil.json" className="pl-btn h-8">Profili indir</a>}
           <button type="button" onClick={remove} disabled={deleting} className="pl-btn h-8 text-nok-ink">{deleting ? "Siliniyor…" : "Sil"}</button>
         </div>
@@ -96,8 +110,10 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
 
       {r && (
         <>
-          <div className={`mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-[2px] border border-pl-line-soft bg-pl-line-soft ${r.device ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
-            {twoWay ? (
+          <div className={`mb-3 grid grid-cols-2 gap-px overflow-hidden rounded-[2px] border border-pl-line-soft bg-pl-line-soft ${safety ? (r.device ? "lg:grid-cols-3" : "lg:grid-cols-2") : r.device ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+            {safety ? (
+              <Stat hero label="Alarm" value={int(r.count)} />
+            ) : twoWay ? (
               <>
                 <Stat hero label="Giriş" value={int(r.count)} />
                 <Stat label="Çıkış" value={int(r.countOut ?? 0)} />
@@ -108,7 +124,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
                 <Stat label="Doğru adet" value={r.truth ? int(r.truth) : "—"} />
               </>
             )}
-            <Stat label="Doğruluk" value={accuracy} hint={r.truth && r.errorPct !== null ? signedPct(r.errorPct) : undefined} />
+            {!safety && <Stat label="Doğruluk" value={accuracy} hint={r.truth && r.errorPct !== null ? signedPct(r.errorPct) : undefined} />}
             <Stat label="İşleme hızı" value={r.processingFps ? int(r.processingFps) : "—"} hint="kare/sn" />
             {r.device && <Stat wide label="Cihaz" value={r.device.kind === "gpu" ? "Ekran kartı" : "İşlemci"} hint={r.device.name} />}
           </div>
@@ -117,7 +133,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
           <div className="grid gap-3 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)]">
             <div className="overflow-hidden rounded-[2px] bg-[#111]">
               {files.has("annotated.mp4") ? (
-                <video key={job.id} src={fileUrl("annotated.mp4")} controls playsInline preload="metadata"
+                <video key={job.id} ref={video} src={fileUrl("annotated.mp4")} controls playsInline preload="metadata"
                        className="block max-h-[520px] w-full bg-black" data-testid="annotated-video">
                   İşaretli video bu tarayıcıda oynatılamıyor.
                 </video>
@@ -128,6 +144,60 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
               )}
             </div>
             <div className="min-w-0">
+              {safety ? (
+                <>
+                  <h3 className="mb-1.5 text-[13px] font-semibold">Alarmlar</h3>
+                  <p className="mb-2 text-xs text-pl-muted" data-testid="alarm-rules">Kurallar: {rulesSummary(job.options.safety)}</p>
+                  {alarms.length === 0 ? (
+                    <p className="rounded-[2px] border border-pl-line-soft bg-pl-side px-3 py-2 text-[13px]">Bu videoda alarm yok.</p>
+                  ) : (
+                    <>
+                      {/* uzun liste sayfayı uzatmaz: tablo kendi kutusunda kayar, başlık satırı yerinde kalır */}
+                      <div className="max-h-[420px] overflow-y-auto rounded-[2px] border border-pl-line-soft" data-testid="alarm-scroll">
+                        <table className="w-full text-[13px]" data-testid="alarm-table">
+                          <thead className="sticky top-0 bg-pl-head text-left text-xs text-pl-muted">
+                            <tr>
+                              <th className="px-2 py-1 font-medium">Başlangıç</th>
+                              <th className="px-2 py-1 font-medium">Tür</th>
+                              <th className="px-2 py-1 font-medium">Süre</th>
+                              <th className="px-2 py-1 font-medium">Resim</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {alarms.map((row) => (
+                              <tr key={row.key} data-testid="alarm-row" onClick={seekable ? () => seek(row.startS) : undefined}
+                                  className={`border-t border-pl-line-soft ${seekable ? "cursor-pointer hover:bg-pl-side" : ""}`}>
+                                <td className="px-2 py-1 tabular-nums">
+                                  {seekable ? (
+                                    <button type="button" title="Videoda bu ana git" className="font-medium text-pl-accent hover:underline">{row.clock}</button>
+                                  ) : row.clock}
+                                </td>
+                                <td className="px-2 py-1">{row.label}</td>
+                                <td className="px-2 py-1 tabular-nums">{row.duration}</td>
+                                <td className="px-2 py-1">
+                                  {row.image ? (
+                                    <a href={fileUrl(row.image)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                                      {/* eslint-disable-next-line @next/next/no-img-element -- iş dosyası vekilden gelir, boyutlandırma gerekmez */}
+                                      <img src={fileUrl(row.image)} alt={`${row.label}, ${row.clock}`} loading="lazy"
+                                           className="h-12 w-auto rounded-[1px] border border-pl-line-soft" />
+                                    </a>
+                                  ) : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {r.count > alarms.length && (
+                        <p className="mt-1.5 text-xs text-pl-muted">Listede ilk {int(alarms.length)} alarm gösteriliyor; toplam {int(r.count)}.</p>
+                      )}
+                      {alarms.length > 50 && <p className="mt-1.5 text-xs text-pl-muted">Resimler yalnızca ilk 50 alarm için kaydedilir.</p>}
+                      {seekable && <p className="mt-1.5 text-xs text-pl-faint">Satıra tıklayınca işaretli video o ana sarar.</p>}
+                    </>
+                  )}
+                </>
+              ) : (
+              <>
               <h3 className="mb-1.5 text-[13px] font-semibold">Kalibrasyon</h3>
               <dl className="mb-3 grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 text-[13px]">
                 <dt className="text-pl-muted">Yöntem</dt><dd className="font-medium">{MODE_LABELS[r.calibration?.countMode ?? "blob"]}</dd>
@@ -158,6 +228,8 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
                   <h3 className="mb-1.5 text-[13px] font-semibold">Zamana göre sayım</h3>
                   <CountChart jobId={job.id} seconds={job.video.seconds} />
                 </>
+              )}
+              </>
               )}
             </div>
           </div>

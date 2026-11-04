@@ -2,12 +2,30 @@
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "expired";
 export type JobStage = "calibrating" | "counting" | "encoding";
-export type Preset = "generic" | "egg" | "flour" | "box" | "people";
+export type Preset = "generic" | "egg" | "flour" | "box" | "people" | "vehicle" | "animal" | "safety";
 export type CountMode = "blob" | "linescan" | "detect" | "safety";
 /** Kişi sayımı: kamera tepeden (center) ya da yandan/eğik (bottom, çizgi zeminde) */
 export type CountAnchor = "center" | "bottom";
 export type Direction = "down" | "up" | "right" | "left";
-export type ResultFile = "annotated.mp4" | "counts.csv" | "profile.json" | "background.png";
+export type ResultFile = "annotated.mp4" | "counts.csv" | "alarms.csv" | "profile.json" | "background.png";
+/** Güvenlik alarmı: pozun türü */
+export type AlarmKind = "handsUp" | "lying";
+
+/** Güvenlik kuralı: verilmeyen alan varsayılana düşer (eller yukarı 3 sn, yerde yatma 10 sn); en az biri açık olmalı */
+export interface SafetyRule {
+  enabled?: boolean;
+  seconds?: number;
+}
+
+/** `result.alarms` öğesi: süreler video saniyesi; `endS` null ise bitiş bilinmiyor; resim yalnızca ilk 50 alarmda */
+export interface Alarm {
+  kind: AlarmKind;
+  trackId: number;
+  startS: number;
+  atS: number;
+  endS: number | null;
+  image: string | null;
+}
 
 export interface Point {
   x: number;
@@ -26,6 +44,8 @@ export interface JobOptions {
   countLine?: { a: Point; b: Point };
   line?: number;
   bgRange?: [number, number];
+  /** Yalnızca preset safety */
+  safety?: { handsUp?: SafetyRule; lying?: SafetyRule };
 }
 
 export interface AnalysisJob {
@@ -40,9 +60,9 @@ export interface AnalysisJob {
   progress: number;
   stage?: JobStage;
   result?: {
-    /** Sayılan adet; iki yönlü sayımda giriş */
+    /** Sayılan adet; iki yönlü sayımda giriş; güvenlikte alarm sayısı */
     count: number;
-    /** Yalnızca iki yönlü sayımda (kişi): çıkış */
+    /** Yalnızca iki yönlü sayımda (kişi, araç, hayvan): çıkış */
     countOut?: number;
     truth: number | null;
     errorPct: number | null;
@@ -57,14 +77,15 @@ export interface AnalysisJob {
       notes?: string[];
     };
     processingFps: number | null;
+    /** Yalnızca güvenlik işinde: alarm listesi (en çok 500; `count` gerçek toplam) */
+    alarms?: Alarm[];
     /** Modelin çalıştığı cihaz (yalnız model kullanan analizlerde) */
     device?: { kind: "cpu" | "gpu"; name: string; note?: string | null };
-    files: ResultFile[];
+    /** Sabit adlar ve `alarm-N.jpg` resimleri */
+    files: (ResultFile | `alarm-${number}.jpg`)[];
   };
   error?: string;
 }
-
-export const RESULT_FILES: ResultFile[] = ["annotated.mp4", "counts.csv", "profile.json", "background.png"];
 
 export const PRESET_LABELS: Record<Preset, string> = {
   egg: "Yumurta",
@@ -72,11 +93,18 @@ export const PRESET_LABELS: Record<Preset, string> = {
   box: "Koli / kutu",
   generic: "Genel ürün",
   people: "Kişi (mağaza girişi)",
+  vehicle: "Araç (giriş / çıkış)",
+  animal: "Hayvan (giriş / çıkış)",
+  safety: "Güvenlik alarmı (poz)",
 };
+
+/** Kişi gibi iki yönlü (giriş / çıkış) sayılan ön ayarlar */
+export const TWO_WAY_PRESETS: Preset[] = ["people", "vehicle", "animal"];
 
 /** Hazır profilin varsayılan sayım yöntemi (services/edge Profile ile aynı) */
 export const PRESET_MODE: Record<Preset, CountMode> = {
-  egg: "blob", flour: "linescan", box: "linescan", generic: "blob", people: "detect",
+  egg: "blob", flour: "linescan", box: "linescan", generic: "blob", people: "detect", vehicle: "detect", animal: "detect",
+  safety: "safety",
 };
 
 export const MODE_LABELS: Record<CountMode, string> = {
@@ -100,6 +128,10 @@ export const DIRECTION_LABELS: Record<Direction, string> = {
   right: "Soldan sağa",
   left: "Sağdan sola",
 };
+
+/** Güvenlik alarmı (poz) işi: sonuç sayım değil alarm listesidir */
+export const isSafetyJob = (job: Pick<AnalysisJob, "options" | "result">) =>
+  job.options.preset === "safety" || job.result?.alarms !== undefined;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isJobId = (id: string) => UUID.test(id);

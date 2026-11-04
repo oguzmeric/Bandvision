@@ -187,3 +187,300 @@ test("un ve koli şerit taramayla gelir; yöntem değiştirilebilir", async ({ p
   await mode.selectOption("blob");
   await expect(mode).toHaveValue("blob");
 });
+
+// ---- Güvenlik alarmı, araç ve hayvan (sahte iş yanıtlarıyla; gerçek analiz sunucusu gerekmez) ----
+
+/** 1×1 resim: alarm küçük resmi yerine (PNG; tarayıcı türü içeriğinden anlar, bu yüzden JPEG diye sunmak yeter) */
+const PIXEL = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const SAFETY_ID = "00000000-0000-4000-8000-0000000005a1";
+const AT = "2026-11-04T09:10:00Z";
+
+type MockAlarm = { kind: string; trackId: number; startS: number; atS: number; endS: number | null; image: string | null };
+
+function mockJob(id: string, over: Record<string, unknown>) {
+  return {
+    schema: "bantvision.analysis-job.v1", id, status: "done", createdAt: new Date().toISOString(), updatedAt: AT,
+    expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(), progress: 1,
+    video: { name: "kamera.mp4", sizeBytes: 1024, seconds: 18, fps: 25, width: 720, height: 480 }, ...over,
+  };
+}
+
+function safetyJob(name: string, alarms: MockAlarm[], files: string[], id = SAFETY_ID, status = "done") {
+  return mockJob(id, {
+    status,
+    video: { name, sizeBytes: 1024, seconds: 18, fps: 25, width: 720, height: 480 },
+    options: { preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 } } },
+    result: { count: alarms.length, truth: null, errorPct: null, calibration: {}, processingFps: 14.8,
+              device: { kind: "gpu", name: "Test GPU", note: null }, alarms, files },
+  });
+}
+
+/** İşaretli video yerine gerçek bir H.264 klibi sunar; Range desteği olmadan tarayıcı sarmaz */
+async function serveFiles(page: Page, id: string) {
+  const clip = fs.readFileSync(CLIP);
+  await page.route(`**/api/jobs/${id}/files/annotated.mp4`, (r) => {
+    const m = /bytes=(\d+)-(\d*)/.exec(r.request().headers()["range"] ?? "");
+    const start = m ? Number(m[1]) : 0;
+    const end = m && m[2] ? Math.min(Number(m[2]), clip.length - 1) : clip.length - 1;
+    return r.fulfill({
+      status: m ? 206 : 200, contentType: "video/mp4", body: clip.subarray(start, end + 1),
+      headers: { "accept-ranges": "bytes", ...(m ? { "content-range": `bytes ${start}-${end}/${clip.length}` } : {}) },
+    });
+  });
+  await page.route(`**/api/jobs/${id}/files/alarm-*.jpg`, (r) => r.fulfill({ contentType: "image/jpeg", body: PIXEL }));
+}
+
+test("güvenlik işi: Alarm kutusu, alarm tablosu (saat, tür, süre, küçük resim) ve CSV bağlantısı; sayım kutuları yok", async ({ page }) => {
+  const alarms: MockAlarm[] = [
+    { kind: "handsUp", trackId: 3, startS: 12.4, atS: 15.4, endS: 19.0, image: "alarm-1.jpg" },
+    { kind: "lying", trackId: 5, startS: 61, atS: 71, endS: 95, image: "alarm-2.jpg" },
+    { kind: "lying", trackId: 7, startS: 100.2, atS: 110.2, endS: null, image: null },
+  ];
+  const files = ["annotated.mp4", "alarms.csv", "profile.json", "alarm-1.jpg", "alarm-2.jpg"];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("kuyumcu.mp4", alarms, files)] }));
+  await serveFiles(page, SAFETY_ID);
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  await expect(detail.getByRole("heading", { name: "kuyumcu.mp4" })).toBeVisible();
+  await expect(detail).toContainText("Güvenlik alarmı (poz) profili");
+
+  // Sayım kutuları yerine Alarm / İşleme hızı / Cihaz
+  const stat = detail.getByText("Alarm", { exact: true }).locator("..");
+  await expect(stat.locator("b")).toHaveText("3");
+  await expect(detail.getByText("İşleme hızı", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Cihaz", { exact: true })).toBeVisible();
+  for (const gone of ["Doğruluk", "Giriş", "Çıkış", "Doğru adet", "Sayım", "Yöntem"]) {
+    await expect(detail.getByText(gone, { exact: true })).toHaveCount(0);
+  }
+
+  // Tablo: başlıklar ve satırlar
+  const table = detail.getByTestId("alarm-table");
+  await expect(table.getByRole("columnheader")).toHaveText(["Başlangıç", "Tür", "Süre", "Resim"]);
+  const rows = detail.getByTestId("alarm-row");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0).getByRole("cell")).toHaveText(["00:12", "Eller yukarı", "7 sn", ""]);
+  await expect(rows.nth(1).getByRole("cell")).toHaveText(["01:01", "Yerde yatan kişi", "34 sn", ""]);
+  await expect(rows.nth(2).getByRole("cell")).toHaveText(["01:40", "Yerde yatan kişi", "—", "—"]);   // bitişi ve resmi yok
+
+  // Küçük resim: işin dosya yolundan, gerçekten yüklenir; resimsiz satırda resim yok
+  const thumb = rows.nth(0).locator("img");
+  await expect(thumb).toHaveAttribute("src", `/api/jobs/${SAFETY_ID}/files/alarm-1.jpg`);
+  await expect.poll(() => thumb.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  await expect(rows.nth(1).locator("img")).toHaveAttribute("src", `/api/jobs/${SAFETY_ID}/files/alarm-2.jpg`);
+  await expect(rows.nth(2).locator("img")).toHaveCount(0);
+
+  // CSV bağlantısı yalnız files'ta listeliyse
+  await expect(detail.getByRole("link", { name: "Alarm CSV indir", exact: true })).toHaveAttribute("href", `/api/jobs/${SAFETY_ID}/files/alarms.csv`);
+  await expect(detail.getByRole("link", { name: "Profili indir" })).toBeVisible();
+  await expect(detail.getByText("Bu videoda alarm yok.")).toHaveCount(0);
+  await expect(detail.getByText("Zamana göre sayım")).toHaveCount(0);
+});
+
+test("güvenlik işi: satıra tıklamak işaretli videoyu alarmın başlangıcına sarar ve oynatır", async ({ page }) => {
+  const alarms: MockAlarm[] = [
+    { kind: "handsUp", trackId: 3, startS: 4.2, atS: 7.2, endS: 9, image: "alarm-1.jpg" },
+    { kind: "lying", trackId: 5, startS: 11.8, atS: 21.8, endS: 17, image: null },
+  ];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("kuyumcu.mp4", alarms, ["annotated.mp4", "alarms.csv", "alarm-1.jpg"])] }));
+  await serveFiles(page, SAFETY_ID);
+  await page.goto("/videos");
+  const video = page.getByTestId("annotated-video");
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.readyState)).toBeGreaterThanOrEqual(1);
+
+  const rows = page.getByTestId("alarm-row");
+  await rows.nth(1).click();
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThanOrEqual(11.8);
+  expect(await video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeLessThan(14);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => !el.paused)).toBe(true);
+
+  await video.evaluate((el: HTMLVideoElement) => el.pause());
+  await rows.nth(0).click();                                                     // başka alarm: yine başlangıcına
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThanOrEqual(4.2);
+  expect(await video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeLessThan(7);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => !el.paused)).toBe(true);
+});
+
+test("güvenlik işi: alarm yoksa 'Bu videoda alarm yok.'; süresi dolunca resim yerine — ve satır tıklanamaz", async ({ page }) => {
+  const empty = safetyJob("bos.mp4", [], ["annotated.mp4", "alarms.csv", "profile.json"], "00000000-0000-4000-8000-0000000005a2");
+  const expired = safetyJob("eski.mp4", [{ kind: "handsUp", trackId: 1, startS: 3, atS: 6, endS: 8, image: null }], [],
+                            "00000000-0000-4000-8000-0000000005a3", "expired");
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [empty, expired] }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+
+  await page.getByTestId("job-row").filter({ hasText: "bos.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "bos.mp4" })).toBeVisible();
+  await expect(detail.getByText("Bu videoda alarm yok.")).toBeVisible();
+  await expect(detail.getByTestId("alarm-table")).toHaveCount(0);
+  await expect(detail.getByText("Alarm", { exact: true }).locator("..").locator("b")).toHaveText("0");
+
+  await page.getByTestId("job-row").filter({ hasText: "eski.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "eski.mp4" })).toBeVisible();
+  await expect(detail.getByText("Saklama süresi doldu")).toBeVisible();
+  const row = detail.getByTestId("alarm-row");
+  await expect(row).toHaveCount(1);                                              // liste kalır
+  await expect(row.getByRole("cell")).toHaveText(["00:03", "Eller yukarı", "5 sn", "—"]);
+  await expect(row.locator("img")).toHaveCount(0);
+  await expect(row.getByRole("button")).toHaveCount(0);                          // video yok: sarılacak yer yok
+  await expect(detail.getByRole("link", { name: "Alarm CSV indir" })).toHaveCount(0);
+});
+
+test("güvenlik işi: 120 alarm kaydırılabilir kutuda durur (sayfa uzamaz), sayı 120", async ({ page }) => {
+  const alarms: MockAlarm[] = Array.from({ length: 120 }, (_, i) => ({
+    kind: i % 2 ? "lying" : "handsUp", trackId: i + 1, startS: i * 0.1, atS: i * 0.1 + 3, endS: i * 0.1 + 9,
+    image: i < 50 ? `alarm-${i + 1}.jpg` : null,
+  }));
+  const files = ["annotated.mp4", "alarms.csv", ...alarms.flatMap((a) => (a.image ? [a.image] : []))];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("cok.mp4", alarms, files)] }));
+  await serveFiles(page, SAFETY_ID);
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  await expect(detail.getByTestId("alarm-row")).toHaveCount(120);
+  await expect(detail.getByText("Alarm", { exact: true }).locator("..").locator("b")).toHaveText("120");
+  const box = detail.getByTestId("alarm-scroll");
+  const m = await box.evaluate((el) => ({ client: el.clientHeight, scroll: el.scrollHeight, overflowY: getComputedStyle(el).overflowY }));
+  expect(m.overflowY).toBe("auto");
+  expect(m.client).toBeLessThanOrEqual(480);
+  expect(m.scroll).toBeGreaterThan(m.client * 2);
+  await expect(detail.getByTestId("alarm-row").nth(119).locator("img")).toHaveCount(0);   // 51. alarmdan sonra resim yok
+});
+
+test("araç ve hayvan işleri kişi gibi Giriş / Çıkış gösterir; iş başlığında ön ayar adı", async ({ page }) => {
+  const mk = (id: string, name: string, preset: string, count: number, out: number, truth: number | null) =>
+    mockJob(id, { video: { name, sizeBytes: 1024, seconds: 18 }, options: { preset, ...(truth ? { truth } : {}) },
+      result: { count, countOut: out, truth, errorPct: truth ? 0 : null, calibration: { countMode: "detect", direction: "down" },
+                processingFps: 12, files: [] } });
+  const vehicle = mk("00000000-0000-4000-8000-0000000005b1", "yol.mp4", "vehicle", 7, 4, null);
+  const animal = mk("00000000-0000-4000-8000-0000000005b2", "ahir.mp4", "animal", 5, 2, 5);
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [vehicle, animal] }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+
+  await page.getByTestId("job-row").filter({ hasText: "yol.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "yol.mp4" })).toBeVisible();
+  await expect(detail).toContainText("Araç (giriş / çıkış) profili");
+  await expect(detail.getByText("Giriş", { exact: true }).locator("..").locator("b")).toHaveText("7");
+  await expect(detail.getByText("Çıkış", { exact: true }).locator("..").locator("b")).toHaveText("4");
+  await expect(detail.getByText("Alarm", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("job-row").filter({ hasText: "yol.mp4" })).toContainText("7 giriş · 4 çıkış");
+
+  await page.getByTestId("job-row").filter({ hasText: "ahir.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "ahir.mp4" })).toBeVisible();
+  await expect(detail).toContainText("Hayvan (giriş / çıkış) profili");
+  await expect(detail.getByText("Giriş", { exact: true }).locator("..").locator("b")).toHaveText("5");
+  await expect(detail.getByText("Çıkış", { exact: true }).locator("..").locator("b")).toHaveText("2");
+});
+
+/** POST /api/jobs isteklerini yakalar (liste GET'ine boş liste, POST'a 202 + sahte iş döner) */
+async function captureUploads(page: Page) {
+  const sent: { options: Record<string, unknown>; name: string }[] = [];
+  await page.route("**/api/jobs", async (r) => {
+    const req = r.request();
+    if (req.method() !== "POST") return r.fulfill({ json: [] });
+    const body = req.postDataBuffer()?.toString("latin1") ?? "";
+    const options = JSON.parse(/name="options"\r\n\r\n([\s\S]*?)\r\n--/.exec(body)![1]) as Record<string, unknown>;
+    sent.push({ options, name: /filename="([^"]*)"/.exec(body)![1] });
+    return r.fulfill({ status: 202, json: mockJob("00000000-0000-4000-8000-0000000005c1", { status: "queued", progress: 0, options }) });
+  });
+  return sent;
+}
+
+test("yükleme formu: Güvenlik alarmı sayım alanlarını gizler, kuralları gösterir ve doğru options gönderir", async ({ page }) => {
+  const sent = await captureUploads(page);
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  const preset = page.getByLabel("Ürün", { exact: true });
+  await expect(preset.locator("option")).toContainText(["Yumurta", "Un torbası", "Koli / kutu", "Genel ürün", "Kişi (mağaza girişi)",
+    "Araç (giriş / çıkış)", "Hayvan (giriş / çıkış)", "Güvenlik alarmı (poz)"]);
+  await preset.selectOption("safety");
+
+  // sayım alanları yok
+  for (const label of [/Doğru adet/, /Doğru giriş/, "Giriş yönü", "Akış yönü", "Sayım yöntemi", "Kamera konumu", "Boş bant başlangıcı (saniye)"]) {
+    await expect(page.getByLabel(label)).toHaveCount(0);
+  }
+  await expect(page.getByText("Alan ve sayım çizgisi")).toHaveCount(0);
+  await expect(page.getByText("Gelişmiş: boş bant aralığı")).toHaveCount(0);
+  await expect(page.getByText("Doğru adeti yazarsan")).toHaveCount(0);
+  // kurallar ve yardım metni
+  await expect(page.getByText("Videodaki herkese uygulanır; canlıdaki güvenlik kamerasıyla aynı kurallar ve aynı analiz.")).toBeVisible();
+  const hu = page.getByLabel("Eller yukarı süresi (sn)"), ly = page.getByLabel("Yerde yatan kişi süresi (sn)");
+  await expect(page.getByRole("checkbox", { name: "Eller yukarı" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Yerde yatan kişi" })).toBeChecked();
+  await expect(hu).toHaveValue("3");
+  await expect(ly).toHaveValue("10");
+
+  // aralık dışı süre: istek gitmez, sunucudakiyle aynı metin
+  await hu.fill("6");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(page.getByTestId("upload-error")).toHaveText("Eller yukarı süresi 3–5 sn arasında bir sayı olmalı.");
+  await hu.fill("4,5");
+  await ly.fill("4");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(page.getByTestId("upload-error")).toHaveText("Yerde yatma süresi 5–30 sn arasında bir sayı olmalı.");
+  // iki kural da kapalı
+  await page.getByRole("checkbox", { name: "Eller yukarı" }).uncheck();
+  await page.getByRole("checkbox", { name: "Yerde yatan kişi" }).uncheck();
+  await expect(hu).toBeDisabled();
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(page.getByTestId("upload-error")).toHaveText("En az bir kural açık olmalı.");
+  expect(sent).toHaveLength(0);
+
+  // geçerli: yatan kişi 12 sn, eller yukarı kapalı
+  await page.getByRole("checkbox", { name: "Yerde yatan kişi" }).check();
+  await ly.fill("12");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: false }, lying: { enabled: true, seconds: 12 } } });
+  expect(sent[0].name).toBe("ui_test_clip.mp4");
+});
+
+test("yükleme formu: güvenliğe geçmeden yazılan sayım değerleri güvenlik isteğine sızmaz; geri dönünce alanlar yeniden görünür", async ({ page }) => {
+  const sent = await captureUploads(page);
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  const preset = page.getByLabel("Ürün", { exact: true });
+  await page.getByLabel(/Doğru adet/).fill("9");                                  // yumurta iken yazılan değer
+  await page.getByLabel("Akış yönü").selectOption("left");
+  await preset.selectOption("safety");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 } } });
+  await preset.selectOption("egg");                                               // geri dönünce sayım alanları yeniden görünür
+  await expect(page.getByLabel(/Doğru adet/)).toBeVisible();
+  await expect(page.getByText("Alan ve sayım çizgisi")).toBeVisible();
+});
+
+test("yükleme formu: Araç ve Hayvan kişi formunu kullanır (giriş yönü, kamera, Doğru giriş) ve preset ile gönderir", async ({ page }) => {
+  const sent = await captureUploads(page);
+  await page.goto("/videos");
+  const preset = page.getByLabel("Ürün", { exact: true });
+  for (const [value, label] of [["vehicle", "Araç (giriş / çıkış)"], ["animal", "Hayvan (giriş / çıkış)"]] as const) {
+    await page.getByTestId("file-input").setInputFiles(CLIP);
+    await preset.selectOption(value);
+    await expect(preset.locator("option:checked")).toHaveText(label);
+    await expect(page.getByLabel("Kamera konumu")).toBeVisible();
+    await expect(page.getByLabel("Giriş yönü")).toBeVisible();
+    await expect(page.getByLabel(/Doğru giriş/)).toBeVisible();
+    await expect(page.getByLabel("Sayım yöntemi")).toHaveCount(0);
+    await expect(page.getByText("Gelişmiş: boş bant aralığı")).toHaveCount(0);
+    await expect(page.getByRole("checkbox")).toHaveCount(0);                      // güvenlik kuralları burada yok
+    await page.getByLabel(/Doğru giriş/).fill("8");
+    await page.getByRole("button", { name: "Analizi başlat" }).click();
+    await expect.poll(() => sent.length).toBe(value === "vehicle" ? 1 : 2);
+    expect(sent[sent.length - 1].options).toEqual({ preset: value, truth: 8, countAnchor: "center" });
+  }
+});
+
+test("dosya vekili: alarms.csv ve alarm-N.jpg analiz sunucusuna iletilir; başka adlar vekilde reddedilir", async ({ page }) => {
+  const id = "00000000-0000-4000-8000-0000000005d1";          // olmayan iş: iletilen ad analiz sunucusundan "İş bulunamadı." alır
+  const get = async (name: string) => {
+    const res = await page.request.get(`/api/jobs/${id}/files/${name}`);
+    return { status: res.status(), detail: ((await res.json()) as { detail: string }).detail };
+  };
+  for (const ok of ["alarms.csv", "alarm-1.jpg", "alarm-50.jpg", "counts.csv"]) {
+    expect(await get(ok), ok).toEqual({ status: 404, detail: "İş bulunamadı." });
+  }
+  for (const bad of ["alarm-100.jpg", "alarm-1.jpg.exe", "ALARM-1.JPG", "alarm-1.jpg%20", "alarm-1.jpg.", "alarm-.jpg", "job.json"]) {
+    expect(await get(bad), bad).toEqual({ status: 404, detail: "Dosya bulunamadı." });
+  }
+});
