@@ -39,9 +39,9 @@ rem Eski ortamda yalniz islemci onnxruntime varsa DirectML ancak simdi kuruldu v
 if not errorlevel 3 goto :paketler_tamam
 :cakisma
 echo Islemci onnxruntime kaldirilip ekran karti surumu ^(onnxruntime-directml^) kuruluyor...
-"%PY%" -m pip uninstall -y onnxruntime || goto :hata
-"%PY%" -m pip install -q --force-reinstall --no-deps "onnxruntime-directml>=1.24" || goto :hata
-"%PY%" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
+"%PY%" -m pip uninstall -y onnxruntime || goto :takas_hata
+"%PY%" -m pip install -q --force-reinstall --no-deps "onnxruntime-directml>=1.24" || goto :takas_hata
+"%PY%" -m pip install -q -e "%EDGE%[analyzer]" || goto :takas_hata
 goto :paketler_tamam
 :analiz_calisiyor
 echo Analiz sunucusu paketleri guncellenecek: "BandVision analiz" penceresini kapatip kisayolu yeniden calistirin.
@@ -78,5 +78,11 @@ exit /b 0
 
 :hata
 echo Kurulum basarisiz. Python 3.11+ ve Node.js 20+ kurulu mu?
+pause
+exit /b 1
+
+:takas_hata
+echo Ekran karti paketi degistirilemedi; "BandVision analiz" penceresini kapatip kisayolu yeniden calistirin.
+echo Baska bir BandVision ya da Python sureci paketleri kilitliyorsa once onu kapatin.
 pause
 exit /b 1

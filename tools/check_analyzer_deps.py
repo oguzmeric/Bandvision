@@ -3,9 +3,9 @@
 Kullanım: `python tools/check_analyzer_deps.py` → çıkış kodu:
   0  her şey tamam;
   1  eksik ya da eski paket var (Türkçe yazılır) → başlatıcı paketleri yeniden kurar;
-  3  paket çakışması (Windows'ta işlemci `onnxruntime` ile `onnxruntime-directml` aynı klasörü kullanır) → başlatıcı
-     işlemci sürümünü kaldırıp DirectML'i zorla yeniden kurar. 3, 1'den önceliklidir (çakışma çözülmeden eksik kurmak
-     boşuna).
+  3  paket çakışması (Windows'ta işlemci `onnxruntime` ile `onnxruntime-directml` aynı klasörü kullanır) ya da yarım
+     kalmış DirectML kurulumu (kayıt var, dosyaları yok) → başlatıcı işlemci sürümünü kaldırıp DirectML'i zorla yeniden
+     kurar. 3, 1'den önceliklidir (çakışma çözülmeden eksik kurmak boşuna).
 
 Denetim iki adımdır:
 1. `services/edge/pyproject.toml`'daki çalışma bağımlılıkları (`dependencies` + `analyzer` eki) KAYNAK dosyadan okunur
@@ -17,11 +17,12 @@ Denetim iki adımdır:
 Başlatıcı 1 görünce paketleri yeniden kurar (`pip install -e services/edge[analyzer]`).
 
 Ortam işaretleri: yalnız `sys_platform == '<x>'` / `!= '<x>'` değerlendirilir (Windows'ta ekran kartı sürümü, öbür
-platformlarda işlemci sürümü istenir). Başka her işaret (ör. `python_version`) doğru sayılır; işareti yanlış çıkan
-bağımlılık atlanır.
+platformlarda işlemci sürümü istenir). Başka her işaret (ör. `python_version`, `and`/`or` ile bileşik işaret,
+`extra == '…'`) doğru sayılır; işareti yanlış çıkan bağımlılık atlanır.
 """
 from __future__ import annotations
 
+import csv
 import importlib
 import importlib.metadata
 import pathlib
@@ -38,7 +39,7 @@ APP_MODULE = "bantvision.analyzer.app"
 _REQ = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$")
 _MIN = re.compile(r">=\s*([0-9][0-9A-Za-z.+!-]*)")
 _NUM = re.compile(r"\d+")
-_PLATFORM_MARKER = re.compile(r"""^\s*sys_platform\s*(==|!=)\s*(['"])(.*?)\2\s*$""")
+_PLATFORM_MARKER = re.compile(r"""^\s*sys_platform\s*(==|!=)\s*(['"])([^'"]*)\2\s*$""")
 
 CPU_RUNTIME = "onnxruntime"
 GPU_RUNTIME = "onnxruntime-directml"
@@ -109,6 +110,35 @@ def conflicts(reqs: list[tuple[str, str | None]], installed: Mapping[str, str] |
     return []
 
 
+def dist_files_present(name: str) -> bool:
+    """Kurulu dağıtımın kayıtlı yerel kitaplık dosyaları (.pyd, .dll) diskte duruyor mu. Kayıt (dist-info) ile dosyalar
+    ayrışabilir: işlemci `onnxruntime`'ı kaldırmak ortak `onnxruntime/` klasörünü siler, ardından DirectML'in zorla
+    yeniden kurulması yarıda kalırsa DirectML kaydı kalır ama dosyaları yoktur. RECORD dosyası doğrudan okunur
+    (`Distribution.files` Python 3.12'de diskte olmayan dosyaları atlar, eksikliği göstermez). RECORD yoksa ya da yerel
+    kitaplık içermiyorsa karar verilemez: tamam sayılır."""
+    try:
+        dist = importlib.metadata.distribution(name)
+    except importlib.metadata.PackageNotFoundError:
+        return True
+    record = dist.read_text("RECORD")
+    if not record:
+        return True
+    paths = [row[0] for row in csv.reader(record.splitlines()) if row and row[0].lower().endswith((".pyd", ".dll"))]
+    return all(dist.locate_file(pth).exists() for pth in paths)
+
+
+def damaged(reqs: list[tuple[str, str | None]], installed: Mapping[str, str],
+            platform: str = sys.platform,
+            files_present: Callable[[str], bool] = dist_files_present) -> list[str]:
+    """Windows'ta istenen `onnxruntime-directml` kayıtlı ama dosyaları eksikse onarım satırı (Türkçe). Başlatıcı bunu
+    çakışma gibi çözer (kaldırma boşa geçer, DirectML zorla yeniden kurulur)."""
+    if platform != "win32" or GPU_RUNTIME not in {n for n, _ in reqs} or GPU_RUNTIME not in installed:
+        return []
+    if files_present(GPU_RUNTIME):
+        return []
+    return [f"{GPU_RUNTIME}: kayıtlı ama dosyaları eksik (kurulum yarım kalmış); yeniden kurulmalı"]
+
+
 def _installed(names: tuple[str, ...], version: Callable[[str], str] = importlib.metadata.version) -> dict[str, str]:
     """Verilen dağıtımlardan kurulu olanlar (ad → sürüm)."""
     out: dict[str, str] = {}
@@ -130,11 +160,13 @@ def import_problem(module: str = APP_MODULE) -> str | None:
 
 
 def main(pyproject: pathlib.Path = PYPROJECT, module: str = APP_MODULE,
-         version: Callable[[str], str] = importlib.metadata.version, platform: str = sys.platform) -> int:
-    """Çıkış kodu: 0 tamam, 1 eksik/eski/açılmıyor, 3 çakışma (1'den önceliklidir)."""
+         version: Callable[[str], str] = importlib.metadata.version, platform: str = sys.platform,
+         files_present: Callable[[str], bool] = dist_files_present) -> int:
+    """Çıkış kodu: 0 tamam, 1 eksik/eski/açılmıyor, 3 çakışma ya da yarım DirectML kurulumu (1'den önceliklidir)."""
     reqs = requirements(pyproject, platform=platform)
     found = problems(reqs, version)
-    clash = conflicts(reqs, _installed((CPU_RUNTIME, GPU_RUNTIME), version), platform)
+    have = _installed((CPU_RUNTIME, GPU_RUNTIME), version)
+    clash = [*conflicts(reqs, have, platform), *damaged(reqs, have, platform, files_present)]
     if not found and not clash:                            # paket listesi tamam: uygulama modülü de açılıyor mu
         err = import_problem(module)
         if err:

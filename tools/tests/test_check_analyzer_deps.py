@@ -91,15 +91,24 @@ analyzer = [
   "a>=1; sys_platform == 'win32'", "b>=1; sys_platform != 'win32'",
   "c>=1; sys_platform == \\"linux\\"", "d>=1; python_version >= '3.11'",
   "e>=1; sys_platform in 'linux'", "f>=1;sys_platform=='darwin'",
+  "g>=1; sys_platform == 'win32' and python_version >= '3.11'",
+  "h>=1; sys_platform != 'win32' and python_version >= '3.11'",
+  "i>=1; extra == 'x'", "j>=1; sys_platform == 'win32' or sys_platform == 'linux'",
 ]
 """, encoding="utf-8")
 
     def names(platform: str) -> list[str]:
         return [n for n, _ in cd.requirements(p, platform=platform)]
-    assert names("win32") == ["a", "d", "e"]          # e: desteklenmeyen işleç → doğru sayılır; d: python_version doğru
-    assert names("linux") == ["b", "c", "d", "e"]
-    assert names("darwin") == ["b", "d", "e", "f"]
+    # e: desteklenmeyen işleç, d: python_version, g/h/j: bileşik (and/or), i: extra → hepsi her platformda doğru sayılır
+    assert names("win32") == ["a", "d", "e", "g", "h", "i", "j"]
+    assert names("linux") == ["b", "c", "d", "e", "g", "h", "i", "j"]
+    assert names("darwin") == ["b", "d", "e", "f", "g", "h", "i", "j"]
     assert cd.requirements(p, platform="win32")[1] == ("d", "1")   # python_version işaretli bağımlılık sürümüyle kalır
+
+
+
+def OK(name: str) -> bool:  # sahte "dosyalar yerinde" denetimi
+    return True
 
 
 CONFLICT = ("onnxruntime (işlemci sürümü) ekran kartı sürümüyle (onnxruntime-directml) aynı klasörü kullanıyor; "
@@ -126,28 +135,69 @@ def test_main_exit_codes_conflict_beats_missing(tmp_path: pathlib.Path, capsys: 
     p = _project(tmp_path, """["onnxruntime-directml>=1.24; sys_platform == 'win32'", "boyle-bir-paket-yok-xyz>=1"]""")
     both = {"onnxruntime": "1.30.0", "onnxruntime-directml": "1.24.4"}
     # çakışma + eksik paket birlikte: 3 (çakışma önce çözülmeli), iki satır da yazılır
-    assert cd.main(p, "json", version=_version(both), platform="win32") == 3
+    assert cd.main(p, "json", version=_version(both), platform="win32", files_present=OK) == 3
     assert capsys.readouterr().out.splitlines() == ["boyle-bir-paket-yok-xyz: kurulu değil", CONFLICT]
     # yalnız eksik paket: 1
-    assert cd.main(p, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32") == 1
+    assert cd.main(p, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32", files_present=OK) == 1
     assert capsys.readouterr().out.splitlines() == ["boyle-bir-paket-yok-xyz: kurulu değil"]
     # her şey tamam: 0
     ok = _project(tmp_path, """["onnxruntime-directml>=1.24; sys_platform == 'win32'"]""")
-    assert cd.main(ok, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32") == 0
+    assert cd.main(ok, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32", files_present=OK) == 0
     assert capsys.readouterr().out == ""
     # yalnız çakışma (paketler tamam): yine 3
-    assert cd.main(ok, "json", version=_version(both), platform="win32") == 3
+    assert cd.main(ok, "json", version=_version(both), platform="win32", files_present=OK) == 3
     assert capsys.readouterr().out.splitlines() == [CONFLICT]
     # Linux'ta aynı kurulum çakışma sayılmaz (DirectML işaretle elenir, işlemci sürümü yeterli)
     lin = _project(tmp_path, """["onnxruntime>=1.18; sys_platform != 'win32'"]""")
-    assert cd.main(lin, "json", version=_version({"onnxruntime": "1.30.0"}), platform="linux") == 0
+    assert cd.main(lin, "json", version=_version({"onnxruntime": "1.30.0"}), platform="linux", files_present=OK) == 0
 
 
 def test_first_update_on_a_machine_with_cpu_onnxruntime_goes_missing_then_conflict(tmp_path: pathlib.Path) -> None:
     """Başlatıcının iki aşamalı yolu: eski ortamda yalnız işlemci onnxruntime var → 1 (DirectML eksik); pip DirectML'i
     ekleyince ikisi birlikte → 3 (başlatıcı işlemci sürümünü kaldırıp DirectML'i zorla yeniden kurar); sonra 0."""
     p = _project(tmp_path, """["onnxruntime-directml>=1.24; sys_platform == 'win32'"]""")
-    assert cd.main(p, "json", version=_version({"onnxruntime": "1.30.0"}), platform="win32") == 1
+    assert cd.main(p, "json", version=_version({"onnxruntime": "1.30.0"}), platform="win32", files_present=OK) == 1
     both = {"onnxruntime": "1.30.0", "onnxruntime-directml": "1.24.4"}
-    assert cd.main(p, "json", version=_version(both), platform="win32") == 3
-    assert cd.main(p, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32") == 0
+    assert cd.main(p, "json", version=_version(both), platform="win32", files_present=OK) == 3
+    assert cd.main(p, "json", version=_version({"onnxruntime-directml": "1.24.4"}), platform="win32", files_present=OK) == 0
+
+
+def test_directml_registered_but_files_missing_is_reported_as_repair(
+        tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Değiştirme yarıda kalırsa (işlemci sürümü kaldırıldı, DirectML'in zorla kurulumu başarısız) DirectML'in kaydı kalır
+    ama ortak onnxruntime klasörü yoktur: kayıt, sürüm ve uygulama modülü denetimleri geçse de dosyalar eksikse 3 döner
+    (başlatıcı çakışma adımını izler: kaldırma boşa geçer, DirectML zorla yeniden kurulur)."""
+    p = _project(tmp_path, """["onnxruntime-directml>=1.24; sys_platform == 'win32'"]""")
+    only_dml = _version({"onnxruntime-directml": "1.24.4"})
+    repair = "onnxruntime-directml: kayıtlı ama dosyaları eksik (kurulum yarım kalmış); yeniden kurulmalı"
+    reqs = cd.requirements(p, platform="win32")
+    assert cd.damaged(reqs, {"onnxruntime-directml": "1.24.4"}, "win32", lambda n: False) == [repair]
+    assert cd.damaged(reqs, {"onnxruntime-directml": "1.24.4"}, "win32", lambda n: True) == []
+    assert cd.damaged(reqs, {}, "win32", lambda n: False) == []                       # kurulu değil: eksik olarak 1
+    assert cd.damaged(reqs, {"onnxruntime-directml": "1.24.4"}, "linux", lambda n: False) == []
+    assert cd.main(p, "json", version=only_dml, platform="win32", files_present=lambda n: False) == 3
+    assert capsys.readouterr().out.splitlines() == [repair]
+    assert cd.main(p, "json", version=only_dml, platform="win32", files_present=lambda n: True) == 0
+    assert capsys.readouterr().out == ""
+    # DirectML kurulu değilken dosya denetimi hiç çağrılmaz: eksik paket 1 kalır
+    def boom(name: str) -> bool:
+        raise AssertionError("kurulu olmayan dağıtım için çağrılmamalı")
+    assert cd.main(p, "json", version=_version({}), platform="win32", files_present=boom) == 1
+
+
+def test_dist_files_present_looks_at_registered_native_libraries(tmp_path: pathlib.Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gerçek denetim: dist-info'daki .pyd/.dll dosyalarından biri bile yoksa False."""
+    site = tmp_path / "site"
+    (site / "fakedml-1.0.dist-info").mkdir(parents=True)
+    info = site / "fakedml-1.0.dist-info"
+    info.joinpath("METADATA").write_text(chr(10).join(["Metadata-Version: 2.1", "Name: fakedml", "Version: 1.0", ""]))
+    info.joinpath("RECORD").write_text(chr(10).join(
+        ["fakedml/__init__.py,,", "fakedml/native.pyd,,", "fakedml/lib.dll,,", "fakedml-1.0.dist-info/METADATA,,", ""]))
+    monkeypatch.syspath_prepend(str(site))
+    assert cd.dist_files_present("fakedml") is False                  # kayıt var, dosyalar yok
+    (site / "fakedml").mkdir()
+    (site / "fakedml" / "native.pyd").write_bytes(b"")
+    assert cd.dist_files_present("fakedml") is False                  # biri hâlâ eksik
+    (site / "fakedml" / "lib.dll").write_bytes(b"")
+    assert cd.dist_files_present("fakedml") is True

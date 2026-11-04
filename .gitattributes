@@ -1,0 +1,2 @@
+# Windows toplu iş dosyaları (tools/panel_baslat.bat) her ortamda CRLF ile çıkarılır; cmd.exe LF satır sonunda etiketleri yanlış çözebilir
+*.bat text eol=crlf
