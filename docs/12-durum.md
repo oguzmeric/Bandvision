@@ -243,7 +243,7 @@ Bilgisayar tarafı yol haritasının 2. projesi (sıra: sade arayüz → **ekran
 
 - **Ne var:**
   - **Motor:** Windows'ta ONNX Runtime DirectML (`onnxruntime-directml`): NVIDIA dizüstü ekran kartı, Intel tümleşik ekran kartı ve AMD aynı pakette, CUDA kurulumu yok. Windows dışında (CI, Linux) işlemci `onnxruntime`'ı ve davranış değişmez.
-  - **Seçim:** canlı kişi/araç tanıma, canlı poz ve Video ile test için ayrı ayrı `Otomatik` (belleği en büyük kart), `İşlemci` ya da bir kart; `devices.json`'da saklanır. Canlı modeller boşluksuz geçer (eski model yenisi hazır olana dek çalışır; başarısız geçişte eski model sürer ve sayfa nedenini yazar). Ürün sayımı model kullanmaz, etkilenmez.
+  - **Seçim:** canlı kişi/araç tanıma, canlı poz ve Video ile test için ayrı ayrı `Otomatik` (en az 1024 MB ayrılmış belleği olanlar arasında belleği en büyük kart; tümleşik kart `Otomatik`'e girmez, elle seçilir; uygun kart yoksa işlemci), `İşlemci` ya da bir kart; `devices.json`'da saklanır. Canlı modeller boşluksuz geçer (eski model yenisi hazır olana dek çalışır; başarısız geçişte eski model sürer ve sayfa nedenini yazar). Ürün sayımı model kullanmaz, etkilenmez.
   - **Hiçbir düşüş gizlenmez:** kart yoksa, açılamazsa ya da çalışırken hata verirse (sürücü sıfırlaması, kartın kapanması) model işlemcide sürer, canlı sayım ve güvenlik alarmı durmaz, nedeni sayfada Türkçe not olarak görünür (N1–N4).
   - **Hız testi:** her cihazda sabit karede ms/kare ve açılış süresi (tek seferde tek test).
   - **Video işleri:** `result.device` (yalnız model kullanan analizde; sözleşme `analysis-job` güncellendi) ve iş ayrıntısında "Cihaz" kutusu.
@@ -256,6 +256,8 @@ Bilgisayar tarafı yol haritasının 2. projesi (sıra: sade arayüz → **ekran
 - **Bilinen sınırlar:**
   - Yalnızca Windows'ta ekran kartı; CUDA, TensorRT, OpenVINO ve NPU kapsam dışı.
   - Çalışırken işlemciye düşen model kendiliğinden ekran kartına dönmez (yeniden başlatma ya da seçim değişimi gerekir).
+  - Yalnız tümleşik ekran kartı olan bilgisayarda `Otomatik` işlemcide çalışır: tümleşik kartın tespit doğruluğu ölçülmeden varsayılan yapılmadı (Intel elle seçilebilir).
+  - Ekran kartındaki bir modelin çağrıları sıraya girer (DirectML bir oturumda eşzamanlı çalıştırmaya izin vermez); işlemcide sıra yoktur.
   - Ürün sayımı ekran kartından yararlanmaz (model kullanmaz).
 
 ## 6. Araştırma ve tasarım notları
