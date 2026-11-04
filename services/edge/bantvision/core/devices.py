@@ -315,6 +315,12 @@ class GuardedSession:
     def used(self) -> Used:
         return self._state[1]
 
+    @property
+    def broken(self) -> str | None:
+        """Kalıcı hata (ekran kartı hata verdi, işlemci oturumu da kurulamadı): kullanıcıya gösterilecek Türkçe ileti;
+        oturum çalışıyorsa None."""
+        return None if self._broken is None else str(self._broken_error())
+
     def get_inputs(self) -> list[Any]:
         return self._state[0].get_inputs()
 

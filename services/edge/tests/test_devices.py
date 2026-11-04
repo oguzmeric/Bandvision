@@ -363,6 +363,7 @@ def test_failing_cpu_rebuild_is_terminal_and_quiet(caplog):
     ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
     ort.cpu_ctor_error = MemoryError("bellek yok")
+    assert s.broken is None
     with caplog.at_level(logging.ERROR, logger="bantvision.devices"):
         with pytest.raises(MemoryError):                                 # o çağrı için asıl hata
             s.run(None, {})
@@ -373,6 +374,7 @@ def test_failing_cpu_rebuild_is_terminal_and_quiet(caplog):
     assert len(caplog.records) == n_logs
     assert sum(1 for r in caplog.records if r.exc_info and "İşlemci oturumu kurulamadı" in r.getMessage()) == 1
     assert len(ort.sessions) == 1 and len(ort.sessions[0].runs) == 1     # GPU yeniden denenmedi
+    assert s.broken is not None and s.broken.startswith("Model kullanılamıyor") and "bellek yok" in s.broken
 
 
 def test_cpu_choice_does_not_enumerate_dxgi(monkeypatch):

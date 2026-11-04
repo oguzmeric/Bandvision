@@ -15,20 +15,22 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, ClassVar, Literal
 
 import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.types import Receive, Scope, Send
 
-from ..core import Profile
+from ..core import Profile, devices
 from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import recorders as rec
 from .alarms import AlarmStore
 from .clips import ClipWriter
+from .devices_store import DeviceSettings, DeviceSettingsBusy
 from .drafts import DraftsFull, DraftStore
 from .jsonfile import quarantine, read_json, write_json_atomic
 from .layouts import LAYOUTS, MAX_TILES, recorder_layout
@@ -103,6 +105,36 @@ class TestAlarmIn(_Strict):
     sessionId: str | None = None
 
 
+class DeviceChoicesIn(_Strict):
+    """Cihaz seçimleri: her biri "auto" | "cpu" | kart kimliği (`devices.valid_choice`); üçü de zorunlu."""
+    detector: str
+    pose: str
+    video: str
+
+    @field_validator("detector", "pose", "video")
+    @classmethod
+    def _valid(cls, v: str) -> str:
+        if not devices.valid_choice(v):
+            raise ValueError("geçersiz cihaz seçimi")
+        return v
+
+
+class DevicesIn(_Strict):
+    choices: DeviceChoicesIn
+
+
+class BenchmarkIn(_Strict):
+    """Hız testi tek bir cihazı ölçer: "cpu" ya da kart kimliği ("auto" değil)."""
+    device: str
+
+    @field_validator("device")
+    @classmethod
+    def _valid(cls, v: str) -> str:
+        if v == "auto" or not devices.valid_choice(v):
+            raise ValueError("geçersiz cihaz")
+        return v
+
+
 # Kaynak/kanal kimliği (TRASSIR GUID, kanal no, uuid): 1–120 karakter, yalnızca noktalardan oluşamaz ("." ve ".." yok).
 # pydantic'in düzenli ifade motoru bakış-ileri (?!...) desteklemez; aynı kural bu biçimle ve `max_length` ile ifade edilir.
 _REF = r"^\.*[A-Za-z0-9_:{}-][A-Za-z0-9._:{}-]*$"
@@ -143,16 +175,23 @@ class _ClosingStream(StreamingResponse):
                 await aclose()
 
 
-def _load_detector() -> Any:
+def _load_detector(choice: str) -> Any:
     from ..core.detector import ObjectDetector
 
-    return ObjectDetector()
+    return ObjectDetector(device=choice)
 
 
-def _load_pose_estimator() -> Any:
+def _load_pose_estimator(choice: str) -> Any:
     from ..core.pose import PoseEstimator
 
-    return PoseEstimator()
+    return PoseEstimator(device=choice)
+
+
+def _bench_detector(choice: str) -> Any:
+    """Hız testi için taze tanıma modeli (ortak canlı modelden bağımsız; test bitince bırakılır)."""
+    from ..core.detector import ObjectDetector
+
+    return ObjectDetector(device=choice)
 
 
 class SharedModel:
@@ -162,20 +201,33 @@ class SharedModel:
     Model (indirme dahil) ARKA PLAN iş parçacığında yüklenir (`warm()` ya da ilk kullanım): o sürece çağrılar engellemeden
     "sonuç yok" döner (oturumların görüntüsü ve durdurma/silme takılmaz). Çıkarım kilidi yükleme sırasında tutulmaz.
     Yükleme hatasında Türkçe hata günlüğe yazılır ve `RETRY_S` saniye yeniden denenmez. `state`: "loading" | "ready" |
-    "error"; `error`: son yükleme hatası (Türkçe, kullanıcıya gösterilir)."""
+    "error" (modelin hizmet durumu; güvenlik izleme sağlığı buna bakar); `error`: son yükleme hatası (Türkçe, kullanıcıya
+    gösterilir).
+
+    Cihaz seçimi (`set_choice`; "auto" | "cpu" | kart kimliği, "auto" yükleme anında donanıma göre çözülür): model hiç
+    yüklenmediyse yalnızca seçim saklanır. Yüklüyse yeni model arka planda kurulurken ESKİ model hizmete devam eder; hazır
+    olunca `_infer` altında değiştirilir (güvenlik alarmı boşluk yaşamaz). Yükleme sürerken seçim yeniden değişirse biten
+    sonuç atılır ve son seçim yüklenir. Değişim yüklemesi başarısızsa eski model hizmette kalır, `state` "error" olur ve
+    `RETRY_S` sonra (ya da yeni bir seçimde hemen) yeni seçimle yeniden denenir. `status()`: Cihaz ayarları sayfasının
+    gördüğü durum."""
 
     RETRY_S = 60.0
     LABEL = "Model"                                     # hata iletisinde: "<LABEL> yüklenemedi: <neden>"
     THREAD = "model"
 
-    def __init__(self, loader: Callable[[], Any], clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, loader: Callable[[str], Any], clock: Callable[[], float] = time.monotonic,
+                 choice: str = "cpu") -> None:
         self._loader, self._clock = loader, clock
         self._lock = threading.Lock()                   # durum ve yükleme iş parçacığı
-        self._infer = threading.Lock()                  # kareler sırayla işlenir
-        self._inner: Any = None
+        self._infer = threading.Lock()                  # kareler sırayla işlenir; model değişimi de bunun altında
+        self._inner: Any = None                         # bir kez kurulunca None'a dönmez (yalnızca değiştirilir)
+        self._inner_choice: str | None = None           # `_inner`'ın kurulduğu seçim
+        self._choice = choice                           # istenen seçim
         self._state = "loading"
         self._error = ""
         self._failed_at = 0.0
+        self._loading = False                           # yükleme iş parçacığı sürüyor (bitiş kararı `_lock` altında)
+        self._ever_started = False
         self._thread: threading.Thread | None = None
 
     @property
@@ -189,41 +241,113 @@ class SharedModel:
         with self._lock:
             return self._error
 
+    @property
+    def choice(self) -> str:
+        """İstenen cihaz seçimi (hizmetteki modelinki farklı olabilir: değişim sürüyor ya da başarısız oldu)."""
+        with self._lock:
+            return self._choice
+
+    @property
+    def ever_started(self) -> bool:
+        """Yükleme hiç başladı mı (başlamadıysa `status()` "idle")."""
+        with self._lock:
+            return self._ever_started
+
+    @property
+    def inner_used(self) -> Any:
+        """Hizmetteki modelin gerçekte çalıştığı cihaz (`devices.Used`; her çağrıda canlı okunur, çalışırken işlemciye
+        düşüş dahil) ya da model yoksa None."""
+        inner = self._inner
+        return None if inner is None else getattr(inner, "used", None)
+
     def warm(self) -> None:
         """Modeli şimdiden yüklemeye başlar (oturum açılınca; ilk kişiyi/kareyi beklemeden). Engellemez; model hazırsa,
         yükleniyorsa ya da hata sonrası bekleme süresindeyse bir şey yapmaz."""
         self._start_loading()
 
+    def set_choice(self, choice: str) -> None:
+        """Cihaz seçimini değiştirir (aynı seçim: bir şey yapmaz). Model hiç yüklenmediyse yalnızca saklanır; yüklüyse ya
+        da yükleniyorsa yeni seçim arka planda yüklenir (hata sonrası bekleme süresi beklenmez: kullanıcı yeni seçti)."""
+        with self._lock:
+            if choice == self._choice:
+                return
+            self._choice = choice
+            if not self._ever_started:
+                return
+        self._start_loading(force=True)
+
+    def status(self) -> dict[str, Any]:
+        """Cihaz ayarları sayfası için: `state` "idle" (hiç yüklenmedi) | "loading" (ilk yükleme ya da cihaz değişimi
+        sürüyor) | "ready" | "error"; `device` hazırken hizmetteki modelin cihazı ({id, kind, name}), değilse None; `note`
+        hazırken düşüş notu (N1–N4), hatada Türkçe hata iletisi. İç oturum kalıcı olarak bozulduysa da "error"."""
+        with self._lock:
+            if not self._ever_started:
+                return {"state": "idle", "device": None, "note": None}
+            if self._state == "error":
+                return {"state": "error", "device": None, "note": self._error}
+            inner = self._inner
+            if inner is None or self._loading:
+                return {"state": "loading", "device": None, "note": None}
+        broken = getattr(inner, "broken", None)
+        if broken:
+            return {"state": "error", "device": None, "note": str(broken)}
+        used = getattr(inner, "used", None)
+        if used is None:
+            return {"state": "ready", "device": None, "note": None}
+        return {"state": "ready", "device": {"id": used.id, "kind": used.kind, "name": used.name}, "note": used.note}
+
     def _ready(self) -> Any:
-        """Hazır model ya da None (o zaman yükleme başlatılır)."""
+        """Hazır model ya da None (o zaman yükleme başlatılır). Seçim hizmetteki modelinkinden farklıysa (başarısız
+        değişim) yükleme yeniden denenir; bekleme süresine `_start_loading` bakar."""
         inner = self._inner
-        if inner is None:
+        if inner is None or self._inner_choice != self._choice:
             self._start_loading()
         return inner
 
-    def _start_loading(self) -> None:
+    def _start_loading(self, force: bool = False) -> None:
         with self._lock:
-            if self._inner is not None:                 # okuyucu `_inner`'ı None görüp kilide gelene dek yükleme bitmiş olabilir
+            if self._inner is not None and self._inner_choice == self._choice:
+                return                                  # okuyucu `_inner`'ı None görüp kilide gelene dek yükleme bitmiş olabilir
+            if self._loading:
+                return                                  # süren yükleme bitmeden seçimi yeniden okur
+            if not force and self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
                 return
-            if self._thread is not None and self._thread.is_alive():
-                return
-            if self._state == "error" and self._clock() - self._failed_at < self.RETRY_S:
-                return
-            self._state = "loading"
+            self._ever_started = True
+            self._state = "loading" if self._inner is None else "ready"   # değişimde eski model hizmette
+            self._loading = True
             self._thread = threading.Thread(target=self._load, name=self.THREAD, daemon=True)
             self._thread.start()
 
     def _load(self) -> None:
-        try:
-            inner = self._loader()
-        except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
-            msg = f"{self.LABEL} yüklenemedi: {failure_reason(e)}"
-            _LOG.error("%s [%s: %s]", msg, type(e).__name__, e)   # önce günlük, sonra durum: "error" görenin günlüğü de vardır
+        """Yükleme iş parçacığı: istenen seçimi yükler; bu arada seçim değiştiyse sonucu atıp son seçimi yükler. Bitiş
+        kararı `_lock` altında verilir: `set_choice` ile yarışta seçim değişikliği ya burada görülür ya da (`_loading`
+        düştükten sonra) yeni bir yükleme başlatır."""
+        while True:
             with self._lock:
-                self._state, self._error, self._failed_at = "error", msg, self._clock()
-            return
-        with self._lock:
-            self._inner, self._state, self._error = inner, "ready", ""
+                choice = self._choice
+                if self._inner is not None and self._inner_choice == choice:   # hizmetteki modele geri dönüldü
+                    self._state, self._error, self._loading = "ready", "", False
+                    return
+            try:
+                inner = self._loader(choice)
+            except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
+                msg = f"{self.LABEL} yüklenemedi: {failure_reason(e)}"
+                _LOG.error("%s [%s: %s]", msg, type(e).__name__, e)   # önce günlük, sonra durum: "error" görenin günlüğü de vardır
+                with self._lock:
+                    if self._choice == choice:
+                        self._state, self._error, self._failed_at = "error", msg, self._clock()
+                        self._loading = False
+                        return
+                continue                                # bu arada seçim değişti: son seçim denenir
+            with self._infer, self._lock:               # sıra hep _infer → _lock (çıkarım _lock'u tutmaz)
+                if self._choice == choice:
+                    old = self._inner
+                    self._inner, self._inner_choice = inner, choice
+                    self._state, self._error, self._loading = "ready", "", False
+                    if old is not None:
+                        _LOG.info("%s yeni cihaza geçti (seçim: %s)", self.LABEL, choice)
+                    return
+            # eski seçimin sonucu atılır, son seçim yüklenir
 
 
 class SharedDetector(SharedModel):
@@ -233,15 +357,15 @@ class SharedDetector(SharedModel):
     LABEL = "Kişi tanıma modeli"
     THREAD = "tanima-modeli"
 
-    def __init__(self, loader: Callable[[], Any] = _load_detector, clock: Callable[[], float] = time.monotonic) -> None:
-        super().__init__(loader, clock)
+    def __init__(self, loader: Callable[[str], Any] | None = None, clock: Callable[[], float] = time.monotonic,
+                 choice: str = "cpu") -> None:
+        super().__init__(loader or _load_detector, clock, choice)
 
     def detect(self, *args: Any, **kwargs: Any) -> Any:
-        inner = self._ready()
-        if inner is None:
+        if self._ready() is None:
             return []
-        with self._infer:
-            return inner.detect(*args, **kwargs)
+        with self._infer:                               # model değişimi de _infer altında: o anki model okunur
+            return self._inner.detect(*args, **kwargs)
 
 
 class SharedPose(SharedModel):
@@ -251,16 +375,15 @@ class SharedPose(SharedModel):
     LABEL = "Poz modeli"
     THREAD = "poz-modeli"
 
-    def __init__(self, loader: Callable[[], Any] = _load_pose_estimator,
-                 clock: Callable[[], float] = time.monotonic) -> None:
-        super().__init__(loader, clock)
+    def __init__(self, loader: Callable[[str], Any] | None = None, clock: Callable[[], float] = time.monotonic,
+                 choice: str = "cpu") -> None:
+        super().__init__(loader or _load_pose_estimator, clock, choice)
 
     def estimate(self, *args: Any, **kwargs: Any) -> Any:
-        inner = self._ready()
-        if inner is None:
+        if self._ready() is None:
             return None
         with self._infer:
-            return inner.estimate(*args, **kwargs)
+            return self._inner.estimate(*args, **kwargs)
 
 
 class SessionIn(_Strict):
@@ -299,9 +422,18 @@ class LiveManager:
         self._clients: dict[str, tuple[str, rec.RecorderClient]] = {}   # kaynak → (ayar imzası, istemci)
         self._channels: dict[str, list[rec.RecorderChannel]] = {}
         self._lock = threading.Lock()
-        self.detector = SharedDetector()
         self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
         root = data_dir or store.root.parent
+        # Cihaz ayarları (<data>/devices.json): ortak modeller hiçbiri ısınmadan önce kayıtlı seçimi alır ("auto" yükleme
+        # anında donanıma göre çözülür); "video" seçimini analiz işçisi her iş başında okur
+        self.device_settings = DeviceSettings(root)
+        choices = self.device_settings.choices()
+        self.detector = SharedDetector()
+        self.detector.set_choice(choices["detector"])
+        self.pose = SharedPose()
+        self.pose.set_choice(choices["pose"])
+        self.make_bench_detector: Callable[[str], Any] = _bench_detector   # hız testi modeli (testlerde sahte)
+        self._bench_lock = threading.Lock()                 # aynı anda tek hız testi
         self.alarms = AlarmStore(root)
         self.views = ViewStore(root)
         self.viewers = ViewHub(self._view_opener, self._session_for)
@@ -311,7 +443,6 @@ class LiveManager:
         self._drafts_reaper: threading.Thread | None = None
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
         self.notifier = TelegramNotifier(store, self.alarms, root)
-        self.pose = SharedPose()
         # Güvenlik alarmı: `on_safety` birden çok oturum iş parçacığından gelir; iki tablo bu kilitle korunur
         self._alarm_lock = threading.Lock()
         self._last_sent: dict[tuple[str, str], float] = {}         # (kamera, tür) → son bildirim (time.monotonic)
@@ -785,6 +916,74 @@ class LiveManager:
                 raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).") from e
         open_url, _ = self.opener(src, channel_id)          # küçük resim API'si yok: RTSP'den ilk kare
         return grab_jpeg(open_url())
+
+    # ------------------------------------------------------------------ cihaz ayarları
+
+    def devices_view(self) -> dict[str, Any]:
+        """`GET /devices` gövdesi: ekran kartı desteği, cihaz listesi (iç alanlar `index`/`luid` çıkmaz), "auto"nun o
+        anki karşılığı, kayıtlı seçimler ve canlı modellerin gerçekte çalıştığı cihaz."""
+        available, reason = devices.gpu_support()
+        gpus = devices.list_gpus()
+        return {
+            "gpuSupport": {"available": available, "reason": reason},
+            "devices": [{"id": devices.CPU_ID, "kind": "cpu", "name": devices.CPU_NAME}]
+                       + [{"id": g.id, "kind": "gpu", "name": g.name, "memoryMb": g.memory_mb} for g in gpus],
+            "auto": devices.auto_choice(gpus),
+            "choices": self.device_settings.choices(),
+            "inUse": {"detector": self.detector.status(), "pose": self.pose.status()},
+        }
+
+    def save_devices(self, choices: dict[str, str]) -> dict[str, Any]:
+        """Seçimleri kaydeder, canlı modellere kayıtlı (çözülmemiş) seçimi verir; `DeviceSettingsBusy` yazılamadıysa."""
+        saved = self.device_settings.save(choices)
+        self.detector.set_choice(saved["detector"])
+        self.pose.set_choice(saved["pose"])
+        return self.devices_view()
+
+    BENCH_FRAME_SHAPE: ClassVar[tuple[int, int, int]] = (720, 1280, 3)
+    BENCH_WARMUP: ClassVar[int] = 3
+    BENCH_RUNS: ClassVar[int] = 20
+
+    def benchmark(self, device: str) -> dict[str, Any]:
+        """Tek cihazda hız testi: taze tanıma modeli (açılış süresi `loadS`), sabit karede 3 ısınma + 20 ölçüm
+        (`msPerFrame`). Aynı anda tek test (`BenchmarkBusy`); model kurulamazsa `BenchmarkFailed` (Türkçe ileti)."""
+        if not self._bench_lock.acquire(blocking=False):
+            raise BenchmarkBusy("Başka bir hız testi sürüyor; bitince yeniden deneyin.")
+        try:
+            frame = np.random.default_rng(0).integers(0, 256, self.BENCH_FRAME_SHAPE, dtype=np.uint8)
+            t0 = time.perf_counter()
+            try:
+                det = self.make_bench_detector(device)
+            except Exception as e:  # indirme/ONNX hatası: ortak modelle aynı Türkçe ileti
+                msg = f"{SharedDetector.LABEL} yüklenemedi: {failure_reason(e)}"
+                _LOG.error("Hız testi: %s [%s: %s]", msg, type(e).__name__, e)
+                raise BenchmarkFailed(msg) from e
+            load_s = time.perf_counter() - t0
+            try:
+                for _ in range(self.BENCH_WARMUP):
+                    det.detect(frame, ["person"])
+                t1 = time.perf_counter()
+                for _ in range(self.BENCH_RUNS):
+                    det.detect(frame, ["person"])
+                ms = (time.perf_counter() - t1) * 1000.0 / self.BENCH_RUNS
+                used = det.used
+            except Exception as e:  # çalışma hatası (ör. kalıcı bozuk oturum): günlükte ayrıntı
+                _LOG.exception("Hız testi çalıştırılamadı (%s)", device)
+                raise BenchmarkFailed("Hız testi tamamlanamadı (ayrıntı analiz sunucusunun günlüğünde).") from e
+            finally:
+                del det                                     # ekran kartı belleği hemen bırakılsın
+            _LOG.info("Hız testi: %s → %.1f ms/kare, açılış %.1f sn", used.name, ms, load_s)
+            return {"device": used.to_json(), "msPerFrame": round(ms, 1), "loadS": round(load_s, 1)}
+        finally:
+            self._bench_lock.release()
+
+
+class BenchmarkBusy(Exception):
+    """Başka bir hız testi sürüyor."""
+
+
+class BenchmarkFailed(Exception):
+    """Hız testi modeli kurulamadı ya da çalışmadı (ileti Türkçe, kullanıcıya gösterilir)."""
 
 
 SNAPSHOT_RETRY_S = 300.0                    # görüntüsü gelmeyen kamera 5 dk denenmez ("Yenile" ile hemen)
@@ -1350,6 +1549,30 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         except NotifyError as e:
             raise HTTPException(422, str(e)) from e
         return {"ok": True}
+
+    # ------------------------------------------------------------------ cihaz ayarları (ekran kartı)
+
+    @r.get("/devices")
+    def get_devices() -> dict[str, Any]:
+        return manager.devices_view()
+
+    @r.put("/devices")
+    def put_devices(body: DevicesIn) -> dict[str, Any]:
+        """Üç seçimi kaydeder; canlı modeller boşluksuz yeni cihaza geçer (eski model yeni hazır olana dek hizmette)."""
+        try:
+            return manager.save_devices(body.choices.model_dump())
+        except DeviceSettingsBusy as e:
+            raise HTTPException(503, str(e)) from e
+
+    @r.post("/devices/benchmark")
+    def benchmark(body: BenchmarkIn) -> dict[str, Any]:
+        """Tek cihazda hız testi (iş parçacığı havuzunda; saniyeler sürebilir). Aynı anda tek test: 409."""
+        try:
+            return manager.benchmark(body.device)
+        except BenchmarkBusy as e:
+            raise HTTPException(409, str(e)) from e
+        except BenchmarkFailed as e:
+            raise HTTPException(502, str(e)) from e
 
     return r
 

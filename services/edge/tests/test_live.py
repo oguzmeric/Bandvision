@@ -1118,7 +1118,7 @@ def test_shared_pose_loads_in_background_and_never_blocks() -> None:
         def estimate(self, *_a: Any, **_k: Any) -> str:
             return "kp"
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         started.set()
         assert gate.wait(30)
@@ -1146,7 +1146,7 @@ def test_shared_pose_failure_is_logged_and_retried_only_after_60_seconds(caplog:
         def estimate(self, *_a: Any, **_k: Any) -> str:
             return "kp"
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         if len(calls) == 1:
             raise OSError("ağ yok")
@@ -1180,7 +1180,7 @@ def test_session_status_reports_pose_model_state() -> None:
 
     gate = threading.Event()
 
-    def broken() -> Any:
+    def broken(_choice: str) -> Any:
         assert gate.wait(30)
         raise OSError("ağ yok")
 
@@ -1205,7 +1205,7 @@ def test_shared_pose_does_not_reload_a_ready_model() -> None:
         def estimate(self, *_a: Any, **_k: Any) -> str:
             return "kp"
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         return Model()
 
@@ -1224,7 +1224,7 @@ def test_shared_pose_logs_failure_before_publishing_error_state(caplog: pytest.L
 
     from bantvision.live.api import SharedPose
 
-    def broken() -> Any:
+    def broken(_choice: str) -> Any:
         raise OSError("ağ yok")
 
     pose = SharedPose(loader=broken)
@@ -1257,7 +1257,7 @@ def test_safety_session_warms_up_pose_model_without_any_person_or_frame() -> Non
     gate, started = threading.Event(), threading.Event()
     calls: list[int] = []
 
-    def loader() -> Any:
+    def loader(_choice: str) -> Any:
         calls.append(1)
         started.set()
         assert gate.wait(30)
@@ -1295,7 +1295,7 @@ def test_safety_session_keeps_streaming_while_pose_model_loads(
 
     gate = threading.Event()
 
-    def loader() -> Any:
+    def loader(_choice: str) -> Any:
         assert gate.wait(60)
         return FakePose(hands_up_kp())
 
@@ -1324,7 +1324,7 @@ def test_shared_detector_loads_in_background_and_returns_no_detections_meanwhile
         def detect(self, *_a: Any, **_k: Any) -> list[str]:
             return ["kişi"]
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         started.set()
         assert gate.wait(30)
@@ -1357,7 +1357,7 @@ def test_shared_detector_failure_is_turkish_logged_and_retried_after_60_seconds(
         def detect(self, *_a: Any, **_k: Any) -> list[str]:
             return ["kişi"]
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         if len(calls) == 1:
             raise urllib.error.URLError("getaddrinfo failed")
@@ -1400,7 +1400,7 @@ def test_shared_detector_serialises_inference_and_never_reloads_ready_model() ->
                 inside[0] -= 1
             return []
 
-    def loader() -> Model:
+    def loader(_choice: str) -> Model:
         calls.append(1)
         return Model()
 
@@ -1426,7 +1426,7 @@ def test_detect_counting_does_not_count_while_detector_loads() -> None:
     from bantvision.live.api import SharedDetector
 
     gate = threading.Event()
-    det = SharedDetector(loader=lambda: gate.wait(30) and None)
+    det = SharedDetector(loader=lambda _c: gate.wait(30) and None)
     pipe = Pipeline(Profile.people())
     pipe.detect._detector = det
     pipe.counting = True
@@ -1452,7 +1452,7 @@ def test_detect_and_safety_sessions_warm_the_shared_detector() -> None:
 
     gate, started = threading.Event(), threading.Event()
 
-    def loader() -> Any:
+    def loader(_choice: str) -> Any:
         started.set()
         assert gate.wait(30)
         return object()
@@ -1465,7 +1465,7 @@ def test_detect_and_safety_sessions_warm_the_shared_detector() -> None:
         assert not started.is_set()
         egg.set_profile(Profile.people())                     # kişi sayımına geçiş ısıtır
         assert started.wait(5)
-        det2, started2 = SharedDetector(loader=lambda: started2.set() or gate.wait(30)), threading.Event()
+        det2, started2 = SharedDetector(loader=lambda _c: started2.set() or gate.wait(30)), threading.Event()
         sessions.append(LiveSession("kuyumcu", lambda: "yok.mp4", Profile.jeweler(), detector=det2))
         assert started2.wait(5)
     finally:
@@ -1788,7 +1788,7 @@ def test_pose_model_in_error_is_retried_from_frames_even_in_an_empty_scene(monke
 
     now, calls = [1000.0], []
 
-    def loader() -> Any:
+    def loader(_choice: str) -> Any:
         calls.append(1)
         if len(calls) == 1:
             raise OSError("ağ yok")

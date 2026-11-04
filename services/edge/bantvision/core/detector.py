@@ -74,6 +74,11 @@ class ObjectDetector:
         """Gerçekte çalışan cihaz (ekran kartı ya da işlemci + varsa düşüş notu)."""
         return self.session.used
 
+    @property
+    def broken(self) -> str | None:
+        """Oturum kalıcı olarak kullanılamıyorsa Türkçe hata iletisi (bkz. `devices.GuardedSession.broken`), yoksa None."""
+        return self.session.broken
+
     def detect(self, bgr: np.ndarray, classes: list[str], conf: float = 0.35, iou: float = 0.45) -> list[Detection]:
         """Görüntü koordinatında (piksel) kutular; yalnızca istenen sınıflar."""
         h, w = bgr.shape[:2]

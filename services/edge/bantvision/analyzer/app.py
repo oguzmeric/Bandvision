@@ -129,7 +129,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     commit = _git_commit()                                  # açılışta bir kez (Hakkında)
     started = time.monotonic()                              # çalışma süresi (durum şeridi)
     store = JobStore(settings)
-    worker = Worker(store)
+    # "Video ile test" modelleri Cihaz ayarlarındaki "video" seçimiyle çalışır; her iş başında okunur (`live`
+    # aşağıda kurulur, işçi ise yalnızca açılışta, lifespan'de başlar)
+    worker = Worker(store, device_choice=lambda: live.device_settings.choices()["video"])
     stop_cleanup = threading.Event()
 
     def cleanup_loop() -> None:

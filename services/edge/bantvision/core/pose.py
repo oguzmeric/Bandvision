@@ -79,6 +79,11 @@ class PoseEstimator:
         """Gerçekte çalışan cihaz (ekran kartı ya da işlemci + varsa düşüş notu)."""
         return self._session.used
 
+    @property
+    def broken(self) -> str | None:
+        """Oturum kalıcı olarak kullanılamıyorsa Türkçe hata iletisi (bkz. `devices.GuardedSession.broken`), yoksa None."""
+        return self._session.broken
+
     def estimate(self, bgr: np.ndarray, box_px: tuple[float, float, float, float]) -> np.ndarray:
         crop = square_crop(box_px)
         out = self._session.run(None, {self._input: make_input(bgr, crop)})[0]

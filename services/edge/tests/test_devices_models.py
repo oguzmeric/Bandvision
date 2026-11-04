@@ -32,6 +32,7 @@ class FakeInput:
 class FakeGuarded:
     def __init__(self, used: devices.Used) -> None:
         self.used = used
+        self.broken: str | None = None
 
     def get_inputs(self) -> list[FakeInput]:
         return [FakeInput()]
@@ -69,6 +70,15 @@ def test_explicit_device_is_passed_to_open_session(cls: Any, opened: list[dict[s
     assert [c["choice"] for c in opened] == ["auto"]
     assert opened[0]["path"] == tmp_path / "x.onnx"              # kod yolu olduğu gibi (Path) iletir
     assert m.used == GPU_USED
+
+
+@pytest.mark.parametrize("cls", [ObjectDetector, PoseEstimator], ids=lambda c: c.__name__)
+def test_broken_is_read_live_from_the_session(cls: Any, opened: list[dict[str, Any]], tmp_path: pathlib.Path) -> None:
+    m = cls(path=tmp_path / "x.onnx", device="auto")
+    assert m.broken is None
+    session = m.session if cls is ObjectDetector else m._session
+    session.broken = "Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı (bellek yok)"
+    assert m.broken == session.broken
 
 
 @pytest.mark.parametrize("cls", [ObjectDetector, PoseEstimator], ids=lambda c: c.__name__)
