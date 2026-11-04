@@ -4,6 +4,8 @@ Kullanım:
     python -m bantvision.video bant.mp4                      # her şeyi otomatik bul
     python -m bantvision.video bant.mp4 --truth 57           # elle sayımla karşılaştır
     python -m bantvision.video bant.mp4 --direction right --roi 0.1,0.2,0.8,0.6 --line 0.5
+    python -m bantvision.video kamera.mp4 --preset safety    # poz güvenliği: alarm listesi (alarm-N.jpg, alarmlar.csv)
+    python -m bantvision.video kamera.mp4 --preset safety --hands-up 4 --no-lying
 
 İki geçiş yapar:
   1. Kalibrasyon: arka plan (örnek karelerin medyanı; videoda boş bant olmasa da çalışır), gürültüden eşik,
@@ -24,19 +26,22 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 import cv2
 import numpy as np
 
 from .core import Pipeline, Profile, devices
-from .core.detector import CLASS_IDS, GROUPS
+from .core.detector import CLASS_IDS, GROUPS, ObjectDetector
 from .core.lineframe import nearest_direction
 from .core.linescan import LineScanCounter, active_region, flow_profile, frame_moving, match_shift, motion_map
 from .core.pipeline import FrameResult
+from .core.pose import PoseEstimator
 from .core.profile import Roi
+from .core.safety import SafetyAnalyzer
 from .core.segmenter import downsample, roi_mask
 from .core.tracker import median
-from .overlay import draw_detect
+from .overlay import draw_detect, draw_safety
 
 
 @functools.lru_cache(maxsize=8)
@@ -54,9 +59,16 @@ def profile_mask(profile: Profile, w: int, h: int) -> np.ndarray:
     return _mask((r.x, r.y, r.width, r.height), poly, w, h)
 
 PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box,
-           "people": Profile.people, "vehicle": Profile.vehicles, "animal": Profile.animals}
+           "people": Profile.people, "vehicle": Profile.vehicles, "animal": Profile.animals,
+           "safety": Profile.jeweler}
 MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek sıra, bitişik hacimli ürünler)",
-           "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)"}
+           "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)",
+           "safety": "güvenlik alarmı (poz: eller yukarı, yerde yatan kişi)"}
+SAFETY_KINDS = {"hands_up": "handsUp", "lying": "lying"}   # çekirdek adı → sözleşme adı
+SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0)}   # ad, en az, en çok (sn)
+MAX_ALARM_IMAGES = 50                                       # alarm resmi sınırı (sonrakiler resimsiz listelenir)
+MAX_ALARMS = 500                                            # listedeki alarm sınırı (`count` gerçek toplam kalır)
+ALARM_IMAGE_WIDTH = 640
 DIRECTION_TR = {"down": "yukarıdan aşağı", "up": "aşağıdan yukarı", "right": "soldan sağa", "left": "sağdan sola"}
 
 # BGR renkler (iOS bindirmesiyle aynı anlam: sarı ROI, turuncu çizgi, yeşil leke, camgöbeği sayılmış iz)
@@ -330,6 +342,10 @@ def learn_product_length(info: VideoInfo, profile: Profile, window: float) -> fl
 def calibrate(info: VideoInfo, profile: Profile, window: float, fixed_direction: bool,
               fixed_area: bool, bg_range: tuple[float, float] | None = None,
               bg_percentile: float = 50.0, threshold: int | None = None) -> Calibration:
+    if profile.countMode == "safety":
+        # Poz güvenliği: arka plan, eşik, yön, alan gerekmez (kişi tanıma + poz; alan kısıtı yok)
+        return Calibration(np.zeros((2, 2), np.float32), profile.diffThreshold, profile.direction, (0.0, 0.0),
+                           background_from="gerekmiyor")
     if profile.countMode == "detect":
         # §4.10: arka plan, eşik, alan gerekmez. Sayım yönü = giriş yönü (hazır profil ya da --direction);
         # kişi iki yönde de geçtiğinden hareketten tahmin edilmez.
@@ -502,6 +518,7 @@ class RunResult:
     per_minute_out: dict[int, int] = field(default_factory=dict)
     crossings: list[tuple[float, int, str, int, int]] = field(default_factory=list)  # (zaman, iz, yön, giriş, çıkış)
     device: devices.Used | None = None           # tanıma: modelin çalıştığı cihaz (model kurulmadıysa None)
+    alarms: list[dict[str, object]] = field(default_factory=list)   # güvenlik: alarm listesi (`total` = gerçek sayı)
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
@@ -510,6 +527,8 @@ def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib
     """`progress`: True → konsola yüzde; fonksiyon → (0–1 oran, anlık sayı) ile çağrılır (analiz sunucusu)."""
     if profile.countMode == "detect":
         return count_detect(info, profile, out_path, out_width, progress, start, end)
+    if profile.countMode == "safety":
+        raise ValueError("Güvenlik modu count_safety() ile çalışır (alarm resimleri için çıktı klasörü gerekir).")
     pipe = Pipeline(profile)
     pipe.segmenter.bg = cal.background.copy()
     writer = None
@@ -636,6 +655,92 @@ def count_detect(info: VideoInfo, profile: Profile, out_path: pathlib.Path | Non
                      crossings=crossings, device=pipe.detect.used)
 
 
+def _alarm_jpeg(img: np.ndarray) -> bytes | None:
+    """Alarm resmi: ALARM_IMAGE_WIDTH piksel genişlikte, JPEG kalite 80."""
+    h, w = img.shape[:2]
+    if w != ALARM_IMAGE_WIDTH:
+        img = cv2.resize(img, (ALARM_IMAGE_WIDTH, max(1, round(h * ALARM_IMAGE_WIDTH / w))),
+                         interpolation=cv2.INTER_AREA if w > ALARM_IMAGE_WIDTH else cv2.INTER_LINEAR)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    return buf.tobytes() if ok else None
+
+
+def count_safety(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_path: pathlib.Path | None,
+                 out_width: int, progress: bool | Callable[[float, int], None] = True, start: float = 0.0,
+                 end: float | None = None) -> RunResult:
+    """Poz güvenliği: canlıdaki `SafetyAnalyzer` aynen (kişi tanıma + izleyici + poz + kurallar). Her kare video zamanıyla
+    (kare no / fps) işlenir; alarm zamanları işleme hızından bağımsızdır. `total` alarm sayısıdır, `alarms` listesi (en çok
+    MAX_ALARMS) ve `alarm-N.jpg` resimleri (en çok MAX_ALARM_IMAGES, `out_dir`'e) buradan çıkar.
+
+    Alarm bitişi (`endS`): kuralın son sağlandığı karenin sonu. Alarm vermiş bölüm canlıdaki gibi kısa kopmalarda sürer
+    (FIRED_GRACE_S), bu yüzden bitişi çekirdek geç bildirir; süre yine de gerçek son kareden hesaplanır. Video sonunda
+    (`end` verildiyse onda) hâlâ süren alarm o ana kadar sürmüş sayılır."""
+    an = SafetyAnalyzer(detector=ObjectDetector(), pose=PoseEstimator())
+    writer = None
+    alarms: list[dict[str, object]] = []
+    open_alarms: dict[tuple[int, str], dict[str, Any]] = {}   # (iz, çekirdek türü) → {rec, start, last}; yalnız listedekiler
+    total = 0
+    t0 = time.perf_counter()
+    n = 0
+    last_t = start
+    frame_s = 1.0 / info.fps
+    span = ((min(end, info.duration) if end is not None else info.duration) - start) or 1.0
+    for _, t, frame in read_frames(info, start, end):
+        last_t = t
+        src = _rotated(frame, profile.rotation)
+        sr = an.process(src, profile, info.fps, t)
+        for tid, kind, was_fired in sr.ended:                 # eski bölümlerin sonu, aynı anahtarın yeni bölümünden önce
+            o = open_alarms.pop((tid, kind), None) if was_fired else None
+            if o is not None:
+                o["rec"]["endS"] = round(o["last"] + frame_s, 1)
+        shown = draw_safety(src.copy(), profile, sr) if (sr.fired or out_path is not None) else None
+        jpeg: bytes | None = None
+        for a in sr.fired:
+            total += 1
+            rec: dict[str, object] = {"kind": SAFETY_KINDS[a.kind], "trackId": int(a.track_id),
+                                      "startS": round(a.started, 1), "atS": round(t, 1), "endS": None, "image": None}
+            if total <= MAX_ALARM_IMAGES and shown is not None:
+                jpeg = jpeg or _alarm_jpeg(shown)             # aynı karedeki alarmlar aynı resmi paylaşır
+                if jpeg is not None:
+                    name = f"alarm-{total}.jpg"
+                    (out_dir / name).write_bytes(jpeg)
+                    rec["image"] = name
+            if len(alarms) < MAX_ALARMS:
+                alarms.append(rec)
+                open_alarms[(a.track_id, a.kind)] = {"rec": rec, "start": a.started, "last": t}
+        for tid, kind, dur, fired in sr.active:               # bölümün son sağlandığı an = başlangıç + süre
+            o = open_alarms.get((tid, kind))
+            if o is not None and fired:
+                o["last"] = o["start"] + dur
+        if out_path is not None and shown is not None:
+            img = shown
+            if img.shape[1] > out_width:
+                img = cv2.resize(img, (out_width, round(img.shape[0] * out_width / img.shape[1])),
+                                 interpolation=cv2.INTER_AREA)
+            if writer is None:
+                writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), info.fps,
+                                         (img.shape[1], img.shape[0]))
+            writer.write(img)
+        n += 1
+        if progress and n % max(1, int(info.fps * 2)) == 0:
+            frac = min(1.0, (t - start) / span)
+            if callable(progress):
+                progress(frac, total)
+            else:
+                print(f"\r  işleniyor %{int(100 * frac):3d}  alarm={total}", end="", flush=True)
+    if writer is not None:
+        writer.release()
+    an.end_all()                                              # açık bölümler kapanır; açık alarmlar aşağıda video sonunda
+    video_end = round(min(last_t + frame_s, end if end is not None else info.duration), 1)
+    for o in open_alarms.values():
+        o["rec"]["endS"] = video_end
+    if callable(progress):
+        progress(1.0, total)
+    elif progress:
+        print(f"\r  işleniyor %100  alarm={total}          ")
+    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=an.dc.used, alarms=alarms)
+
+
 # ---------------------------------------------------------------- CLI
 
 def build_profile(a: argparse.Namespace) -> Profile:
@@ -701,6 +806,44 @@ def _device_arg(value: str) -> str:
     return value
 
 
+def _seconds_arg(kind: str) -> Callable[[str], float]:
+    title, lo, hi = SAFETY_RANGES[kind]
+
+    def parse(value: str) -> float:
+        try:
+            sec = float(value)
+        except ValueError:
+            sec = float("nan")
+        if not lo <= sec <= hi:                             # NaN ve sonsuz da dışarıda kalır
+            raise argparse.ArgumentTypeError(f"{title} süresi {lo:g}–{hi:g} sn arasında bir sayı olmalı.")
+        return sec
+
+    return parse
+
+
+# Güvenlik alarmı sayım yapmaz: bu seçenekler verilirse reddedilir (analiz sunucusu aynı iletiyle 422 verir)
+_COUNTING_OPTIONS = ("truth", "truth_out", "direction", "line", "count_line", "roi", "roi_polygon", "bg_range",
+                     "product_length", "anchor")
+
+
+def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, profile: Profile) -> None:
+    given_rules = any(v is not None and v is not False for v in (a.hands_up, a.no_hands_up, a.lying, a.no_lying))
+    if profile.countMode != "safety":
+        if given_rules:
+            ap.error("Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır.")
+        return
+    if any(getattr(a, name) is not None for name in _COUNTING_OPTIONS):
+        ap.error("Güvenlik alarmı videosunda sayım ayarları kullanılmaz.")
+    for rule, off, sec in ((profile.safety.handsUp, a.no_hands_up, a.hands_up),
+                           (profile.safety.lying, a.no_lying, a.lying)):
+        if off:
+            rule.enabled = False
+        if sec is not None:
+            rule.enabled, rule.seconds = True, sec
+    if not (profile.safety.handsUp.enabled or profile.safety.lying.enabled):
+        ap.error("En az bir kural açık olmalı.")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m bantvision.video", description=__doc__.split("\n\n")[0])
     ap.add_argument("video")
@@ -737,6 +880,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
+    for flag, kind, what in (("hands-up", "hands_up", "eller yukarı"), ("lying", "lying", "yerde yatan kişi")):
+        g = ap.add_mutually_exclusive_group()
+        lo, hi = SAFETY_RANGES[kind][1:]
+        g.add_argument(f"--{flag}", type=_seconds_arg(kind), metavar="SANİYE",
+                       help=f"güvenlik: {what} kuralının süresi ({lo:g}–{hi:g} sn)")
+        g.add_argument(f"--no-{flag}", action="store_true", help=f"güvenlik: {what} kuralını kapat")
     ap.add_argument("--device", type=_device_arg, default="cpu", metavar="auto|cpu|gpu-…",
                     help="model cihazı (yalnız tanıma): auto, cpu ya da ekran kartı kimliği (gpu-10de-28a1); "
                          "varsayılan cpu")
@@ -754,6 +903,8 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = pathlib.Path(a.out) if a.out else src.with_name(src.stem + "_analiz")
     out_dir.mkdir(parents=True, exist_ok=True)
     profile = build_profile(a)
+    apply_safety_options(ap, a, profile)
+    safety = profile.countMode == "safety"
 
     print(f"Video: {src.name}  {info.width}x{info.height}  {info.fps:.1f} fps  {info.duration:.1f} sn")
     print("1/2 Kalibrasyon...")
@@ -763,12 +914,17 @@ def main(argv: list[str] | None = None) -> int:
                     fixed_area=a.expected_area is not None or profile.expectedArea > 0,
                     bg_range=bg_range, bg_percentile=a.bg_percentile, threshold=a.threshold)  # type: ignore[arg-type]
     detect = profile.countMode == "detect"
-    if not detect:                               # tanımada görüntü saklanmaz (kişisel veri)
+    if not detect and not safety:                # tanımada görüntü saklanmaz (kişisel veri)
         cv2.imwrite(str(out_dir / "arka_plan.png"), cv2.resize(
             cal.background.astype(np.uint8), (cal.background.shape[1] * 3, cal.background.shape[0] * 3),
             interpolation=cv2.INTER_NEAREST))
     print(f"  yöntem: {MODE_TR.get(profile.countMode, profile.countMode)}")
-    if detect:
+    if safety:
+        sf = profile.safety
+        rules = [f"{SAFETY_RANGES[k][0]} {r.seconds:g} sn" for k, r in (("hands_up", sf.handsUp), ("lying", sf.lying))
+                 if r.enabled]
+        print("  kurallar: " + ", ".join(rules) + "  (videodaki herkese uygulanır)")
+    elif detect:
         print(f"  sınıflar: {', '.join(profile.detectClasses)}  giriş yönü: "
               f"{DIRECTION_TR.get(profile.direction, profile.direction)}  konum noktası: {profile.countAnchor}")
     elif profile.countMode == "linescan":
@@ -783,12 +939,15 @@ def main(argv: list[str] | None = None) -> int:
     if any("Leke boyları" in n for n in cal.notes):
         print("    (ayrı kalibrasyon: --profile ile ürünlerin tek tek geçtiği videodan üretilmiş profil.json)")
 
-    print("2/2 Sayım...")
+    print("2/2 " + ("Alarm analizi..." if safety else "Sayım..."))
     emit(stage="counting")
     report: bool | Callable[[float, int], None] = (
         (lambda f, n: emit(progress=round(f, 4), count=n)) if a.progress_json else True)
-    res = count(info, profile, cal, None if a.no_video else out_dir / "isaretli.mp4", a.out_width, report,
-                start=a.start, end=a.end)
+    marked = None if a.no_video else out_dir / "isaretli.mp4"
+    if safety:
+        res = count_safety(info, profile, out_dir, marked, a.out_width, report, start=a.start, end=a.end)
+    else:
+        res = count(info, profile, cal, marked, a.out_width, report, start=a.start, end=a.end)
 
     summary = {
         "video": src.name, "fps": info.fps, "seconds": round(info.duration, 2),
@@ -804,20 +963,33 @@ def main(argv: list[str] | None = None) -> int:
     }
     if res.device is not None:                   # yalnız model gerçekten kurulduysa (ürün sayımı model kullanmaz)
         summary["device"] = {"kind": res.device.kind, "name": res.device.name, "note": res.device.note}
-    if detect:
+    if safety:
+        summary.update({"alarms": res.alarms, "range": [a.start, a.end]})
+    elif detect:
         summary.update({"countOut": res.total_out, "truthOut": a.truth_out, "classes": profile.detectClasses,
                         "range": [a.start, a.end]})
     (out_dir / "ozet.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "profil.json").write_text(json.dumps(profile.to_dict(), ensure_ascii=False, indent=2),
                                          encoding="utf-8")
-    with (out_dir / "sayimlar.csv").open("w", newline="", encoding="utf-8") as fh:
+    with (out_dir / ("alarmlar.csv" if safety else "sayimlar.csv")).open("w", newline="", encoding="utf-8") as fh:
         wr = csv.writer(fh, delimiter=";")
-        if detect:
+        if safety:
+            wr.writerow(["baslangic_sn", "alarm_sn", "bitis_sn", "tur", "iz"])
+            wr.writerows([al["startS"], al["atS"], al["endS"], al["kind"], al["trackId"]] for al in res.alarms)
+        elif detect:
             wr.writerow(["zaman_sn", "iz", "yon", "giris_toplam", "cikis_toplam"])
             wr.writerows(res.crossings)
         else:
             wr.writerow(["zaman_sn", "iz", "delta", "toplam"])
             wr.writerows(res.events)
+
+    if safety:
+        print(f"\nALARM: {res.total}" + (f"  (listede ilk {len(res.alarms)})" if res.total > len(res.alarms) else ""))
+        for al in res.alarms[:20]:
+            print(f"  {al['startS']:6.1f} sn  {al['kind']:8s} iz {al['trackId']}  alarm {al['atS']} sn  bitiş {al['endS']}")
+        print(f"Çıktılar: {out_dir}  (" + ("" if a.no_video else "isaretli.mp4, ")
+              + "ozet.json, profil.json, alarmlar.csv, alarm-N.jpg)")
+        return 0
 
     if detect:
         print(f"\nGİRİŞ: {res.total}   ÇIKIŞ: {res.total_out}")
