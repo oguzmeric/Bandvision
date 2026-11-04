@@ -124,7 +124,16 @@ Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve
 - **Oturumlar** bellekte (sunucu yeniden başlarsa kapanır; **güvenlik oturumları hariç**: bkz. "Yeniden başlatmada geri yükleme"). Okuyucu iş parçacığı her zaman en son kareyi tutar (RTSP TCP, kopunca artan beklemeyle yeniden bağlanır, TRASSIR jetonu her bağlanışta yenilenir); işleyici en son kareyi sayar, işaretli kare en çok 12/sn. Aynı kamera ikinci kez açılırsa eski oturum kapanır; kaynak silinince oturumları da kapanır.
 - **Birden çok kamera** aynı anda sayılır (kullanıcı, 2026-10-06): canlı sayfada her kameranın kartı (Giriş/Çıkış ya da adet), Kameralar'da sayılan kamera "Sayılıyor". Kişi tanıma modeli **tek ve ortak** (kareler sırayla); boş sahnede (alanda hareket ve iz yok) tanıma atlanır, en geç saniyede bir yine çalışır → işlemci kişinin olduğu kameraya kalır. Bu atlama yalnızca canlıdadır; video analizi ve iPhone her karede tanır.
 - **Alt / ana akış** oturum başına seçilir (başlatırken ve canlı sayfada). Değiştirince aynı oturum yeni akışa bağlanır; **sayaçlar sıfırlanmaz** (kare boyu değişirse bant sayımı arka planı yeniden öğrenir). Tam RTSP adresli kaynakta seçim yok.
-- **RTSP zaman aşımı:** FFmpeg 5+ `stimeout`'u yok sayar; `timeout` kullanılır (kapalı kamerada açılış 30 sn → ~5 sn). Küçük resimde aynı anda en çok 2 RTSP açılışı; alınamayan kamera 1 dk yeniden denenmez.
+- **RTSP zaman aşımı:** FFmpeg 5+ `stimeout`'u yok sayar; `timeout` kullanılır. Ama bu, OpenCV'nin kendi 30 sn'lik açılış sınırını kısaltmıyordu: sinyalsiz kanalın açılışı 30 sn sürüyordu. Ağ akışları artık OpenCV'ye açılış 8 sn, okuma 10 sn sınırıyla açılır (`live/session.py` `OPEN_TIMEOUT_MS`, `READ_TIMEOUT_MS`). Küçük resimde aynı anda en çok 2 RTSP açılışı; alınamayan kamera 1 dk yeniden denenmez.
+- **Açılış sırası** (`live/open_gate.py`):
+  - **Neden:** OpenCV bir süreçteki tüm ağ akışı açılışlarını tek genel kilitle sırayla yapar. İzleme duvarında sinyalsiz kanallar sürekli yeniden denendiğinde sayım ya da güvenlik kamerası sıra alamıyordu. Ölçüm, 8 sinyalsiz kanal varken: 117 sn bekleme; sonunda kayıt cihazının akış izni de dolup 404 aldı.
+  - **Sıra:** açılışlar artık önceliklidir:
+    1. analiz oturumu (sayım, güvenlik);
+    2. izleme ve küçük resim;
+    3. son denemesi hiç kare vermemiş izleme okuyucusu.
+
+    Eşit öncelikte geliş sırası korunur.
+  - **Sonuç:** analiz oturumu en çok bir açılış süresi bekler (aynı ölçümde 7 sn).
 - **Windows:** sunucu kendini güç kısmasından (verimlilik modu / EcoQoS) çıkarır (`live/power.py`); arka planda tanıma kare başına 65 ms'den ~350 ms'ye çıkıp canlı sayım 13'ten 2–3 kare/sn'ye düşüyordu. Sistem ayarı değişmez.
 - **Test:** `ANALYZER_ALLOW_FILE_SOURCES=1` iken "Özel RTSP" adresine yerel video dosyası yazılabilir (başa sararak "kamera" gibi oynar). Yalnızca test/e2e içindir; bayraksız sunucu dosya okumaz.
 

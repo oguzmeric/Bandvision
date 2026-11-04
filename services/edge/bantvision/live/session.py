@@ -31,6 +31,7 @@ from ..core.pipeline import FrameResult
 from ..core.staff_color import teach_bgr
 from ..overlay import draw_detect, draw_safety
 from ..video import draw, number_label, split_numbers
+from . import open_gate
 from .clips import ClipBuffer, ClipJob
 
 _LOG = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ _LOG = logging.getLogger(__name__)
 # FFmpeg 5+ (OpenCV 4.6+): `timeout` = bağlanma ve okuma zaman aşımı (µs). Eski `stimeout` artık yok sayılıyor;
 # kapalı kamerada açılış 30 sn takılıyordu.
 _FFMPEG_OPTIONS = "rtsp_transport;tcp|timeout;5000000"
+# OpenCV'nin kendi açılış/okuma sınırı (varsayılan 30 sn; yukarıdaki FFmpeg `timeout` bunu kısaltmıyor). Ölçüm (yerel
+# ağdaki kayıt cihazı): sağlam kanal 1,4–2,1 sn'de açılır, sinyalsiz kanal sınır dolana dek bekletir.
+OPEN_TIMEOUT_MS = 8000
+READ_TIMEOUT_MS = 10000
 
 
 @dataclass
@@ -106,13 +111,20 @@ def fps_from_stamps(stamps: list[float]) -> float:
     return (len(stamps) - 1) / span if len(stamps) > 2 and span > 0 else 0.0
 
 
-def open_capture(url: str) -> cv2.VideoCapture:
-    """RTSP için FFmpeg seçenekleri; dosya/HTTP adresleri olduğu gibi açılır."""
+def open_capture(url: str, level: int | None = None) -> cv2.VideoCapture:
+    """RTSP için FFmpeg seçenekleri; dosya adresleri olduğu gibi açılır. Ağ akışı açılışı süre sınırlı
+    (OPEN_TIMEOUT_MS; sınırsızken OpenCV kapalı kanalda 30 sn bekliyordu) ve öncelikli sırayla yapılır
+    (`open_gate`): `level` verilmezse açan iş parçacığının ipucu (`open_gate.priority`), o da yoksa izleme."""
     import os
 
-    if url.lower().startswith("rtsp://"):
+    lower = url.lower()
+    if not lower.startswith(("rtsp://", "http://", "https://")):
+        return cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    if lower.startswith("rtsp://"):
         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _FFMPEG_OPTIONS
-    return cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, OPEN_TIMEOUT_MS, cv2.CAP_PROP_READ_TIMEOUT_MSEC, READ_TIMEOUT_MS]
+    with open_gate.GATE.hold(open_gate.current_priority() if level is None else level):
+        return cv2.VideoCapture(url, cv2.CAP_FFMPEG, params)
 
 
 class LiveSession:
@@ -435,7 +447,7 @@ class LiveSession:
                 self._wait_reconnect(backoff)
                 backoff = min(backoff * 2, 15.0)
                 continue
-            cap = open_capture(url)
+            cap = open_capture(url, open_gate.SESSION)
             if not cap.isOpened():
                 cap.release()
                 self._set_state("reconnecting", "Görüntü açılamadı; yeniden deneniyor.")

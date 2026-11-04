@@ -30,6 +30,7 @@ from typing import Any, Literal
 import cv2
 import numpy as np
 
+from . import open_gate
 from .session import open_capture
 
 _LOG = logging.getLogger(__name__)
@@ -119,6 +120,7 @@ class CameraViewer:
         self._frame: np.ndarray | None = None
         self._state, self._message = "connecting", ""
         self._stamps: list[float] = []
+        self._no_frames = False                 # son deneme hiç kare vermedi: açılış sırasında en sona (open_gate)
         self.last_used = clock()
         self._thread = threading.Thread(target=self._run, name=f"izleme-{key[0][:8]}", daemon=True)
         self._thread.start()
@@ -159,6 +161,7 @@ class CameraViewer:
                 frames, good, message, rewind = 0, 0.0, "Görüntü okunamadı; yeniden deneniyor.", False
             if self._stop.is_set():
                 return
+            self._no_frames = frames == 0
             if rewind and frames > 0:                         # test dosyası başa sarar (canlı kamera gibi)
                 continue
             self._fail(message)
@@ -173,7 +176,8 @@ class CameraViewer:
             url = self._open_url()
         except Exception as e:  # noqa: BLE001 — kayıt cihazı yanıt vermedi; yeniden denenir
             return 0, 0.0, f"Kaynağa ulaşılamadı: {_detail(e)}", False
-        cap = self._capture(url)
+        with open_gate.priority(open_gate.RETRY if self._no_frames else open_gate.VIEWER):
+            cap = self._capture(url)
         try:
             if not cap.isOpened():
                 return 0, 0.0, "Görüntü açılamadı; yeniden deneniyor.", False
