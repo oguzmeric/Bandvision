@@ -16,7 +16,7 @@ import secrets
 import subprocess
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Annotated, Any, Literal
 
 import cv2
@@ -161,21 +161,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         t = threading.Thread(target=cleanup_loop, name="analiz-temizlik", daemon=True)
         t.start()
         yield
+
+        def step(name: str, fn: Callable[[], object]) -> None:
+            """Kapanış adımı: hatası günlüğe yazılır, sonraki adımlar yine çalışır (biri patlayınca kamera, kayıt ya da
+            bildirim kuyruğu açık kalmasın)."""
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("Kapanışta adım başarısız: %s", name)
+
         try:
-            stop_cleanup.set()
-            live.stop_background()                               # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
-            live.mosaics.stop()                                  # birleşik izleme akışları (okuyuculardan önce)
-            live.viewers.stop()                                  # izleme okuyucuları (kameralar bırakılır)
-            worker.stop()
+            step("temizlik döngüsü", stop_cleanup.set)
+            step("arka plan", live.stop_background)              # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
+            step("birleşik izleme", live.mosaics.stop)           # birleşik izleme akışları (okuyuculardan önce)
+            step("izleme okuyucuları", live.viewers.stop)        # izleme okuyucuları (kameralar bırakılır)
+            step("video işçisi", worker.stop)
             sessions = list(live.sessions.values())
             # İzlenen güvenlik kameraları listesi (watch.json) korunur: sonraki açılışta yeniden açılırlar
             for s in sessions:                                   # canlı oturumlar kapanırken kamerayı bırak
-                s.stop()
+                step(f"canlı oturum {s.id}", s.stop)
             for s in sessions:                                   # açık alarmların sonu yazılır (günlükte açık kalmasın)
-                live.close_alarms(s.id)
-            live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
-            live.notifier.stop()
-        finally:                                             # önceki bir stop() hata verse de PDH sorgusu kapanır
+                step(f"alarm kapanışı {s.id}", lambda sid=s.id: live.close_alarms(sid))
+            step("kayıtlar", live.clips.stop)                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
+            step("bildirimler", live.notifier.stop)
+        finally:                                             # beklenmedik bir hatada da PDH sorgusu kapanır
             with gpu_sampler_lock:
                 sampler, gpu_sampler = gpu_sampler, None     # yeniden girilen lifespan taze örnekleyici kurar
             if sampler is not None:

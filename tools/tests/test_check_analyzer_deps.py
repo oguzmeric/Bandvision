@@ -201,3 +201,31 @@ def test_dist_files_present_looks_at_registered_native_libraries(tmp_path: pathl
     assert cd.dist_files_present("fakedml") is False                  # biri hâlâ eksik
     (site / "fakedml" / "lib.dll").write_bytes(b"")
     assert cd.dist_files_present("fakedml") is True
+
+
+def test_dist_files_present_unreadable_record_counts_as_ok(tmp_path: pathlib.Path,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """Okunamayan RECORD (bozuk kodlama, CSV hatası, erişim hatası) denetimi çökertmez: karar verilemez, tamam sayılır."""
+    site = tmp_path / "site"
+    info = site / "fakedml-1.0.dist-info"
+    info.mkdir(parents=True)
+    info.joinpath("METADATA").write_text(chr(10).join(["Metadata-Version: 2.1", "Name: fakedml", "Version: 1.0", ""]))
+    info.joinpath("RECORD").write_bytes(b"fakedml/native.pyd,,\n\xff\xfe\xfa bozuk\n")
+    monkeypatch.syspath_prepend(str(site))
+    assert cd.dist_files_present("fakedml") is True                   # UnicodeDecodeError
+    info.joinpath("RECORD").write_text("fakedml/native.pyd,,\n")
+    assert cd.dist_files_present("fakedml") is False                  # okunabilir: dosya yok
+
+    def csv_boom(*a: object, **k: object) -> object:
+        raise cd.csv.Error("field larger than field limit")
+
+    monkeypatch.setattr(cd.csv, "reader", csv_boom)
+    assert cd.dist_files_present("fakedml") is True                   # csv.Error
+    monkeypatch.undo()
+    monkeypatch.syspath_prepend(str(site))
+
+    def os_boom(self: object, filename: str) -> str:
+        raise PermissionError(13, "erişim reddedildi")
+
+    monkeypatch.setattr(importlib.metadata.PathDistribution, "read_text", os_boom)
+    assert cd.dist_files_present("fakedml") is True                   # OSError

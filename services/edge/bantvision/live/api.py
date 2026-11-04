@@ -255,13 +255,6 @@ class SharedModel:
         with self._lock:
             return self._ever_started
 
-    @property
-    def inner_used(self) -> Any:
-        """Hizmetteki modelin gerçekte çalıştığı cihaz (`devices.Used`; her çağrıda canlı okunur, çalışırken işlemciye
-        düşüş dahil) ya da model yoksa None."""
-        inner = self._inner
-        return None if inner is None else getattr(inner, "used", None)
-
     def warm(self) -> None:
         """Modeli şimdiden yüklemeye başlar (oturum açılınca; ilk kişiyi/kareyi beklemeden). Engellemez; model hazırsa,
         yükleniyorsa ya da hata sonrası bekleme süresindeyse bir şey yapmaz."""

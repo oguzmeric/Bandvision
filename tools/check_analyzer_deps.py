@@ -115,16 +115,21 @@ def dist_files_present(name: str) -> bool:
     ayrışabilir: işlemci `onnxruntime`'ı kaldırmak ortak `onnxruntime/` klasörünü siler, ardından DirectML'in zorla
     yeniden kurulması yarıda kalırsa DirectML kaydı kalır ama dosyaları yoktur. RECORD dosyası doğrudan okunur
     (`Distribution.files` Python 3.12'de diskte olmayan dosyaları atlar, eksikliği göstermez). RECORD yoksa ya da yerel
-    kitaplık içermiyorsa karar verilemez: tamam sayılır."""
+    kitaplık içermiyorsa karar verilemez: tamam sayılır. RECORD okunamıyorsa (erişim, bozuk kodlama ya da CSV) da
+    tamam sayılır: denetim her açılışta çökmesin."""
     try:
         dist = importlib.metadata.distribution(name)
     except importlib.metadata.PackageNotFoundError:
         return True
-    record = dist.read_text("RECORD")
-    if not record:
+    try:
+        record = dist.read_text("RECORD")
+        if not record:
+            return True
+        paths = [row[0] for row in csv.reader(record.splitlines())
+                 if row and row[0].lower().endswith((".pyd", ".dll"))]
+        return all(dist.locate_file(pth).exists() for pth in paths)
+    except (OSError, csv.Error, UnicodeDecodeError):
         return True
-    paths = [row[0] for row in csv.reader(record.splitlines()) if row and row[0].lower().endswith((".pyd", ".dll"))]
-    return all(dist.locate_file(pth).exists() for pth in paths)
 
 
 def damaged(reqs: list[tuple[str, str | None]], installed: Mapping[str, str],

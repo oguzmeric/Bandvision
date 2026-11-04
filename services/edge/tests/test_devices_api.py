@@ -197,13 +197,12 @@ def test_never_loaded_set_choice_only_stores() -> None:
     det.set_choice("gpu-10de-28a1")
     time.sleep(0.1)
     assert calls == [] and det.choice == "gpu-10de-28a1" and not det.ever_started
-    assert det.status()["state"] == "idle" and det.inner_used is None
+    assert det.status() == {"state": "idle", "device": None, "note": None}
     det.warm()
     wait_for(lambda: det.status()["state"] == "ready")
     assert calls == ["gpu-10de-28a1"] and det.ever_started
     assert det.status() == {"state": "ready", "device": {"id": "gpu-10de-28a1", "kind": "gpu",
                                                         "name": "Kart gpu-10de-28a1"}, "note": None}
-    assert det.inner_used == used_for("gpu-10de-28a1")
 
 
 def test_slow_swap_keeps_old_model_serving_until_new_is_ready() -> None:
@@ -442,8 +441,9 @@ def test_swap_waits_for_an_inflight_detect() -> None:
         det.set_choice("gpu-10de-28a1")
         assert loaded.wait(5)
         time.sleep(0.2)                                                 # yeni model hazır ama çıkarım sürüyor
-        assert det.status()["state"] == "loading"                       # değişim çıkarım bitene dek bekler
-        assert det.inner_used == used_for("cpu")
+        # değişim çıkarım bitene dek bekler; hizmette eski (işlemci) model
+        assert det.status() == {"state": "loading", "device": {"id": "cpu", "kind": "cpu", "name": "İşlemci"},
+                                "note": None}
     finally:
         release.set()
         t.join(10)

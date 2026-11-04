@@ -345,19 +345,36 @@ def test_system_status_gpu_follows_detector_then_pose_then_auto(tmp_path: pathli
 
 
 def test_lifespan_shutdown_closes_gpu_sampler_even_if_stop_raises(tmp_path: pathlib.Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kapanışta önceki bir stop() hata verse de PDH sorgusu kapanır; yeniden girilen lifespan taze örnekleyici kurar."""
+                                                                  monkeypatch: pytest.MonkeyPatch,
+                                                                  caplog: pytest.LogCaptureFixture) -> None:
+    """Kapanışta bir stop() hata verse de sonraki adımlar çalışır (hata günlüğe yazılır) ve PDH sorgusu kapanır;
+    yeniden girilen lifespan taze örnekleyici kurar."""
     fake = _fake_gpus(monkeypatch, [_gpu("gpu-10de-28a1", "NVIDIA kart", "0x00000000_0x000153a6")],
                       auto="gpu-10de-28a1")
     app = create_app(Settings(data_dir=tmp_path))
+    live = app.state.live
+    ran: list[str] = []
 
     def boom() -> None:
+        ran.append("worker")
         raise RuntimeError("worker durmadı")
 
+    def boom_viewers() -> None:
+        ran.append("viewers")
+        raise RuntimeError("okuyucular durmadı")
+
+    monkeypatch.setattr(live.viewers, "stop", boom_viewers)
     monkeypatch.setattr(app.state.worker, "stop", boom)
-    c = local_client(app)
-    with pytest.raises(RuntimeError, match="worker durmadı"), c:
+    for name, obj in (("clips", live.clips), ("notifier", live.notifier)):
+        real = obj.stop
+        monkeypatch.setattr(obj, "stop", lambda real=real, name=name: (ran.append(name), real())[1])
+    with caplog.at_level(logging.ERROR), local_client(app) as c:                # kapanış hatası dışarı taşmaz
         assert c.get("/api/v1/system/status").json()["gpu"]["percent"] == 37.5
+    assert ran == ["viewers", "worker", "clips", "notifier"]                      # hatadan sonraki adımlar da çalıştı
+    failed = [r for r in caplog.records if "Kapanışta adım başarısız" in r.getMessage()]
+    assert [r.getMessage() for r in failed] == ["Kapanışta adım başarısız: izleme okuyucuları",
+                                                "Kapanışta adım başarısız: video işçisi"]
+    assert all(r.exc_info for r in failed)
     assert fake.instances == 1 and fake.closed == 1
     monkeypatch.undo()
     _fake_gpus(monkeypatch, [_gpu("gpu-10de-28a1", "NVIDIA kart", "0x00000000_0x000153a6")], auto="gpu-10de-28a1")

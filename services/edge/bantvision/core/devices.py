@@ -34,6 +34,12 @@ DXGI_FLAG_SOFTWARE = 2
 VENDOR_MICROSOFT = 0x1414
 CACHE_TTL_S = 30.0
 REASON_MAX = 160
+AUTO_MIN_MEMORY_MB = 1024   # "auto" yalnız bu kadar ayrılmış belleği olan kartı seçer (tümleşik kartlar ~128 MB bildirir)
+
+# Kullanıcıya gösterilen nedenden atılan dosya yolları: Windows yolu (DirectML iletileri derleme sunucusunun kaynak
+# yoluyla başlar, örn. "D:\a\_work\...\x.cpp(123)\...") ve boşluktan sonra başlayan, en az iki bileşenli mutlak POSIX
+# yolu ("/onnxruntime_src/.../x.h:560"). Tırnak içindeki düğüm adları ('/model.0/conv/Conv') yol sayılmaz.
+_PATH_RE = re.compile(r"[A-Za-z]:\\\S+|(?<!\S)/(?:[^\s/]+/)+[^\s/]+")
 
 # DXGI ham satırı: (dizin, açıklama, satıcı, aygıt, ayrılmış bellek bayt, bayraklar, luid_high, luid_low)
 DxgiRow = tuple[int, str, int, int, int, int, int, int]
@@ -214,8 +220,11 @@ def gpu_support(*, _ort: Any = None) -> tuple[bool, str | None]:
 
 
 def _best(gpus: Sequence[Gpu]) -> Gpu | None:
-    """En büyük bellek; eşitlikte en küçük DXGI sırası."""
-    return min(gpus, key=lambda g: (-g.memory_mb, g.index), default=None)
+    """"auto"nun kartı: en az `AUTO_MIN_MEMORY_MB` ayrılmış belleği olanlar arasında en büyük bellek, eşitlikte en
+    küçük DXGI sırası. Tümleşik kartlar (ayrılmış bellek ~128 MB) seçilmez: tespit doğruluğu ölçülmedi ve ekranla
+    paylaşılırlar; listede kalırlar ve elle seçilebilirler. Uygun kart yoksa None (işlemci)."""
+    eligible = [g for g in gpus if g.memory_mb >= AUTO_MIN_MEMORY_MB]
+    return min(eligible, key=lambda g: (-g.memory_mb, g.index), default=None)
 
 
 def auto_choice(gpus: Sequence[Gpu] | None = None, *, _ort: Any = None) -> str:
@@ -268,11 +277,12 @@ def set_default_choice(choice: str) -> None:
 # ---------------------------------------------------------------- oturum
 
 def _reason(e: BaseException) -> str:
-    """Hatanın ilk (boş olmayan) satırı, en çok 160 karakter; kullanıcıya gösterilen nota girer."""
+    """Kullanıcıya gösterilen nota giren neden: hatanın ilk boş olmayan satırından dosya yolları (`_PATH_RE`) atılır,
+    boşluklar teke indirilir, en çok 160 karakter. HRESULT ve ileti metni kalır; geriye bir şey kalmazsa hatanın türü."""
     for line in str(e).splitlines():
-        line = line.strip()
-        if line:
-            return line[:REASON_MAX]
+        if line.strip():
+            text = " ".join(_PATH_RE.sub(" ", line).split())
+            return text[:REASON_MAX] if text else type(e).__name__
     return type(e).__name__
 
 
@@ -301,13 +311,19 @@ def _gpu_session(ort: Any, path: str, configure: Callable[[Any], None], gpu: Gpu
 class GuardedSession:
     """ONNX oturumu sarmalayıcısı: ekran kartında çalışırken hata çıkarsa (sürücü sıfırlanması, kart kapanması)
     aynı model işlemcide yeniden kurulur, aynı çağrı yeniden denenir ve `used` N4 notunu alır. Düştükten sonra
-    kendiliğinden ekran kartına dönmez. İşlemci oturumunun hataları aynen yayılır."""
+    kendiliğinden ekran kartına dönmez. İşlemci oturumunun hataları aynen yayılır.
+
+    Eşzamanlılık: DirectML bir oturumda eşzamanlı `Run`'a izin vermez; oturum ekran kartındayken `run` çağrıları
+    `_run_lock` ile sıraya girer. İşlemci oturumu (baştan ya da düşüşten sonra) kilitsiz çalışır. İki kilit hiç iç içe
+    tutulmaz: `_run_lock` yalnız ekran kartı çağrısını sarar ve hata dışarı çıkarken bırakılır; düşüş `_lock`'u (durum
+    kilidi) ondan sonra alır. Kilidi beklerken oturum işlemciye düştüyse çağrı yeni durumda (kilitsiz) çalışır."""
 
     def __init__(self, ort: Any, path: str, configure: Callable[[Any], None], session: Any, used: Used) -> None:
         self._ort = ort
         self._path = path
         self._configure = configure
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()                         # durum kilidi: işlemciye düşüş
+        self._run_lock = threading.Lock()                     # ekran kartı çağrıları sırayla (DirectML şartı)
         self._broken: str | None = None                       # işlemci yeniden kurulumu da başarısız: kalıcı hata
         self._state: tuple[Any, Used] = (session, used)       # tek atamayla değişir: oturum ve used birlikte
 
@@ -336,15 +352,19 @@ class GuardedSession:
             raise self._broken_error()
         state = self._state
         session, used = state
+        if used.kind != "gpu":
+            return session.run(output_names, feeds)           # işlemci: kilitsiz, hatalar aynen yayılır
         try:
-            return session.run(output_names, feeds)
+            with self._run_lock:
+                if self._state is state:
+                    return session.run(output_names, feeds)
         except Exception as e:
-            if used.kind != "gpu":
-                raise
             if self._broken is not None:                      # başka bir çağrı yeniden kurulumu zaten bozdu
                 raise self._broken_error() from None
             log.exception("Ekran kartında çalışırken hata; işlemciye geçiliyor (%s)", used.name)
             reason = _reason(e)
+        else:                                                 # kilidi beklerken başka bir çağrı işlemciye düşürdü:
+            return self.run(output_names, feeds)              # yeni durumda (durum yalnız kart → işlemci değişir)
         with self._lock:
             if self._broken is not None:
                 raise self._broken_error()

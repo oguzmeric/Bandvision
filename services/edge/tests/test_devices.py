@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -51,6 +52,8 @@ class FakeSession:
         self.runs.append((output_names, feeds))
         if self.is_gpu and self.ort.gpu_run_hook is not None:
             self.ort.gpu_run_hook()
+        if not self.is_gpu and self.ort.cpu_run_hook is not None:
+            self.ort.cpu_run_hook()
         if self.is_gpu and self.ort.run_error is not None:
             raise self.ort.run_error
         if not self.is_gpu and self.ort.cpu_run_error is not None:
@@ -73,6 +76,7 @@ class FakeOrt:
         self.report_cpu, self.ctor_error = report_cpu, ctor_error
         self.run_error, self.cpu_run_error = run_error, cpu_run_error
         self.gpu_run_hook: Callable[[], None] | None = None     # GPU run içinde çağrılır (engelleme için)
+        self.cpu_run_hook: Callable[[], None] | None = None     # işlemci run içinde çağrılır
         self.cpu_ctor_error: Exception | None = None            # işlemci (DirectML'siz) kurucu hatası
         self.sessions: list[FakeSession] = []
 
@@ -180,9 +184,24 @@ def test_dxgi_failure_gives_empty_and_warns_once(monkeypatch, caplog):
 
 def test_auto_choice_largest_memory_lowest_index_on_ties():
     ort = FakeOrt()
-    assert devices.auto_choice(gpus2(), _ort=ort) == "gpu-10de-28a1"
-    tie = [Gpu("gpu-aaaa-0001", "A", 100, 2, "l"), Gpu("gpu-bbbb-0002", "B", 100, 1, "l")]
+    assert devices.auto_choice(gpus2(), _ort=ort) == "gpu-10de-28a1"           # Intel + NVIDIA: NVIDIA
+    tie = [Gpu("gpu-aaaa-0001", "A", 2048, 2, "l"), Gpu("gpu-bbbb-0002", "B", 2048, 1, "l")]
     assert devices.auto_choice(tie, _ort=ort) == "gpu-bbbb-0002"
+
+
+def test_auto_choice_skips_integrated_gpus():
+    """Ayrılmış belleği 1024 MB'tan az kart (tümleşik, ~128 MB) "auto"ya girmez; listede kalır ve elle seçilir."""
+    ort = FakeOrt()
+    intel_only = devices.list_gpus(_enum=lambda: [INTEL, BASIC])
+    assert [g.id for g in intel_only] == ["gpu-8086-9a49"]
+    assert devices.auto_choice(intel_only, _ort=ort) == "cpu"
+    assert devices.resolve("auto", intel_only, _ort=ort) == (None, None)       # beklenen sonuç: not yok
+    g, note = devices.resolve("gpu-8086-9a49", intel_only, _ort=ort)           # elle seçim çalışır
+    assert g is not None and g.id == "gpu-8086-9a49" and note is None
+    edge = [Gpu("gpu-aaaa-0001", "A", 1023, 0, "l"), Gpu("gpu-bbbb-0002", "B", 1024, 1, "l")]
+    assert devices.auto_choice(edge, _ort=ort) == "gpu-bbbb-0002"              # sınır: 1024 MB dahil
+    s = devices.open_session("m.onnx", Configure(), "auto", _ort=ort, _gpus=intel_only)
+    assert s.used == devices.cpu_used() and [x.providers for x in ort.sessions] == [[CPU]]
 
 
 def test_auto_choice_cpu_without_gpus_or_dml():
@@ -303,6 +322,28 @@ def test_reason_is_truncated_to_160_chars():
     assert s.used.note == f"Ekran kartında açılamadı ({'x' * 160}); işlemci kullanılıyor."
 
 
+def test_reason_strips_build_server_paths():
+    """DirectML iletileri derleme sunucusunun kaynak yoluyla başlar; nota yol girmez, HRESULT ve ileti kalır."""
+    dml = RuntimeError(
+        "D:\\a\\_work\\1\\s\\onnxruntime\\core\\providers\\dml\\DmlExecutionProvider\\src\\"
+        "DmlCommittedResourceAllocator.cpp(22)\\onnxruntime_pybind11_state.pyd!00007FFB1C2A3F8C: "
+        "(caller: 00007FFB1C2A6E5A) Exception(3) tid(1a2c) 887A0005 The GPU device instance has been suspended.\n"
+        "ikinci satır")
+    reason = devices._reason(dml)
+    assert reason == ("(caller: 00007FFB1C2A6E5A) Exception(3) tid(1a2c) 887A0005 The GPU device instance has been "
+                      "suspended.")
+    posix = RuntimeError("[ONNXRuntimeError] : 1 : FAIL : /onnxruntime_src/onnxruntime/core/framework/"
+                         "bfc_arena.cc:376 void* Alloc  Failed to allocate memory  Name:'/model.0/conv/Conv'")
+    assert devices._reason(posix) == ("[ONNXRuntimeError] : 1 : FAIL : void* Alloc Failed to allocate memory "
+                                      "Name:'/model.0/conv/Conv'")                 # düğüm adı yol değil
+    assert devices._reason(OSError("C:\\x\\y.dll")) == "OSError"                 # yalnız yol: hatanın türü
+    assert devices._reason(RuntimeError("\n  \n")) == "RuntimeError"
+    ort = FakeOrt(ctor_error=dml)
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    assert s.used.note == f"Ekran kartında açılamadı ({reason}); işlemci kullanılıyor."
+    assert "\\" not in (s.used.note or "") and "_work" not in (s.used.note or "")
+
+
 # --------------------------------------------------------------- 8-9. çalışma hatası
 
 def test_run_error_on_gpu_rebuilds_on_cpu_and_retries():
@@ -339,11 +380,100 @@ def test_run_error_after_fallback_on_cpu_propagates():
     assert s.used.note is not None and s.used.note.startswith("Ekran kartı çalışırken hata verdi")
 
 
-def test_concurrent_gpu_failures_build_one_cpu_session():
-    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
-    barrier = threading.Barrier(2, timeout=10)
-    ort.gpu_run_hook = barrier.wait                                      # iki çağrı da GPU'da hata alsın
+def wait_until(cond: Callable[[], bool], timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > deadline:
+            raise AssertionError("koşul zamanında sağlanmadı")
+        time.sleep(0.005)
+
+
+def test_gpu_runs_are_serialised():
+    """DirectML bir oturumda eşzamanlı Run'a izin vermez: ekran kartındaki çağrılar sıraya girer."""
+    ort = FakeOrt()
+    active, peak = [0], [0]
+    guard = threading.Lock()
+
+    def hook() -> None:
+        with guard:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.02)
+        with guard:
+            active[0] -= 1
+
+    ort.gpu_run_hook = hook
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    results: list[float] = []
+    threads = [threading.Thread(target=lambda: results.append(float(s.run(None, {})[0][0]))) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert results == [7.0] * 4 and peak[0] == 1 and len(ort.sessions[0].runs) == 4
+
+
+def test_cpu_runs_stay_lock_free():
+    """İşlemci oturumu kilitsiz: iki çağrı aynı anda run içinde olabilir (engel ikisi de girmeden açılmaz)."""
+    ort = FakeOrt()
+    ort.cpu_run_hook = threading.Barrier(2, timeout=10).wait
+    s = devices.open_session("m.onnx", Configure(), "cpu", _ort=ort, _gpus=gpus2())
+    results: list[float] = []
+    threads = [threading.Thread(target=lambda: results.append(float(s.run(None, {})[0][0]))) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert results == [3.0, 3.0]
+
+
+def test_call_waiting_on_gpu_lock_runs_on_cpu_after_fallback():
+    """Kart kilidini bekleyen çağrı, beklerken oturum işlemciye düştüyse kartı denemeden işlemcide (kilitsiz) çalışır.
+    Düşüş, kilidi tutan çağrının içinden durumu değiştirerek benzetilir (sıralama böylece kesin)."""
+    ort = FakeOrt()
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    gpu_s = ort.sessions[0]
+    cpu_s = ort.InferenceSession("m.onnx", FakeSO(), [CPU])
+    entered, release = threading.Event(), threading.Event()
+
+    def hook() -> None:
+        entered.set()
+        release.wait(10)
+        s._state = (cpu_s, devices.cpu_used("düştü"))                    # başka bir çağrının düşüşü (benzetim)
+
+    ort.gpu_run_hook = hook
+    results: list[float] = []
+
+    def call() -> None:
+        results.append(float(s.run(None, {})[0][0]))
+
+    first = threading.Thread(target=call)
+    first.start()
+    assert entered.wait(10)                                              # ilk çağrı kartta, kilit tutuluyor
+    second = threading.Thread(target=call)
+    second.start()
+    time.sleep(0.1)
+    assert len(gpu_s.runs) == 1 and not cpu_s.runs                       # ikinci çağrı kilidi bekliyor
+    release.set()
+    first.join(15)
+    second.join(15)
+    assert sorted(results) == [3.0, 7.0]
+    assert len(gpu_s.runs) == 1 and len(cpu_s.runs) == 1 and s.used.note == "düştü"
+
+
+def test_concurrent_gpu_failures_build_one_cpu_session(monkeypatch):
+    """İkinci çağrı, ilki işlemci oturumunu kurarken (durum kilidi tutulurken) kart kilidini alıp kartta hata alır:
+    kilitler iç içe tutulmadığından kilitlenme olmaz, tek işlemci oturumu kurulur, ikisi de işlemci sonucunu alır."""
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2())
+    gpu_s = ort.sessions[0]
+    real_cpu_session = devices._cpu_session
+
+    def slow_cpu_session(*a: object) -> object:                          # ikinci kart denemesini bekle
+        wait_until(lambda: len(gpu_s.runs) == 2)
+        return real_cpu_session(*a)
+
+    monkeypatch.setattr(devices, "_cpu_session", slow_cpu_session)
     results: list[float] = []
 
     def call() -> None:

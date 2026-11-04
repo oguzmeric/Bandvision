@@ -84,5 +84,6 @@ exit /b 1
 :takas_hata
 echo Ekran karti paketi degistirilemedi; "BandVision analiz" penceresini kapatip kisayolu yeniden calistirin.
 echo Baska bir BandVision ya da Python sureci paketleri kilitliyorsa once onu kapatin.
+echo Internet baglantisini kontrol edip yeniden deneyin.
 pause
 exit /b 1
