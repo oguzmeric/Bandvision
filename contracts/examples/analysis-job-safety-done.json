@@ -1,0 +1,41 @@
+{
+  "schema": "bantvision.analysis-job.v1",
+  "id": "5d2a7c90-3e1b-4b6f-9a48-e07c1d5b8f23",
+  "status": "done",
+  "createdAt": "2026-11-04T09:10:00Z",
+  "updatedAt": "2026-11-04T09:11:30Z",
+  "expiresAt": "2026-11-11T09:10:00Z",
+  "video": {
+    "name": "kuyumcu_kamera.mp4",
+    "sizeBytes": 31457280,
+    "seconds": 95.0,
+    "fps": 25.0,
+    "width": 1280,
+    "height": 720
+  },
+  "options": {
+    "preset": "safety",
+    "safety": {
+      "handsUp": { "enabled": true, "seconds": 3 },
+      "lying": { "enabled": true, "seconds": 10 }
+    }
+  },
+  "progress": 1.0,
+  "result": {
+    "count": 2,
+    "calibration": {},
+    "processingFps": 14.8,
+    "device": { "kind": "gpu", "name": "NVIDIA GeForce RTX 3050 Laptop GPU", "note": null },
+    "alarms": [
+      { "kind": "handsUp", "trackId": 3, "startS": 12.4, "atS": 15.4, "endS": 19.0, "image": "alarm-1.jpg" },
+      { "kind": "lying", "trackId": 5, "startS": 61.0, "atS": 71.0, "endS": 95.0, "image": "alarm-2.jpg" }
+    ],
+    "files": [
+      "annotated.mp4",
+      "alarms.csv",
+      "profile.json",
+      "alarm-1.jpg",
+      "alarm-2.jpg"
+    ]
+  }
+}

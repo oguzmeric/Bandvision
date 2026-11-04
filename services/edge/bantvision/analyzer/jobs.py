@@ -13,6 +13,7 @@ import logging
 import os
 import pathlib
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -28,10 +29,15 @@ from ..core import devices
 SCHEMA = "bantvision.analysis-job.v1"
 RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
     "sayimlar.csv": "counts.csv",
+    "alarmlar.csv": "alarms.csv",
     "profil.json": "profile.json",
     "arka_plan.png": "background.png",
 }
-PUBLIC_FILES = ("annotated.mp4", "counts.csv", "profile.json", "background.png")
+FIXED_PUBLIC_FILES = ("annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png")
+ALARM_IMAGE = re.compile(r"alarm-([0-9]{1,2})\.jpg")     # alarm resmi: yalnızca bu ad (sözleşme: ^alarm-[0-9]{1,2}\.jpg$)
+MAX_ALARMS = 500                                          # sonuçtaki alarm listesi (sözleşme `maxItems`)
+ALARM_KINDS = ("handsUp", "lying")
+ALARMS_BROKEN = "alarm listesi bozuk"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".ts"}
 # JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
 # (\x1c-\x1f ve \x85'i de atar, \ufeff'i atmaz): panelle aynı girdide aynı sonuç için açık küme (`Host` ayrıştırma, anahtar).
@@ -42,6 +48,12 @@ REMOVE_ATTEMPTS = 20     # açık dosya silinemez (Windows): klasör kısa aral�
 REMOVE_WAIT_S = 0.25
 
 _LOG = logging.getLogger(__name__)
+
+
+def is_public_file(name: str) -> bool:
+    """`GET /jobs/{id}/files/{name}` ile sunulabilen ad: sabit adlar ve `alarm-N.jpg` (tam eşleşme; yol ayracı, uzantı
+    eki ya da sondaki satır sonu geçmez). Başka hiçbir ad sunulmaz: iş klasöründeki `job.json` ve girdi dışarıda kalır."""
+    return name in FIXED_PUBLIC_FILES or ALARM_IMAGE.fullmatch(name) is not None
 
 
 def now() -> dt.datetime:
@@ -127,6 +139,13 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
     bg = options.get("bgRange")
     if bg:
         args += ["--bg-range", f"{float(bg[0])},{float(bg[1])}"]
+    rules = options.get("safety") or {}                   # güvenlik: kapalı kural --no-…, süresi verilen kural --… SANİYE
+    for key, flag in (("handsUp", "hands-up"), ("lying", "lying")):
+        rule = rules.get(key) or {}
+        if rule.get("enabled") is False:
+            args.append(f"--no-{flag}")
+        elif rule.get("seconds") is not None:
+            args += [f"--{flag}", f"{float(rule['seconds']):g}"]
     return args
 
 
@@ -250,7 +269,7 @@ class JobStore:
         return removed
 
     def file(self, job_id: str, name: str) -> pathlib.Path | None:
-        if name not in PUBLIC_FILES:
+        if not is_public_file(name):
             return None
         p = self.dir(job_id) / "out" / name
         return p if p.is_file() else None
@@ -282,6 +301,36 @@ def _valid_device(raw: Any) -> dict[str, Any] | None:
     if note is not None and not isinstance(note, str):
         return None
     return {"kind": raw["kind"], "name": raw["name"], "note": note}
+
+
+def alarm_image_names(folder: pathlib.Path) -> list[str]:
+    """Klasördeki alarm resimleri (`alarm-N.jpg`), N sırasıyla."""
+    names = [p.name for p in folder.glob("alarm-*.jpg") if ALARM_IMAGE.fullmatch(p.name)]
+    return sorted(names, key=lambda n: int(n[len("alarm-"):-len(".jpg")]))
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _valid_alarm(a: Any) -> bool:
+    """Özetteki bir alarm sözleşme şeklinde mi (analysis-job.schema.json `result.alarms`): tam altı alan, doğru türler."""
+    if not isinstance(a, dict) or set(a) != {"kind", "trackId", "startS", "atS", "endS", "image"}:
+        return False
+    end, image = a["endS"], a["image"]
+    return (a["kind"] in ALARM_KINDS
+            and isinstance(a["trackId"], int) and not isinstance(a["trackId"], bool)
+            and all(_is_number(a[k]) and a[k] >= 0 for k in ("startS", "atS"))   # NaN karşılaştırması yanlış çıkar
+            and (end is None or (_is_number(end) and end >= 0))
+            and (image is None or (isinstance(image, str) and ALARM_IMAGE.fullmatch(image) is not None)))
+
+
+def checked_alarms(raw: Any) -> list[dict[str, Any]]:
+    """Özetteki alarm listesi, her öğe sözleşme şeklinde ise kopyası. Liste bizim kendi çıktımız: bozuk şekil bir hatadır,
+    sessizce atlanmaz (`ValueError` → iş "Sonuç hazırlanamadı: alarm listesi bozuk" ile başarısız olur)."""
+    if not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a) for a in raw):
+        raise ValueError(ALARMS_BROKEN)
+    return [dict(a) for a in raw]
 
 
 class Worker:
@@ -440,8 +489,13 @@ class Worker:
                 if (raw / src).exists():
                     os.replace(raw / src, out / dst)
                     files.append(dst)
+            images = alarm_image_names(raw)
+            for name in images:                                   # alarm resimleri adlarıyla taşınır
+                os.replace(raw / name, out / name)
+                files.append(name)
             summary = json.loads((raw / "ozet.json").read_text(encoding="utf-8"))
-        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            alarms = checked_alarms(summary["alarms"]) if "alarms" in summary else None
+        except (OSError, subprocess.CalledProcessError, ValueError) as e:     # JSONDecodeError de ValueError
             self._changed(self.store.update(job_id, status="failed", error=f"Sonuç hazırlanamadı: {e}"))
             return
         finally:
@@ -450,8 +504,10 @@ class Worker:
         result = {
             "count": int(summary["count"]), "truth": summary.get("truth"), "errorPct": summary.get("errorPct"),
             "calibration": summary.get("calibration") or {}, "processingFps": summary.get("processingFps"),
-            "files": [f for f in PUBLIC_FILES if f in files],
+            "files": [f for f in FIXED_PUBLIC_FILES if f in files] + images,
         }
+        if alarms is not None:                                   # güvenlik: alarm listesi (count = alarm toplamı)
+            result["alarms"] = alarms
         if summary.get("countOut") is not None:                  # iki yönlü sayım (kişi): çıkış
             result["countOut"] = int(summary["countOut"])
         device = _valid_device(summary.get("device"))            # yalnız model kullanan analizlerde var

@@ -17,27 +17,42 @@ import subprocess
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import cv2
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    ValidationError,
+    field_validator,
+)
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..core import devices, gpu_load
 from .hostcheck import LocalOnlyMiddleware
-from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
+from .jobs import VIDEO_EXTENSIONS, JobStore, Settings, Worker, is_public_file
 
 _LOG = logging.getLogger(__name__)
 CHUNK = 1024 * 1024
 TOKEN_REFUSED = "Yetkisiz: geçerli bir erişim anahtarı gerekli."
 CLEANUP_INTERVAL_S = 3600.0                     # saatte bir: saklama süresi dolan iş ve alarm kayıtları
 MEDIA_TYPES = {"annotated.mp4": "video/mp4", "counts.csv": "text/csv; charset=utf-8",
-               "profile.json": "application/json", "background.png": "image/png"}
+               "alarms.csv": "text/csv; charset=utf-8", "profile.json": "application/json", "background.png": "image/png"}
+ALARM_IMAGE_TYPE = "image/jpeg"                 # MEDIA_TYPES'ta olmayan her herkese açık ad bir alarm resmidir (`is_public_file`)
+COUNTING_OPTIONS = ("countMode", "truth", "direction", "line", "countLine", "countAnchor", "roi", "roiPolygon",
+                    "bgRange", "productLength")   # güvenlik alarmında kullanılmayan sayım ayarları
+SAFETY_WITH_COUNTING = "Güvenlik alarmı videosunda sayım ayarları kullanılmaz."     # bantvision.video ile aynı metinler
+RULES_WITHOUT_SAFETY = "Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır."
+NO_RULE_ON = "En az bir kural açık olmalı."
 
 
 class _Strict(BaseModel):
@@ -61,9 +76,40 @@ class CountLineIn(_Strict):
     b: PointIn
 
 
+class SafetyRuleIn(_Strict):
+    """Bir güvenlik kuralı: verilmeyen alan canlıdaki varsayılana düşer (açık; eller yukarı 3 sn, yerde yatma 10 sn).
+    Yanlış tür (ör. "false", "10") sessizce dönüştürülmez, reddedilir."""
+    title: ClassVar[str]
+    low: ClassVar[float]
+    high: ClassVar[float]
+    enabled: StrictBool | None = None
+    seconds: StrictFloat | StrictInt | None = None
+
+    @field_validator("seconds")
+    @classmethod
+    def _in_range(cls, v: float | None) -> float | None:
+        # karşılaştırma NaN ve sonsuzu da dışlar (yanlış çıkar); aralıklar canlıdaki kurallarla aynı (live/api.py)
+        if v is not None and not cls.low <= v <= cls.high:
+            raise ValueError(f"{cls.title} süresi {cls.low:g}–{cls.high:g} sn arasında bir sayı olmalı.")
+        return v
+
+
+class HandsUpIn(SafetyRuleIn):
+    title, low, high = "Eller yukarı", 3.0, 5.0
+
+
+class LyingIn(SafetyRuleIn):
+    title, low, high = "Yerde yatma", 5.0, 30.0
+
+
+class SafetyIn(_Strict):
+    handsUp: HandsUpIn | None = None
+    lying: LyingIn | None = None
+
+
 class OptionsIn(_Strict):
     """Sözleşmedeki `options` ile birebir (bilinmeyen alan reddedilir)."""
-    preset: Literal["generic", "egg", "flour", "box", "people"] | None = None
+    preset: Literal["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety"] | None = None
     countMode: Literal["blob", "linescan", "detect"] | None = None
     countAnchor: Literal["center", "bottom"] | None = None
     productLength: float | None = Field(default=None, gt=0, le=2)
@@ -74,6 +120,20 @@ class OptionsIn(_Strict):
     countLine: CountLineIn | None = None
     line: float | None = Field(default=None, ge=0, le=1)
     bgRange: list[float] | None = Field(default=None, min_length=2, max_length=2)
+    safety: SafetyIn | None = None
+
+
+def refuse_mixed_options(opts: OptionsIn) -> None:
+    """Güvenlik alarmı ile sayım ayarları birbirine karışmaz: sessizce yok sayılmaz, iş açılmadan 422 verilir."""
+    if opts.preset != "safety":
+        if opts.safety is not None:
+            raise HTTPException(422, RULES_WITHOUT_SAFETY)
+        return
+    if any(getattr(opts, name) is not None for name in COUNTING_OPTIONS):
+        raise HTTPException(422, SAFETY_WITH_COUNTING)
+    rules = (opts.safety.handsUp, opts.safety.lying) if opts.safety else ()
+    if len(rules) == 2 and all(r is not None and r.enabled is False for r in rules):
+        raise HTTPException(422, NO_RULE_ON)
 
 
 def _bearer_bytes(token: str) -> bytes:
@@ -310,6 +370,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             opts = OptionsIn.model_validate(json.loads(options)) if options else OptionsIn()
         except (json.JSONDecodeError, ValidationError) as e:
             raise HTTPException(422, f"Seçenekler geçersiz: {e}") from e
+        refuse_mixed_options(opts)
         name = pathlib.Path(file.filename or "video").name
         suffix = pathlib.Path(name).suffix.lower()
         if suffix not in VIDEO_EXTENSIONS:
@@ -348,14 +409,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/jobs/{job_id}/files/{name}", dependencies=[Auth])
     def get_file(job_id: str, name: str) -> FileResponse:
         job_or_404(job_id)
-        if name not in PUBLIC_FILES:
+        if not is_public_file(name):
             raise HTTPException(404, "Dosya bulunamadı.")
         path = store.file(job_id, name)
         if path is None:
             raise HTTPException(404, "Dosya henüz hazır değil ya da saklama süresi doldu.")
         # FileResponse Range isteklerini destekler: tarayıcı oynatıcısı ileri/geri sarabilir.
         # Video/görsel/JSON tarayıcıda açılır; CSV indirilir.
-        return FileResponse(path, media_type=MEDIA_TYPES[name], filename=name,
+        return FileResponse(path, media_type=MEDIA_TYPES.get(name, ALARM_IMAGE_TYPE), filename=name,
                             content_disposition_type="attachment" if name.endswith(".csv") else "inline")
 
     @app.delete("/api/v1/jobs/{job_id}", status_code=204, dependencies=[Auth])

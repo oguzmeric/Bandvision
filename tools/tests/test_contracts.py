@@ -89,9 +89,14 @@ def _many_events(doc: Any) -> None:
     doc["events"] = [copy.deepcopy(doc["events"][0]) for _ in range(501)]
 
 
+def _many_alarms(doc: Any) -> None:
+    doc["result"]["alarms"] = [dict(doc["result"]["alarms"][0]) for _ in range(501)]
+
+
 PROFILE = ("profile-egg.json", "product-profile.schema.json")
 POLY = ("profile-box-polygon.json", "product-profile.schema.json")
 JOB = ("analysis-job-done.json", "analysis-job.schema.json")
+SAFETY_JOB = ("analysis-job-safety-done.json", "analysis-job.schema.json")
 EVENT = ("event-state.json", "event.schema.json")
 BATCH = ("batch.json", "batch.schema.json")
 PAIR = ("device-pair-request.json", "device.schema.json#/$defs/pairRequest")
@@ -121,7 +126,29 @@ NEGATIVE_CASES = [
     ("biten işte sonuç yok", *JOB, _del(["result"]), "required", []),
     ("başarısız işte hata yok", *JOB, _set(["status"], "failed"), "required", []),
     ("iş ilerlemesi 1'den büyük", *JOB, _set(["progress"], 1.5), "maximum", ["progress"]),
-    ("iş sonuç dosyası bilinmiyor", *JOB, _set(["result", "files"], ["../etc/passwd"]), "enum", ["result", "files", 0]),
+    ("iş sonuç dosyası bilinmiyor", *JOB, _set(["result", "files"], ["../etc/passwd"]), "anyOf", ["result", "files", 0]),
+    ("iş alarm resmi adı bozuk (files)", *SAFETY_JOB, _set(["result", "files"], ["alarm-999.jpg"]), "pattern",
+     ["result", "files", 0]),
+    ("iş alarm resmi uzantısı bozuk (files)", *SAFETY_JOB, _set(["result", "files"], ["alarm-1.jpg.exe"]), "pattern",
+     ["result", "files", 0]),
+    ("iş alarm türü geçersiz", *SAFETY_JOB, _set(["result", "alarms", 0, "kind"], "fire"), "enum",
+     ["result", "alarms", 0, "kind"]),
+    ("iş alarmında resim yolu dışarı kaçıyor", *SAFETY_JOB, _set(["result", "alarms", 0, "image"], "../x.jpg"),
+     "pattern", ["result", "alarms", 0, "image"]),
+    ("iş alarmında bitiş eksik", *SAFETY_JOB, _del(["result", "alarms", 0, "endS"]), "required",
+     ["result", "alarms", 0]),
+    ("iş alarmında bilinmeyen alan", *SAFETY_JOB, _set(["result", "alarms", 0, "renk"], "kırmızı"),
+     "additionalProperties", ["result", "alarms", 0]),
+    ("iş alarm zamanı eksi", *SAFETY_JOB, _set(["result", "alarms", 1, "atS"], -1), "minimum",
+     ["result", "alarms", 1, "atS"]),
+    ("iş 500'den fazla alarm", *SAFETY_JOB, _many_alarms, "maxItems", ["result", "alarms"]),
+    ("iş eller yukarı süresi 5'ten uzun", *SAFETY_JOB, _set(["options", "safety", "handsUp", "seconds"], 6),
+     "maximum", ["options", "safety", "handsUp", "seconds"]),
+    ("iş yerde yatma süresi 5'ten kısa", *SAFETY_JOB, _set(["options", "safety", "lying", "seconds"], 4),
+     "minimum", ["options", "safety", "lying", "seconds"]),
+    ("iş kural ayarında bilinmeyen kural", *SAFETY_JOB, _set(["options", "safety", "fire"], {"enabled": True}),
+     "additionalProperties", ["options", "safety"]),
+    ("iş ön ayarı bilinmiyor", *JOB, _set(["options", "preset"], "drone"), "enum", ["options", "preset"]),
     ("iş seçeneğinde çokgen bozuk", *JOB, _set(["options", "roiPolygon"], [{"x": 0.1, "y": 0.1}]), "minItems",
      ["options", "roiPolygon"]),
     ("iş bilinmeyen alan", *JOB, _set(["sahibi"], "x"), "additionalProperties", []),

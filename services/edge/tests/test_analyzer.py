@@ -525,11 +525,13 @@ class _FakeProc:
 
 
 def _run_fake_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, summary: dict[str, Any],
-                  worker_kwargs: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
-    """Gerçek video süreci yerine sahte Popen: komut satırını yakalar, `ozet.json`'u verilen özetle yazar."""
+                  worker_kwargs: dict[str, Any], options: dict[str, Any] | None = None,
+                  extra_files: dict[str, bytes] | None = None) -> tuple[list[str], dict[str, Any]]:
+    """Gerçek video süreci yerine sahte Popen: komut satırını yakalar, `ozet.json`'u verilen özetle ve `extra_files`'ı
+    (alarmlar.csv, alarm-N.jpg…) ham çıktı klasörüne yazar."""
     from bantvision.analyzer import jobs
     store = JobStore(Settings(data_dir=tmp_path))
-    job, path = store.create("a.mp4", 10, {}, ".mp4")
+    job, path = store.create("a.mp4", 10, options or {}, ".mp4")
     path.write_bytes(b"x")
     cmds: list[list[str]] = []
 
@@ -537,6 +539,8 @@ def _run_fake_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, summa
         cmds.append(cmd)
         raw = pathlib.Path(cmd[cmd.index("--out") + 1])
         (raw / "ozet.json").write_text(json.dumps(summary), encoding="utf-8")
+        for name, data in (extra_files or {}).items():
+            (raw / name).write_bytes(data)
         return _FakeProc()
 
     monkeypatch.setattr(jobs.subprocess, "Popen", fake_popen)
@@ -578,3 +582,280 @@ def test_worker_omits_malformed_summary_device(tmp_path: pathlib.Path, monkeypat
     _, done = _run_fake_job(tmp_path, monkeypatch, {**SUMMARY, "device": bad}, {})
     assert done["status"] == "done" and "device" not in done["result"]
     assert_contract(job_validator, done)
+
+
+# --- güvenlik alarmı, araç ve hayvan (Video ile test genişlemesi) ---------------------------------------------------------
+
+JPEG = bytes([0xFF, 0xD8, 0xFF, 0xE0]) + b"fake-jpeg-bytes" + bytes([0xFF, 0xD9])
+ALARMS = [
+    {"kind": "handsUp", "trackId": 3, "startS": 12.4, "atS": 15.4, "endS": 19.0, "image": "alarm-1.jpg"},
+    {"kind": "lying", "trackId": 5, "startS": 61.0, "atS": 71.0, "endS": 95.0, "image": "alarm-2.jpg"},
+]
+SAFETY_SUMMARY = {**SUMMARY, "count": 2, "alarms": ALARMS, "seconds": 95.0,
+                  "device": {"kind": "cpu", "name": "İşlemci", "note": None}}
+SAFETY_FILES = {"alarmlar.csv": b"baslangic_sn;alarm_sn\n", "profil.json": b"{}",
+                "alarm-1.jpg": JPEG, "alarm-2.jpg": JPEG}
+SAFETY_OPTIONS = {"preset": "safety", "safety": {"handsUp": {"seconds": 3}, "lying": {"enabled": False}}}
+
+
+def _post(client: TestClient, options: dict[str, Any]) -> Any:
+    return client.post("/api/v1/jobs", files={"file": ("a.mp4", b"x", "video/mp4")},
+                       data={"options": json.dumps(options)})
+
+
+def _accept_without_analysis(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Yükleme kabul sınaması: sahte bayt "okunabilir video" sayılır ve iş çalıştırılmaz (model/süreç yok)."""
+    from bantvision.analyzer import app as app_module
+    monkeypatch.setattr(app_module, "_is_readable_video", lambda _path: True)
+    monkeypatch.setattr(client.app.state.worker, "submit", lambda _job_id: None)
+
+
+@pytest.mark.parametrize("preset", ["vehicle", "animal", "safety"])
+def test_options_accept_new_presets(preset: str) -> None:
+    from bantvision.analyzer.app import OptionsIn
+    assert OptionsIn.model_validate({"preset": preset}).preset == preset
+
+
+def test_options_accept_vehicle_and_animal_with_counting_fields() -> None:
+    from bantvision.analyzer.app import OptionsIn
+    for preset in ("vehicle", "animal"):
+        o = OptionsIn.model_validate({"preset": preset, "countMode": "detect", "countAnchor": "bottom",
+                                      "direction": "left", "line": 0.4, "truth": 7})
+        assert (o.preset, o.countAnchor, o.truth) == (preset, "bottom", 7)
+
+
+def test_options_accept_safety_rules_and_keep_only_given_values() -> None:
+    from bantvision.analyzer.app import OptionsIn
+    o = OptionsIn.model_validate({"preset": "safety", "safety": {"handsUp": {"enabled": True, "seconds": 5},
+                                                                 "lying": {"enabled": False}}})
+    assert o.model_dump(exclude_none=True) == {
+        "preset": "safety", "safety": {"handsUp": {"enabled": True, "seconds": 5.0}, "lying": {"enabled": False}}}
+    assert OptionsIn.model_validate({"preset": "safety", "safety": {}}).model_dump(exclude_none=True) == {
+        "preset": "safety", "safety": {}}
+
+
+@pytest.mark.parametrize("rules", [
+    {"handsUp": {"seconds": 2.9}}, {"handsUp": {"seconds": 5.1}}, {"lying": {"seconds": 4.9}},
+    {"lying": {"seconds": 30.1}}, {"lying": {"seconds": "10"}}, {"handsUp": {"seconds": True}}, {"lying": {"enabled": "false"}},
+    {"fire": {"enabled": True}}, {"handsUp": {"seconds": 3, "kind": "x"}}, {"handsUp": {"seconds": float("nan")}},
+], ids=str)
+def test_options_reject_bad_safety_rules(rules: dict[str, Any]) -> None:
+    from bantvision.analyzer.app import OptionsIn
+    with pytest.raises(ValueError):
+        OptionsIn.model_validate({"preset": "safety", "safety": rules})
+
+
+def test_safety_rule_range_error_is_turkish_and_422(client: TestClient) -> None:
+    r = _post(client, {"preset": "safety", "safety": {"handsUp": {"seconds": 9}}})
+    assert r.status_code == 422
+    assert "Eller yukarı süresi 3–5 sn arasında bir sayı olmalı." in r.json()["detail"]
+    r = _post(client, {"preset": "safety", "safety": {"lying": {"seconds": 1}}})
+    assert r.status_code == 422 and "Yerde yatma süresi 5–30 sn arasında bir sayı olmalı." in r.json()["detail"]
+    assert client.get("/api/v1/jobs").json() == []
+
+
+@pytest.mark.parametrize("extra", [
+    {"countMode": "detect"}, {"truth": 3}, {"direction": "down"}, {"line": 0.5},
+    {"countLine": {"a": {"x": 0.1, "y": 0.1}, "b": {"x": 0.9, "y": 0.9}}},
+    {"roi": {"x": 0, "y": 0, "width": 1, "height": 1}},
+    {"roiPolygon": [{"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.1}, {"x": 0.5, "y": 0.9}]}, {"bgRange": [0, 1]},
+    {"productLength": 0.3}, {"countAnchor": "bottom"},
+], ids=lambda e: next(iter(e)))
+def test_counting_option_on_safety_is_422_and_creates_no_job(client: TestClient, extra: dict[str, Any]) -> None:
+    r = _post(client, {"preset": "safety", **extra})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Güvenlik alarmı videosunda sayım ayarları kullanılmaz."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+@pytest.mark.parametrize("preset", ["generic", "egg", "flour", "box", "people", "vehicle", "animal", None])
+def test_safety_option_on_counting_preset_is_422_and_creates_no_job(client: TestClient, preset: str | None) -> None:
+    options: dict[str, Any] = {"safety": {"lying": {"seconds": 10}}}
+    if preset:
+        options["preset"] = preset
+    r = _post(client, options)
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+def test_both_safety_rules_off_is_422(client: TestClient) -> None:
+    r = _post(client, {"preset": "safety", "safety": {"handsUp": {"enabled": False}, "lying": {"enabled": False}}})
+    assert r.status_code == 422 and r.json()["detail"] == "En az bir kural açık olmalı."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+def test_safety_job_without_rules_is_accepted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kural verilmezse canlıdaki varsayılanlar (eller yukarı 3 sn, yerde yatma 10 sn); tek kural kapalı olabilir."""
+    _accept_without_analysis(client, monkeypatch)
+    for options in ({"preset": "safety"}, {"preset": "safety", "safety": {"lying": {"enabled": False}}}):
+        r = _post(client, options)
+        assert r.status_code == 202, r.text
+        assert r.json()["options"] == options
+
+
+@pytest.mark.parametrize("preset", ["vehicle", "animal"])
+def test_vehicle_and_animal_jobs_are_accepted_with_counting_options(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                                                    preset: str) -> None:
+    _accept_without_analysis(client, monkeypatch)
+    options = {"preset": preset, "countMode": "detect", "countAnchor": "bottom", "direction": "left", "line": 0.4,
+               "truth": 7}
+    r = _post(client, options)
+    assert r.status_code == 202, r.text
+    assert r.json()["options"] == options
+
+
+def test_safety_options_reach_video_tool() -> None:
+    from bantvision.analyzer.jobs import options_to_args
+    assert options_to_args({"preset": "safety", "safety": {"handsUp": {"enabled": True, "seconds": 3},
+                                                           "lying": {"enabled": False}}}) == [
+        "--preset", "safety", "--hands-up", "3", "--no-lying"]
+    assert options_to_args({"preset": "safety", "safety": {"handsUp": {"enabled": False},
+                                                           "lying": {"seconds": 12.5}}}) == [
+        "--preset", "safety", "--no-hands-up", "--lying", "12.5"]
+    assert options_to_args({"preset": "safety"}) == ["--preset", "safety"]
+    assert options_to_args({"preset": "safety", "safety": {"handsUp": {"enabled": True}}}) == ["--preset", "safety"]
+
+
+@pytest.mark.parametrize("preset", ["vehicle", "animal"])
+def test_vehicle_and_animal_options_reach_video_tool(preset: str) -> None:
+    from bantvision.analyzer.jobs import options_to_args
+    assert options_to_args({"preset": preset, "countAnchor": "bottom", "direction": "up", "line": 0.6, "truth": 5}) == [
+        "--preset", preset, "--truth", "5", "--anchor", "bottom", "--direction", "up", "--line", "0.6"]
+
+
+def test_worker_safety_result_has_alarms_and_images(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                    client: TestClient, job_validator: Draft202012Validator) -> None:
+    cmd, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert cmd[cmd.index("--preset") + 1] == "safety" and "--no-lying" in cmd and "--hands-up" in cmd
+    assert done["status"] == "done", done.get("error")
+    res = done["result"]
+    assert res["count"] == 2 and res["alarms"] == ALARMS
+    assert res["files"] == ["alarms.csv", "profile.json", "alarm-1.jpg", "alarm-2.jpg"]
+    assert res["device"] == {"kind": "cpu", "name": "İşlemci", "note": None}
+    assert_contract(job_validator, done)
+    assert not (tmp_path / "jobs" / done["id"] / "work").exists()
+    for name in ("alarm-1.jpg", "alarm-2.jpg"):
+        r = client.get(f"/api/v1/jobs/{done['id']}/files/{name}")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content == JPEG
+        assert r.headers["content-disposition"].startswith("inline")
+    r = client.get(f"/api/v1/jobs/{done['id']}/files/alarms.csv")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert r.headers["content-disposition"].startswith("attachment")
+
+
+def test_worker_safety_result_without_images_lists_only_moved_files(tmp_path: pathlib.Path,
+                                                                    monkeypatch: pytest.MonkeyPatch,
+                                                                    job_validator: Draft202012Validator) -> None:
+    alarms = [{**ALARMS[0], "image": None}]
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "count": 1, "alarms": alarms}, {},
+                            SAFETY_OPTIONS, {"alarmlar.csv": b"x"})
+    assert done["status"] == "done"
+    assert done["result"]["alarms"] == alarms and done["result"]["files"] == ["alarms.csv"]
+    assert_contract(job_validator, done)
+
+
+def test_worker_safety_count_is_true_total_beyond_listed_alarms(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                                job_validator: Draft202012Validator) -> None:
+    alarms = [{**ALARMS[0], "image": f"alarm-{i}.jpg" if i <= 50 else None} for i in range(1, 501)]
+    images = {f"alarm-{i}.jpg": JPEG for i in range(1, 51)}
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "count": 730, "alarms": alarms}, {},
+                            SAFETY_OPTIONS, images)
+    assert done["status"] == "done"
+    assert done["result"]["count"] == 730 and len(done["result"]["alarms"]) == 500
+    assert done["result"]["files"] == [f"alarm-{i}.jpg" for i in range(1, 51)]
+    assert_contract(job_validator, done)
+
+
+@pytest.mark.parametrize("bad", [
+    {"kind": "fire"}, {"trackId": "3"}, {"trackId": True}, {"trackId": 1.5}, {"startS": -1}, {"startS": "1"},
+    {"atS": None}, {"endS": "x"}, {"endS": -2}, {"image": "../x.jpg"}, {"image": "alarm-100.jpg"},
+    {"image": "alarm-1.jpg.exe"}, {"image": 3}, {"extra": 1},
+], ids=lambda d: next(iter(d)) + "=" + repr(next(iter(d.values()))))
+def test_worker_fails_job_on_broken_alarm_item(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                               bad: dict[str, Any]) -> None:
+    alarms = [ALARMS[0], {**ALARMS[1], **bad}]
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "alarms": alarms}, {}, SAFETY_OPTIONS,
+                            SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+    assert "result" not in done
+
+
+def test_worker_fails_job_on_alarm_missing_a_field(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    alarms = [{k: v for k, v in ALARMS[0].items() if k != "endS"}]
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "alarms": alarms}, {}, SAFETY_OPTIONS,
+                            SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+@pytest.mark.parametrize("alarms", ["x", {"kind": "lying"}, [None], ["alarm"], [ALARMS[0]] * 501],
+                         ids=["metin", "nesne", "boş öğe", "metin öğe", "501 alarm"])
+def test_worker_fails_job_on_broken_alarm_list(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                               alarms: Any) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "alarms": alarms}, {}, SAFETY_OPTIONS,
+                            SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+def test_worker_accepts_alarm_without_end(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                          job_validator: Draft202012Validator) -> None:
+    """Sözleşme `endS: null`'a izin verir (bu araç hiç üretmez, ama başka bir üretici verebilir)."""
+    summary = {**SAFETY_SUMMARY, "count": 1, "alarms": [{**ALARMS[0], "endS": None}]}
+    _, done = _run_fake_job(tmp_path, monkeypatch, summary, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert done["status"] == "done" and done["result"]["alarms"][0]["endS"] is None
+    assert_contract(job_validator, done)
+
+
+def test_counting_job_result_has_no_alarms(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, SUMMARY, {})
+    assert "alarms" not in done["result"]
+
+
+@pytest.mark.parametrize("preset", ["vehicle", "animal"])
+def test_worker_vehicle_and_animal_result_is_two_way(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                     job_validator: Draft202012Validator, preset: str) -> None:
+    summary = {**SUMMARY, "count": 5, "countOut": 3, "truth": 5, "errorPct": 0.0}
+    _, done = _run_fake_job(tmp_path, monkeypatch, summary, {}, {"preset": preset, "truth": 5})
+    assert done["result"]["count"] == 5 and done["result"]["countOut"] == 3
+    assert "alarms" not in done["result"]
+    assert_contract(job_validator, done)
+
+
+@pytest.mark.parametrize("name", ["alarm-999.jpg", "alarm-1.jpg.exe", "alarm-.jpg", "alarm-a.jpg", "ALARM-1.jpg",
+                                  "alarm-1.JPG", "alarm-100.jpg", "alarm-1.jpg%0a", "..%2fprofile.json", "x.jpg",
+                                  "job.json", "input.mp4", "%2e%2e%2fjob.json", "alarm-1%2ejpg.exe",
+                                  "alarmlar.csv", "ozet.json"])
+def test_files_route_refuses_unknown_names(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, client: TestClient,
+                                           name: str) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert client.get(f"/api/v1/jobs/{done['id']}/files/{name}").status_code == 404
+
+
+def test_files_route_refuses_traversal_from_alarm_name(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                       client: TestClient) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    (tmp_path / "jobs" / done["id"] / "x").write_bytes(b"secret")
+    for url in (f"/api/v1/jobs/{done['id']}/files/../x", f"/api/v1/jobs/{done['id']}/files/..%2fx",
+                f"/api/v1/jobs/{done['id']}/files/alarm-1.jpg/../../x"):
+        assert client.get(url).status_code == 404, url
+
+
+def test_is_public_file_accepts_fixed_names_and_alarm_images_only() -> None:
+    from bantvision.analyzer.jobs import is_public_file
+    for ok in ("annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png", "alarm-1.jpg",
+               "alarm-50.jpg", "alarm-99.jpg"):
+        assert is_public_file(ok), ok
+    for bad in ("alarm-100.jpg", "alarm-1.jpg\n", "alarm-1.jpg.exe", "alarm-1.jpeg", "../alarm-1.jpg", "alarm-1.jpg ",
+                "", "job.json", "alarmlar.csv", "sayimlar.csv", "ozet.json"):
+        assert not is_public_file(bad), bad
+
+
+def test_expiry_removes_alarm_images_and_empties_files(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    store = JobStore(Settings(data_dir=tmp_path))
+    from bantvision.analyzer.jobs import now
+    later = now() + dt.timedelta(days=30)
+    assert store.expire(later) == [done["id"]]
+    assert store.file(done["id"], "alarm-1.jpg") is None
+    assert store.get(done["id"])["result"]["files"] == []
+
