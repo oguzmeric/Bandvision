@@ -173,13 +173,10 @@ class CameraViewer:
     def _attempt(self) -> tuple[int, float, str, bool]:
         """Bir bağlantı denemesi: (okunan kare, kare gelen süre sn, kopma iletisi, dosya kaynağı mı)."""
         level = open_gate.RETRY if self._no_frames else open_gate.VIEWER
-        # Adres (TRASSIR jetonu) kapıya girdikten sonra alınır: kuyrukta beklerken dolmasın (open_gate)
-        with open_gate.GATE.hold(level), open_gate.priority(level):
-            try:
-                url = self._open_url()
-            except Exception as e:  # noqa: BLE001 — kayıt cihazı yanıt vermedi; yeniden denenir
-                return 0, 0.0, f"Kaynağa ulaşılamadı: {_detail(e)}", False
-            cap = self._capture(url)
+        try:
+            url, cap = open_gate.resolve_and_open(self._open_url, self._capture, level)
+        except open_gate.UrlError as e:                      # kayıt cihazı yanıt vermedi; yeniden denenir
+            return 0, 0.0, f"Kaynağa ulaşılamadı: {_detail(e.__cause__ or e)}", False
         try:
             if not cap.isOpened():
                 return 0, 0.0, "Görüntü açılamadı; yeniden deneniyor.", False

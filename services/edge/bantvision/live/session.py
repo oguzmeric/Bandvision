@@ -439,22 +439,17 @@ class LiveSession:
         file_offset = 0.0                                    # dosya başa sarınca zaman geriye gitmesin
         got_frames = True                                    # ilk deneme öncelikli; görüntü vermeyen sonra sıraya
         while not self._stop.is_set():
+            if self._switch.is_set():                        # yeni kaynak: ilk denemesi yine öncelikli
+                got_frames = True
             self._switch.clear()
             level = open_gate.SESSION if got_frames else open_gate.SESSION_RETRY
-            # Adres (TRASSIR jetonu) kapıya girdikten sonra alınır: kuyrukta beklerken dolmasın (open_gate)
-            with open_gate.GATE.hold(level):
-                try:
-                    with self._lock:
-                        open_url = self._open_url
-                    url = open_url()
-                except Exception as e:  # noqa: BLE001 — adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
-                    url, failure = "", e
-                else:
-                    failure = None
-                cap = open_capture(url, level) if failure is None else None
-            if cap is None:
+            with self._lock:
+                open_url = self._open_url
+            try:
+                url, cap = open_gate.resolve_and_open(open_url, lambda u, lv=level: open_capture(u, lv), level)
+            except open_gate.UrlError as e:                  # adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
                 got_frames = False
-                self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {failure}")
+                self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {e.__cause__}")
                 self._wait_reconnect(backoff)
                 backoff = min(backoff * 2, 15.0)
                 continue

@@ -1,4 +1,4 @@
-"""Ağ akışı açılış sırası: öncelik, iç içe giriş, adresin kapı içinde alınması, süre sınırı ve dosya istisnası."""
+"""Ağ akışı açılış sırası: öncelik, iç içe giriş, adresin alınıp tazelenmesi, süre sınırı ve dosya istisnası."""
 from __future__ import annotations
 
 import contextlib
@@ -222,7 +222,7 @@ class _Cap:
         pass
 
 
-def test_viewer_resolves_url_inside_the_gate_and_failed_viewer_retries_last(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_viewer_retries_last(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(viewer_mod, "_pause", lambda stop, s: stop.wait(0.01))
     plan = [-1, -1, 3, -1]                                         # açılmadı, açılmadı, 3 kare, açılmadı
     seen: list[int] = []
@@ -243,7 +243,7 @@ def test_viewer_resolves_url_inside_the_gate_and_failed_viewer_retries_last(monk
         v.request_stop()
         v.join(2)
     assert seen[:5] == [open_gate.VIEWER, open_gate.RETRY, open_gate.RETRY, open_gate.VIEWER, open_gate.RETRY]
-    assert url_in_gate and all(url_in_gate)                        # jeton kuyrukta beklerken dolmaz
+    assert url_in_gate and not any(url_in_gate)                    # adres kapı dışında (kuyruk beklenmedi)
 
 
 def test_session_opens_first_and_a_session_without_frames_steps_back(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -267,7 +267,7 @@ def test_session_opens_first_and_a_session_without_frames_steps_back(monkeypatch
     finally:
         s.stop()
     assert levels[:4] == [open_gate.SESSION, open_gate.SESSION_RETRY, open_gate.SESSION, open_gate.SESSION_RETRY]
-    assert url_in_gate and all(url_in_gate)
+    assert url_in_gate and not any(url_in_gate)
 
 
 def test_abandoned_snapshot_does_not_open_after_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,3 +280,91 @@ def test_abandoned_snapshot_does_not_open_after_its_deadline(monkeypatch: pytest
     assert opened == [] and result == {}
     api._grab("rtsp://nvr/1", result, deadline=time.monotonic() + 5)
     assert opened == ["rtsp://nvr/1"] and "jpeg" in result
+
+
+def test_session_switch_reconnects_at_session_priority(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(session.LiveSession, "_wait_reconnect", lambda self, s: self._stop.wait(0.05))
+    levels: list[int | None] = []
+    monkeypatch.setattr(session, "open_capture", lambda url, level=None: levels.append(level) or _Cap(-1))
+    s = session.LiveSession("t", lambda: "rtsp://nvr/olu", Profile.egg())
+    try:
+        _wait(lambda: len(levels) >= 2)                            # ölü kaynak: ikinci deneme geride
+        s.switch_source(lambda: "rtsp://nvr/yeni")
+        n = len(levels)
+        _wait(lambda: len(levels) > n)
+    finally:
+        s.stop()
+    assert levels[1] == open_gate.SESSION_RETRY and open_gate.SESSION in levels[n:n + 2]
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 100.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_url_is_fetched_outside_the_gate_and_refreshed_after_a_long_wait() -> None:
+    clock = _Clock()
+    fetched: list[tuple[str, bool]] = []
+    tokens = iter(["rtsp://nvr/1?jeton=eski", "rtsp://nvr/1?jeton=taze"])
+
+    def open_url() -> str:
+        fetched.append(("adres", open_gate.GATE.held_by_current_thread()))
+        return next(tokens)
+
+    def open_fn(url: str) -> str:
+        assert open_gate.GATE.held_by_current_thread()
+        return f"açık:{url}"
+
+    url, cap = open_gate.resolve_and_open(open_url, open_fn, open_gate.VIEWER, clock=clock)
+    assert (url, cap) == ("rtsp://nvr/1?jeton=eski", "açık:rtsp://nvr/1?jeton=eski") and fetched == [("adres", False)]
+
+    fetched.clear()
+    tokens = iter(["rtsp://nvr/1?jeton=eski", "rtsp://nvr/1?jeton=taze"])
+    gate_hold = open_gate.GATE.hold
+
+    @contextlib.contextmanager
+    def waiting_hold(level: int) -> Iterator[None]:
+        clock.t += open_gate.FRESH_URL_S + 1                       # sıra gelene dek uzun beklendi
+        with gate_hold(level):
+            yield
+
+    open_gate.GATE.hold = waiting_hold  # type: ignore[method-assign]
+    try:
+        url, cap = open_gate.resolve_and_open(open_url, open_fn, open_gate.VIEWER, clock=clock)
+    finally:
+        open_gate.GATE.hold = gate_hold  # type: ignore[method-assign]
+    assert url == "rtsp://nvr/1?jeton=taze" and fetched == [("adres", False), ("adres", True)]
+
+
+def test_unreachable_recorder_never_takes_the_gate_and_open_errors_pass_through() -> None:
+    entered: list[int] = []
+    gate_hold = open_gate.GATE.hold
+
+    @contextlib.contextmanager
+    def spy(level: int) -> Iterator[None]:
+        entered.append(level)
+        with gate_hold(level):
+            yield
+
+    def unreachable() -> str:
+        raise TimeoutError("kayıt cihazı yanıt vermedi")
+
+    def broken_open(url: str) -> str:
+        raise ValueError("açıcı bozuk")
+
+    open_gate.GATE.hold = spy  # type: ignore[method-assign]
+    try:
+        with pytest.raises(open_gate.UrlError) as e:
+            open_gate.resolve_and_open(unreachable, lambda u: u, open_gate.SESSION)
+        assert isinstance(e.value.__cause__, TimeoutError) and entered == []
+        with pytest.raises(ValueError):
+            open_gate.resolve_and_open(lambda: "rtsp://nvr/1", broken_open, open_gate.SESSION)
+        assert entered == [open_gate.SESSION]
+        assert open_gate.resolve_and_open(lambda: "C:/v/test.mp4", lambda u: "dosya", open_gate.SESSION) == (
+            "C:/v/test.mp4", "dosya")
+        assert entered == [open_gate.SESSION]                      # dosya kaynağı kapıya girmez
+    finally:
+        open_gate.GATE.hold = gate_hold  # type: ignore[method-assign]

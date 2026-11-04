@@ -9,9 +9,9 @@ sırayı biz belirleriz:
 3. görüntü vermemiş analiz oturumu (kapalı kamerada gece boyu bekleyen güvenlik oturumu duvarı tıkamasın);
 4. görüntü vermemiş izleme okuyucusu.
 
-Adres (TRASSIR'da ~10 sn geçerli jeton) kapıya girdikten SONRA alınır: kuyrukta beklerken jeton dolmasın. Bunun için
-çağıran `GATE.hold(...)` içinde adresi alıp açar; kapı aynı iş parçacığında iç içe girilebilir (`open_capture` yine
-kapıdan geçer).
+Adres (TRASSIR'da ~10 sn geçerli jeton) önce kapı dışında alınır, kuyrukta uzun beklendiyse kapı içinde tazelenir
+(`resolve_and_open`): ulaşılamayan kayıt cihazının HTTP zaman aşımı sırayı tutmaz, jeton da kuyrukta dolmaz. Kapı aynı
+iş parçacığında iç içe girilebilir (`open_capture` yine kapıdan geçer).
 
 Öncelik açılışı yapan iş parçacığına ipucu olarak da verilebilir (`priority(...)`): izleme okuyucusunun açıcısı
 değiştirilebilir (testler sahte açıcı verir) ve imzası değişmez.
@@ -22,7 +22,11 @@ import contextlib
 import heapq
 import itertools
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
+from typing import TypeVar
+
+T = TypeVar("T")
 
 SESSION = 0          # sayım / güvenlik oturumu
 VIEWER = 1           # izleme (ilk deneme ya da son denemesi görüntü verdi), anlık görüntü
@@ -97,3 +101,35 @@ class OpenGate:
 
 
 GATE = OpenGate()
+
+FRESH_URL_S = 5.0    # kuyrukta bundan uzun beklendiyse adres (jeton) kapı içinde yeniden alınır
+
+
+def is_network(url: str) -> bool:
+    return url.lower().startswith(("rtsp://", "http://", "https://"))
+
+
+class UrlError(Exception):
+    """Adres alınamadı (kayıt cihazı yanıt vermedi): asıl hata `__cause__`'da; açıcının hatası bununla sarılmaz."""
+
+
+def _url(open_url: Callable[[], str]) -> str:
+    try:
+        return open_url()
+    except Exception as e:
+        raise UrlError(str(e)) from e
+
+
+def resolve_and_open(open_url: Callable[[], str], open_fn: Callable[[str], T], level: int,
+                     clock: Callable[[], float] = time.monotonic) -> tuple[str, T]:
+    """Adresi al ve aç: (adres, açılan). Adres önce kapı DIŞINDA alınır (ulaşılamayan kayıt cihazının HTTP zaman aşımı
+    sırayı tutmaz); kuyrukta FRESH_URL_S'den uzun beklendiyse sıra gelince yeniden alınır (TRASSIR jetonu ~10 sn).
+    Dosya kaynağı kapıya girmez. Adres hatası `UrlError` olur; açıcının hatası olduğu gibi geçer."""
+    url = _url(open_url)
+    if not is_network(url):
+        return url, open_fn(url)
+    asked = clock()
+    with GATE.hold(level), priority(level):
+        if clock() - asked > FRESH_URL_S:
+            url = _url(open_url)
+        return url, open_fn(url)
