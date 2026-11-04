@@ -1,13 +1,16 @@
 /**
  * `GET /api/system` yanıtı (app/api/system/route.ts): durum şeridi ve Hakkında sayfası okur. Çalışan analiz sunucusunda
  * bilinmeyen alanlar: işlemci yükü ve çalışma süresi null, sürüm ve git özeti "?" (psutil'siz kurulum ya da durum ucu
- * olmayan eski analiz sunucusu).
+ * olmayan eski analiz sunucusu). Ekran kartı: `gpuName` kartın adı (kart yoksa null), `gpuPercent` yükü (kart yoksa ya da
+ * ölçülemiyorsa null; şerit "—" yazar).
  */
 export type SystemInfo =
   | {
       analyzer: "up";
       cpuPercent: number | null;
       uptimeS: number | null;
+      gpuPercent: number | null;
+      gpuName: string | null;
       analyzerVersion: string;
       analyzerCommit: string;
       panelVersion: string;

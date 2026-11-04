@@ -17,6 +17,8 @@ export function classify(r) {
 /**
  * Analiz sunucusu gövdesini doğrular; tür uymuyorsa null (çağıran "down" sayar). `cpuPercent` null olabilir: psutil'siz
  * eski kurulumda işlemci yükü bilinmez (şerit "—" yazar). `commit` alanı olmayan (eski) gövdede git özeti "?".
+ * İsteğe bağlı `gpu: {name, percent}` (percent null olabilir: yük ölçülemedi) `gpuName` ve `gpuPercent` olur; `gpu` yoksa
+ * (eski analiz sunucusu, kart yok) ya da biçimi bozuksa ikisi de null (gövde yine geçerlidir).
  */
 export function parseStatus(json) {
   if (!json || typeof json !== "object") return null;
@@ -25,20 +27,30 @@ export function parseStatus(json) {
   if (cpuPercent !== null && (typeof cpuPercent !== "number" || !Number.isFinite(cpuPercent))) return null;
   if (typeof uptimeS !== "number" || !Number.isFinite(uptimeS)) return null;
   if (typeof version !== "string" || typeof commit !== "string") return null;
-  return { cpuPercent, uptimeS, version, commit };
+  const { gpuName, gpuPercent } = parseGpu(json.gpu);
+  return { cpuPercent, uptimeS, version, commit, gpuPercent, gpuName };
+}
+
+/** `gpu` alanı: {name: metin, percent: sayı | null}; başka her şey (yok, null, bozuk) iki alan da null */
+function parseGpu(gpu) {
+  if (!gpu || typeof gpu !== "object" || typeof gpu.name !== "string") return { gpuName: null, gpuPercent: null };
+  if (gpu.percent !== null && (typeof gpu.percent !== "number" || !Number.isFinite(gpu.percent))) {
+    return { gpuName: null, gpuPercent: null };
+  }
+  return { gpuName: gpu.name, gpuPercent: gpu.percent };
 }
 
 /** Durum ucu olmayan ama çalışan analiz sunucusu: ölçümler ve sürüm bilinmiyor */
-const UNKNOWN = { cpuPercent: null, uptimeS: null, version: "?", commit: "?" };
+const UNKNOWN = { cpuPercent: null, uptimeS: null, version: "?", commit: "?", gpuPercent: null, gpuName: null };
 
 /**
  * Analiz sunucusunun özeti. `get(yol)` analiz sunucusuna istek atar ({ok, status, json()} döndürür; ağ hatasında atar:
- * hata çağırana gider). Sonuç `{analyzer, cpuPercent?, uptimeS?, version?, commit?, log}`; `log` günlüğe yazılacak
+ * hata çağırana gider). Sonuç `{analyzer, cpuPercent?, uptimeS?, version?, commit?, gpuPercent?, gpuName?, log}`; `log` günlüğe yazılacak
  * `{message, what}` ya da null.
  *   - 200 ve geçerli gövde: "up" ve ölçümler;
  *   - 401/403: "auth";
- *   - 404 (durum ucu yok: eski analiz sunucusu): `/healthz` `{ok: true}` derse "up" ve bilinmeyen alanlar (işlemci, süre
- *     null; sürüm, özet "?"), demezse "down";
+ *   - 404 (durum ucu yok: eski analiz sunucusu): `/healthz` `{ok: true}` derse "up" ve bilinmeyen alanlar (işlemci, süre,
+ *     ekran kartı null; sürüm, özet "?"), demezse "down";
  *   - başka hata kodu ya da geçersiz gövde: "down".
  */
 export async function analyzerSummary(get) {

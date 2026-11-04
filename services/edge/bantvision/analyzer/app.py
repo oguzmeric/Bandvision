@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ..core import devices, gpu_load
 from .hostcheck import LocalOnlyMiddleware
 from .jobs import PUBLIC_FILES, VIDEO_EXTENSIONS, JobStore, Settings, Worker
 
@@ -172,6 +173,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             live.close_alarms(s.id)
         live.clips.stop()                                    # durdurulan oturumların kayıtları yazılsın (en çok 60 sn)
         live.notifier.stop()
+        if gpu_sampler is not None:
+            gpu_sampler.close()                              # PDH sorgusu
 
     # Erişim anahtarı tanımlıyken anahtarsız açık tek uç /healthz kalır: API belge sayfaları (/docs, /redoc) ve şema
     # (/openapi.json) sunulmaz. Anahtarsız (yerel geliştirme) açıktır, ama yalnızca bu bilgisayardan (aşağıda
@@ -242,6 +245,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # interval=None: önceki çağrıdan bu yana ölçer; ilk çağrı 0.0 döner, sonraki yoklamalar anlamlıdır.
         return round(psutil.cpu_percent(interval=None), 1)
 
+    gpu_sampler: gpu_load.GpuLoad | None = None
+    gpu_sampler_lock = threading.Lock()
+    gpu_failed_logged = False
+
+    def gpu_status() -> dict[str, Any] | None:
+        """Durum şeridi için ekran kartı: canlı algılayıcının kullandığı kart, yoksa poz modelinin, yoksa `auto` kartı
+        (R12); kimlik kart listesinde yoksa ya da hiç kart yoksa None. Yük ölçülemezse `percent` None, ad yine döner.
+        Örnekleyici uygulama başına tek, ilk çağrıda kurulur (PDH sorgusu süreç boyunca açık kalır)."""
+        nonlocal gpu_sampler, gpu_failed_logged
+        try:
+            gid: str | None = None
+            for model in (live.detector, live.pose):
+                dev = model.status().get("device")
+                if dev and dev.get("kind") == "gpu":
+                    gid = dev.get("id")
+                    break
+            if gid is None:
+                auto = devices.auto_choice()
+                gid = auto if auto != devices.CPU_ID else None
+            gpu = next((g for g in devices.list_gpus() if g.id == gid), None) if gid else None
+            if gpu is None:
+                return None
+            with gpu_sampler_lock:
+                if gpu_sampler is None:
+                    gpu_sampler = gpu_load.GpuLoad()
+                sampler = gpu_sampler
+            percent = sampler.percent(gpu.luid)
+            return {"name": gpu.name, "percent": None if percent is None else round(percent, 1)}
+        except Exception:  # noqa: BLE001 — ekran kartı bilgisi durum ucunu düşürmez
+            if not gpu_failed_logged:
+                gpu_failed_logged = True
+                _LOG.warning("Ekran kartı yükü durum yanıtına eklenemedi", exc_info=True)
+            return None
+
     @app.get("/api/v1/system/status", dependencies=[Auth])
     def system_status() -> dict[str, Any]:
         # Sürüm kurulu dağıtımın adıyla okunur (pyproject.toml `name`); paket kurulu değilse "?"
@@ -250,7 +287,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except importlib.metadata.PackageNotFoundError:
             version = "?"
         return {"cpuPercent": cpu_percent(), "uptimeS": int(time.monotonic() - started), "version": version,
-                "commit": commit}
+                "commit": commit, "gpu": gpu_status()}
 
     @app.post("/api/v1/jobs", status_code=202, dependencies=[Auth])
     async def create_job(file: Annotated[UploadFile, File()],

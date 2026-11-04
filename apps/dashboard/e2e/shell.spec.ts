@@ -177,7 +177,7 @@ test("durum şeridi: analiz sunucusu çalışıyor, işlemci yükü; kapanınca 
   await login(page);
   await expect(strip(page)).toContainText("Analiz sunucusu: çalışıyor");
   await expect(strip(page)).toContainText(/İşlemci %\d+/);
-  await expect(strip(page)).toContainText("Ekran kartı: —");
+  await expect(strip(page)).toContainText(/Ekran kartı: (—|%\d+)/);       // CI'da kart yok, geliştirme bilgisayarında var
   await expect(strip(page)).not.toContainText("Lisans");
   // 5 sn'lik yoklama: sunucu sonradan kapanınca şerit kendiliğinden değişir
   await page.route("**/api/system", (r) => r.fulfill({ json: { analyzer: "down" } }));
@@ -185,6 +185,20 @@ test("durum şeridi: analiz sunucusu çalışıyor, işlemci yükü; kapanınca 
   await expect(strip(page)).toContainText("İşlemci —");
   await expect(strip(page)).toContainText("Ekran kartı: —");
   await expect(strip(page)).not.toContainText("%");
+});
+
+test("durum şeridi: ekran kartı yükü yuvarlanır, kartın adı ipucunda; yük bilinmiyorsa '—' ama ad yine ipucunda", async ({ page }) => {
+  const body = { analyzer: "up", cpuPercent: 3, uptimeS: 9, analyzerVersion: "1", analyzerCommit: "abc1234",
+    panelVersion: pkg.version, panelCommit: "abc1234" };
+  await page.route("**/api/system", (r) => r.fulfill({ json: { ...body, gpuPercent: 12.4, gpuName: "Deneme kartı" } }));
+  await login(page);
+  const gpu = strip(page).getByText(/^Ekran kartı:/);
+  await expect(gpu).toHaveText("Ekran kartı: %12");
+  await expect(gpu).toHaveAttribute("title", "Deneme kartı");
+  await page.unroute("**/api/system");
+  await page.route("**/api/system", (r) => r.fulfill({ json: { ...body, gpuPercent: null, gpuName: "Deneme kartı" } }));
+  await expect(gpu).toHaveText("Ekran kartı: —", { timeout: 12_000 });
+  await expect(gpu).toHaveAttribute("title", "Deneme kartı");
 });
 
 test("durum şeridi: çalışan ama işlemci yükünü bilmeyen analiz sunucusu (psutil'siz ya da eski) 'çalışıyor' ve '—'", async ({ page }) => {

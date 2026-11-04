@@ -14,21 +14,39 @@ test("classify: 200 up; 401/403 auth; 404 old (durum ucu olmayan eski analiz sun
 
 test("parseStatus: işlemci yükü bilinmiyorsa (psutil'siz eski kurulum) null kabul edilir", () => {
   const body = { cpuPercent: null, uptimeS: 90, version: "0.1.0", commit: "abc1234" };
-  assert.deepEqual(parseStatus(body), body);
+  assert.deepEqual(parseStatus(body), { ...body, gpuPercent: null, gpuName: null });
 });
 
 test("parseStatus: git özeti olmayan (eski) gövde kabul edilir, özet '?'", () => {
   assert.deepEqual(parseStatus({ cpuPercent: 3, uptimeS: 9, version: "0.1.0" }),
-    { cpuPercent: 3, uptimeS: 9, version: "0.1.0", commit: "?" });
+    { cpuPercent: 3, uptimeS: 9, version: "0.1.0", commit: "?", gpuPercent: null, gpuName: null });
 });
 
 test("parseStatus: geçerli gövde; türü bozuk ya da eksik gövde null", () => {
   const ok = { cpuPercent: 12.5, uptimeS: 90, version: "0.1.0", commit: "abc1234" };
-  assert.deepEqual(parseStatus({ ...ok, fazla: 1 }), ok);
+  assert.deepEqual(parseStatus({ ...ok, fazla: 1 }), { ...ok, gpuPercent: null, gpuName: null });
   for (const bad of [null, undefined, "x", 5, {}, { ...ok, cpuPercent: "1" }, { ...ok, uptimeS: null },
     { ...ok, version: 1 }, { ...ok, version: undefined }, { ...ok, commit: 5 }, { ...ok, commit: null },
     { ...ok, cpuPercent: NaN }, { ...ok, cpuPercent: undefined }]) {
     assert.equal(parseStatus(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("parseStatus: gpu {name, percent} geçer; yük bilinmiyorsa (null) ad yine okunur", () => {
+  const ok = { cpuPercent: 1, uptimeS: 9, version: "0.1.0", commit: "abc1234" };
+  assert.deepEqual(parseStatus({ ...ok, gpu: { name: "NVIDIA kart", percent: 12.4 } }),
+    { ...ok, gpuPercent: 12.4, gpuName: "NVIDIA kart" });
+  assert.deepEqual(parseStatus({ ...ok, gpu: { name: "NVIDIA kart", percent: null } }),
+    { ...ok, gpuPercent: null, gpuName: "NVIDIA kart" });
+  assert.deepEqual(parseStatus({ ...ok, gpu: { name: "Kart", percent: 0 } }), { ...ok, gpuPercent: 0, gpuName: "Kart" });
+});
+
+test("parseStatus: gpu yok (eski analiz sunucusu), null ya da bozuksa iki alan da null; gövde yine geçerli", () => {
+  const ok = { cpuPercent: 1, uptimeS: 9, version: "0.1.0", commit: "abc1234" };
+  const none = { ...ok, gpuPercent: null, gpuName: null };
+  for (const gpu of [undefined, null, "x", 5, [], {}, { name: 1, percent: 3 }, { name: "K", percent: "3" },
+    { name: "K", percent: NaN }, { name: "K", percent: Infinity }, { name: "K" }, { percent: 3 }]) {
+    assert.deepEqual(parseStatus({ ...ok, gpu }), none, JSON.stringify(gpu));
   }
 });
 
@@ -49,15 +67,25 @@ const FULL = { cpuPercent: 7.5, uptimeS: 12, version: "0.1.0", commit: "abc1234"
 
 test("analyzerSummary: güncel analiz sunucusu → up ve ölçümler; /healthz sorulmaz", async () => {
   const { get, asked } = fake({ [STATUS]: { status: 200, body: FULL } });
-  assert.deepEqual(await analyzerSummary(get), { analyzer: "up", ...FULL, log: null });
+  assert.deepEqual(await analyzerSummary(get), { analyzer: "up", ...FULL, gpuPercent: null, gpuName: null, log: null });
   assert.deepEqual(asked, [STATUS]);
+});
+
+test("analyzerSummary: gpu alanı geçirilir (gpuPercent, gpuName); eski analiz sunucusunda null", async () => {
+  const withGpu = fake({ [STATUS]: { status: 200, body: { ...FULL, gpu: { name: "NVIDIA kart", percent: 41.5 } } } });
+  const s = await analyzerSummary(withGpu.get);
+  assert.equal(s.gpuPercent, 41.5);
+  assert.equal(s.gpuName, "NVIDIA kart");
+  const old = await analyzerSummary(fake({ [STATUS]: { status: 200, body: FULL } }).get);
+  assert.equal(old.gpuPercent, null);
+  assert.equal(old.gpuName, null);
 });
 
 test("analyzerSummary: durum ucu yok (404) ama /healthz çalışıyor → up, alanlar bilinmiyor", async () => {
   const { get, asked } = fake({ "/healthz": { status: 200, body: { ok: true, retentionDays: 7 } } });
   const s = await analyzerSummary(get);
   assert.deepEqual({ ...s, log: null },
-    { analyzer: "up", cpuPercent: null, uptimeS: null, version: "?", commit: "?", log: null });
+    { analyzer: "up", cpuPercent: null, uptimeS: null, version: "?", commit: "?", gpuPercent: null, gpuName: null, log: null });
   assert.match(s.log.what, /eski/);
   assert.deepEqual(asked, [STATUS, "/healthz"]);
 });

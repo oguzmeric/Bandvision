@@ -13,7 +13,7 @@ import textwrap
 import time
 import tomllib
 import warnings
-from typing import Any
+from typing import Any, ClassVar
 
 import anyio
 import pytest
@@ -271,11 +271,97 @@ def test_system_status_shape(tmp_path: pathlib.Path) -> None:
         r = c.get("/api/v1/system/status", headers={"Authorization": "Bearer gizli"})
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"cpuPercent", "uptimeS", "version", "commit"}
+        assert set(body) == {"cpuPercent", "uptimeS", "version", "commit", "gpu"}
         assert isinstance(body["cpuPercent"], float) and 0.0 <= body["cpuPercent"] <= 100.0
         assert isinstance(body["uptimeS"], int) and body["uptimeS"] >= 0
         assert isinstance(body["version"], str) and body["version"]
         assert isinstance(body["commit"], str) and body["commit"]
+
+
+class _FakeGpuLoad:
+    """Sahte PDH örnekleyici: kaç örnek oluşturulduğunu ve hangi LUID'lerin sorulduğunu kaydeder."""
+    instances = 0
+    asked: ClassVar[list[str]] = []
+    value: float | None = 37.5
+
+    def __init__(self) -> None:
+        type(self).instances += 1
+
+    def percent(self, luid: str) -> float | None:
+        type(self).asked.append(luid)
+        return type(self).value
+
+    def close(self) -> None:
+        pass
+
+
+def _fake_gpus(monkeypatch: pytest.MonkeyPatch, gpus: list[Any], auto: str = "cpu") -> type[_FakeGpuLoad]:
+    from bantvision.core import devices, gpu_load
+    _FakeGpuLoad.instances, _FakeGpuLoad.asked, _FakeGpuLoad.value = 0, [], 37.5
+    monkeypatch.setattr(devices, "list_gpus", lambda *a, **k: list(gpus))
+    monkeypatch.setattr(devices, "auto_choice", lambda *a, **k: auto)
+    monkeypatch.setattr(gpu_load, "GpuLoad", _FakeGpuLoad)
+    return _FakeGpuLoad
+
+
+def _gpu(gid: str, name: str, luid: str, index: int = 0) -> Any:
+    from bantvision.core.devices import Gpu
+    return Gpu(gid, name, 4096, index, luid)
+
+
+def test_system_status_gpu_is_null_without_any_gpu(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _fake_gpus(monkeypatch, [])
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
+        assert c.get("/api/v1/system/status").json()["gpu"] is None
+    assert fake.instances == 0 and fake.asked == []
+
+
+def test_system_status_gpu_follows_detector_then_pose_then_auto(tmp_path: pathlib.Path,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """R12: canlı algılayıcının kartı; yoksa poz modelinin kartı; yoksa `auto` kartı. Sorgulanan LUID o kartınkidir."""
+    fake = _fake_gpus(monkeypatch, [_gpu("gpu-8086-a7a8", "Intel kart", "0x00000000_0x000132d5", 0),
+                                    _gpu("gpu-10de-28a1", "NVIDIA kart", "0x00000000_0x000153a6", 1)],
+                      auto="gpu-10de-28a1")
+    app = create_app(Settings(data_dir=tmp_path))
+    live = app.state.live
+    gpu_dev = lambda gid: {"state": "ready", "device": {"id": gid, "kind": "gpu", "name": "x"}, "note": None}
+    cpu_dev = {"state": "ready", "device": {"id": "cpu", "kind": "cpu", "name": "İşlemci"}, "note": None}
+    idle = {"state": "idle", "device": None, "note": None}
+    with local_client(app) as c:
+        monkeypatch.setattr(live.detector, "status", lambda: gpu_dev("gpu-8086-a7a8"))
+        monkeypatch.setattr(live.pose, "status", lambda: gpu_dev("gpu-10de-28a1"))
+        assert c.get("/api/v1/system/status").json()["gpu"] == {"name": "Intel kart", "percent": 37.5}
+        assert fake.asked[-1] == "0x00000000_0x000132d5"
+        monkeypatch.setattr(live.detector, "status", lambda: cpu_dev)             # algılayıcı işlemcide: poz kartı
+        assert c.get("/api/v1/system/status").json()["gpu"] == {"name": "NVIDIA kart", "percent": 37.5}
+        assert fake.asked[-1] == "0x00000000_0x000153a6"
+        monkeypatch.setattr(live.pose, "status", lambda: idle)                    # ikisi de kart değil: auto
+        assert c.get("/api/v1/system/status").json()["gpu"] == {"name": "NVIDIA kart", "percent": 37.5}
+        monkeypatch.setattr(live.detector, "status", lambda: idle)
+        fake.value = None                                                         # yük bilinmiyor: ad yine var
+        assert c.get("/api/v1/system/status").json()["gpu"] == {"name": "NVIDIA kart", "percent": None}
+    assert fake.instances == 1                                                    # uygulama başına tek örnekleyici
+
+
+def test_system_status_gpu_id_not_listed_is_null(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_gpus(monkeypatch, [_gpu("gpu-8086-a7a8", "Intel kart", "0x00000000_0x000132d5")], auto="gpu-10de-28a1")
+    with local_client(create_app(Settings(data_dir=tmp_path))) as c:
+        assert c.get("/api/v1/system/status").json()["gpu"] is None
+
+
+def test_system_status_survives_gpu_lookup_failure(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                   caplog: pytest.LogCaptureFixture) -> None:
+    from bantvision.core import devices
+
+    def boom(*a: object, **k: object) -> list[Any]:
+        raise RuntimeError("dxgi")
+
+    monkeypatch.setattr(devices, "list_gpus", boom)
+    with caplog.at_level(logging.WARNING), local_client(create_app(Settings(data_dir=tmp_path))) as c:
+        for _ in range(2):
+            r = c.get("/api/v1/system/status")
+            assert r.status_code == 200 and r.json()["gpu"] is None and r.json()["uptimeS"] >= 0
+    assert sum("Ekran kartı yükü" in m for m in caplog.messages) == 1
 
 
 def test_system_status_without_psutil_reports_cpu_null(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,

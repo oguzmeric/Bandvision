@@ -6,7 +6,7 @@ import { ANALYZER_STATE_TEXT, fetchSystem, type SystemInfo } from "@/lib/system"
 const POLL_MS = 5000;
 
 /**
- * Ekranın altındaki durum şeridi: analiz sunucusu çalışıyor mu, işlemci yükü, ekran kartı yükü (proje 2 gelene dek "—").
+ * Ekranın altındaki durum şeridi: analiz sunucusu çalışıyor mu, işlemci yükü, ekran kartı yükü (adı üzerine gelince görünür).
  * Lisans durumu proje 3 gelene dek gösterilmez. `/api/system` 5 sn'de bir yoklanır; istekler üst üste binmez.
  * Panele ulaşılamıyor ya da oturum düşmüşse (giriş yönlendirmesi alarm şeridinde) her alan "—".
  */
@@ -32,6 +32,9 @@ export default function StatusBar() {
   const server = info ? ANALYZER_STATE_TEXT[info.analyzer] : "—";
   // İşlemci yükü bilinmiyorsa (psutil'siz eski kurulum, durum ucu olmayan eski analiz sunucusu) da "—"
   const cpu = info?.analyzer === "up" && info.cpuPercent !== null ? `%${Math.round(info.cpuPercent)}` : "—";
+  // Ekran kartı yükü: kart yoksa, yük ölçülemiyorsa (PDH yok, eski analiz sunucusu) "—"; adı biliniyorsa yine ipucunda
+  const gpu = info?.analyzer === "up" && typeof info.gpuPercent === "number" ? `%${Math.round(info.gpuPercent)}` : "—";
+  const gpuName = info?.analyzer === "up" ? info.gpuName ?? undefined : undefined;
   return (
     <footer data-testid="status-bar" aria-label="Durum şeridi"
             className="sticky bottom-0 z-30 flex flex-wrap gap-x-2 border-t border-pl-line bg-pl-side px-3 py-1 text-xs text-pl-muted">
@@ -39,7 +42,7 @@ export default function StatusBar() {
       <span aria-hidden="true">·</span>
       <span>İşlemci {cpu}</span>
       <span aria-hidden="true">·</span>
-      <span>Ekran kartı: —</span>
+      <span title={gpuName}>Ekran kartı: {gpu}</span>
     </footer>
   );
 }

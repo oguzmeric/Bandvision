@@ -15,4 +15,14 @@ test("sistem durumu: giriş yoksa 401, girişle analiz sunucusu 'up' ve ölçüm
   expect(typeof body.panelVersion).toBe("string");
   expect(typeof body.analyzerCommit).toBe("string");
   expect(typeof body.panelCommit).toBe("string");
+  // Ekran kartı: CI'da kart yok (null), geliştirme bilgisayarında ad ve yük (yük ölçülemezse null) gelir
+  expect(body.gpuName === null || typeof body.gpuName === "string").toBe(true);
+  expect(body.gpuPercent === null || (typeof body.gpuPercent === "number" && body.gpuPercent >= 0 && body.gpuPercent <= 100)).toBe(true);
+});
+
+test("durum şeridi: ekran kartı alanı '—' ya da yüzde olarak yazılır", async ({ page }) => {
+  await page.goto("/videos");
+  await page.getByLabel("Şifre").fill("e2e-test-sifresi");
+  await page.getByRole("button", { name: "Giriş yap" }).click();
+  await expect(page.getByTestId("status-bar")).toContainText(/Ekran kartı: (—|%\d+)/);
 });

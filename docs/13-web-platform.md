@@ -93,9 +93,9 @@ Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun
 
 **Analiz süzmesi** (`src/lib/analysisKind.ts`): Ürün sayımı, Kişi sayımı ve Güvenlik alarmı aynı canlı sayım sayfasının (`/live`) oturumun profil yöntemine göre süzülmüş hâlidir: ürün `blob` ve `linescan`, kişi `detect`, güvenlik `safety`. Sayfa başlığı türün adıdır. Süzülmüş sayfadaki "Yeni analiz" Kameralar sayfasını aynı türle (`/cameras?tur=…`) açar; orada sayfanın üstünde seçili tür yazar ("Yeni analiz: Kişi sayımı." ve Canlı sayım düğmesinin yalnız bu türün profilleriyle başladığı), "Tümü" süzmeyi kaldırır; oradan açılan "Canlı sayımı başlat" penceresi yalnız o türün profillerini gösterir. Sayımı süren kameranın "Sayılıyor" / "Nöbette" bağlantısı oturumun türüne süzülmüş sayfayı açar (`/live?s=…&tur=…`). `?tur=` birden çok kez verilirse ilki geçerlidir.
 
-**Durum şeridi** (`components/StatusBar.tsx`, her panel sayfasının altında): "Analiz sunucusu: çalışıyor / kapalı / yetki hatası · İşlemci %N · Ekran kartı: —".
+**Durum şeridi** (`components/StatusBar.tsx`, her panel sayfasının altında): "Analiz sunucusu: çalışıyor / kapalı / yetki hatası · İşlemci %N · Ekran kartı: %N".
 - İşlemci, analiz sunucusunun çalıştığı bilgisayarın toplam işlemci yüküdür (bir önceki yoklamadan bu yana); analiz sunucusu çalışmıyorsa ya da yükü bilinmiyorsa (`cpuPercent: null`, aşağıda) "—".
-- Ekran kartı yükü proje 2 gelene dek "—"; lisans durumu proje 3 gelene dek gösterilmez.
+- Ekran kartı, analiz sunucusunun `/api/v1/system/status` yanıtındaki `gpu: {name, percent}` alanından gelir: canlı algılayıcının kullandığı kart, yoksa poz modelinin, yoksa "Otomatik" kart (Windows performans sayaçları, Görev Yöneticisi ile aynı hesap); adı üzerine gelince görünür. Kart yoksa, yük ölçülemiyorsa (Windows dışı, sayaç yok, eski analiz sunucusu) "—". Lisans durumu proje 3 gelene dek gösterilmez.
 - Panele ulaşılamıyorsa ya da oturum düşmüşse her alan "—" olur (giriş bağlantısı alarm şeridindedir).
 
 **Hakkında** (`/about`): panelin sürümü (`package.json`) ve git kısa özeti sunucuda okunur, analiz sunucusu kapalıyken de görünür. Analiz sunucusunun sürümü ve git kısa özeti sayfa açılınca bir kez `/api/system`'den istenir. Sunucu çalışmıyorsa "— (analiz sunucusu kapalı)" ya da "— (analiz sunucusu yetki hatası)" yazar.
