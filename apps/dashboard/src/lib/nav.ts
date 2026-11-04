@@ -27,7 +27,7 @@ export const NAV: NavGroup[] = [
     title: "Donanım",
     items: [
       { label: "Kameralar ve kayıt cihazları", href: "/cameras" },
-      { label: "Cihaz ayarları", href: null, soon: true },
+      { label: "Cihaz ayarları", href: "/devices" },
     ],
   },
   {

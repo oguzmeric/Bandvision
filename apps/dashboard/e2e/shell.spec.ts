@@ -22,7 +22,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
   ] },
   { title: "Donanım", items: [
     { label: "Kameralar ve kayıt cihazları", href: "/cameras" },
-    { label: "Cihaz ayarları", href: null },
+    { label: "Cihaz ayarları", href: "/devices" },
   ] },
   { title: "Sistem", items: [
     { label: "Bildirimler", href: "/notifications" },
