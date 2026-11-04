@@ -3,6 +3,23 @@
 const CPU_NAME = "İşlemci";
 
 /**
+ * Her cihazın ekranda görünen adı (kimlik → etiket). Aynı adlı iki ya da daha çok ekran kartı karışmasın diye adın sonuna
+ * kimliğin `-N` soneki eklenir: " (1)", " (2)"… (soneksiz kimlik 1'dir). Adı benzersiz olanlar olduğu gibi kalır.
+ * @param {Array<{id: string, kind: string, name: string}>} devices
+ * @returns {Record<string, string>}
+ */
+export function deviceLabels(devices) {
+  /** @type {Record<string, string>} */
+  const labels = {};
+  for (const d of devices) {
+    const twins = d.kind === "gpu" && devices.filter((o) => o.kind === "gpu" && o.name === d.name).length > 1;
+    const n = /^gpu-[0-9a-f]{4}-[0-9a-f]{4}-(\d+)$/.exec(d.id)?.[1] ?? "1";
+    labels[d.id] = twins ? `${d.name} (${n})` : d.name;
+  }
+  return labels;
+}
+
+/**
  * "Kullanım" açılır kutusunun seçenekleri: Otomatik (seçilecek cihazın adı), İşlemci, sonra listedeki her ekran kartı.
  * Kayıtlı seçim listede olmayan bir ekran kartıysa (kart sökülmüş, sürücü değişmiş) kaybolmaz: "Bulunamayan ekran kartı (<kimlik>)"
  * olarak sonda yer alır; çözümleme sunucuda işlemciye düşer.
@@ -11,11 +28,11 @@ const CPU_NAME = "İşlemci";
  * @param {string} saved  sunucuda kayıtlı seçim: "auto", "cpu" ya da ekran kartı kimliği
  */
 export function choiceOptions(devices, auto, saved) {
-  const nameOf = (id) => devices.find((d) => d.id === id)?.name ?? (id === "cpu" ? CPU_NAME : id);
+  const labels = deviceLabels(devices);
   const options = [
-    { value: "auto", label: `Otomatik (${nameOf(auto)})` },
+    { value: "auto", label: `Otomatik (${labels[auto] ?? (auto === "cpu" ? CPU_NAME : auto)})` },
     { value: "cpu", label: CPU_NAME },
-    ...devices.filter((d) => d.kind === "gpu").map((d) => ({ value: d.id, label: d.name })),
+    ...devices.filter((d) => d.kind === "gpu").map((d) => ({ value: d.id, label: labels[d.id] })),
   ];
   if (saved !== "auto" && saved !== "cpu" && !devices.some((d) => d.id === saved)) {
     options.push({ value: saved, label: `Bulunamayan ekran kartı (${saved})` });

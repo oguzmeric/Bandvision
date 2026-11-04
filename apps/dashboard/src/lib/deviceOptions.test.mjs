@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { benchText, choiceOptions, inUseText } from "./deviceOptions.mjs";
+import { benchText, choiceOptions, deviceLabels, inUseText } from "./deviceOptions.mjs";
 
 const CPU = { id: "cpu", kind: "cpu", name: "İşlemci" };
 const NV = { id: "gpu-10de-28a1", kind: "gpu", name: "NVIDIA GeForce RTX 4050 Laptop GPU", memoryMb: 5920 };
@@ -42,21 +42,21 @@ test("inUseText: kullanılmıyor (idle)", () => {
 
 test("inUseText: yükleniyor; eski cihaz hâlâ çalışıyorsa adı da yazılır", () => {
   assert.deepEqual(inUseText({ state: "loading", device: null, note: null }), { text: "Şu an: yükleniyor…", warn: false });
-  assert.deepEqual(inUseText({ state: "loading", device: { id: "cpu", kind: "cpu", name: "İşlemci", note: null }, note: null }),
+  assert.deepEqual(inUseText({ state: "loading", device: { id: "cpu", kind: "cpu", name: "İşlemci" }, note: null }),
     { text: "Şu an: İşlemci (yeni cihaz yükleniyor…)", warn: false });
 });
 
 test("inUseText: hazır; çalışan cihazın adı", () => {
-  assert.deepEqual(inUseText({ state: "ready", device: { id: NV.id, kind: "gpu", name: NV.name, note: null }, note: null }),
+  assert.deepEqual(inUseText({ state: "ready", device: { id: NV.id, kind: "gpu", name: NV.name }, note: null }),
     { text: `Şu an: ${NV.name}`, warn: false });
 });
 
 test("inUseText: hazır ama not var (işlemciye düşüş, başarısız geçiş) → uyarı rengi ve not metni", () => {
   const n4 = "Ekran kartı çalışırken hata verdi (DXGI_ERROR_DEVICE_REMOVED); işlemci kullanılıyor.";
-  assert.deepEqual(inUseText({ state: "ready", device: { id: "cpu", kind: "cpu", name: "İşlemci", note: n4 }, note: n4 }),
+  assert.deepEqual(inUseText({ state: "ready", device: { id: "cpu", kind: "cpu", name: "İşlemci" }, note: n4 }),
     { text: `Şu an: İşlemci — ${n4}`, warn: true });
   const sw = "Seçilen cihaza geçilemedi: x; önceki cihazda çalışmaya devam ediyor.";
-  const r = inUseText({ state: "ready", device: { id: NV.id, kind: "gpu", name: NV.name, note: null }, note: sw });
+  const r = inUseText({ state: "ready", device: { id: NV.id, kind: "gpu", name: NV.name }, note: sw });
   assert.equal(r.warn, true);
   assert.ok(r.text.includes(NV.name) && r.text.includes(sw));
 });
@@ -75,4 +75,24 @@ test("benchText: '12.3 ms/kare (2.0 sn açılış)'; not varsa uyarı ve not met
   const note = "Ekran kartında açılamadı (x); işlemci kullanılıyor.";
   assert.deepEqual(benchText({ device: { ...dev, id: "cpu", kind: "cpu", name: "İşlemci", note }, msPerFrame: 90, loadS: 1 }),
     { text: note, warn: true });
+});
+
+const TWIN1 = { id: "gpu-10de-2684", kind: "gpu", name: "NVIDIA ekran kartı", memoryMb: 24000 };
+const TWIN2 = { id: "gpu-10de-2684-2", kind: "gpu", name: "NVIDIA ekran kartı", memoryMb: 24000 };
+const TWIN3 = { id: "gpu-10de-2684-3", kind: "gpu", name: "NVIDIA ekran kartı", memoryMb: 24000 };
+
+test("deviceLabels: adı benzersiz olanlar olduğu gibi; aynı adlı kartlara kimlik sonekiyle (soneksiz = 1) numara eklenir", () => {
+  assert.deepEqual(deviceLabels([CPU, NV, INTEL]), { cpu: "İşlemci", [NV.id]: NV.name, [INTEL.id]: INTEL.name });
+  assert.deepEqual(deviceLabels([CPU, TWIN1, TWIN2, INTEL]), {
+    cpu: "İşlemci", [TWIN1.id]: "NVIDIA ekran kartı (1)", [TWIN2.id]: "NVIDIA ekran kartı (2)", [INTEL.id]: INTEL.name,
+  });
+  // numara listedeki sıraya değil kimliğin sonekine bağlıdır: ilk kart listede yoksa kalan 2 ve 3 kendi numarasını korur
+  const labels = deviceLabels([TWIN3, TWIN2]);
+  assert.equal(labels[TWIN2.id], "NVIDIA ekran kartı (2)");
+  assert.equal(labels[TWIN3.id], "NVIDIA ekran kartı (3)");
+});
+
+test("choiceOptions: aynı adlı kartlar seçenekte ve 'Otomatik (…)' etiketinde numaralı", () => {
+  const opts = choiceOptions([CPU, TWIN1, TWIN2], TWIN2.id, "auto");
+  assert.deepEqual(opts.map((o) => o.label), ["Otomatik (NVIDIA ekran kartı (2))", "İşlemci", "NVIDIA ekran kartı (1)", "NVIDIA ekran kartı (2)"]);
 });

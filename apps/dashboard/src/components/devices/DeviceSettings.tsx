@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
 import { fetchDevices, runBenchmark, saveDevices, type BenchResult, type Choices, type DevicesState, type InUse } from "@/lib/devices";
-import { benchText, choiceOptions, inUseText } from "@/lib/deviceOptions.mjs";
+import { benchText, choiceOptions, deviceLabels, inUseText } from "@/lib/deviceOptions.mjs";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 /** Kullanım satırları: anahtar sunucudaki `choices` anahtarıdır; `live`: altında "Şu an:" satırı olan canlı model */
@@ -34,17 +34,37 @@ export default function DeviceSettings() {
 
   /** Sunucudan gelen durum: ayarı okuyan HER istek buradan geçer (hata kalkar, yeniden deneme durur) */
   const apply = useCallback((d: DevicesState) => { setData(d); setLoadError(null); }, []);
-  const load = useCallback(() => fetchDevices().then(apply).catch((e: Error) => setLoadError(e.message)), [apply]);
+  /** İstek sırası: her okuma ve kayıt bir numara alır; kendinden yeni bir yanıt uygulandıysa geç gelen eski yanıt (ya da hatası)
+   * atılır. Yoksa yavaş bir okuma, kayıttan sonra gelip eski "yükleniyor" durumunu geri getirirdi. */
+  const seq = useRef(0);
+  const applied = useRef(0);
+  const load = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const d = await fetchDevices();
+      if (mine < applied.current) return;
+      applied.current = mine;
+      apply(d);
+    } catch (e) {
+      if (mine >= applied.current) setLoadError((e as Error).message);
+    }
+  }, [apply]);
   useEffect(() => { void load(); }, [load]);
   useRetryWhileFailed(loadError !== null, load);
 
-  // Bir model yeni cihaza yüklenirken "Şu an" satırı sonucu gösterene dek yenilenir
+  // Bir model yeni cihaza yüklenirken "Şu an" satırı sonucu gösterene dek yenilenir; yenileme başarısızsa okuma hatası olur
+  // (5 sn'lik yeniden deneme devralır, satır sonsuza dek "yükleniyor" demez). Süren yenileme bitmeden yenisi başlamaz.
   const loading = data !== null && (data.inUse.detector.state === "loading" || data.inUse.pose.state === "loading");
   useEffect(() => {
-    if (!loading) return;
-    const timer = setInterval(() => { fetchDevices().then(apply).catch(() => undefined); }, LOADING_POLL_MS);
+    if (!loading || loadError !== null) return;
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void load().finally(() => { busy = false; });
+    }, LOADING_POLL_MS);
     return () => clearInterval(timer);
-  }, [loading, apply]);
+  }, [loading, loadError, load]);
 
   /** Okunmadan form boştur: Kaydet o boş değerleri gönderip kayıtlı seçimleri silerdi */
   const ready = data !== null && loadError === null;
@@ -62,6 +82,7 @@ export default function DeviceSettings() {
     setSaving(true);
     try {
       const d = await saveDevices({ detector: value("detector"), pose: value("pose"), video: value("video") });
+      applied.current = ++seq.current;                  // yolda kalan eski okumalar artık atılır
       apply(d); setDraft({}); setMsg({ ok: true, text: "Kaydedildi." });
     } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
     finally { setSaving(false); }
@@ -76,6 +97,8 @@ export default function DeviceSettings() {
       setBench((b) => ({ ...b, [id]: { ok: false, text: (e as Error).message } }));
     } finally { setBenching(null); }
   }
+
+  const labels = data ? deviceLabels(data.devices) : {};
 
   return (
     <div className="max-w-[760px]">
@@ -98,11 +121,12 @@ export default function DeviceSettings() {
                   const shown = b?.ok ? benchText(b.result) : b ? { text: b.text, warn: true } : null;
                   return (
                     <tr key={d.id} data-testid={`device-row-${d.id}`}>
-                      <td>{d.name}</td>
+                      <td>{labels[d.id]}</td>
                       <td>{d.kind === "gpu" ? "Ekran kartı" : "İşlemci"}</td>
                       <td className="tabular-nums">{d.memoryMb === undefined ? "—" : `${d.memoryMb} MB`}</td>
                       <td>
-                        <button type="button" className="pl-btn h-7" disabled={benching !== null} onClick={() => measure(d.id)}>
+                        <button type="button" className="pl-btn h-7" disabled={benching !== null} onClick={() => measure(d.id)}
+                                aria-label={`${labels[d.id]}: ${benching === d.id ? "ölçülüyor" : "hız testi"}`}>
                           {benching === d.id ? "Ölçülüyor…" : "Hız testi"}
                         </button>
                         {shown && (
@@ -128,7 +152,7 @@ export default function DeviceSettings() {
             <div key={key} className="pl-row">
               <label htmlFor={`use-${key}`}>{label}</label>
               <div className="min-w-0">
-                <select id={`use-${key}`} data-testid={`use-${key}`} className="pl-input h-8 w-full" disabled={!ready} value={value(key)}
+                <select id={`use-${key}`} data-testid={`use-${key}`} className="pl-input h-8 w-full" disabled={!ready || saving} value={value(key)}
                         onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}>
                   {data && choiceOptions(data.devices, data.auto, data.choices[key]).map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>

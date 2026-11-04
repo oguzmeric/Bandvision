@@ -2,12 +2,14 @@ import { api } from "./live";
 
 /** Analiz sunucusunun cihaz uçları (`/api/v1/live/devices`, panelde `/api/live/devices`). */
 export interface DeviceInfo { id: string; kind: "cpu" | "gpu"; name: string; memoryMb?: number }
-/** Modelin gerçekte çalıştığı cihaz; `note`: işlemciye düşüş gibi kullanıcıya gösterilecek Türkçe not */
-export interface UsedDevice { id: string; kind: "cpu" | "gpu"; name: string; note: string | null }
+/** Çalışan cihaz (canlı model durumunda): not cihazda değil durumun kendisinde (`InUse.note`) gelir */
+export interface BriefDevice { id: string; kind: "cpu" | "gpu"; name: string }
+/** Hız testinin cihazı; `note`: işlemciye düşüş gibi kullanıcıya gösterilecek Türkçe not */
+export interface UsedDevice extends BriefDevice { note: string | null }
 export interface InUse {
   state: "idle" | "loading" | "ready" | "error";
   /** hazır: çalışan cihaz; yükleniyor: yeni cihaz gelene dek hizmet veren ESKİ cihaz; hata/boşta: null */
-  device: UsedDevice | null;
+  device: BriefDevice | null;
   note: string | null;
 }
 export type Choice = string;   // "auto" | "cpu" | ekran kartı kimliği

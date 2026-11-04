@@ -16,6 +16,8 @@ async function login(page: Page, path = "/devices") {
 const NVIDIA = { id: "gpu-10de-28a1", kind: "gpu", name: "NVIDIA dizüstü ekran kartı", memoryMb: 5920 };
 const INTEL = { id: "gpu-8086-a7a0", kind: "gpu", name: "Intel tümleşik ekran kartı", memoryMb: 128 };
 const CPU = { id: "cpu", kind: "cpu", name: "İşlemci" };
+/** Canlı model durumundaki cihaz: kimlik, tür, ad (not cihazda değil durumda gelir) */
+const brief = ({ id, kind, name }: { id: string; kind: string; name: string }) => ({ id, kind, name });
 const MISSING = "gpu-1002-73bf";
 const N4 = "Ekran kartı çalışırken hata verdi (DXGI_ERROR_DEVICE_REMOVED); işlemci kullanılıyor.";
 
@@ -27,8 +29,8 @@ function body(over: Record<string, unknown> = {}) {
     auto: NVIDIA.id,
     choices: { detector: "auto", pose: NVIDIA.id, video: MISSING },
     inUse: {
-      detector: { state: "ready", device: { ...CPU, note: N4 }, note: N4 },
-      pose: { state: "ready", device: { ...NVIDIA, note: null }, note: null },
+      detector: { state: "ready", device: CPU, note: N4 },
+      pose: { state: "ready", device: brief(NVIDIA), note: null },
     },
     ...over,
   };
@@ -46,7 +48,7 @@ test.describe("gerçek analiz sunucusu", () => {
     const cpu = page.getByTestId("device-row-cpu");
     await expect(cpu).toContainText("İşlemci");
     await expect(cpu).toContainText("—");                                    // işlemcinin belleği yok
-    await expect(cpu.getByRole("button", { name: "Hız testi" })).toBeEnabled();
+    await expect(cpu.getByRole("button", { name: "İşlemci: hız testi", exact: true })).toBeEnabled();
     const save = page.getByRole("button", { name: "Kaydet" });
     const video = page.getByTestId("use-video");
     await expect(video).toBeEnabled();                                       // ayarlar okundu
@@ -150,7 +152,7 @@ test.describe("sahte API", () => {
         gpuSupport: { available: false, reason },
         devices: [CPU], auto: "cpu", choices: { detector: "auto", pose: "auto", video: "auto" },
         inUse: {
-          detector: { state: "loading", device: { ...CPU, note: null }, note: null },
+          detector: { state: "loading", device: CPU, note: null },
           pose: { state: "error", device: null, note: "Poz modeli açılamadı: model dosyası bulunamadı." },
         },
       }),
@@ -187,28 +189,28 @@ test.describe("sahte API", () => {
 
     const nv = page.getByTestId(`device-row-${NVIDIA.id}`);
     const cpu = page.getByTestId("device-row-cpu");
-    await nv.getByRole("button", { name: "Hız testi" }).click();
-    await expect(nv.getByRole("button", { name: "Ölçülüyor…" })).toBeDisabled();
-    await expect(cpu.getByRole("button", { name: "Hız testi" })).toBeDisabled();
-    await expect(page.getByTestId(`device-row-${INTEL.id}`).getByRole("button", { name: "Hız testi" })).toBeDisabled();
+    await nv.getByRole("button", { name: `${NVIDIA.name}: hız testi`, exact: true }).click();
+    await expect(nv.getByRole("button", { name: `${NVIDIA.name}: ölçülüyor`, exact: true })).toBeDisabled();
+    await expect(cpu.getByRole("button", { name: "İşlemci: hız testi", exact: true })).toBeDisabled();
+    await expect(page.getByTestId(`device-row-${INTEL.id}`).getByRole("button", { name: `${INTEL.name}: hız testi`, exact: true })).toBeDisabled();
     release();
     await expect(page.getByTestId(`bench-${NVIDIA.id}`)).toHaveText("12.3 ms/kare (2.0 sn açılış)");
     await expect(page.getByTestId(`bench-${NVIDIA.id}`)).not.toHaveClass(/text-nok-ink/);
-    await expect(cpu.getByRole("button", { name: "Hız testi" })).toBeEnabled();
+    await expect(cpu.getByRole("button", { name: "İşlemci: hız testi", exact: true })).toBeEnabled();
     expect(asked).toEqual([NVIDIA.id]);
 
     // kart işlemciye düştü: sayı yerine not, uyarı renginde
     gate = new Promise<void>((r) => { release = r; }); release(); mode = "note";
-    await page.getByTestId(`device-row-${INTEL.id}`).getByRole("button", { name: "Hız testi" }).click();
+    await page.getByTestId(`device-row-${INTEL.id}`).getByRole("button", { name: `${INTEL.name}: hız testi`, exact: true }).click();
     await expect(page.getByTestId(`bench-${INTEL.id}`)).toHaveText("Ekran kartında açılamadı (x); işlemci kullanılıyor.");
     await expect(page.getByTestId(`bench-${INTEL.id}`)).toHaveClass(/text-nok-ink/);
 
     // başka test sürüyor (409): hata o satırda
     mode = "busy";
-    await cpu.getByRole("button", { name: "Hız testi" }).click();
+    await cpu.getByRole("button", { name: "İşlemci: hız testi", exact: true }).click();
     await expect(page.getByTestId("bench-cpu")).toHaveText("Başka bir hız testi sürüyor; bitince yeniden deneyin.");
     await expect(page.getByTestId("bench-cpu")).toHaveClass(/text-nok-ink/);
-    await expect(cpu.getByRole("button", { name: "Hız testi" })).toBeEnabled();
+    await expect(cpu.getByRole("button", { name: "İşlemci: hız testi", exact: true })).toBeEnabled();
   });
 
   test("okuma hatası (502): hata satırı, Kaydet kapalı; sunucu dönünce sayfa kendiliğinden toparlanır", async ({ page }) => {
@@ -228,5 +230,124 @@ test.describe("sahte API", () => {
     await expect(error).toHaveCount(0);
     await expect(page.getByTestId("use-detector")).toBeEnabled();
     await expect(page.getByTestId("inuse-pose")).toHaveText(`Şu an: ${NVIDIA.name}`);
+  });
+
+  /** Canlı model durumu: "loading" eski cihazda hizmet verirken, "ready" yeni (ekran kartı) cihazda */
+  const detectorIn = (phase: "loading" | "ready") => phase === "loading"
+    ? { state: "loading", device: CPU, note: null }
+    : { state: "ready", device: brief(NVIDIA), note: null };
+  const poseIn = { state: "ready", device: brief(NVIDIA), note: null };
+  const fixture = (phase: "loading" | "ready", over: Record<string, unknown> = {}) =>
+    body({ choices: { detector: "auto", pose: NVIDIA.id, video: "auto" }, inUse: { detector: detectorIn(phase), pose: poseIn }, ...over });
+
+  test("yükleme yenilemesi: 'Şu an' satırı hazır olunca güncellenir, kullanıcının seçimi ve Kaydet bozulmaz, hazır olunca istekler durur", async ({ page }) => {
+    let phase: "loading" | "ready" = "loading";
+    let gets = 0;
+    await page.route("**/api/live/devices", (route) => { gets += 1; return route.fulfill({ json: fixture(phase) }); });
+    await login(page);
+    await expect(page.getByTestId("inuse-detector")).toHaveText("Şu an: İşlemci (yeni cihaz yükleniyor…)");
+
+    await page.getByTestId("use-video").selectOption(INTEL.id);                       // kullanıcı bu sırada seçim yaptı
+    phase = "ready";                                                                  // model yeni cihaza geçti
+    await expect(page.getByTestId("inuse-detector")).toHaveText(`Şu an: ${NVIDIA.name}`);
+    await expect(page.getByTestId("use-video")).toHaveValue(INTEL.id);                // yenileme seçimi ezmedi
+    await expect(page.getByRole("button", { name: "Kaydet" })).toBeEnabled();
+
+    const after = gets;                                                               // hazır: yenileme durmalı
+    await page.waitForTimeout(5000);
+    expect(gets - after).toBeLessThanOrEqual(1);
+  });
+
+  test("yenileme hatası: analiz sunucusu gidince okuma hatası görünür (sonsuza dek 'yükleniyor' demez); dönünce toparlanır", async ({ page }) => {
+    let mode: "loading" | "down" | "ready" = "loading";
+    await page.route("**/api/live/devices", (route) => mode === "down"
+      ? route.fulfill({ status: 502, json: { detail: "Analiz sunucusuna ulaşılamıyor." } })
+      : route.fulfill({ json: fixture(mode) }));
+    await login(page);
+    await expect(page.getByTestId("inuse-detector")).toHaveText("Şu an: İşlemci (yeni cihaz yükleniyor…)");
+
+    mode = "down";
+    const error = page.getByRole("status").filter({ hasText: "Analiz sunucusuna ulaşılamıyor." });
+    await expect(error).toBeVisible();                                                // 2 sn'lik yenileme hatayı yüzeye çıkardı
+    await expect(page.getByRole("button", { name: "Kaydet" })).toBeDisabled();
+    await expect(page.getByTestId("use-video")).toBeDisabled();
+
+    mode = "ready";                                                                   // 5 sn'lik yeniden deneme okur
+    await expect(page.getByTestId("inuse-detector")).toHaveText(`Şu an: ${NVIDIA.name}`, { timeout: 20_000 });
+    await expect(error).toHaveCount(0);
+    await expect(page.getByTestId("use-video")).toBeEnabled();
+  });
+
+  test("eski yanıt atılır: kayıttan önce başlayıp sonra gelen yavaş okuma, yeni durumu eski 'yükleniyor'la ezmez", async ({ page }) => {
+    let phase: "loading" | "ready" = "loading";
+    let hold: Promise<void> | null = null;
+    let held = false;
+    await page.route("**/api/live/devices", async (route) => {
+      if (route.request().method() === "PUT") {
+        phase = "ready";
+        const choices = (route.request().postDataJSON() as { choices: Record<string, string> }).choices;
+        await route.fulfill({ json: fixture("ready", { choices }) });
+        return;
+      }
+      const snapshot = fixture(phase);                                                // istek anındaki durum
+      const gate = hold;
+      if (gate) { hold = null; held = true; await gate; }
+      await route.fulfill({ json: snapshot });
+    });
+    await login(page);
+    await expect(page.getByTestId("inuse-detector")).toHaveText("Şu an: İşlemci (yeni cihaz yükleniyor…)");
+
+    let open: () => void = () => undefined;
+    hold = new Promise<void>((r) => { open = r; });
+    await expect.poll(() => held, { timeout: 10_000 }).toBe(true);                    // sıradaki yenileme yolda ve bekletiliyor
+    await page.getByTestId("use-video").selectOption(INTEL.id);
+    await page.getByRole("button", { name: "Kaydet" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Kaydedildi." })).toBeVisible();
+    await expect(page.getByTestId("inuse-detector")).toHaveText(`Şu an: ${NVIDIA.name}`);
+
+    open();                                                                           // eski yanıt şimdi gelir
+    await page.waitForTimeout(700);
+    await expect(page.getByTestId("inuse-detector")).toHaveText(`Şu an: ${NVIDIA.name}`);
+    await expect(page.getByTestId("use-video")).toHaveValue(INTEL.id);
+  });
+
+  test("kayıt sürerken seçimler kapalıdır, bitince açılır", async ({ page }) => {
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { open = r; });
+    await page.route("**/api/live/devices", async (route) => {
+      if (route.request().method() === "PUT") {
+        await gate;
+        const choices = (route.request().postDataJSON() as { choices: Record<string, string> }).choices;
+        await route.fulfill({ json: fixture("ready", { choices }) });
+        return;
+      }
+      await route.fulfill({ json: fixture("ready") });
+    });
+    await login(page);
+    await page.getByTestId("use-pose").selectOption("cpu");
+    await page.getByRole("button", { name: "Kaydet" }).click();
+    for (const k of ["detector", "pose", "video"]) await expect(page.getByTestId(`use-${k}`)).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Kaydet" })).toBeDisabled();
+    open();
+    await expect(page.getByRole("status").filter({ hasText: "Kaydedildi." })).toBeVisible();
+    for (const k of ["detector", "pose", "video"]) await expect(page.getByTestId(`use-${k}`)).toBeEnabled();
+    await expect(page.getByTestId("use-pose")).toHaveValue("cpu");
+  });
+
+  test("aynı adlı iki ekran kartı numaralanır: seçenekler, 'Otomatik (…)', tablo adı ve hız testi düğmesinin adı", async ({ page }) => {
+    const twin1 = { id: "gpu-10de-2684", kind: "gpu", name: "NVIDIA ekran kartı", memoryMb: 24000 };
+    const twin2 = { ...twin1, id: "gpu-10de-2684-2" };
+    await page.route("**/api/live/devices", (route) => route.fulfill({
+      json: body({ devices: [CPU, twin1, twin2], auto: twin2.id, choices: { detector: "auto", pose: twin1.id, video: "auto" },
+                   inUse: { detector: detectorIn("ready"), pose: { state: "idle", device: null, note: null } } }),
+    }));
+    await login(page);
+    await expect(page.getByTestId("use-pose").locator("option")).toHaveText(
+      ["Otomatik (NVIDIA ekran kartı (2))", "İşlemci", "NVIDIA ekran kartı (1)", "NVIDIA ekran kartı (2)"]);
+    await expect(page.getByTestId(`device-row-${twin1.id}`)).toContainText("NVIDIA ekran kartı (1)");
+    await expect(page.getByTestId(`device-row-${twin2.id}`)).toContainText("NVIDIA ekran kartı (2)");
+    await expect(page.getByRole("button", { name: "NVIDIA ekran kartı (1): hız testi", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "NVIDIA ekran kartı (2): hız testi", exact: true })).toBeVisible();
+    await expect(page.getByTestId("inuse-pose")).toHaveText("Şu an: kullanılmıyor");
   });
 });
