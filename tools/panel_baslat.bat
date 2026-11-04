@@ -21,12 +21,31 @@ if not exist "%EDGE%\.venv\Scripts\python.exe" (
 )
 rem Eski kurulumda (guncellemeyle yeni bir paket eklendiyse ya da alt surumu yukseldiyse) analiz sunucusu acilmaz:
 rem pyproject.toml'daki calisma bagimliliklarinin hepsi kurulu ve yeterince yeni mi, uygulama modulu aciliyor mu bakilir
-rem (tools\check_analyzer_deps.py); degilse paketler yeniden kurulur
-"%EDGE%\.venv\Scripts\python.exe" "%ROOT%\tools\check_analyzer_deps.py" >nul 2>&1
-if errorlevel 1 (
-  echo Analiz sunucusu paketleri guncelleniyor ^(bir kez^)...
-  "%EDGE%\.venv\Scripts\python.exe" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
-)
+rem (tools\check_analyzer_deps.py); degilse paketler yeniden kurulur. Cikis kodu: 0 tamam, 1 eksik/eski, 3 cakisma
+rem (Windows'ta islemci "onnxruntime" ile ekran karti "onnxruntime-directml" ayni klasoru kullanir: ikisi birlikte
+rem kalamaz; islemci surumu kaldirilir, DirectML zorla yeniden kurulur).
+set "PY=%EDGE%\.venv\Scripts\python.exe"
+"%PY%" "%ROOT%\tools\check_analyzer_deps.py" >nul 2>&1
+set "DEPS=%errorlevel%"
+if %DEPS% EQU 0 goto :paketler_tamam
+rem Analiz sunucusu calisiyorsa paketler degistirilemez (DLL'leri kilitli): kurulum atlanir, kullanici uyarilir.
+curl -s -m 2 http://127.0.0.1:8090/healthz >nul 2>&1
+if not errorlevel 1 goto :analiz_calisiyor
+if %DEPS% EQU 3 goto :cakisma
+echo Analiz sunucusu paketleri guncelleniyor ^(bir kez^)...
+"%PY%" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
+rem Eski ortamda yalniz islemci onnxruntime varsa DirectML ancak simdi kuruldu ve ikisi birlikte kaldi: yeniden denetle.
+"%PY%" "%ROOT%\tools\check_analyzer_deps.py" >nul 2>&1
+if not errorlevel 3 goto :paketler_tamam
+:cakisma
+echo Islemci onnxruntime kaldirilip ekran karti surumu ^(onnxruntime-directml^) kuruluyor...
+"%PY%" -m pip uninstall -y onnxruntime || goto :hata
+"%PY%" -m pip install -q --force-reinstall --no-deps "onnxruntime-directml>=1.24" || goto :hata
+"%PY%" -m pip install -q -e "%EDGE%[analyzer]" || goto :hata
+goto :paketler_tamam
+:analiz_calisiyor
+echo Analiz sunucusu paketleri guncellenecek: "BandVision analiz" penceresini kapatip kisayolu yeniden calistirin.
+:paketler_tamam
 if not exist "%DASH%\node_modules\qrcode" (
   echo Panel paketleri kuruluyor ^(ilk sefer ya da yeni paket^)...
   pushd "%DASH%"

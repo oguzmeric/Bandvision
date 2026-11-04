@@ -1,6 +1,11 @@
 """Analiz sunucusunun Python ortamı güncel mi (tools/panel_baslat.bat çağırır; yalnızca standart kütüphane).
 
-Kullanım: `python tools/check_analyzer_deps.py` → eksik ya da eski paket yoksa 0, varsa 1 (eksikler Türkçe yazılır).
+Kullanım: `python tools/check_analyzer_deps.py` → çıkış kodu:
+  0  her şey tamam;
+  1  eksik ya da eski paket var (Türkçe yazılır) → başlatıcı paketleri yeniden kurar;
+  3  paket çakışması (Windows'ta işlemci `onnxruntime` ile `onnxruntime-directml` aynı klasörü kullanır) → başlatıcı
+     işlemci sürümünü kaldırıp DirectML'i zorla yeniden kurar. 3, 1'den önceliklidir (çakışma çözülmeden eksik kurmak
+     boşuna).
 
 Denetim iki adımdır:
 1. `services/edge/pyproject.toml`'daki çalışma bağımlılıkları (`dependencies` + `analyzer` eki) KAYNAK dosyadan okunur
@@ -10,6 +15,10 @@ Denetim iki adımdır:
 2. Analiz sunucusunun uygulama modülü (`bantvision.analyzer.app`) içe aktarılır: bildirilmemiş ama açılışta gereken
    bir şey de eksikse yakalanır.
 Başlatıcı 1 görünce paketleri yeniden kurar (`pip install -e services/edge[analyzer]`).
+
+Ortam işaretleri: yalnız `sys_platform == '<x>'` / `!= '<x>'` değerlendirilir (Windows'ta ekran kartı sürümü, öbür
+platformlarda işlemci sürümü istenir). Başka her işaret (ör. `python_version`) doğru sayılır; işareti yanlış çıkan
+bağımlılık atlanır.
 """
 from __future__ import annotations
 
@@ -19,7 +28,7 @@ import pathlib
 import re
 import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "services" / "edge" / "pyproject.toml"
@@ -29,14 +38,32 @@ APP_MODULE = "bantvision.analyzer.app"
 _REQ = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)$")
 _MIN = re.compile(r">=\s*([0-9][0-9A-Za-z.+!-]*)")
 _NUM = re.compile(r"\d+")
+_PLATFORM_MARKER = re.compile(r"""^\s*sys_platform\s*(==|!=)\s*(['"])(.*?)\2\s*$""")
+
+CPU_RUNTIME = "onnxruntime"
+GPU_RUNTIME = "onnxruntime-directml"
+CONFLICT_EXIT = 3
 
 
-def requirements(pyproject: pathlib.Path = PYPROJECT, extra: str = EXTRA) -> list[tuple[str, str | None]]:
-    """(dağıtım adı, en düşük sürüm ya da None): `dependencies` ve `[project.optional-dependencies].<extra>`."""
+def _marker_applies(marker: str, platform: str) -> bool:
+    """`sys_platform == 'x'` / `!= 'x'` değerlendirilir; başka her işaret (ya da işaretsiz) doğru sayılır."""
+    m = _PLATFORM_MARKER.match(marker)
+    if m is None:
+        return True
+    return (platform == m.group(3)) == (m.group(1) == "==")
+
+
+def requirements(pyproject: pathlib.Path = PYPROJECT, extra: str = EXTRA,
+                 platform: str = sys.platform) -> list[tuple[str, str | None]]:
+    """(dağıtım adı, en düşük sürüm ya da None): `dependencies` ve `[project.optional-dependencies].<extra>`;
+    ortam işareti bu `platform` için yanlış olanlar atlanır."""
     project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
     out: list[tuple[str, str | None]] = []
     for spec in [*project.get("dependencies", []), *project.get("optional-dependencies", {}).get(extra, [])]:
-        m = _REQ.match(spec.split(";", 1)[0])
+        body, _, marker = spec.partition(";")
+        if not _marker_applies(marker, platform):
+            continue
+        m = _REQ.match(body)
         if m is None:
             continue
         low = _MIN.search(m.group(2))
@@ -68,6 +95,31 @@ def problems(reqs: list[tuple[str, str | None]],
     return out
 
 
+def conflicts(reqs: list[tuple[str, str | None]], installed: Mapping[str, str] | None = None,
+              platform: str = sys.platform) -> list[str]:
+    """Windows'ta işlemci `onnxruntime` ile istenen `onnxruntime-directml` birlikte kuruluysa çakışma (Türkçe satır):
+    ikisi de `onnxruntime` klasörüne yazar, biri ötekinin dosyalarını bozar. `installed`: dağıtım adı → sürüm (verilmezse
+    kurulu paketlere bakılır). DirectML henüz kurulu değilse çakışma yoktur (önce eksik olarak 1 döner)."""
+    if platform != "win32" or GPU_RUNTIME not in {n for n, _ in reqs}:
+        return []
+    have = installed if installed is not None else _installed((CPU_RUNTIME, GPU_RUNTIME))
+    if CPU_RUNTIME in have and GPU_RUNTIME in have:
+        return [(f"{CPU_RUNTIME} (işlemci sürümü) ekran kartı sürümüyle ({GPU_RUNTIME}) aynı klasörü kullanıyor; "
+                 "kaldırılmalı")]
+    return []
+
+
+def _installed(names: tuple[str, ...], version: Callable[[str], str] = importlib.metadata.version) -> dict[str, str]:
+    """Verilen dağıtımlardan kurulu olanlar (ad → sürüm)."""
+    out: dict[str, str] = {}
+    for name in names:
+        try:
+            out[name] = version(name)
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return out
+
+
 def import_problem(module: str = APP_MODULE) -> str | None:
     """Modül içe aktarılamıyorsa nedeni (Türkçe), aktarılıyorsa None."""
     try:
@@ -77,15 +129,19 @@ def import_problem(module: str = APP_MODULE) -> str | None:
     return None
 
 
-def main(pyproject: pathlib.Path = PYPROJECT, module: str = APP_MODULE) -> int:
-    found = problems(requirements(pyproject))
-    if not found:                                          # paket listesi tamam: uygulama modülü de açılıyor mu
+def main(pyproject: pathlib.Path = PYPROJECT, module: str = APP_MODULE,
+         version: Callable[[str], str] = importlib.metadata.version, platform: str = sys.platform) -> int:
+    """Çıkış kodu: 0 tamam, 1 eksik/eski/açılmıyor, 3 çakışma (1'den önceliklidir)."""
+    reqs = requirements(pyproject, platform=platform)
+    found = problems(reqs, version)
+    clash = conflicts(reqs, _installed((CPU_RUNTIME, GPU_RUNTIME), version), platform)
+    if not found and not clash:                            # paket listesi tamam: uygulama modülü de açılıyor mu
         err = import_problem(module)
         if err:
             found.append(err)
-    for line in found:
+    for line in [*found, *clash]:
         print(line)
-    return 1 if found else 0
+    return CONFLICT_EXIT if clash else 1 if found else 0
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ Tarayıcı ◄──── Next.js paneli (apps/dashboard) ◄──────
 | `GET` | `/api/v1/jobs/{id}` | İş: durum, ilerleme, sonuç |
 | `GET` | `/api/v1/jobs/{id}/files/{ad}` | `annotated.mp4`, `counts.csv`, `profile.json`, `background.png` |
 | `DELETE` | `/api/v1/jobs/{id}` | İşi ve dosyalarını sil (sürüyorsa iptal) |
-| `GET` | `/api/v1/system/status` | Durum şeridi ve Hakkında için: `{cpuPercent, uptimeS, version, commit}` (bkz. "Panel kabuğu" → "Sistem durumu") |
+| `GET` | `/api/v1/system/status` | Durum şeridi ve Hakkında için: `{cpuPercent, uptimeS, version, commit, gpu}` (`gpu`: `{name, percent}` ya da `null`) (bkz. "Panel kabuğu" → "Sistem durumu") |
 | `GET` | `/healthz` | Sağlık |
 
 Güvenlik:
@@ -78,7 +78,7 @@ Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun
 | Analizler | Video ile test | `/videos` | Video analizi (sayfa başlığı "Videodan sayım ve doğruluk" idi) |
 | Analizler | Raporlar | gri, "yakında" | Raporlar, yakında |
 | Donanım | Kameralar ve kayıt cihazları | `/cameras` | Kameralar |
-| Donanım | Cihaz ayarları | gri, "yakında" | yok (proje 2) |
+| Donanım | Cihaz ayarları | `/devices` | yok (proje 2; bkz. "Cihaz ayarları (ekran kartı)") |
 | Sistem | Bildirimler | `/notifications` | Bildirimler |
 | Sistem | Telefondan erişim | `/settings` | Ayarlar |
 | Sistem | Lisans | gri, "yakında" | yok (proje 3) |
@@ -104,16 +104,17 @@ Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun
 
 **Sistem durumu** (durum şeridi ve Hakkında'nın kaynağı):
 - **Panel `GET /api/system`** (`app/api/system/route.ts`). Durum şeridi her panel sayfasında 5 sn'de bir çağırır (önceki istek bitmeden yenisi gitmez); Hakkında sayfası açılışta çağırır ve durum `up` olana dek 5 sn'de bir yeniden sorar. Panelin sunucu tarafı analiz sunucusunun `GET /api/v1/system/status` ucunu erişim anahtarıyla ve 5 sn zaman aşımıyla sorar. Ara katmandan geçen istekte (şifreli kipte oturumlu; şifresiz kipte `Host` geri döngü adı ve başka siteden değil) yanıt her zaman `200`'dür (şerit durumu gösterir, hata saymaz):
-  - `{analyzer: "up", cpuPercent, uptimeS, analyzerVersion, analyzerCommit, panelVersion, panelCommit}`;
-  - `{analyzer: "up", cpuPercent: null, uptimeS: null, analyzerVersion: "?", analyzerCommit: "?", …}`: bu ucu olmayan eski analiz sunucusu (`404`) ama `/healthz` `{ok: true}` diyor: çalışıyor, ölçümler ve sürüm bilinmiyor (şerit "çalışıyor" ve "İşlemci —"). Durum ucunda `commit` alanı yoksa (eski gövde) git özeti "?"; `cpuPercent: null` (psutil yok) kabul edilir;
+  - `{analyzer: "up", cpuPercent, uptimeS, analyzerVersion, analyzerCommit, panelVersion, panelCommit, gpuPercent, gpuName}`: `gpuPercent` / `gpuName` analiz sunucusunun `gpu: {name, percent}` alanından gelir; kart yoksa ya da yanıtta `gpu` yoksa ikisi de `null`, yük ölçülemiyorsa `gpuPercent` `null` ve `gpuName` kartın adıdır;
+  - `{analyzer: "up", cpuPercent: null, uptimeS: null, analyzerVersion: "?", analyzerCommit: "?", gpuPercent: null, gpuName: null, …}`: bu ucu olmayan eski analiz sunucusu (`404`) ama `/healthz` `{ok: true}` diyor: çalışıyor, ölçümler ve sürüm bilinmiyor (şerit "çalışıyor", "İşlemci —" ve "Ekran kartı: —"). Durum ucunda `commit` alanı yoksa (eski gövde) git özeti "?"; `cpuPercent: null` (psutil yok) kabul edilir;
   - `{analyzer: "down"}`: ağ hatası, zaman aşımı, `401`, `403` ve `404` dışındaki her hata kodu (ör. 5xx), `404` olup `/healthz` de çalışmıyorsa ya da beklenmeyen gövde;
   - `{analyzer: "auth"}`: analiz sunucusu `401` (panelin `ANALYZER_TOKEN`'ı yanlış ya da eksik) ya da `403` (anahtarsız kipte panelin bağlandığı adı reddetti: `ANALYZER_URL` `127.0.0.1` ya da `localhost` değil; bkz. "Analiz sunucusu API" → Güvenlik) döndürdü. Bu durum "kapalı" diye gösterilmez. Durum şeridi ikisinde de "yetki hatası" der; günlük satırı nedeni duruma göre söyler (`401` anahtar, `403` adres).
   - Ara katman isteği önce denetler: şifreli kipte girişsiz istek `401`, şifresiz kipte `Host` başlığı geri döngü adı (`localhost`, `127.0.0.1`, `[::1]`) olmayan istek `403` "Geçersiz adres.", başka siteden gelen tarayıcı isteği `403` "Bu istek başka bir siteden geldiği için kabul edilmedi." alır (bkz. "Telefondan erişim"). Bağlantı ve yetki hataları (ve eski analiz sunucusu notu) günlüğe aynı ileti için dakikada en çok bir satır yazılır; istemci istek sürerken giderse (sayfa kapandı, yoklama iptal edildi) analiz sunucusuna giden istek de kesilir ve günlüğe yazılmaz.
-- **Analiz sunucusu `GET /api/v1/system/status`** (`bantvision/analyzer/app.py`; `ANALYZER_TOKEN` tanımlıysa Bearer gerekir) `{cpuPercent, uptimeS, version, commit}` döndürür:
+- **Analiz sunucusu `GET /api/v1/system/status`** (`bantvision/analyzer/app.py`; `ANALYZER_TOKEN` tanımlıysa Bearer gerekir) `{cpuPercent, uptimeS, version, commit, gpu}` döndürür:
   - `cpuPercent`: bilgisayarın toplam işlemci yükü (yüzde, bir ondalık; `psutil`). Bir önceki çağrıdan bu yana ölçülür; sunucu açıldıktan sonraki ilk çağrı 0.0 verir. `psutil` kurulu değilse (paketleri güncellenmemiş eski kurulum) `null`: sunucu yine açılır, günlüğe bir kez uyarı yazılır, durum şeridi "İşlemci —" gösterir. `psutil` ilk durum isteğinde yüklenir.
   - `uptimeS`: analiz sunucusunun çalışma süresi (tam saniye).
   - `version`: kurulu `bantvision-edge` paketinin sürümü (kurulu değilse "?").
   - `commit`: açılışta bir kez bulunan git kısa özeti (yukarıdaki kural).
+  - `gpu`: `{name, percent}` ya da `null`. Kart: canlı algılayıcının şu an kullandığı ekran kartı, yoksa poz modelinin, yoksa "Otomatik"in seçeceği kart; hiç kart yoksa (ya da bilgi alınamazsa) `null`. `percent`: kartın yükü (yüzde, bir ondalık; Windows performans sayaçları, Görev Yöneticisi ile aynı hesap), ölçülemiyorsa (Windows dışı, sayaç yok) `null` ve ad yine döner. Yeni durum alanı kırıcı değildir: eski panel `gpu`'yu yok sayar.
 
 ## Canlı sayım: kamera ve kayıt cihazı (panel, `bantvision/live`)
 Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve canlı sayım web'de de olsun; ofis NVR'ından görüntü alınıp yerelde test edilebilsin.
@@ -162,6 +163,8 @@ Kullanıcı isteği (2026-10-05): telefondaki ağ kamerası / NVR eklentileri ve
 | `POST` | `/alarms/test` | `{sessionId?}`: deneme alarmı (`type: "test"`); kayıt, panel şeridi ve (yapılandırılmışsa) Telegram; tekrar önlemeye tabi değil. `sessionId` bir güvenlik oturumuysa o kameranın işaretsiz karesi olay resmi olur ve ön kayıttan (son ≤ 8 sn) olay kaydı yazılır; Telegram'a fotoğraf yalnızca o kamerada `sendImage` açıksa gider |
 | `GET` | `/notify` | `{enabled, chatId, hasToken, lastError}`; `lastError`: `{text, at}` ya da `null` (son gönderim hatası, Türkçe, anahtarsız); bot anahtarı hiçbir yanıtta dönmez |
 | `PUT` | `/notify` | `{enabled, chatId, token?}`: `token` `null` → kayıtlı anahtar korunur, `""` → silinir; biçimi geçersiz anahtar `422` (Türkçe ileti, anahtar yankılanmaz). Yanıt `GET` ile aynıdır; anahtar ya da sohbet kimliği değişirse `lastError` silinir |
+| `GET` `PUT` | `/devices` | Cihaz ayarları (bkz. "Cihaz ayarları (ekran kartı)"): kartlar, kayıtlı seçimler ve canlı modellerin şu an çalıştığı cihaz / seçimleri kaydet |
+| `POST` | `/devices/benchmark` | `{device}`: tek cihazda hız testi (`device`: `cpu` ya da kart kimliği) |
 | `POST` | `/notify/test` | Telegram deneme mesajı gönderir; hata (anahtar ya da sohbet kimliği yanlış, ağ yok) `422`, Türkçe ve anahtarsız |
 
 **Güvenlik alarmı ve Bildirimler** (isteğe bağlı, kamera başına; algoritma `03-algorithm.md` §4.11): **Canlı sayımı başlat**ta **Güvenlik** kategorisi, hazır profil **Kuyumcu güvenliği** (`countMode: "safety"`). Kamera eller yukarı ve yerde yatan kişiyi izler, sayım yapmaz; yalnızca bilgisayarda çalışır (iPhone profili tanır ama çalıştırmaz, "Yalnızca bilgisayarda" der). **Alan kısıtı yoktur** (kullanıcı kararı, 2026-10-07): kural görüntüdeki herkese uygulanır, profildeki alan yok sayılır. **Ayarla** panelinde kamera başına yalnızca kurallar (eller yukarı 3–5 sn, yerde yatan kişi 5–30 sn; aç/kapa ve süre) ve "Olay resmini Telegram'a gönder" (varsayılan kapalı) kaydedilir; alan düzenleyicisi yoktur, canlı akış iskeletiyle yerinde kalır ve altında "Kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez. Kural görüntüdeki herkese uygulanır." yazar. Canlı sayfada iskeletli akış, yan panelde "İzleniyor" (izlenmiyorsa nedeniyle), süren durumlar, son 10 alarm (saat, tür, küçük resim, kayıt varsa ▶, bildirim durumu; tıklayınca kayıt penceresi) ve **Deneme alarmı** düğmesi görünür.
@@ -312,6 +315,80 @@ Kullanıcı isteği (2026-10-08): telefondaki tarayıcıdan, ofis Wi-Fi'ında pa
   - **Dışarıdan erişim kapsamda değil** (VPN / tünel sonra).
   - `DASHBOARD_PASSWORD` tanımlıysa o önceliklidir (Telefondan erişim sayfası şifre alanlarını gizler; erişimi açmak için ayrıca bir panel şifresi gerekmez). Ama bu kipte oturum çerezi tuzsuz bir SHA-256 türevidir (şifre değişmedikçe aynı kalır); **yerel ağ için Telefondan erişim sayfasındaki panel şifresi önerilir** (tuzlu scrypt özeti ve rastgele oturum sırrı).
 - **Testler:** `apps/dashboard/src/lib/accessCore.test.mjs` ve `hostCheck.test.mjs` (`npm run test:unit`, CI'da: şifre özeti, panel planı, giriş kısıtı, Host denetimi, ayar kararı, tek kopya kilidi kararı, derleme işareti, middleware denetimi, durum dosyası, JSON gövde türü); CI ayrıca `node --check tools/panel_run.mjs` çalıştırır; `src/lib/analyzerRefusal.test.mjs` (vekilin ret kodları ve metinleri, sayfa sorunu sınıflandırması, anahtarın baytları); `src/lib/streamUpload.test.mjs` (akan gövde bellekte birikmez, 401 ağ hatası olmaz); `e2e/analyzer-key.spec.ts` (gerçek yığın: ayrı analiz sunucusu doğru, ayrı şifresiz panel yanlış anahtarla: vekil `502` + kod, Canlı izleme, alarm ve durum şeridi, Video ile test, taslak yazımının sürmesi; şifresiz panelde başka siteden gelen API isteği; 10 MB üstü video iki anahtarla; yükleme bitmeden karar); `e2e/self-recovery.spec.ts` (ilk yüklemesi başarısız olan sayfalar); `e2e/access.spec.ts` (`DASHBOARD_PASSWORD` kipi, ayar ve durum dosyası geçici klasörde, Telefondan erişim sayfasındaki derleme satırı), `e2e/auth.spec.ts` (muaf yollar tam yol) ve `e2e/access-hash.spec.ts` (şifre özeti kipinde ayrı panel sunucusu: girişsiz sayfa giriş formu, API `401`, sahte çerezler, `415`, giriş kısıtı). Başlatıcının kendisi (kilit, `.next-lan` derlemesi, işaret, middleware denetimi) elle denendi.
+
+## Cihaz ayarları (ekran kartı)
+Bilgisayar yol haritasının 2. projesi (2026-11-03): kişi/araç tanıma ve poz modelleri ekran kartında çalışabilsin, hangi cihazda çalışacağı panelden seçilsin. Menüde Donanım → "Cihaz ayarları" (`/devices`). Görev planı: `docs/superpowers/plans/2026-11-03-gpu-cihaz-ayarlari.md`. **Ürün sayımı model kullanmaz**, işlemcide çalışır ve bu ayardan etkilenmez (sayfa bunu tek satırla söyler).
+
+**Nasıl çalışır:**
+- **Motor:** Windows'ta ONNX Runtime'ın DirectML sağlayıcısı (`onnxruntime-directml`): NVIDIA, Intel ve AMD kartları tek pakette, CUDA kurulumu olmadan. Windows dışında (CI, Linux uç kutusu) işlemci sürümü (`onnxruntime`) kalır, cihaz listesinde yalnız işlemci vardır ve sonuçlar değişmez. CUDA, TensorRT, OpenVINO ve NPU kapsam dışıdır.
+- **Cihaz listesi** (`bantvision/core/devices.py`): işlemci (`cpu`) ve DXGI'nin bildirdiği her ekran kartı. Yazılım bağdaştırıcıları ve Microsoft'unkiler listelenmez. Kart kimliği `gpu-<satıcı>-<aygıt>` (onaltılık, 4+4 hane; aynı karttan ikincisi ve sonrası `-2`, `-3`, … DXGI sırasıyla). Kimlik, sürücü güncellemesi ya da yeni bir ekran yüzünden DXGI sırası değişse de kayıtlı seçimi geçerli tutar; oturum her açılırken o anki DXGI sırasına çevrilir. DXGI hata verirse liste boş kalır (günlüğe bir kez uyarı). Liste 30 sn önbellekte tutulur.
+- **Seçim:** `auto`, `cpu` ya da kart kimliği. `auto` listedeki **ayrılmış belleği en büyük** kartı seçer (eşitlikte DXGI sırası küçük olan); DirectML ya da kart yoksa işlemci. Yani NVIDIA dizüstü ekran kartı ile Intel tümleşik ekran kartı olan bilgisayarda `auto` NVIDIA'yı seçer; Intel elle seçilir. Şu an bulunmayan bir kart kimliği kaydedilebilir ve silinmez (kart sonra takılabilir): çalışırken işlemciye düşer (N2).
+- **Üç ayrı seçim:**
+  - `detector`: canlı kişi ve araç tanıma (hem Kişi sayımı hem Güvenlik alarmının kişi bulması);
+  - `pose`: canlı poz (Güvenlik alarmı);
+  - `video`: "Video ile test" işlerindeki bütün modeller.
+- **Hiçbir düşüş gizlenmez.** Gerçekte çalışan cihaz (`kind`, `id`, `name`, `note`) her modelde tutulur. Oturum açıldıktan sonra ONNX Runtime'ın bildirdiği ilk sağlayıcı DirectML değilse (sessizce işlemciye düşmüşse) oturum "ekran kartı" diye sunulmaz: işlemci olarak açılır ve N3 notunu alır.
+
+**Notlar** (Türkçe, kullanıcıya olduğu gibi gösterilir; `<neden>` hata iletisinin ilk satırıdır, en çok 160 karakter, dosya yolu içermez):
+
+| Kod | Ne zaman | Metin |
+|---|---|---|
+| N1 | Kart seçili ama DirectML yok | `Ekran kartı desteği kurulu değil (onnxruntime-directml); işlemci kullanılıyor.` Windows dışında: `Ekran kartı desteği yalnız Windows'ta var; işlemci kullanılıyor.` |
+| N2 | Seçilen kart kimliği listede yok | `Seçilen ekran kartı bulunamadı; işlemci kullanılıyor.` |
+| N3 | Kartta oturum açılamadı | `Ekran kartında açılamadı (<neden>); işlemci kullanılıyor.` |
+| N4 | Kart çalışırken hata verdi | `Ekran kartı çalışırken hata verdi (<neden>); işlemci kullanılıyor.` |
+
+`auto` kart ya da DirectML olmadığı için işlemciye çözülürse ve `cpu` seçilmişse not yoktur (işlemci beklenen sonuçtur).
+
+**Çalışma hatası (sürücü sıfırlanması, dizüstünde kartın kapanması):** ekran kartı oturumunun herhangi bir çağrısı hata verirse hata günlüğe yazılır, aynı model işlemcide yeniden kurulur ve aynı çağrı işlemcide yeniden denenir (N4). Canlı sayım ve güvenlik alarmı durmaz ve çökmez. Düştükten sonra model işlemcide kalır: yeniden başlatılana ya da seçim değiştirilene dek kendiliğinden ekran kartına dönmez. İşlemci oturumunun hataları olduğu gibi yükselir.
+
+**Canlı modeller boşluksuz geçer** (`SharedModel.set_choice`, `bantvision/live/api.py`): yeni seçim kaydedilince yeni cihazdaki model arka planda yüklenir; eski model hazır olana dek hizmet verir (Intel'in ilk yüklemesi ~15 sn sürebilir ve güvenlik alarmı bu sırada kör kalmaz). Hazır olunca model `_infer` kilidi altında değiştirilir ve eski model bırakılır.
+- **Hizmet sağlığı ile geçiş ayrıdır.** Canlı modelin `state`/`error`'u (güvenlik gözcüsünü besler) "hizmet veren bir model var mı" demektir. Yeni cihaza geçiş **başarısız olursa eski model hizmette kalır ve sağlık "ready" kalır**; başarısızlık yalnızca Cihaz ayarları sayfasında görünür.
+- **`status()`** (sayfanın "Şu an" satırı): hiç yüklenmediyse `idle`; geçiş sürerken `loading` ve **eski cihaz** ("Şu an: <eski> (yeni cihaz yükleniyor…)"); hazırsa `ready`; başarısız geçişte `ready`, eski cihaz ve `Seçilen cihaza geçilemedi: <neden>; önceki cihazda çalışmaya devam ediyor.`; hizmette model yokken yükleme hatası `error`. Hizmet veren cihazı yeniden seçmek başarısızlık notunu siler. Başarısız seçim sonraki yükleme denemesinde (60 sn sonra ya da yeni bir seçimle) yeniden denenir.
+- **Üst üste geçişler:** son seçim kazanır. Aynı seçimi yeniden göndermek bir şey yapmaz. Model hiç yüklenmediyse yalnızca seçim saklanır.
+
+**Ayar dosyası** `<ANALYZER_DATA_DIR>/devices.json` (canlı ayarlar ve alarmlarla aynı kök): `{"choices": {"detector": c, "pose": c, "video": c}}`. Eksik dosya ya da anahtar `auto` demektir; geçersiz değer günlüğe uyarı yazılıp `auto` sayılır. Yazma atomiktir.
+- **Bozuk dosya** diğer ayar dosyaları gibi `devices.json.corrupt` adıyla kenara alınır ve varsayılanlar geçerli olur.
+- **Kilitli dosya** (açılışta okunamadı): varsayılanlar yalnızca bellekte kullanılır ve dosyaya dokunulmaz; dosya her `GET /devices`'ta beklemesiz yeniden okunur (okunursa seçimler canlı modellere uygulanır). `PUT /devices` dosyanın içeriğini okumaz: gövdedeki seçimler kazanır, dosyaya yazılır ve dosya artık okunmuş sayılır.
+- Yazılamazsa (disk, kilit) `PUT` `503` döner ve bellekteki seçimler değişmez.
+
+**API** (`/api/v1/live`, var olan erişim anahtarı; panel vekili `/api/live/[...path]` değişmedi):
+- `GET /devices`:
+
+  ```json
+  {"gpuSupport": {"available": true, "reason": null},
+   "devices": [{"id": "cpu", "kind": "cpu", "name": "İşlemci"},
+               {"id": "gpu-1234-abcd", "kind": "gpu", "name": "<kartın adı>", "memoryMb": 6144}],
+   "auto": "gpu-1234-abcd",
+   "choices": {"detector": "auto", "pose": "auto", "video": "auto"},
+   "inUse": {"detector": {"state": "ready", "device": {"id": "gpu-1234-abcd", "kind": "gpu", "name": "<kartın adı>"}, "note": null},
+             "pose": {"state": "idle", "device": null, "note": null}}}
+  ```
+
+  - Kartın iç alanları (`index`, `luid`) yanıta çıkmaz.
+  - `gpuSupport.reason`: N1'in "; işlemci kullanılıyor." öncesi kısmı ya da `null`. Windows dışında `available` `false`'tur ve cihaz listesi yalnız işlemcidir.
+  - `inUse.*.state`: `idle` | `loading` | `ready` | `error`; `device` ve `note` yukarıdaki `status()` kuralıyla.
+- `PUT /devices`: gövde `{"choices": {"detector", "pose", "video"}}`, üçü de zorunlu, fazladan alan yok. Her değer `auto`, `cpu` ya da `gpu-xxxx-xxxx[-N]` olmalı, değilse `422`. Kaydeder, her iki canlı modele kayıtlı seçimi verir ve `GET` gövdesini döndürür. Yazılamazsa `503`.
+- `POST /devices/benchmark`: gövde `{"device": "cpu" | <kart kimliği>}` (`auto` ve bozuk kimlik `422`). Taze bir `ObjectDetector(device=…)` sabit karede (720×1280×3, tohumlu rastgele) 3 ısınma + 20 ölçümlük koşu yapar. Yanıt `{"device": {id, kind, name, note}, "msPerFrame": <ortalama, bir ondalık>, "loadS": <model açılış süresi>}`. Kart işlemciye düşerse `200` döner ve düşüş `device.note`'ta yazılır (gizlenmez). Aynı anda tek test: biri sürerken yenisi `409` ("Başka bir hız testi sürüyor; bitince yeniden deneyin."); model indirilemez ya da çalıştırılamazsa `502` (Türkçe ileti).
+
+**Video işleri:** işçi her iş başında `choices["video"]`'yu okur ve `bantvision.video`'ya `--device <seçim>` verir (okunamaz ya da geçersizse `cpu`; iş bu yüzden hiç başarısız olmaz). Komut satırındaki `--device` varsayılanı `cpu`'dur (komut satırı ve araçlar tekrarlanabilir kalır). Özet `ozet.json` ve iş sonucu `result.device = {kind, name, note}` yalnızca **model kullanan** analizde (kişi/araç tanıma) yazılır; ürün sayımında yoktur. Sözleşme: `contracts/analysis-job.schema.json`, `02-contracts.md` §7. Video ile test sayfasındaki iş ayrıntısı "Cihaz" kutusunu ("Ekran kartı" / "İşlemci", altında cihaz adı) ve varsa notu tek soluk satır olarak gösterir.
+
+**Panel sayfası** (`components/devices/DeviceSettings.tsx`; başlık "Cihaz ayarları"; giriş metni: "Kişi ve araç tanıma ile poz modelleri ekran kartında çalışabilir. Ürün sayımı model kullanmaz, işlemcide çalışır."):
+- **Cihazlar:** tablo (Ad, Tür, Bellek, Hız testi). Tür "İşlemci" / "Ekran kartı"; bellek `<N> MB` ya da "—". `gpuSupport.available` `false` ise tablonun üstünde `reason` soluk satırda yazar. Aynı adlı ekran kartları kimliğin `-N` sonekiyle " (1)", " (2)"… diye ayrılır.
+- **Hız testi:** her satırdaki düğmenin erişilebilir adı "<ad>: hız testi"dir. Test sürerken düğme "Ölçülüyor…" der ve bütün hız testi düğmeleri kapalıdır. Sonuç `<N> ms/kare (<N> sn açılış)`; cihaz işlemciye düştüyse sayı yerine notu uyarı renginde gösterir (kullanıcı ekran kartı hızı sandığı bir sayıya bakmasın). `409`/`502` metni satırda yazar.
+- **Kullanım:** üç satır (Kişi ve araç tanıma (canlı), Poz — güvenlik alarmı (canlı), Video ile test), her biri bir açılır kutu: "Otomatik (<seçilecek cihazın adı>)", "İşlemci", her ekran kartı; kayıtlı kimlik listede yoksa "Bulunamayan ekran kartı (<kimlik>)". Canlı satırların altında "Şu an: <cihaz>" (yüklenirken "Şu an: yükleniyor…", geçişte "Şu an: <eski> (yeni cihaz yükleniyor…)", hiç yüklenmediyse "Şu an: kullanılmıyor"; not uyarı renginde). Bir model yüklenirken bu satırlar 2 sn'de bir yenilenir.
+- **Kaydet** Bildirimler sayfasının kurallarıyla: ayar okunana dek ve değişiklik yokken kapalı; okuma hatası ile son işlemin sonucu ayrı satırlar; okuma başarısızsa 5 sn'de bir yeniden dener (`useRetryWhileFailed`); `{error}`/`detail` metni `failure.ts` ile okunur; kaydedilmemiş değişiklikle menüden ayrılırken sorulur (`UnsavedGuard`).
+
+**Durum şeridi ekran kartı yükü** (`bantvision/core/gpu_load.py`, yalnız Windows; ctypes, yeni bağımlılık yok): `\GPU Engine(*)\Utilization Percentage` performans sayacı (PDH). Kartın yükü, aynı motorun (`luid_…_eng_N`) işlem başına değerlerinin toplamının motorlar üzerindeki en büyüğüdür, 100 ile sınırlı (Görev Yöneticisi ile aynı). Sorgu süreç boyunca açık kalır; ilk çağrı 100 ms arayla iki örnek toplar, sonrakiler bir önceki çağrıdan bu yana. Herhangi bir PDH hatasında yük `null` olur ve bir kez uyarı yazılır. Şerit "Ekran kartı: %N" gösterir (adı üzerine gelince görünür); kart ya da yük yoksa "—".
+
+**Kurulum ve başlatıcı** (`services/edge/pyproject.toml`, `tools/check_analyzer_deps.py`, `tools/panel_baslat.bat`):
+- `analyzer` ve `detect` ekleri Windows'ta `onnxruntime-directml>=1.24`, diğer platformlarda `onnxruntime>=1.18` ister (ortam işaretiyle). İkisi aynı `onnxruntime` klasörüne yazdığı için **birlikte kurulu kalamaz**.
+- `check_analyzer_deps.py` yalnızca `sys_platform == '…'` / `!= '…'` işaretini değerlendirir (başka işaret doğru sayılır, ör. `python_version`; işareti yanlış çıkan bağımlılık atlanır). Çıkış kodu: `0` tamam; `1` eksik ya da eski paket; `3` Windows'ta işlemci `onnxruntime` ile istenen `onnxruntime-directml` birlikte kurulu (çakışma; `3`, `1`'den önceliklidir ve iki satır da yazılır). DirectML henüz kurulu değilken çakışma sayılmaz (önce eksik olarak `1`).
+- Başlatıcı denetim `0` verirse bir şey yapmaz. Denetim sıfır değilse ve `127.0.0.1:8090/healthz` yanıt veriyorsa analiz sunucusu çalışıyor demektir; çalışan sunucunun DLL'leri kilitli olduğundan paket değiştirilemez: "Analiz sunucusu paketleri guncellenecek: "BandVision analiz" penceresini kapatip kisayolu yeniden calistirin." yazar, kurulumu atlar ve devam eder.
+- Sunucu çalışmıyorsa: `3` ise `pip uninstall -y onnxruntime`, sonra `pip install -q --force-reinstall --no-deps "onnxruntime-directml>=1.24"` (işlemci sürümünün kaldırılması ortak dosyaları da siler; DirectML dosyaları yeniden yazılır), sonra olağan `pip install -q -e services/edge[analyzer]`. `1` ise olağan kurulum yapılır ve **denetim yeniden çalıştırılır**: işlemci `onnxruntime` kurulu eski bir ortamda ilk güncelleme DirectML'i ekler, ikisi birlikte kalır, denetim ancak o zaman `3` verir ve başlatıcı çakışma adımına geçer. Sonuç tam olarak `onnxruntime-directml` kurulu bir ortamdır.
+- Windows dışında hiçbir şey değişmez (CI ve Linux uç kutusu `onnxruntime` ile kalır).
+
+**Doğrulama durumu:** birim ve entegrasyon testleri sahte DXGI, ONNX ve PDH ile çalışır (CI'da Ubuntu ve işlemci `onnxruntime`'ı ile yeşil kalır); yalnızca Windows'ta gerçek DXGI ve PDH okuma testleri ek olarak çalışır (`skipif`). Kartların gerçek hızları (ms/kare) ve başlatıcının gerçek makinede ilk güncellemesi henüz ölçülmedi; ölçülünce `12-durum.md` §5i'ye yazılır, bu belgede başarım iddiası yoktur.
 
 ## Fazlar
 | Faz | İçerik | Kabul |

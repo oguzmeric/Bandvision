@@ -206,7 +206,7 @@ Birden çok kamerayı TRASSIR istemcisindeki gibi tek ekranda, şablonlu bir ız
 Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran kartı desteği ve Cihaz ayarları → lisans ve demo → exe kurulumu → yangın ve duman). Panel TRASSIR'ın ayar ekranı gibi sade: solda yazılı menü, sağda düz sayfalar; izlemede şablon sekmeleri ve 128 kutuya kadar N×M ızgara. Tasarım: `docs/superpowers/specs/2026-10-28-sade-arayuz-design.md` (durum: uygulandı, ölçüm bekliyor); ayrıntı `13-web-platform.md` "Panel kabuğu" ve "Çoklu izleme"; düzen dili `02-contracts.md` §8.
 
 - **Ne var:**
-  - **Kabuk:** solda yazılı, gruplu menü: İzleme, Analizler, Donanım, Sistem. Gruplar açılıp kapanır ve tarayıcıda hatırlanır. Yangın ve duman, Kalite kontrol, Raporlar, Cihaz ayarları ve Lisans gridir, tıklanınca "yakında" der. Telefonda menü "Menü" düğmesinin arkasında bir çekmecedir. Altta durum şeridi: analiz sunucusu çalışıyor / kapalı / yetki hatası, işlemci yükü, ekran kartı "—". Yeni **Hakkında** sayfası panelin ve analiz sunucusunun sürümünü ve git kısa özetini gösterir. Bütün sayfalar sade görünümdedir (düz başlık, form satırları, tablolar); eski kart görünümünü bir birim testi bekçisi yakalar. Sayfa adresleri değişmedi.
+  - **Kabuk:** solda yazılı, gruplu menü: İzleme, Analizler, Donanım, Sistem. Gruplar açılıp kapanır ve tarayıcıda hatırlanır. Yangın ve duman, Kalite kontrol, Raporlar ve Lisans gridir, tıklanınca "yakında" der (Cihaz ayarları §5i ile açıldı). Telefonda menü "Menü" düğmesinin arkasında bir çekmecedir. Altta durum şeridi: analiz sunucusu çalışıyor / kapalı / yetki hatası, işlemci yükü, ekran kartı yükü (§5i). Yeni **Hakkında** sayfası panelin ve analiz sunucusunun sürümünü ve git kısa özetini gösterir. Bütün sayfalar sade görünümdedir (düz başlık, form satırları, tablolar); eski kart görünümünü bir birim testi bekçisi yakalar. Sayfa adresleri değişmedi.
   - **Analizler:** Ürün sayımı, Kişi sayımı ve Güvenlik alarmı (poz), canlı sayım sayfasının türe süzülmüş hâlleridir (`/live?tur=urun|kisi|guvenlik`). "Yeni analiz" o türün profilleriyle başlatır.
   - **Canlı izleme** (`/watch`):
     - Şablonlar üstte sekmelerdir: "+" yeni 2×2 şablon açar; sağ tıkla Yeniden adlandır / Kopyala / Sil; seçili sekme bu tarayıcıda hatırlanır.
@@ -237,6 +237,27 @@ Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran k
 - **Video yükleme (2026-11-02):** panelden 10 MB üstü video yüklenemiyordu (Next ara katman gövdesini 10 MB'ta kesiyordu; doğru anahtarla da "ulaşılamadı"). `/api/jobs` ara katmandan çıktı, aynı denetimi kendisi yapar; analiz sunucusunun sınırına kadar bellekte biriktirmeden akar, yanlış anahtar videoyu beklemeden söylenir.
 - **Host denetimi ve başka site reddi (2026-11-02):** anahtarsız kipte analiz sunucusu ve panel yalnızca geri döngü adlarıyla (`Host`) açılır ve başka siteden gelen tarayıcı istekleri (`Origin`, `Sec-Fetch-Site: cross-site`, virgüllü tek satır dahil) `403` alır; panelde Next'in `/_next/data/…` veri yolları da aynı kapıdan geçer. Origin kuralının ortak tablosu `contracts/loopback-origins.json`: iki test takımı aynı dosyayı okur. Ayrıntı: `13-web-platform.md` → "Analiz sunucusu API" → Güvenlik.
 
+## 5i. Ekran kartı desteği ve Cihaz ayarları (web, 2026-11-03)
+
+Bilgisayar tarafı yol haritasının 2. projesi (sıra: sade arayüz → **ekran kartı desteği ve Cihaz ayarları** → lisans ve demo → exe kurulumu → yangın ve duman). Kişi/araç tanıma ve poz modelleri ekran kartında çalışabilir; hangi cihazda çalışacağı panelde Donanım → "Cihaz ayarları"ndan seçilir. Ayrıntı: `13-web-platform.md` "Cihaz ayarları (ekran kartı)"; görev planı `docs/superpowers/plans/2026-11-03-gpu-cihaz-ayarlari.md`.
+
+- **Ne var:**
+  - **Motor:** Windows'ta ONNX Runtime DirectML (`onnxruntime-directml`): NVIDIA dizüstü ekran kartı, Intel tümleşik ekran kartı ve AMD aynı pakette, CUDA kurulumu yok. Windows dışında (CI, Linux) işlemci `onnxruntime`'ı ve davranış değişmez.
+  - **Seçim:** canlı kişi/araç tanıma, canlı poz ve Video ile test için ayrı ayrı `Otomatik` (belleği en büyük kart), `İşlemci` ya da bir kart; `devices.json`'da saklanır. Canlı modeller boşluksuz geçer (eski model yenisi hazır olana dek çalışır; başarısız geçişte eski model sürer ve sayfa nedenini yazar). Ürün sayımı model kullanmaz, etkilenmez.
+  - **Hiçbir düşüş gizlenmez:** kart yoksa, açılamazsa ya da çalışırken hata verirse (sürücü sıfırlaması, kartın kapanması) model işlemcide sürer, canlı sayım ve güvenlik alarmı durmaz, nedeni sayfada Türkçe not olarak görünür (N1–N4).
+  - **Hız testi:** her cihazda sabit karede ms/kare ve açılış süresi (tek seferde tek test).
+  - **Video işleri:** `result.device` (yalnız model kullanan analizde; sözleşme `analysis-job` güncellendi) ve iş ayrıntısında "Cihaz" kutusu.
+  - **Durum şeridi:** "Ekran kartı: %N" gerçek yük (Windows performans sayaçları); `/api/v1/system/status` `gpu: {name, percent}` ekledi.
+  - **Kurulum:** `pyproject.toml` ortam işaretleriyle Windows'ta `onnxruntime-directml`, öbür yerde `onnxruntime` ister. Başlatıcı (`tools/panel_baslat.bat`) işlemci sürümü kurulu eski ortamda `onnxruntime`'ı kaldırıp DirectML'i kurar; analiz sunucusu çalışırken paketi değiştirmez, pencereyi kapatıp kısayolu yeniden çalıştırmayı söyler.
+- **Doğrulama durumu:** birim ve entegrasyon testleri (sahte DXGI, ONNX ve PDH; panelde birim ve Playwright) tasarıma uygun çalıştığını sınar. CI'da ekran kartı yoktur: yalnızca Windows'ta gerçek DXGI ve PDH okuma testleri çalışır.
+- **Ölçüm BEKLİYOR (kullanıcıyla); şimdilik başarım iddiası yok.**
+  - Ölçülecek: kullanıcının bilgisayarında her cihazın hız testi (ms/kare, açılış süresi), Video ile test işinde `result.device` ve süre farkı, canlı geçişte güvenlik alarmının sürekliliği, Intel'e geçişin süresi.
+  - Başlatıcının gerçek makinede ilk güncellemesi (işlemci `onnxruntime` kurulu ortamdan `onnxruntime-directml`'e) kullanıcıyla denenecek.
+- **Bilinen sınırlar:**
+  - Yalnızca Windows'ta ekran kartı; CUDA, TensorRT, OpenVINO ve NPU kapsam dışı.
+  - Çalışırken işlemciye düşen model kendiliğinden ekran kartına dönmez (yeniden başlatma ya da seçim değişimi gerekir).
+  - Ürün sayımı ekran kartından yararlanmaz (model kullanmaz).
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -265,4 +286,4 @@ Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran k
 4. F0.2 Swift testleri, F1.1 sözleşme v1 + outbox, F1.2 ekranda iz kimlikleri.
 5. **Poz güvenlik ölçümü** (§5f): ofis bullet/dome kameralarından, kamera başına etiketli kayıtlar (toplam ≥ 20 eller yukarı, ≥ 20 yerde yatma; her kamera için ≥ 1 saat normal hareket) → `tools/eval_pose.py --manifest`; ayrıca kare hızı denetimi (hedef ≥ 5 kare/sn).
 6. **Çoklu izleme ölçümü** (§5g, plan Görev 9): ofis NVR'ında 4'lü, 9'lu ve (kanal varsa) 16'lı şablon; işlemci kullanımı, kutu fps'leri, aynı anda çalışan sayım oturumunun fps'i; telefonla ofis Wi-Fi'ında QR ve şifreyle bağlanıp 9'lu şablonu izleme; güvenlik oturumunda deneme alarmıyla kırmızı kutu. Sonra iPhone ekranı (alt proje B, ayrı tasarım).
-7. **Sade arayüz ölçümü** (§5h, plan Görev 9; kullanıcıyla): ofis NVR'ında 16, 32 ve 64 kutuluk şablonda analiz sunucusunun işlemci yükü ve kutu başına kare hızı. Sonra bilgisayar yol haritasının 2. projesi: ekran kartı desteği ve Cihaz ayarları.
+7. **Sade arayüz ölçümü** (§5h, plan Görev 9; kullanıcıyla): ofis NVR'ında 16, 32 ve 64 kutuluk şablonda analiz sunucusunun işlemci yükü ve kutu başına kare hızı. Bilgisayar yol haritasının 2. projesi (ekran kartı desteği ve Cihaz ayarları) §5i'de; sıradaki: lisans ve demo.

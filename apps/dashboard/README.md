@@ -21,7 +21,7 @@ tıklanınca "yakında" der. Her sayfanın altında durum şeridi vardır: anali
 | Analizler | Video ile test | `/videos` | Video yükle, işaretli videoyu oynat, sayım/doğruluk, zamana göre sayım grafiği, CSV, geçmiş |
 | Analizler | Raporlar | — | Yakında |
 | Donanım | Kameralar ve kayıt cihazları | `/cameras` | Kayıt cihazı (NVR) ve IP kamera ekle; kamerada canlı sayımı başlat |
-| Donanım | Cihaz ayarları | — | Yakında |
+| Donanım | Cihaz ayarları | `/devices` | Ekran kartları ve hız testi; kişi/araç tanıma, poz ve Video ile test için işlemci / ekran kartı seçimi |
 | Sistem | Bildirimler | `/notifications` | Telegram kurulumu, deneme alarmı, bu tarayıcıdaki dikkat seçenekleri |
 | Sistem | Telefondan erişim | `/settings` | Panel şifresi, yerel ağa açma, telefonda açılacak adres ve QR kod |
 | Sistem | Lisans | — | Yakında |
@@ -53,6 +53,7 @@ Elle (geliştirme):
    pip install -e ".[analyzer]"
    python -m bantvision.analyzer --port 8090
    ```
+   **Windows'ta ekran kartı:** `analyzer` eki Windows'ta `onnxruntime` yerine `onnxruntime-directml` kurar (NVIDIA, Intel ve AMD; CUDA kurulumu gerekmez). İkisi aynı klasöre yazdığı için birlikte kurulu kalamaz: işlemci `onnxruntime` önceden kuruluysa önce `pip uninstall -y onnxruntime`, sonra `pip install --force-reinstall --no-deps "onnxruntime-directml>=1.24"` ve yeniden `pip install -e ".[analyzer]"` çalıştırın. `tools/panel_baslat.bat` bunu kendisi yapar; analiz sunucusu çalışıyorsa paketleri değiştiremez (DLL'ler kilitli) ve "BandVision analiz" penceresini kapatıp kısayolu yeniden çalıştırmanızı söyler. Windows dışında `onnxruntime` kalır ve yalnız işlemci kullanılır. Kartların listesi, hız testi ve model başına cihaz seçimi panelde Donanım → Cihaz ayarları'nda.
 2. Panel (Node 20+):
    ```bash
    cd apps/dashboard
