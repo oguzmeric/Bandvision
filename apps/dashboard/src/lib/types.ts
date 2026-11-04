@@ -101,6 +101,13 @@ export const PRESET_LABELS: Record<Preset, string> = {
 /** Kişi gibi iki yönlü (giriş / çıkış) sayılan ön ayarlar */
 export const TWO_WAY_PRESETS: Preset[] = ["people", "vehicle", "animal"];
 
+/** İki yönlü ön ayarın metinlerdeki adları: çoğul, tamlayan ve geçiş alanının adı (sayım çizgisi yönergesi) */
+export const TWO_WAY_NOUNS: Record<"people" | "vehicle" | "animal", { plural: string; genitive: string; area: string }> = {
+  people: { plural: "kişiler", genitive: "kişilerin", area: "yürüme alanının" },
+  vehicle: { plural: "araçlar", genitive: "araçların", area: "geçiş alanının" },
+  animal: { plural: "hayvanlar", genitive: "hayvanların", area: "geçiş alanının" },
+};
+
 /** Hazır profilin varsayılan sayım yöntemi (services/edge Profile ile aynı) */
 export const PRESET_MODE: Record<Preset, CountMode> = {
   egg: "blob", flour: "linescan", box: "linescan", generic: "blob", people: "detect", vehicle: "detect", animal: "detect",

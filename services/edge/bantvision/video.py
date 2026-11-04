@@ -824,7 +824,7 @@ def _seconds_arg(kind: str) -> Callable[[str], float]:
 
 # Güvenlik alarmı sayım yapmaz: bu seçenekler verilirse reddedilir (analiz sunucusu aynı iletiyle 422 verir)
 _COUNTING_OPTIONS = ("mode", "truth", "truth_out", "direction", "line", "count_line", "roi", "roi_polygon", "bg_range",
-                     "product_length", "anchor", "expected_area", "threshold", "bg_percentile")
+                     "product_length", "anchor", "expected_area", "threshold", "bg_percentile", "classes")
 
 
 def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, profile: Profile) -> None:
@@ -901,6 +901,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(kw), flush=True)
 
     src = pathlib.Path(a.video)
+    if a.preset == "safety" and a.profile:       # profil dosyası sayım profili olabilir: güvenlik koşusu sessizce sayıma dönmesin
+        ap.error("Güvenlik alarmı videosunda profil dosyası kullanılmaz.")
     profile = build_profile(a)
     apply_safety_options(ap, a, profile)         # reddedilen seçenek birleşimi çıktı klasörü bırakmasın
     info = probe(src)

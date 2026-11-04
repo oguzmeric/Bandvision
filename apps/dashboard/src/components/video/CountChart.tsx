@@ -40,7 +40,7 @@ export default function CountChart({ jobId, seconds }: { jobId: string; seconds?
     let cancelled = false;
     setSeries(null);
     setFailed(false);
-    fetch(`/api/jobs/${jobId}/files/counts.csv`, { cache: "no-store" })
+    fetch(`/api/jobs/${encodeURIComponent(jobId)}/files/counts.csv`, { cache: "no-store" })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((text) => !cancelled && setSeries(parseCounts(text)))
       .catch(() => !cancelled && setFailed(true));

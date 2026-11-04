@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_GEOMETRY, type Geometry } from "@/lib/geometry";
+import { TWO_WAY_NOUNS } from "@/lib/types";
 import GeometryControls from "./GeometryControls";
 import RoiEditor from "./RoiEditor";
 
@@ -36,8 +37,10 @@ export function useVideoFrame(file: File | null, at = 1.0): { src: string | null
   return file ? state : { src: null, aspect: 16 / 9, error: null };
 }
 
-export default function GeometryDialog({ file, initial, twoWay, allowAngled, onSave, onClose }: {
+export default function GeometryDialog({ file, initial, twoWay, subject = TWO_WAY_NOUNS.people, allowAngled, onSave, onClose }: {
   file: File; initial: Geometry | null; twoWay: boolean; allowAngled: boolean;
+  /** İki yönlü sayımda sayılan şeyin adı (kişi, araç, hayvan); yönergede geçer */
+  subject?: { genitive: string; area: string };
   onSave: (g: Geometry) => void; onClose: () => void;
 }) {
   const frame = useVideoFrame(file);
@@ -69,7 +72,7 @@ export default function GeometryDialog({ file, initial, twoWay, allowAngled, onS
           <GeometryControls value={g} onChange={setG} aspect={frame.aspect} twoWay={twoWay} allowAngled={allowAngled} />
           {twoWay && (
             <p className="mt-3 rounded-[2px] border border-pl-sel-line bg-pl-sel px-2.5 py-1.5 text-[12px] text-pl-ink">
-              Çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy — kapı eşiğine değil.
+              Çizgiyi {subject.genitive} tamamen geçtiği yere, {subject.area} ortasına koy — kapı eşiğine değil.
             </p>
           )}
           <div className="mt-auto flex gap-2 pt-4">

@@ -7,16 +7,11 @@ import { type Failure, failureOf } from "@/lib/failure";
 import { clampLine, type Geometry } from "@/lib/geometry";
 import { ALARM_LABELS, defaultSafetyForm, SAFETY_RULES, safetyOptions } from "@/lib/safetyAlarms.mjs";
 import {
-  ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE, TWO_WAY_PRESETS,
+  ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE, TWO_WAY_NOUNS, TWO_WAY_PRESETS,
   type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
 } from "@/lib/types";
 
 import FailureText from "./FailureText";
-
-/** İki yönlü ön ayarın yardım metnindeki çoğul adı (yalın, tamlayan) */
-const TWO_WAY_NOUNS: Partial<Record<Preset, [string, string]>> = {
-  people: ["kişiler", "kişilerin"], vehicle: ["araçlar", "araçların"], animal: ["hayvanlar", "hayvanların"],
-};
 
 const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
 
@@ -45,7 +40,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const safety = preset === "safety";
   const [rules, setRules] = useState(defaultSafetyForm);
   const effectiveMode = twoWay ? "detect" : (mode || PRESET_MODE[preset]);
-  const [noun, nounOf] = TWO_WAY_NOUNS[preset] ?? ["kişiler", "kişilerin"];
+  const subject = TWO_WAY_NOUNS[preset as keyof typeof TWO_WAY_NOUNS] ?? TWO_WAY_NOUNS.people;
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<Failure | null>(null);
 
@@ -205,7 +200,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
             </select>
           </label>
           <p className="mt-1 text-xs text-pl-faint">
-            Giren ve çıkan {noun} ayrı sayılır; görüntü saklanmaz. Sayım çizgisi yataydır: {nounOf} tamamen geçtiği
+            Giren ve çıkan {subject.plural} ayrı sayılır; görüntü saklanmaz. Sayım çizgisi yataydır: {subject.genitive} tamamen geçtiği
             yere koy (kapı eşiğine değil).
           </p>
         </>
@@ -259,7 +254,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
         </div>
       </div>
       {editing && file && (
-        <GeometryDialog file={file} initial={geom} twoWay={twoWay} allowAngled={effectiveMode !== "linescan"}
+        <GeometryDialog file={file} initial={geom} twoWay={twoWay} subject={subject} allowAngled={effectiveMode !== "linescan"}
                         onSave={(g) => { setGeom(g); setDirection(g.direction); }} onClose={() => setEditing(false)} />
       )}
       {twoWay ? null : (

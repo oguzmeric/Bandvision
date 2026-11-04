@@ -168,6 +168,38 @@ def test_counting_options_on_safety_are_refused_without_leaving_output(
     assert not out.exists()                                            # reddedilen koşu boş klasör bırakmaz
 
 
+def test_classes_on_safety_is_refused_without_leaving_output(src: pathlib.Path, tmp_path: pathlib.Path,
+                                                             capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "o"
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(out), "--preset", "safety", "--classes", "people"])
+    assert e.value.code == 2
+    assert "Güvenlik alarmı videosunda sayım ayarları kullanılmaz." in capsys.readouterr().err
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("count_mode", ["blob", "linescan", "detect", "safety"])
+def test_profile_file_on_safety_preset_is_refused_without_leaving_output(
+        src: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], count_mode: str) -> None:
+    """Sayım profili dosyası güvenlik koşusunu sessizce sayıma çevirirdi: `--preset safety` ile profil dosyası reddedilir."""
+    prof = tmp_path / "p.json"
+    prof.write_text(json.dumps({"countMode": count_mode}), encoding="utf-8")
+    out = tmp_path / "o"
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(out), "--preset", "safety", "--profile", str(prof)])
+    assert e.value.code == 2
+    assert "Güvenlik alarmı videosunda profil dosyası kullanılmaz." in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_missing_profile_file_on_safety_preset_is_refused_not_a_traceback(
+        src: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--preset", "safety", "--profile", str(tmp_path / "yok.json")])
+    assert e.value.code == 2
+    assert "profil dosyası kullanılmaz" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("mode", ["blob", "linescan", "detect"])
 def test_mode_on_safety_is_refused_without_leaving_output(src: pathlib.Path, tmp_path: pathlib.Path,
                                                           capsys: pytest.CaptureFixture[str], mode: str) -> None:

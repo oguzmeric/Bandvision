@@ -5,15 +5,10 @@ import { type Failure, failureOf } from "@/lib/failure";
 import { bytes, duration, int, num, signedPct, when } from "@/lib/format";
 import { alarmRows, rulesSummary } from "@/lib/safetyAlarms.mjs";
 import { ANCHOR_LABELS, DIRECTION_LABELS, isSafetyJob, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
+import { failureHint, stageText } from "@/lib/jobText";
 import CountChart from "./CountChart";
 import FailureText from "./FailureText";
 import { StatusPill } from "./JobList";
-
-const STAGE: Record<string, string> = {
-  calibrating: "Kalibrasyon: arka plan, eşik ve ürün boyu öğreniliyor",
-  counting: "Sayılıyor",
-  encoding: "İşaretli video hazırlanıyor",
-};
 
 function Stat({ label, value, hint, hero, wide }: { label: string; value: string; hint?: string; hero?: boolean; wide?: boolean }) {
   return (
@@ -32,7 +27,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
   const r = job.result;
   const files = new Set<string>(r?.files ?? []);
   const video = useRef<HTMLVideoElement>(null);
-  const fileUrl = (name: string) => `/api/jobs/${job.id}/files/${name}`;
+  const fileUrl = (name: string) => `/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(name)}`;
   const meta = [
     job.video.width && job.video.height ? `${job.video.width}×${job.video.height}` : null,
     job.video.fps ? `${num(job.video.fps, 0)} fps` : null,
@@ -45,8 +40,13 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
   function seek(startS: number) {
     const v = video.current;
     if (!v) return;
-    v.currentTime = startS;
-    v.play().catch(() => { /* kullanıcı tıklamasıyla başladığı için reddedilmez; sarma yine de yapıldı */ });
+    v.scrollIntoView({ block: "nearest" });             // video ekran dışındaysa (uzun tablo, dar ekran) sarılan kare görünsün
+    const go = () => {
+      v.currentTime = startS;
+      v.play().catch(() => { /* kullanıcı tıklamasıyla başladığı için reddedilmez; sarma yine de yapıldı */ });
+    };
+    if (v.readyState === 0) v.addEventListener("loadedmetadata", go, { once: true });   // süre bilinmeden sarma tutmaz
+    else go();
   }
 
   async function remove() {
@@ -54,7 +54,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
       if (res.ok || res.status === 404) return onDeleted();
       const body: unknown = await res.json().catch(() => null);
       setDeleteError(failureOf(res.status, body, `Silinemedi (HTTP ${res.status}).`));
@@ -92,7 +92,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
 
       {(job.status === "queued" || job.status === "running") && (
         <div className="rounded-[2px] border border-pl-line-soft bg-pl-side p-3" aria-live="polite">
-          <p className="font-medium">{job.status === "queued" ? "Sırada bekliyor" : STAGE[job.stage ?? "counting"]}</p>
+          <p className="font-medium">{job.status === "queued" ? "Sırada bekliyor" : stageText({ ...job, stage: job.stage ?? "counting" }, "long")}</p>
           <div className="mt-2 h-2 overflow-hidden rounded-[1px] border border-pl-line-soft bg-white">
             <div className="h-full bg-pl-accent transition-[width]" style={{ width: `${Math.round(job.progress * 100)}%` }} />
           </div>
@@ -104,7 +104,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
         <div role="alert" className="rounded-[2px] border border-nok-line bg-nok-50 p-3 text-[13px] text-nok-ink">
           <p className="font-medium">Analiz tamamlanamadı</p>
           <p className="mt-1">{job.error}</p>
-          <p className="mt-2 text-xs">İpucu: video sabit kamerayla, bandın tepesinden çekilmiş olmalı. Bant başta doluysa &quot;boş bant aralığı&quot;nı belirterek yeniden dene.</p>
+          <p className="mt-2 text-xs">{failureHint(job)}</p>
         </div>
       )}
 
@@ -169,7 +169,7 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
                                   className={`border-t border-pl-line-soft ${seekable ? "cursor-pointer hover:bg-pl-side" : ""}`}>
                                 <td className="px-2 py-1 tabular-nums">
                                   {seekable ? (
-                                    <button type="button" title="Videoda bu ana git" className="font-medium text-pl-accent hover:underline">{row.clock}</button>
+                                    <button type="button" title="Videoda bu ana git" aria-label={`Videoda ${row.clock} anına git (${row.label})`} className="font-medium text-pl-accent hover:underline">{row.clock}</button>
                                   ) : row.clock}
                                 </td>
                                 <td className="px-2 py-1">{row.label}</td>

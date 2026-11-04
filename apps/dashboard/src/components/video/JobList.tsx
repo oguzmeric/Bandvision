@@ -1,9 +1,8 @@
 "use client";
 
 import { duration, signedPct, when } from "@/lib/format";
+import { stageText } from "@/lib/jobText";
 import { isSafetyJob, type AnalysisJob } from "@/lib/types";
-
-const STAGE: Record<string, string> = { calibrating: "Kalibrasyon", counting: "Sayılıyor", encoding: "Video hazırlanıyor" };
 
 export function StatusPill({ job }: { job: AnalysisJob }) {
   const base = "whitespace-nowrap rounded-[2px] px-2 py-0.5 text-[11px] font-semibold";
@@ -41,7 +40,7 @@ export default function JobList({ jobs, selected, onSelect }: {
       {jobs.map((job) => {
         const active = job.status === "running" || job.status === "queued";
         const sub = active
-          ? `${STAGE[job.stage ?? ""] ?? "Sırada"} · %${Math.round(job.progress * 100)}`
+          ? `${stageText(job, "short") ?? "Sırada"} · %${Math.round(job.progress * 100)}`
           : `${when(job.createdAt)} · ${duration(job.video.seconds)}`;
         return (
           <li key={job.id} className="border-b border-pl-line-soft last:border-b-0">

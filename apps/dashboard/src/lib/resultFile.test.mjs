@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isResultFile } from "./resultFile.mjs";
+import { FIXED_RESULT_FILES, isResultFile } from "./resultFile.mjs";
 
 test("isResultFile: sabit sonuç dosyaları ve alarms.csv", () => {
   for (const n of ["annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png"]) assert.equal(isResultFile(n), true, n);
@@ -20,4 +20,10 @@ test("isResultFile: tam eşleşme — yol, uzantı, büyük harf, 3 basamak, bo�
 
 test("isResultFile: dize olmayan değer reddedilir", () => {
   for (const v of [undefined, null, 1, {}, ["alarm-1.jpg"]]) assert.equal(isResultFile(v), false);
+});
+
+test("FIXED_RESULT_FILES: dondurulmuş (dışarıdan eklenemez)", () => {
+  assert.equal(Object.isFrozen(FIXED_RESULT_FILES), true);
+  assert.throws(() => FIXED_RESULT_FILES.push("job.json"), TypeError);
+  assert.equal(isResultFile("job.json"), false);
 });

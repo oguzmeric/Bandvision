@@ -215,10 +215,11 @@ function safetyJob(name: string, alarms: MockAlarm[], files: string[], id = SAFE
   });
 }
 
-/** İşaretli video yerine gerçek bir H.264 klibi sunar; Range desteği olmadan tarayıcı sarmaz */
-async function serveFiles(page: Page, id: string) {
+/** İşaretli video yerine gerçek bir H.264 klibi sunar; Range desteği olmadan tarayıcı sarmaz. `videoDelayMs`: yanıtı geciktirir */
+async function serveFiles(page: Page, id: string, videoDelayMs = 0) {
   const clip = fs.readFileSync(CLIP);
-  await page.route(`**/api/jobs/${id}/files/annotated.mp4`, (r) => {
+  await page.route(`**/api/jobs/${id}/files/annotated.mp4`, async (r) => {
+    if (videoDelayMs) await new Promise((done) => setTimeout(done, videoDelayMs));   // video henüz yüklenmedi (readyState 0)
     const m = /bytes=(\d+)-(\d*)/.exec(r.request().headers()["range"] ?? "");
     const start = m ? Number(m[1]) : 0;
     const end = m && m[2] ? Math.min(Number(m[2]), clip.length - 1) : clip.length - 1;
@@ -259,6 +260,8 @@ test("güvenlik işi: Alarm kutusu, alarm tablosu (saat, tür, süre, küçük r
   const rows = detail.getByTestId("alarm-row");
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0).getByRole("cell")).toHaveText(["00:12", "Eller yukarı", "7 sn", ""]);
+  await expect(rows.nth(0).getByRole("button", { name: "Videoda 00:12 anına git (Eller yukarı)" })).toBeVisible();
+  await expect(rows.nth(1).getByRole("button", { name: "Videoda 01:01 anına git (Yerde yatan kişi)" })).toBeVisible();
   await expect(rows.nth(1).getByRole("cell")).toHaveText(["01:01", "Yerde yatan kişi", "34 sn", ""]);
   await expect(rows.nth(2).getByRole("cell")).toHaveText(["01:40", "Yerde yatan kişi", "—", "—"]);   // bitişi ve resmi yok
 
@@ -483,4 +486,143 @@ test("dosya vekili: alarms.csv ve alarm-N.jpg analiz sunucusuna iletilir; başka
   for (const bad of ["alarm-100.jpg", "alarm-1.jpg.exe", "ALARM-1.JPG", "alarm-1.jpg%20", "alarm-1.jpg.", "alarm-.jpg", "job.json"]) {
     expect(await get(bad), bad).toEqual({ status: 404, detail: "Dosya bulunamadı." });
   }
+});
+
+// ---- İnceleme turu: sarma, uzun liste notu, aşama ve ipucu metinleri, yönerge, form geçişi ----
+
+test("güvenlik işi: video yüklenmeden (readyState 0) tıklanırsa sarma metadata gelince yapılır", async ({ page }) => {
+  const alarms: MockAlarm[] = [{ kind: "lying", trackId: 5, startS: 11.8, atS: 21.8, endS: 17, image: null }];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("kuyumcu.mp4", alarms, ["annotated.mp4", "alarms.csv"])] }));
+  await serveFiles(page, SAFETY_ID, 2500);                                       // video yanıtı geciktirilir: tıklama anında süre bilinmez
+  await page.goto("/videos");
+  const video = page.getByTestId("annotated-video");
+  const row = page.getByTestId("alarm-row");
+  await expect(row).toHaveCount(1);
+  expect(await video.evaluate((el: HTMLVideoElement) => el.readyState)).toBe(0);
+  await row.click();
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.readyState), { timeout: 20_000 }).toBeGreaterThanOrEqual(1);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime), { timeout: 20_000 }).toBeGreaterThanOrEqual(11.8);
+  expect(await video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeLessThan(15);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => !el.paused)).toBe(true);
+});
+
+test("güvenlik işi: dar ekranda video görünür alanın dışındaysa satıra tıklayınca görünür alana gelir", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 360 });
+  const alarms: MockAlarm[] = Array.from({ length: 12 }, (_, i) => ({
+    kind: "handsUp", trackId: i + 1, startS: i + 1, atS: i + 4, endS: i + 8, image: null }));
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("kuyumcu.mp4", alarms, ["annotated.mp4", "alarms.csv"])] }));
+  await serveFiles(page, SAFETY_ID);
+  await page.goto("/videos");
+  const video = page.getByTestId("annotated-video");
+  const row = page.getByTestId("alarm-row").nth(11);
+  await row.scrollIntoViewIfNeeded();
+  const inView = () => video.evaluate((el) => {
+    const b = el.getBoundingClientRect();
+    return b.bottom > 0 && b.top < window.innerHeight;
+  });
+  expect(await inView()).toBe(false);                                            // tablodayken video yukarıda kaldı
+  await row.click();
+  await expect.poll(inView).toBe(true);
+});
+
+test("güvenlik işi: toplam 600, liste 500 satır: 'Listede ilk 500 alarm gösteriliyor; toplam 600.' ve resim notu", async ({ page }) => {
+  const alarms: MockAlarm[] = Array.from({ length: 500 }, (_, i) => ({
+    kind: "handsUp", trackId: i + 1, startS: i * 0.1, atS: i * 0.1 + 3, endS: i * 0.1 + 9, image: null }));
+  const job = safetyJob("cok.mp4", alarms, ["annotated.mp4", "alarms.csv"]);
+  (job as unknown as { result: { count: number } }).result.count = 600;
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [job] }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  await expect(detail.getByTestId("alarm-row")).toHaveCount(500);
+  await expect(detail.getByText("Alarm", { exact: true }).locator("..").locator("b")).toHaveText("600");
+  await expect(detail.getByText("Listede ilk 500 alarm gösteriliyor; toplam 600.")).toBeVisible();
+  await expect(detail.getByText("Resimler yalnızca ilk 50 alarm için kaydedilir.")).toBeVisible();
+});
+
+test("sürmekte olan iş: güvenlikte 'Hazırlanıyor' / 'Alarm analizi', sayımda 'Kalibrasyon' / 'Sayılıyor' (ayrıntı ve liste)", async ({ page }) => {
+  const running = (id: string, name: string, preset: string, stage: string) =>
+    mockJob(id, { status: "running", progress: 0.3, stage, video: { name, sizeBytes: 1024 }, options: { preset } });
+  const jobs = [
+    running("00000000-0000-4000-8000-0000000005e1", "g1.mp4", "safety", "calibrating"),
+    running("00000000-0000-4000-8000-0000000005e2", "g2.mp4", "safety", "counting"),
+    running("00000000-0000-4000-8000-0000000005e3", "u1.mp4", "egg", "calibrating"),
+    running("00000000-0000-4000-8000-0000000005e4", "u2.mp4", "people", "counting"),
+  ];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: jobs }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  const pick = (name: string) => page.getByTestId("job-row").filter({ hasText: name });
+  for (const [name, longText, shortText] of [
+    ["g1.mp4", "Hazırlanıyor", "Hazırlanıyor · %30"],
+    ["g2.mp4", "Alarm analizi", "Alarm analizi · %30"],
+    ["u1.mp4", "Kalibrasyon: arka plan, eşik ve ürün boyu öğreniliyor", "Kalibrasyon · %30"],
+    ["u2.mp4", "Sayılıyor", "Sayılıyor · %30"],
+  ] as const) {
+    await expect(pick(name)).toContainText(shortText);
+    await pick(name).click();
+    await expect(detail.getByRole("heading", { name })).toBeVisible();
+    await expect(detail.getByText(longText, { exact: true })).toBeVisible();
+  }
+});
+
+test("başarısız iş ipucu: güvenlikte ve iki yönlü sayımda bant tavsiyesi yok; bant sayımında var", async ({ page }) => {
+  const failed = (id: string, name: string, preset: string) =>
+    mockJob(id, { status: "failed", progress: 0, video: { name, sizeBytes: 1024 }, options: { preset }, error: "Hata." });
+  const jobs = [
+    failed("00000000-0000-4000-8000-0000000005f1", "g.mp4", "safety"),
+    failed("00000000-0000-4000-8000-0000000005f2", "a.mp4", "vehicle"),
+    failed("00000000-0000-4000-8000-0000000005f3", "h.mp4", "animal"),
+    failed("00000000-0000-4000-8000-0000000005f4", "k.mp4", "people"),
+    failed("00000000-0000-4000-8000-0000000005f5", "u.mp4", "egg"),
+  ];
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: jobs }));
+  await page.goto("/videos");
+  const alert = page.getByTestId("job-detail").getByRole("alert");
+  for (const [name, has, hasNot] of [
+    ["g.mp4", "karedeki kişiler net görünmeli", /bant/i],
+    ["a.mp4", "sayılacak araçlar karede net görünmeli", /bant/i],
+    ["h.mp4", "sayılacak hayvanlar karede net görünmeli", /bant/i],
+    ["k.mp4", "sayılacak kişiler karede net görünmeli", /bant/i],
+    ["u.mp4", "bandın tepesinden çekilmiş olmalı", /(?!)/],
+  ] as const) {
+    await page.getByTestId("job-row").filter({ hasText: name }).click();
+    await expect(page.getByTestId("job-detail").getByRole("heading", { name })).toBeVisible();
+    await expect(alert).toContainText(has);
+    await expect(alert).not.toContainText(hasNot);
+  }
+});
+
+test("geometri penceresi yönergesi ön ayara göre: kişi, araç, hayvan", async ({ page }) => {
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [] }));
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  const preset = page.getByLabel("Ürün", { exact: true });
+  for (const [value, text] of [
+    ["people", "Çizgiyi kişilerin tamamen geçtiği yere, yürüme alanının ortasına koy"],
+    ["vehicle", "Çizgiyi araçların tamamen geçtiği yere, geçiş alanının ortasına koy"],
+    ["animal", "Çizgiyi hayvanların tamamen geçtiği yere, geçiş alanının ortasına koy"],
+  ] as const) {
+    await preset.selectOption(value);
+    await page.getByRole("button", { name: "Ayarla", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText(text);
+    await dialog.getByRole("button", { name: "Vazgeç" }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+});
+
+test("yükleme formu: güvenlikte kural değiştirip araca geçince istekte safety yok", async ({ page }) => {
+  const sent = await captureUploads(page);
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  const preset = page.getByLabel("Ürün", { exact: true });
+  await preset.selectOption("safety");
+  await page.getByLabel("Yerde yatan kişi süresi (sn)").fill("12");
+  await page.getByRole("checkbox", { name: "Eller yukarı" }).uncheck();
+  await preset.selectOption("vehicle");
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].options).toEqual({ preset: "vehicle", countAnchor: "center" });
+  expect(Object.keys(sent[0].options)).not.toContain("safety");
 });
