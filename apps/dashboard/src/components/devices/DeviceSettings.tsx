@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useUnsavedGuard } from "@/components/UnsavedGuard";
 import { fetchDevices, runBenchmark, saveDevices, type BenchResult, type Choices, type DevicesState, type InUse } from "@/lib/devices";
 import { benchText, choiceOptions, deviceLabels, inUseText } from "@/lib/deviceOptions.mjs";
+import { ApiError } from "@/lib/live";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 /** Kullanım satırları: anahtar sunucudaki `choices` anahtarıdır; `live`: altında "Şu an:" satırı olan canlı model */
@@ -17,6 +18,14 @@ const ROWS: { key: keyof Choices; label: string; live: "detector" | "pose" | nul
 const LOADING_POLL_MS = 2000;
 
 type Bench = { ok: true; result: BenchResult } | { ok: false; text: string };
+
+/** Yeni panel, eski analiz sunucusu: `/devices` uçları yok, FastAPI "Not Found" döner */
+const OLD_ANALYZER = "Analiz sunucusu bu sürümde Cihaz ayarlarını tanımıyor; analiz sunucusunu yeniden başlatın.";
+
+/** İsteğin hata satırı: `api()`'nin `ApiError` iletisi (`detail`/`error`); 404 eski analiz sunucusu demektir */
+function errorText(e: unknown): string {
+  return e instanceof ApiError && e.status === 404 ? OLD_ANALYZER : (e as Error).message;
+}
 
 /** Cihaz ayarları: cihaz listesi + hız testi ve hangi modelin hangi cihazda çalışacağı. */
 export default function DeviceSettings() {
@@ -46,7 +55,7 @@ export default function DeviceSettings() {
       applied.current = mine;
       apply(d);
     } catch (e) {
-      if (mine >= applied.current) setLoadError((e as Error).message);
+      if (mine >= applied.current) setLoadError(errorText(e));
     }
   }, [apply]);
   useEffect(() => { void load(); }, [load]);
@@ -84,7 +93,7 @@ export default function DeviceSettings() {
       const d = await saveDevices({ detector: value("detector"), pose: value("pose"), video: value("video") });
       applied.current = ++seq.current;                  // yolda kalan eski okumalar artık atılır
       apply(d); setDraft({}); setMsg({ ok: true, text: "Kaydedildi." });
-    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+    } catch (e) { setMsg({ ok: false, text: errorText(e) }); }
     finally { setSaving(false); }
   }
 
@@ -94,7 +103,7 @@ export default function DeviceSettings() {
       const result = await runBenchmark(id);
       setBench((b) => ({ ...b, [id]: { ok: true, result } }));
     } catch (e) {
-      setBench((b) => ({ ...b, [id]: { ok: false, text: (e as Error).message } }));
+      setBench((b) => ({ ...b, [id]: { ok: false, text: errorText(e) } }));
     } finally { setBenching(null); }
   }
 
@@ -147,7 +156,7 @@ export default function DeviceSettings() {
         <h2>Kullanım</h2>
         {ROWS.map(({ key, label, live }) => {
           const status: InUse | null = live && data ? data.inUse[live] : null;
-          const line = status ? inUseText(status) : null;
+          const line = status ? inUseText(status, labels) : null;
           return (
             <div key={key} className="pl-row">
               <label htmlFor={`use-${key}`}>{label}</label>

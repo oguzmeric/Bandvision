@@ -96,3 +96,42 @@ test("choiceOptions: aynı adlı kartlar seçenekte ve 'Otomatik (…)' etiketin
   const opts = choiceOptions([CPU, TWIN1, TWIN2], TWIN2.id, "auto");
   assert.deepEqual(opts.map((o) => o.label), ["Otomatik (NVIDIA ekran kartı (2))", "İşlemci", "NVIDIA ekran kartı (1)", "NVIDIA ekran kartı (2)"]);
 });
+
+test("deviceLabels: aynı adlı ama farklı aygıt kimlikli kartlar (sonekler çakışır) listedeki sırayla numaralanır", () => {
+  const A = { id: "gpu-10de-2503", kind: "gpu", name: "NVIDIA GeForce RTX 3060", memoryMb: 12000 };
+  const B = { id: "gpu-10de-2504", kind: "gpu", name: "NVIDIA GeForce RTX 3060", memoryMb: 12000 };
+  assert.deepEqual(deviceLabels([CPU, A, B]), {
+    cpu: "İşlemci", [A.id]: "NVIDIA GeForce RTX 3060 (1)", [B.id]: "NVIDIA GeForce RTX 3060 (2)",
+  });
+  // karışık grup: 2503, 2503-2 ve 2504 → sonekler 1, 2, 1 çakışır → sırayla 1, 2, 3 (etiketler yine benzersiz)
+  const A2 = { ...A, id: "gpu-10de-2503-2" };
+  const labels = deviceLabels([A, A2, B]);
+  assert.deepEqual([labels[A.id], labels[A2.id], labels[B.id]],
+    ["NVIDIA GeForce RTX 3060 (1)", "NVIDIA GeForce RTX 3060 (2)", "NVIDIA GeForce RTX 3060 (3)"]);
+  // başka adlı grup kendi kuralıyla: aynı model kartlar sonekle kalır
+  const both = deviceLabels([A, B, TWIN2, TWIN3]);
+  assert.equal(both[TWIN2.id], "NVIDIA ekran kartı (2)");
+  assert.equal(both[TWIN3.id], "NVIDIA ekran kartı (3)");
+  assert.equal(new Set(Object.values(both)).size, 4);
+});
+
+test("inUseText: aynı adlı kartta 'Şu an' satırı seçeneklerle aynı numaralı etiketi kullanır", () => {
+  const labels = deviceLabels([CPU, TWIN1, TWIN2]);
+  const ready = { state: "ready", device: { id: TWIN2.id, kind: "gpu", name: TWIN2.name }, note: null };
+  assert.deepEqual(inUseText(ready, labels), { text: "Şu an: NVIDIA ekran kartı (2)", warn: false });
+  assert.deepEqual(inUseText({ ...ready, state: "loading" }, labels),
+    { text: "Şu an: NVIDIA ekran kartı (2) (yeni cihaz yükleniyor…)", warn: false });
+  const n4 = "Ekran kartı çalışırken hata verdi (x); işlemci kullanılıyor.";
+  assert.equal(inUseText({ ...ready, note: n4 }, labels).text, `Şu an: NVIDIA ekran kartı (2) — ${n4}`);
+  // listede olmayan kimlik (kart sökülmüş): sunucunun verdiği ad
+  const gone = { state: "ready", device: { id: "gpu-1002-73bf", kind: "gpu", name: "AMD kart" }, note: null };
+  assert.equal(inUseText(gone, labels).text, "Şu an: AMD kart");
+});
+
+test("choiceOptions: otomatik işlemciye çözülürse (yalnız tümleşik kart var) 'Otomatik (İşlemci)', kart elle seçilebilir", () => {
+  assert.deepEqual(choiceOptions([CPU, INTEL], "cpu", "auto"), [
+    { value: "auto", label: "Otomatik (İşlemci)" },
+    { value: "cpu", label: "İşlemci" },
+    { value: INTEL.id, label: INTEL.name },
+  ]);
+});

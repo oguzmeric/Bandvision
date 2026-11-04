@@ -40,6 +40,33 @@ test("silme reddedilirse (502 analyzer_key) metin görünür, iş kalır", async
   await expect(page.getByRole("link", { name: "Giriş yap" })).toHaveCount(0);        // anahtar sorunu: giriş işe yaramaz
 });
 
+test("Cihaz: model kullanan bitmiş işte 'Cihaz' kutusu ve not satırı; cihaz bilgisi olmayan işte kutu yok", async ({ page }) => {
+  const at = new Date().toISOString();
+  const note = "Ekran kartı çalışırken hata verdi (x); işlemci kullanılıyor.";
+  const done = (id: string, name: string, device?: unknown) => ({
+    schema: "bantvision.analysis-job.v1", id, status: "done", createdAt: at, updatedAt: at,
+    expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(), video: { name, sizeBytes: 16 }, options: {},
+    progress: 1, result: { count: 3, truth: null, errorPct: null, processingFps: 20, files: [], ...(device ? { device } : {}) },
+  });
+  const withDevice = done("00000000-0000-4000-8000-0000000000d1", "kisi.mp4", { kind: "gpu", name: "Test GPU", note });
+  const without = done("00000000-0000-4000-8000-0000000000d2", "urun.mp4");
+  await page.route("**/api/jobs", (r) => r.fulfill({ json: [withDevice, without] }));
+  await page.goto("/videos");
+  const detail = page.getByTestId("job-detail");
+  await page.getByTestId("job-row").filter({ hasText: "kisi.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "kisi.mp4" })).toBeVisible();
+  const stat = detail.getByText("Cihaz", { exact: true }).locator("..");
+  await expect(stat.locator("b")).toHaveText("Ekran kartı");
+  await expect(stat.locator("span")).toHaveText("Test GPU");                       // kartın adı ipucu olarak
+  await expect(detail.getByTestId("device-note")).toHaveText(note);
+
+  await page.getByTestId("job-row").filter({ hasText: "urun.mp4" }).click();
+  await expect(detail.getByRole("heading", { name: "urun.mp4" })).toBeVisible();
+  await expect(detail.getByText("Sayım", { exact: true })).toBeVisible();          // sonuç kutuları çizildi
+  await expect(detail.getByText("Cihaz", { exact: true })).toHaveCount(0);
+  await expect(detail.getByTestId("device-note")).toHaveCount(0);
+});
+
 test("oturum dolunca (panelin kendi 401'i) yükleme, silme ve iş listesi 'oturum doldu' + giriş bağlantısı der; HTTP 401 yazmaz", async ({ page, context, request }) => {
   const AUTH = "Oturum süresi doldu — yeniden giriş yapın.";
   const made = await page.request.post("/api/jobs", { multipart: { file: { name: "ui_test_clip.mp4", mimeType: "video/mp4", buffer: fs.readFileSync(CLIP) } } });

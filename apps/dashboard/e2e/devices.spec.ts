@@ -339,7 +339,8 @@ test.describe("sahte API", () => {
     const twin2 = { ...twin1, id: "gpu-10de-2684-2" };
     await page.route("**/api/live/devices", (route) => route.fulfill({
       json: body({ devices: [CPU, twin1, twin2], auto: twin2.id, choices: { detector: "auto", pose: twin1.id, video: "auto" },
-                   inUse: { detector: detectorIn("ready"), pose: { state: "idle", device: null, note: null } } }),
+                   inUse: { detector: { state: "ready", device: brief(twin2), note: null },
+                            pose: { state: "idle", device: null, note: null } } }),
     }));
     await login(page);
     await expect(page.getByTestId("use-pose").locator("option")).toHaveText(
@@ -349,5 +350,26 @@ test.describe("sahte API", () => {
     await expect(page.getByRole("button", { name: "NVIDIA ekran kartı (1): hız testi", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "NVIDIA ekran kartı (2): hız testi", exact: true })).toBeVisible();
     await expect(page.getByTestId("inuse-pose")).toHaveText("Şu an: kullanılmıyor");
+    await expect(page.getByTestId("inuse-detector")).toHaveText("Şu an: NVIDIA ekran kartı (2)");   // seçeneklerle aynı ad
+  });
+
+  test("eski analiz sunucusu (404 Not Found): anlaşılır satır, Kaydet kapalı; sunucu yeniden başlayınca toparlanır", async ({ page }) => {
+    let old = true;
+    await page.route("**/api/live/devices", (route) => old
+      ? route.fulfill({ status: 404, json: { detail: "Not Found" } })
+      : route.fulfill({ json: body() }));
+    await login(page);
+    const error = page.getByRole("status").filter({
+      hasText: "Analiz sunucusu bu sürümde Cihaz ayarlarını tanımıyor; analiz sunucusunu yeniden başlatın.",
+    });
+    await expect(error).toBeVisible();
+    await expect(page.getByText("Not Found", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Kaydet" })).toBeDisabled();
+    await expect(page.getByTestId("device-row-cpu")).toHaveCount(0);
+
+    old = false;                                                       // 5 sn'lik yeniden deneme sürer
+    await expect(page.getByTestId("device-row-cpu")).toBeVisible({ timeout: 20_000 });
+    await expect(error).toHaveCount(0);
+    await expect(page.getByTestId("use-detector")).toBeEnabled();
   });
 });
