@@ -45,6 +45,14 @@ const NOT_A_HEADER_VALUE = /[\0-\x08\x0a-\x1f\x7f]/;
  * HTTP başlığı bayt dizisidir ve `Headers` 255'ten büyük kod noktasında hata verir: Türkçe karakterli anahtar UTF-8
  * baytlarıyla (her bayt bir karakter, ByteString) gönderilir; analiz sunucusu da bu baytlarla karşılaştırır.
  */
+/** Eski analiz sunucusu yeni bir ön ayarı tanımaz ve ham doğrulama dökümüyle `422` verir ("Seçenekler geçersiz: … preset …");
+ * yükleme bunu okunur bir iletiye çevirir. Başka her `422`, başka durum ya da ileti null (olduğu gibi gösterilir). */
+export const UNKNOWN_ANALYSIS = "Analiz sunucusu bu analizi tanımıyor; analiz sunucusunu güncelleyin.";
+export function optionsRefusal(status, detail) {
+  if (status !== 422 || typeof detail !== "string") return null;
+  return detail.startsWith("Seçenekler geçersiz:") && /\bpreset\b/.test(detail) ? UNKNOWN_ANALYSIS : null;
+}
+
 export function bearerHeader(token) {
   const trimmed = typeof token === "string" ? token.trim() : "";
   if (!trimmed || NOT_A_HEADER_VALUE.test(trimmed)) return null;

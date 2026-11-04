@@ -368,8 +368,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                          options: Annotated[str | None, Form()] = None) -> dict[str, Any]:
         try:
             opts = OptionsIn.model_validate(json.loads(options)) if options else OptionsIn()
-        except (json.JSONDecodeError, ValidationError) as e:
+        except json.JSONDecodeError as e:
             raise HTTPException(422, f"Seçenekler geçersiz: {e}") from e
+        except ValidationError as e:                      # ham pydantic dökümü (adres, ayrıntılar) yerine ilk hata: "alan: ileti"
+            first = e.errors()[0]
+            raise HTTPException(422, f"Seçenekler geçersiz: {'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from e
         refuse_mixed_options(opts)
         name = pathlib.Path(file.filename or "video").name
         suffix = pathlib.Path(name).suffix.lower()

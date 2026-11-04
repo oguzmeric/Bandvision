@@ -705,6 +705,18 @@ def test_vehicle_and_animal_jobs_are_accepted_with_counting_options(client: Test
     assert r.json()["options"] == options
 
 
+def test_invalid_options_give_one_short_message_not_a_pydantic_dump(client: TestClient) -> None:
+    r = _post(client, {"preset": "bilinmeyen"})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail.startswith("Seçenekler geçersiz: preset: ")
+    assert "pydantic" not in detail and "validation error" not in detail and len(detail.splitlines()) == 1
+    r = _post(client, {"safety": {"handsUp": {"seconds": 9}}, "preset": "safety"})
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("Seçenekler geçersiz: safety.handsUp.seconds: ")
+    assert "Eller yukarı süresi 3–5 sn arasında bir sayı olmalı." in r.json()["detail"]
+
+
 def test_safety_options_reach_video_tool() -> None:
     from bantvision.analyzer.jobs import options_to_args
     assert options_to_args({"preset": "safety", "safety": {"handsUp": {"enabled": True, "seconds": 3},

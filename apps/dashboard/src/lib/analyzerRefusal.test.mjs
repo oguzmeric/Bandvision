@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { ANALYZER_REFUSALS, bearerHeader, problemFrom, refusalFor, refusalText } from "./analyzerRefusal.mjs";
+import { ANALYZER_REFUSALS, UNKNOWN_ANALYSIS, bearerHeader, optionsRefusal, problemFrom, refusalFor, refusalText } from "./analyzerRefusal.mjs";
 
 const KEY_TEXT = "Analiz sunucusu erişim anahtarı uyuşmuyor — panelde ve analiz sunucusunda aynı ANALYZER_TOKEN ayarlanmalı.";
 const HOST_TEXT = "Analiz sunucusu panelin bağlandığı adresi reddetti — erişim anahtarı yokken ANALYZER_URL 127.0.0.1 ya da localhost olmalı.";
@@ -92,4 +92,15 @@ test("bearerHeader: fetch anahtarın UTF-8 baytlarını olduğu gibi gönderir (
   const res = await fetch(`http://127.0.0.1:${server.address().port}/`, { headers: { Authorization: bearerHeader("gizlişifre") } });
   await res.arrayBuffer();
   assert.deepEqual([...Buffer.from(raw, "latin1")], [...Buffer.from("Bearer gizlişifre", "utf8")]);
+});
+
+test("optionsRefusal: eski analiz sunucusunun ön ayar dökümü okunur iletiye çevrilir; başka 422 ve durumlar olduğu gibi", () => {
+  const dump = "Seçenekler geçersiz: 1 validation error for OptionsIn\npreset\n  Input should be 'generic', 'egg' [type=literal_error, input_value='vehicle']\n    For further information visit https://errors.pydantic.dev/2.9/v/literal_error";
+  assert.equal(UNKNOWN_ANALYSIS, "Analiz sunucusu bu analizi tanımıyor; analiz sunucusunu güncelleyin.");
+  assert.equal(optionsRefusal(422, dump), UNKNOWN_ANALYSIS);
+  assert.equal(optionsRefusal(422, "Seçenekler geçersiz: safety.handsUp.seconds: Value error"), null);   // preset değil
+  assert.equal(optionsRefusal(422, "Desteklenmeyen dosya türü: preset"), null);                         // başka ileti
+  assert.equal(optionsRefusal(400, dump), null);
+  assert.equal(optionsRefusal(422, undefined), null);
+  assert.equal(optionsRefusal(422, ["preset"]), null);
 });

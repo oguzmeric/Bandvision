@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import GeometryDialog from "@/components/geometry/GeometryDialog";
+import { optionsRefusal } from "@/lib/analyzerRefusal.mjs";
 import { bytes } from "@/lib/format";
 import { type Failure, failureOf } from "@/lib/failure";
 import { clampLine, type Geometry } from "@/lib/geometry";
@@ -19,6 +20,8 @@ const ACCEPT = ".mp4,.mov,.m4v,.avi,.mkv,.webm,.3gp,.mts,.ts,video/*";
  * (oturum doldu) metin değil `AUTH_LOST` */
 function errorOf(body: unknown, status: number): Failure {
   const d = (body as { detail?: unknown })?.detail;
+  const unknown = optionsRefusal(status, d);             // eski analiz sunucusu yeni ön ayarı tanımaz
+  if (unknown) return unknown;
   if (Array.isArray(d)) return d.map((x) => (x as { msg?: string }).msg ?? String(x)).join("; ");
   return failureOf(status, body, `Yükleme başarısız (HTTP ${status}).`);
 }

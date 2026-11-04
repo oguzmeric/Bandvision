@@ -579,7 +579,7 @@ test("başarısız iş ipucu: güvenlikte ve iki yönlü sayımda bant tavsiyesi
   await page.goto("/videos");
   const alert = page.getByTestId("job-detail").getByRole("alert");
   for (const [name, has, hasNot] of [
-    ["g.mp4", "karedeki kişiler net görünmeli", /bant/i],
+    ["g.mp4", "video açılabilir olmalı ve kamera sabit durmalı; karedeki kişiler net görünmeli", /bant/i],
     ["a.mp4", "sayılacak araçlar karede net görünmeli", /bant/i],
     ["h.mp4", "sayılacak hayvanlar karede net görünmeli", /bant/i],
     ["k.mp4", "sayılacak kişiler karede net görünmeli", /bant/i],
@@ -625,4 +625,23 @@ test("yükleme formu: güvenlikte kural değiştirip araca geçince istekte safe
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0].options).toEqual({ preset: "vehicle", countAnchor: "center" });
   expect(Object.keys(sent[0].options)).not.toContain("safety");
+});
+
+test("eski analiz sunucusu yeni ön ayarı tanımazsa (ham 422 dökümü) yükleme okunur bir ileti gösterir; başka 422 olduğu gibi", async ({ page }) => {
+  const dump = "Seçenekler geçersiz: 1 validation error for OptionsIn\npreset\n  Input should be 'generic', 'egg', 'flour', 'box' or 'people' "
+    + "[type=literal_error, input_value='safety', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.9/v/literal_error";
+  let detail = dump;
+  await page.route("**/api/jobs", (r) => r.request().method() === "POST"
+    ? r.fulfill({ status: 422, json: { detail } }) : r.fulfill({ json: [] }));
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  await page.getByLabel("Ürün", { exact: true }).selectOption("safety");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  const error = page.getByTestId("upload-error");
+  await expect(error).toHaveText("Analiz sunucusu bu analizi tanımıyor; analiz sunucusunu güncelleyin.");
+  await expect(error).not.toContainText("pydantic");
+
+  detail = "Desteklenmeyen dosya türü: .xyz";                                     // başka 422: sunucunun metni değişmeden
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(error).toHaveText("Desteklenmeyen dosya türü: .xyz");
 });

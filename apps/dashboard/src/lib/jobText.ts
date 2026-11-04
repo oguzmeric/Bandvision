@@ -19,7 +19,7 @@ export function stageText(job: Pick<AnalysisJob, "options" | "result" | "stage">
 /** Başarısız işin ipucu: işe uygun (bant tavsiyesi yalnızca bant üstü ürün sayımında) */
 export function failureHint(job: Pick<AnalysisJob, "options" | "result">): string {
   if (isSafetyJob(job)) {
-    return "İpucu: video açılabiliyor ve kamera sabit olmalı; karedeki kişiler net görünmeli. Sorun sürerse videoyu yeniden yükle.";
+    return "İpucu: video açılabilir olmalı ve kamera sabit durmalı; karedeki kişiler net görünmeli. Sorun sürerse videoyu yeniden yükle.";
   }
   const preset = job.options.preset;
   if (preset === "people" || preset === "vehicle" || preset === "animal") {

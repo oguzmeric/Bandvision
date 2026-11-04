@@ -269,7 +269,7 @@ Video ile test sayfasının "Ürün" listesine **Araç (giriş / çıkış)**, *
   - **Güvenlik alarmı:** canlıdaki güvenlik kamerasıyla aynı motor ve kurallar (eller yukarı 3–5 sn, yerde yatan kişi 5–30 sn), video zamanıyla; sonuçta alarm listesi (başlangıç, tür, süre, alarm anı resmi) ve tablodan işaretli videoyu o ana sarma. `alarms.csv` indirilebilir.
   - **Bütünlük:** karışık seçenek (güvenlikte sayım ayarı, sayımda kural ayarı, iki kural da kapalı) `422`; en çok 500 alarm listelenir, ilk 50'sinin resmi vardır, `count` gerçek toplamdır; süresi dolan işte liste kalır, resimler gider.
   - **Dosya vekili:** `alarms.csv` ve `alarm-N.jpg` tam eşleşmeyle geçer (`src/lib/resultFile.mjs`).
-- **Doğrulama durumu:** birim testleri (sahte tanıma ve poz modeli; panelde `safetyAlarms`, `resultFile`) ve sahte iş yanıtlı Playwright testleri. Gerçek modellerle bir güvenlik ve bir araç videosu **uçtan uca denenmedi**; doğruluk ölçümü yok, başarım iddiası yok.
+- **Doğrulama durumu:** birim testleri (sahte tanıma ve poz modeli; panelde `safetyAlarms`, `resultFile`) ve sahte iş yanıtlı Playwright testleri. Gerçek modellerle duman denemesi yapıldı (kontrolcü, 2026-11-04): güvenlik alarmı, içinde kimse olmayan bir videoda 0 alarm verdi; sonuç dosyaları `annotated.mp4`, `alarms.csv`, `profile.json`; ekran kartında yaklaşık 21 kare/sn. Araç videosu 0 giriş / 0 çıkış verdi. Karışık seçenek `422` ve Türkçe ileti aldı. Alarm anları ve sayı doğruluğu ölçülmedi; gerçek alarmlı video denenmedi; doğruluk ölçümü yok, başarım iddiası yok.
 - **Ölçüm BEKLİYOR:** gerçek bir güvenlik kamerası videosunda canlı oturumla aynı alarm anlarının çıkması (aynı video, aynı süreler), araç ve hayvan videosunda sayı doğruluğu.
 
 ## 6. Araştırma ve tasarım notları
