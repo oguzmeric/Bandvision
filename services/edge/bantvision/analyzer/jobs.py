@@ -271,6 +271,10 @@ class JobStore:
     def file(self, job_id: str, name: str) -> pathlib.Path | None:
         if not is_public_file(name):
             return None
+        if name == "alarms.csv" or ALARM_IMAGE.fullmatch(name):   # yalnızca işin sonucunda listelenmişse (başarısız ve süresi dolmuş iş: yok)
+            job = self.get(job_id)
+            if job is None or name not in (job.get("result") or {}).get("files", []):
+                return None
         p = self.dir(job_id) / "out" / name
         return p if p.is_file() else None
 
@@ -287,6 +291,8 @@ class JobStore:
                     shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
             if job.get("result"):
                 job["result"]["files"] = []
+                for alarm in job["result"].get("alarms", []):       # resimler gitti: liste kalır, resim yolu null olur
+                    alarm["image"] = None
             job["status"] = "expired"
             self.save(job)
             expired.append(job["id"])
@@ -325,10 +331,13 @@ def _valid_alarm(a: Any) -> bool:
             and (image is None or (isinstance(image, str) and ALARM_IMAGE.fullmatch(image) is not None)))
 
 
-def checked_alarms(raw: Any) -> list[dict[str, Any]]:
-    """Özetteki alarm listesi, her öğe sözleşme şeklinde ise kopyası. Liste bizim kendi çıktımız: bozuk şekil bir hatadır,
+def checked_alarms(raw: Any, count: Any, images: list[str]) -> list[dict[str, Any]]:
+    """Özetteki alarm listesi, her öğe sözleşme şeklinde ve tutarlıysa kopyası: `count` (gerçek toplam) listeden az olamaz ve
+    resmi olan her alarmın resmi gerçekten taşınmış olmalı (`images`). Liste bizim kendi çıktımız: bozukluk bir hatadır,
     sessizce atlanmaz (`ValueError` → iş "Sonuç hazırlanamadı: alarm listesi bozuk" ile başarısız olur)."""
-    if not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a) for a in raw):
+    if (not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a) for a in raw)
+            or not isinstance(count, int) or isinstance(count, bool) or count < len(raw)
+            or any(a["image"] is not None and a["image"] not in images for a in raw)):
         raise ValueError(ALARMS_BROKEN)
     return [dict(a) for a in raw]
 
@@ -494,7 +503,12 @@ class Worker:
                 os.replace(raw / name, out / name)
                 files.append(name)
             summary = json.loads((raw / "ozet.json").read_text(encoding="utf-8"))
-            alarms = checked_alarms(summary["alarms"]) if "alarms" in summary else None
+            if "alarms" in summary:
+                alarms: list[dict[str, Any]] | None = checked_alarms(summary["alarms"], summary.get("count"), images)
+            elif job["options"].get("preset") == "safety":       # güvenlik işinin özeti alarm listesiz olamaz
+                raise ValueError(ALARMS_BROKEN)
+            else:
+                alarms = None
         except (OSError, subprocess.CalledProcessError, ValueError) as e:     # JSONDecodeError de ValueError
             self._changed(self.store.update(job_id, status="failed", error=f"Sonuç hazırlanamadı: {e}"))
             return

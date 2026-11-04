@@ -850,12 +850,60 @@ def test_is_public_file_accepts_fixed_names_and_alarm_images_only() -> None:
         assert not is_public_file(bad), bad
 
 
-def test_expiry_removes_alarm_images_and_empties_files(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expiry_removes_alarm_images_and_empties_files(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                       client: TestClient, job_validator: Draft202012Validator) -> None:
     _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
     store = JobStore(Settings(data_dir=tmp_path))
     from bantvision.analyzer.jobs import now
     later = now() + dt.timedelta(days=30)
     assert store.expire(later) == [done["id"]]
     assert store.file(done["id"], "alarm-1.jpg") is None
-    assert store.get(done["id"])["result"]["files"] == []
+    expired = store.get(done["id"])
+    assert expired is not None and expired["status"] == "expired"
+    assert expired["result"]["files"] == []
+    assert len(expired["result"]["alarms"]) == 2 and all(a["image"] is None for a in expired["result"]["alarms"])
+    assert [a["atS"] for a in expired["result"]["alarms"]] == [15.4, 71.0]          # liste kalır, yalnız resimler gider
+    assert_contract(job_validator, expired)
+    assert client.get(f"/api/v1/jobs/{done['id']}/files/alarm-1.jpg").status_code == 404
+    assert client.get(f"/api/v1/jobs/{done['id']}/files/alarms.csv").status_code == 404
+
+
+def test_worker_fails_safety_job_whose_summary_has_no_alarm_list(tmp_path: pathlib.Path,
+                                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = {k: v for k, v in SAFETY_SUMMARY.items() if k != "alarms"}
+    _, done = _run_fake_job(tmp_path, monkeypatch, summary, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+@pytest.mark.parametrize("count", [1, 0, None, "2", True])
+def test_worker_fails_job_when_count_is_below_listed_alarms_or_not_a_number(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, count: Any) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "count": count}, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+def test_worker_fails_job_when_an_alarm_image_was_not_moved(tmp_path: pathlib.Path,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    files = {k: v for k, v in SAFETY_FILES.items() if k != "alarm-2.jpg"}
+    _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, files)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+def test_alarm_files_of_a_failed_job_are_not_served(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                    client: TestClient) -> None:
+    """Resimler `out/` a taşındıktan sonra liste bozuk çıkarsa iş başarısızdır; dosyalar diskte kalsa da sunulmaz."""
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "count": 1}, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    assert done["status"] == "failed"
+    out = tmp_path / "jobs" / done["id"] / "out"
+    assert (out / "alarm-1.jpg").is_file() and (out / "alarms.csv").is_file()
+    for name in ("alarm-1.jpg", "alarm-2.jpg", "alarms.csv"):
+        assert client.get(f"/api/v1/jobs/{done['id']}/files/{name}").status_code == 404, name
+
+
+def test_alarm_image_outside_result_files_is_not_served(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                        client: TestClient) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, SAFETY_SUMMARY, {}, SAFETY_OPTIONS, SAFETY_FILES)
+    (tmp_path / "jobs" / done["id"] / "out" / "alarm-7.jpg").write_bytes(JPEG)        # diskte var, sonuçta listelenmemiş
+    assert client.get(f"/api/v1/jobs/{done['id']}/files/alarm-7.jpg").status_code == 404
+    assert client.get(f"/api/v1/jobs/{done['id']}/files/alarm-1.jpg").status_code == 200
 

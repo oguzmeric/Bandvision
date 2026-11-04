@@ -123,6 +123,10 @@
   },
   "allOf": [
     { "if": { "properties": { "status": { "const": "done" } } }, "then": { "required": ["result"] } },
-    { "if": { "properties": { "status": { "const": "failed" } } }, "then": { "required": ["error"] } }
+    { "if": { "properties": { "status": { "const": "failed" } } }, "then": { "required": ["error"] } },
+    {
+      "if": { "required": ["options"], "properties": { "options": { "required": ["preset"], "properties": { "preset": { "const": "safety" } } } } },
+      "else": { "properties": { "result": { "not": { "required": ["alarms"] } } } }
+    }
   ]
 }

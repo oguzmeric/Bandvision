@@ -168,6 +168,18 @@ def test_counting_options_on_safety_are_refused_without_leaving_output(
     assert not out.exists()                                            # reddedilen koşu boş klasör bırakmaz
 
 
+@pytest.mark.parametrize("mode", ["blob", "linescan", "detect"])
+def test_mode_on_safety_is_refused_without_leaving_output(src: pathlib.Path, tmp_path: pathlib.Path,
+                                                          capsys: pytest.CaptureFixture[str], mode: str) -> None:
+    """`--mode` profili ezerdi (blob sayımı güvenlik adıyla çalışırdı): reddedilir."""
+    out = tmp_path / "o"
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(out), "--preset", "safety", "--mode", mode])
+    assert e.value.code == 2
+    assert "Güvenlik alarmı videosunda sayım ayarları kullanılmaz." in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_refused_rule_options_leave_no_output_folder(src: pathlib.Path, tmp_path: pathlib.Path) -> None:
     out = tmp_path / "o"
     for argv in (["--preset", "people", "--no-lying"], ["--preset", "safety", "--no-hands-up", "--no-lying"]):

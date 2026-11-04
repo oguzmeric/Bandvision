@@ -823,13 +823,14 @@ def _seconds_arg(kind: str) -> Callable[[str], float]:
 
 
 # Güvenlik alarmı sayım yapmaz: bu seçenekler verilirse reddedilir (analiz sunucusu aynı iletiyle 422 verir)
-_COUNTING_OPTIONS = ("truth", "truth_out", "direction", "line", "count_line", "roi", "roi_polygon", "bg_range",
+_COUNTING_OPTIONS = ("mode", "truth", "truth_out", "direction", "line", "count_line", "roi", "roi_polygon", "bg_range",
                      "product_length", "anchor", "expected_area", "threshold", "bg_percentile")
 
 
 def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, profile: Profile) -> None:
     given_rules = any(v is not None and v is not False for v in (a.hands_up, a.no_hands_up, a.lying, a.no_lying))
-    if profile.countMode != "safety":
+    # --mode safety profilini ezer (profile.countMode değişir): güvenlik, ön ayardan da anlaşılır
+    if profile.countMode != "safety" and a.preset != "safety":
         if given_rules:
             ap.error("Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır.")
         return
