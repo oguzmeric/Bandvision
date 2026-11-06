@@ -3,7 +3,11 @@
 import { useEffect, useRef } from "react";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
-export interface TabItem { id: string; name: string; unsaved: boolean }
+/** `movable`: kayıtlı şablon (sırası sunucuda); kaydedilmemiş yeni sekme sürüklenmez, yerinde (sonda) kalır */
+export interface TabItem { id: string; name: string; unsaved: boolean; movable: boolean }
+
+/** Sekmeden sekmeye sürükleme (sıra): sürüklenen sekmenin kimliği */
+const TAB_MIME = "application/x-bv-tab";
 
 /** Sekmenin DOM kimliği (ızgara bölmesi `aria-labelledby` ile buna bağlanır) */
 export const tabDomId = (id: string) => `bv-tab-${id}`;
@@ -18,10 +22,13 @@ export const TABLIST_ID = "bv-tablist";
  * sağ tık (ya da Shift+F10 / menü tuşu, ya da "⋯" düğmesi) Yeniden adlandır / Kopyala / Sil menüsünü açar.
  * Klavye: ←/→/Home/End sekmeler arasında odak gezdirir, Enter/Boşluk seçer (seçim kaydedilmemiş değişiklikte soru
  * çıkarabildiği için otomatik değil). Dar ekranda çubuk yatay kaydırılır; seçili sekme görünür alana kaydırılır.
+ * Kayıtlı sekmeler sürüklenip başka bir kayıtlı sekmenin üstüne bırakılınca onun yerine geçer (`onMove`); klavye ve
+ * dokunmatikte menüdeki Sola taşı / Sağa taşı aynı işi yapar.
  */
-export default function TemplateTabs({ tabs, current, onSelect, onAdd, onMenu, addDisabled }: {
+export default function TemplateTabs({ tabs, current, onSelect, onAdd, onMenu, onMove, addDisabled }: {
   tabs: TabItem[]; current: string | null;
-  onSelect: (id: string) => void; onAdd: () => void; onMenu: (id: string, x: number, y: number) => void; addDisabled: boolean;
+  onSelect: (id: string) => void; onAdd: () => void; onMenu: (id: string, x: number, y: number) => void;
+  onMove: (id: string, target: string) => void; addDisabled: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -52,7 +59,15 @@ export default function TemplateTabs({ tabs, current, onSelect, onAdd, onMenu, a
             return (
               <button key={t.id} id={tabDomId(t.id)} type="button" role="tab" aria-selected={on}
                       aria-controls={on ? PANEL_ID : undefined} tabIndex={on || (!currentTab && t === tabs[0]) ? 0 : -1}
-                      onClick={() => onSelect(t.id)} onKeyDown={(e) => onKeyDown(e, t.id)}
+                      onClick={() => onSelect(t.id)} onKeyDown={(e) => onKeyDown(e, t.id)} draggable={t.movable}
+                      onDragStart={(e) => { e.dataTransfer.setData(TAB_MIME, t.id); e.dataTransfer.effectAllowed = "move"; }}
+                      onDragOver={(e) => { if (t.movable && e.dataTransfer.types.includes(TAB_MIME)) e.preventDefault(); }}
+                      onDrop={(e) => {
+                        const id = e.dataTransfer.getData(TAB_MIME);
+                        if (!t.movable || !id) return;
+                        e.preventDefault();
+                        onMove(id, t.id);
+                      }}
                       onContextMenu={(e) => { e.preventDefault(); const p = menuPoint(e, false); onMenu(t.id, p.x, p.y); }}
                       className={`shrink-0 whitespace-nowrap border-r border-pl-line px-4 py-1.5 text-[13px] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-pl-accent ${on
                         ? "bg-pl-accent font-semibold text-white focus-visible:outline-white"

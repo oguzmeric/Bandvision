@@ -23,9 +23,11 @@ const GONE: CameraStatus = { name: "", state: "error", message: "Kamera silinmi�
  * bağlıya geçince hemen. Yoklama üst üste `FAILS_BEFORE_WARNING` kez koparsa görüntünün üstünde sunucuya ulaşılamadığı
  * (ya da oturumun dolduğu, 401) yazar; eski "canlı" durumu gösterilmez. `liveHref`: analizi varsa o oturum, yoksa Kameralar sayfası.
  * Gizli sekmede `<img>` çizilmez (akış bırakılır); silinmiş kamerada akış hatası yeniden açmayı tetiklemez.
+ * `children`: görüntünün üstünde (her kipte, video duvarında da) ek katman (ör. sıralı gösterim çubuğu).
  */
-export default function SingleCamera({ sourceId, channelId, name, liveHref, mode, onClose }: {
+export default function SingleCamera({ sourceId, channelId, name, liveHref, mode, onClose, children }: {
   sourceId: string; channelId: string | null; name: string; liveHref: string; mode: SingleMode; onClose: () => void;
+  children?: React.ReactNode;
 }) {
   const [quality, setQuality] = useState<"sub" | "main">("sub");
   const [cam, setCam] = useState<CameraStatus | null>(null);
@@ -138,6 +140,7 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
           </span>
         )}
         {overlay && header}
+        {children}
       </div>
     </section>
   );

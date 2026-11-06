@@ -15,13 +15,17 @@ import {
   RECORDER_TEMPLATE_TIMEOUT_MS, TEMPLATE_TIMEOUT_MS, TIMEOUT_NOT_RELOADED, TIMEOUT_RELOADED, UNSAVED_TEXT,
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
+import { moveTab, shortcutFor, shortcutsBlocked } from "@/lib/watchKeys.mjs";
+import { filledIndexes, stepFilled, tourPosition } from "@/lib/watchTour.mjs";
 import CameraList, { type CamState } from "./CameraList";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 import ConnectionProblem from "./ConnectionProblem";
 import ContextMenu, { type MenuAction } from "./ContextMenu";
 import EditorMenu, { EDITOR_ID } from "./EditorMenu";
 import NameDialog from "./NameDialog";
+import ShortcutHelp from "./ShortcutHelp";
 import SingleCamera, { type SingleMode } from "./SingleCamera";
+import TourDialog from "./TourDialog";
 import TemplateTabs, { ADD_ID, PANEL_ID, TABLIST_ID, tabDomId, type TabItem } from "./TemplateTabs";
 import TileOverlay, { type TileDrop, type TileMove } from "./TileOverlay";
 import { useDraft } from "./useDraft";
@@ -113,6 +117,8 @@ function timedApi<T>(page: AbortSignal, path: string, init?: RequestInit & { jso
     .catch((e: unknown) => { throw timedOut ? new TemplateTimeout() : e; })
     .finally(() => { clearTimeout(timer); page.removeEventListener("abort", onPage); });
 }
+/** Sıralı gösterim çubuğunun düğmeleri (görüntünün üstünde, beyaz yazı) */
+const TOUR_BTN = "inline-flex h-7 shrink-0 items-center rounded-[2px] border border-white/40 px-2 text-[13px] text-white hover:bg-white/10";
 /** focusLater: o an seçili sekme (sekme kalmadıysa "+") */
 const CURRENT_TAB = "#seçili-sekme";
 
@@ -122,6 +128,18 @@ const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isConte
 type Single = { sourceId: string; channelId: string | null; name: string; liveHref: string };
 type Menu = { kind: "tab"; id: string; x: number; y: number } | { kind: "tile"; index: number; x: number; y: number };
 type Naming = { title: string; initial: string; submit: (name: string) => Promise<void> };
+/**
+ * Sıralı gösterim: tek kamera görünümü şablonun dolu kutularını `seconds`'ta bir gezer; `index` gösterilen kutu. Kalıcı
+ * değildir (yenileyince ızgara); tek kamera kapanınca, sekme ya da şablonun kutuları değişince biter.
+ */
+type Tour = { seconds: number; index: number; paused: boolean };
+/** Kutu katmanı öğesinin ızgaradaki sırası (F kısayolu: fareyle üstüne gelinen ya da son tıklanan kutu) */
+function tileIndexOf(grid: HTMLElement | null, target: EventTarget | null): number | null {
+  const tile = target instanceof Element ? target.closest("[data-testid=watch-tile]") : null;
+  if (!grid || !tile) return null;
+  const i = [...grid.querySelectorAll("[data-testid=watch-tile]")].indexOf(tile);
+  return i < 0 ? null : i;
+}
 
 /**
  * Canlı izleme (TRASSIR gibi; taslak duzen.html, sayfalar.html): üstte şablon sekmeleri, "Şablon editörü" menüsü,
@@ -183,6 +201,14 @@ export default function WatchView() {
   const [goneId, setGoneId] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [naming, setNaming] = useState<Naming | null>(null);
+  const [tour, setTour] = useState<Tour | null>(null);
+  /** "Sıralı gösterim…" penceresi açık */
+  const [tourAsk, setTourAsk] = useState(false);
+  /** Kısayollar listesi açık */
+  const [help, setHelp] = useState(false);
+  /** F kısayolunun kutusu: fareyle üstüne gelinen, yoksa son tıklanan */
+  const hoverTile = useRef<number | null>(null);
+  const clickedTile = useRef<number | null>(null);
   /** Video duvarı (tam ekran) açık mı; tarayıcı tam ekranı desteklemiyorsa (ör. iPhone) düğme gizlenir */
   const [wallOn, setWallOn] = useState(false);
   const [canWall, setCanWall] = useState(false);
@@ -198,7 +224,8 @@ export default function WatchView() {
   const live = useRef({
     edit: null as Edit | null,
     hist: null as History | null, currentId: null as string | null, present: null as Draft | null, selected: null as number | null,
-    single: null as Single | null, byKey: new Map<string, TileStatus>(), labels: {} as Record<string, string>, dirty: false,
+    single: null as Single | null, tour: null as Tour | null,
+    byKey: new Map<string, TileStatus>(), labels: {} as Record<string, string>, dirty: false,
     layout: null as ViewLayout | null, tabName: null as string | null, viewAt: null as number | null,
   });
   const keepAsNew = useRef<(notice: string) => void>(() => undefined);
@@ -292,7 +319,8 @@ export default function WatchView() {
   const presentLayout = present?.layout ?? null;
   const layout = useMemo(() => (presentLayout ? layoutFor(presentLayout, layouts) : null), [presentLayout, layouts]);
 
-  // Sekme değişince: başka sekmenin geçmişi, yeni şablon, seçim, menü ve iletiler bırakılır; seçim hatırlanır
+  // Sekme değişince: başka sekmenin geçmişi, yeni şablon, seçim, menü ve iletiler bırakılır; seçim hatırlanır. Tek kamera
+  // ve sıralı gösterim de kapanır (1–9 kısayolu tek kamerada da sekme değiştirir: yeni şablonun ızgarası görünür)
   useEffect(() => {
     setEdit((e) => (e && e.tabId !== currentId ? null : e));
     setFresh((f) => (f && f.id === currentId ? f : null));
@@ -300,6 +328,10 @@ export default function WatchView() {
     setFocusIdx(0);
     setMenu(null);
     setNote(null);
+    setSingle(null);
+    setTour(null);
+    hoverTile.current = null;
+    clickedTile.current = null;
     if (currentId && !isLocal(currentId)) remember(currentId);
   }, [currentId]);
   // Sekme değişimi düzenlemeden ayrılmaktır; işleme anında (çizimle birlikte) sayılır: süren Kaydet'in yanıtı bundan
@@ -525,7 +557,8 @@ export default function WatchView() {
   const wall = async () => {
     try { await wallRef.current?.requestFullscreen(); } catch { /* tarayıcı izin vermedi */ }
   };
-  const closeSingle = useCallback(() => setSingle(null), []);
+  /** Izgaraya dönüş (Esc, "← Izgaraya dön", görüntüye çift tık, F, Durdur): sıralı gösterim de biter */
+  const closeSingle = useCallback(() => { setSingle(null); setTour(null); }, []);
   const closeMenu = useCallback(() => setMenu(null), []);
 
   /** Kameranın canlı durumu (son yoklamadan; kamera başına, kutu sırasından bağımsız: taslak güncellenirken de geçerli) */
@@ -543,7 +576,7 @@ export default function WatchView() {
 
   // ---- düzenleme (geçmişe yazılır)
 
-  live.current = { edit, hist, currentId, present, selected, single, byKey, labels, dirty, layout, tabName, viewAt: view?.updatedAt ?? null };
+  live.current = { edit, hist, currentId, present, selected, single, tour, byKey, labels, dirty, layout, tabName, viewAt: view?.updatedAt ?? null };
   const commit = useCallback((next: Draft) => {
     const { hist: h, currentId: id } = live.current;
     if (!h || !id) return;
@@ -617,6 +650,38 @@ export default function WatchView() {
     const st = m.get(refKey(t)) ?? null;
     setSingle({ sourceId: t.sourceId, channelId: t.channelId, name: st?.name ?? names[refKey(t)] ?? "Kamera", liveHref: liveHref(st?.analysis) });
   }, []);
+
+  // ---- sıralı gösterim (tek kamera dolu kutuları kutu sırasıyla gezer)
+
+  const startTour = (seconds: number) => {
+    setTourAsk(false);
+    const first = present ? filledIndexes(present.tiles)[0] : undefined;
+    if (first === undefined) return;
+    openTile(first);
+    setTour({ seconds, index: first, paused: false });
+  };
+  /** Tek kamerada önceki/sonraki dolu kutu (başa/sona sarar); sıralı gösterimde süre baştan başlar */
+  const stepSingle = useCallback((dir: 1 | -1) => {
+    const { present: p, single: s, tour: t } = live.current;
+    if (!p || !s) return;
+    const from = t ? t.index : p.tiles.findIndex((x) => !!x && x.sourceId === s.sourceId && (x.channelId ?? null) === s.channelId);
+    const next = from < 0 ? null : stepFilled(p.tiles, from, dir);
+    if (next === null) return;
+    openTile(next);
+    if (t) setTour({ ...t, index: next });
+  }, [openTile]);
+  // Her aralıkta sıradaki dolu kutu. Duraklatınca durur; sürdürünce ya da elle geçişte (←/→) süre baştan başlar
+  useEffect(() => {
+    if (!tour || tour.paused) return;
+    const timer = setTimeout(() => stepSingle(1), tour.seconds * 1000);
+    return () => clearTimeout(timer);
+  }, [tour, stepSingle]);
+  // Şablonun kutuları değişti (başka cihazda düzenlendi): sıralı gösterim biter, ızgara döner
+  const tilesKey = present ? `${present.layout}:${present.tiles.map((t) => (t ? refKey(t) : "")).join(",")}` : "";
+  useEffect(() => { if (live.current.tour) closeSingle(); }, [tilesKey, closeSingle]);
+  // Tek kamera açılınca ızgara kalkar: fareyle üstüne gelinen kutu bilinmez olur
+  useEffect(() => { if (single) hoverTile.current = null; }, [single]);
+
   const addLabels = useCallback((l: Record<string, string>) => setLabels((m) => ({ ...m, ...l })), []);
   const onAlarm = useCallback((id: string) => center?.open(id), [center]);
   const onTileMenu = useCallback((index: number, x: number, y: number) => setMenu({ kind: "tile", index, x, y }), []);
@@ -862,15 +927,73 @@ export default function WatchView() {
     });
   };
 
+  /**
+   * Kayıtlı şablon sekmesini `target` sekmesinin yerine taşır (sürükle-bırak, Sola/Sağa taşı). Sıra sunucuda tutulur
+   * (bütün tarayıcılar ve telefon aynı sırayı görür): sekmeler hemen yer değiştirir, istek başarısız olursa eski sıraya
+   * döner ve neden yazılır. Kaydedilmemiş yeni sekme sıraya girmez (sonda kalır).
+   */
+  const moveTabTo = (id: string, target: string) => {
+    const ids = views.map((v) => v.id);
+    const next = moveTab(ids, id, target);
+    if (next === ids || busyRef.current) return;
+    const byOrder = (vs: ViewTemplate[], order: string[]) => {
+      const rank = (x: string) => { const i = order.indexOf(x); return i < 0 ? order.length : i; };
+      return [...vs].sort((a, b) => rank(a.id) - rank(b.id));
+    };
+    setViews((vs) => byOrder(vs, next));
+    void run(async () => {
+      try {
+        setViews(await timedApi<ViewTemplate[]>(pageLife.current.signal, "views/order", { method: "PUT", json: { ids: next } }));
+      } catch (e) {
+        setViews((vs) => byOrder(vs, ids));
+        throw e;
+      }
+    });
+  };
+
   const tabs: TabItem[] = [
-    ...views.map((v) => ({ id: v.id, name: v.name, unsaved: v.id === currentId && dirty })),
-    ...(isNew ? [{ id: fresh.id, name: fresh.name, unsaved: true }] : []),
+    ...views.map((v) => ({ id: v.id, name: v.name, unsaved: v.id === currentId && dirty, movable: true })),
+    ...(isNew ? [{ id: fresh.id, name: fresh.name, unsaved: true, movable: false }] : []),
   ];
+
+  /**
+   * Klavye kısayolları (watchKeys.mjs): F büyüt/ızgaraya dön (çift tıkla aynı), Esc, Boşluk (sıralı gösterimi duraklat),
+   * ←/→ (tek kamerada önceki/sonraki), 1–9 (n. sekme), ? (liste). Yazı kutusunda ya da açık pencere/menüde çalışmaz;
+   * işleyen bileşenin tuşu (ör. odaktaki kutunun Boşluk'u) atlanır. Her çizimde güncel değerlerle yeniden kurulur.
+   */
+  const onShortcut = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  onShortcut.current = (e) => {
+    if (e.defaultPrevented) return;
+    const target = e.target instanceof Element ? e.target : null;
+    const sc = shortcutFor(e, { blocked: shortcutsBlocked(target, document), single: !!single, touring: !!tour,
+      control: !!target?.closest("button, a[href]") });
+    if (!sc) return;
+    if (sc.type !== "escape") e.preventDefault();
+    if (sc.type === "toggle-single") {
+      if (single) { closeSingle(); return; }
+      const i = hoverTile.current ?? clickedTile.current;
+      if (i !== null) openTile(i);
+    } else if (sc.type === "escape") closeSingle();
+    else if (sc.type === "pause") setTour((t) => t && { ...t, paused: !t.paused });
+    else if (sc.type === "step") stepSingle(sc.dir);
+    else if (sc.type === "tab") { const t = tabs[sc.index]; if (t) selectTab(t.id); }
+    else if (sc.type === "help") setHelp(true);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => onShortcut.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const menuActions = (m: Menu): MenuAction[] => {
     if (m.kind === "tab") {
+      const ids = views.map((v) => v.id);
+      const i = ids.indexOf(m.id);
       return [
         { label: "Yeniden adlandır", onSelect: () => renameTab(m.id), disabled: busy },
         { label: "Kopyala", onSelect: () => copyTab(m.id), disabled: isLocal(m.id) || busy },
+        { label: "Sola taşı", onSelect: () => moveTabTo(m.id, ids[i - 1]), disabled: i <= 0 || busy },
+        { label: "Sağa taşı", onSelect: () => moveTabTo(m.id, ids[i + 1]), disabled: i < 0 || i === ids.length - 1 || busy },
         { label: "Sil", onSelect: () => deleteTab(m.id), disabled: busy },
       ];
     }
@@ -897,6 +1020,8 @@ export default function WatchView() {
     // sayfada: geniş ekranda ızgara pencere yüksekliğine sığar (sekmeler ve araç çubuğu görünür kalır)
     : { aspectRatio: aspect, width: `min(100%, max(320px, calc((100svh - 230px) * ${ratio})))` };
   const chrome = !single && !immersive;
+  /** Sıralı gösterimde gösterilen kutunun dolu kutular arasındaki sırası ("n/toplam") */
+  const tourPos = tour && present ? tourPosition(present.tiles, tour.index) : null;
   const message = "border px-3 py-1.5 text-[13px]";
 
   return (
@@ -905,8 +1030,10 @@ export default function WatchView() {
       <span ref={remRef} aria-hidden="true" className="pointer-events-none invisible absolute h-0 w-[1rem]" />
       {chrome && (
         <>
-          <PageHeader title="Canlı izleme" />
-          <TemplateTabs tabs={tabs} current={currentId} onSelect={selectTab} onAdd={newTemplate}
+          <PageHeader title="Canlı izleme">
+            <button type="button" aria-haspopup="dialog" onClick={() => setHelp(true)} className="pl-btn">Kısayollar</button>
+          </PageHeader>
+          <TemplateTabs tabs={tabs} current={currentId} onSelect={selectTab} onAdd={newTemplate} onMove={moveTabTo}
                         onMenu={(id, x, y) => setMenu({ kind: "tab", id, x, y })} addDisabled={layouts.length === 0 || busy} />
           <div className="flex flex-wrap items-center gap-1.5"
                onFocus={(e) => { toolbarFocus.current = e.target instanceof HTMLButtonElement && e.target.hasAttribute("data-toolbar") ? e.target : null; }}>
@@ -915,7 +1042,8 @@ export default function WatchView() {
                         recorders={recorders} onNew={newTemplate} onUndo={doUndo} onRedo={doRedo} onSave={save} onSaveAs={saveAs}
                         onLayout={chooseLayout} onFromRecorder={fromRecorder}
                         canClearSelected={selected !== null && !!present?.tiles[selected]}
-                        onClearSelected={() => { if (selected !== null) emptyTile(selected); }} />
+                        onClearSelected={() => { if (selected !== null) emptyTile(selected); }}
+                        canTour={!!layout && !!present && filledIndexes(present.tiles).length >= 2} onTour={() => setTourAsk(true)} />
             <button type="button" data-toolbar="" onClick={save} disabled={!dirty || !layout || busy || !tabName.trim()} className="pl-btn">Kaydet</button>
             <button type="button" data-toolbar="" onClick={doUndo} disabled={!hist || !canUndo(hist)} className="pl-btn">Geri al</button>
             {canWall && <button type="button" onClick={wall} disabled={!present || !layout} className="pl-btn">Tüm ekran</button>}
@@ -944,9 +1072,25 @@ export default function WatchView() {
             // Video duvarı (tam ekran) bu kapsayıcıdır: tek kameraya geçilince de içinde kalır, tam ekran bozulmaz
             <div ref={wallRef} data-wall={wallOn ? "true" : undefined} className={wallOn ? "grid h-screen w-screen place-items-center bg-black" : undefined}>
               {single ? (
-                <SingleCamera {...single} mode={singleMode} onClose={closeSingle} />
+                <SingleCamera key={refKey(single)} {...single} mode={singleMode} onClose={closeSingle}>
+                  {tour && tourPos && (
+                    <div role="group" aria-label="Sıralı gösterim" data-testid="tour-bar"
+                         className="absolute bottom-2 left-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-2 bg-black/65 px-2 py-1 text-[13px] text-white">
+                      <span className="min-w-0 truncate">
+                        Sıralı gösterim · {single.name} · {tourPos.n}/{tourPos.total}
+                      </span>
+                      <button type="button" onClick={() => setTour((t) => t && { ...t, paused: !t.paused })} className={TOUR_BTN}>
+                        {tour.paused ? "Sürdür" : "Duraklat"}
+                      </button>
+                      <button type="button" onClick={closeSingle} className={TOUR_BTN}>Durdur</button>
+                    </div>
+                  )}
+                </SingleCamera>
               ) : (
-                <div ref={gridRef} data-testid="watch-grid" data-stream={streamId ?? undefined} className={gridClass} style={gridStyle}>
+                <div ref={gridRef} data-testid="watch-grid" data-stream={streamId ?? undefined} className={gridClass} style={gridStyle}
+                     onPointerOver={(e) => { hoverTile.current = tileIndexOf(gridRef.current, e.target); }}
+                     onPointerLeave={() => { hoverTile.current = null; }}
+                     onPointerDown={(e) => { const i = tileIndexOf(gridRef.current, e.target); if (i !== null) clickedTile.current = i; }}>
                   {src && (
                     // eslint-disable-next-line @next/next/no-img-element -- canlı MJPEG akışı
                     <img alt={`${tabName} canlı görüntü`} src={src} className="absolute inset-0 h-full w-full" onError={onError} />
@@ -981,6 +1125,8 @@ export default function WatchView() {
                      actions={menuActions(menu)} onClose={closeMenu} />
       )}
       {naming && <NameDialog title={naming.title} initial={naming.initial} onSubmit={naming.submit} onCancel={() => setNaming(null)} />}
+      {tourAsk && <TourDialog onStart={startTour} onCancel={() => setTourAsk(false)} />}
+      {help && <ShortcutHelp onClose={() => setHelp(false)} />}
     </div>
   );
 }
