@@ -58,13 +58,27 @@ export function panelPlan(access, env) {
 }
 
 /**
- * Next'i hangi kipte açacağız. Yerel ağa açıkken (0.0.0.0) HER ZAMAN `next start`: `next dev`in kendi uç noktaları
+ * Next'i hangi kipte açacağız. Varsayılan üretim kipi (`next start`): sayfalar ilk açılışta derlenmez (geliştirme
+ * kipinde her sayfanın ilk açılışı 10-18 sn sürüyordu). Geliştirme kipi yalnızca `dev` istenirse ve yalnızca bu
+ * bilgisayarda: yerel ağa açıkken (0.0.0.0) HER ZAMAN `next start`, çünkü `next dev`in kendi uç noktaları
  * (/__nextjs_restart_dev, launch-editor, source-map…) middleware'den ÖNCE çalışır, yani şifresiz erişilebilirdi.
- * Yerelde (127.0.0.1) geliştirme kipi; `prod` verilirse üretim.
  */
 export function panelCommand(plan, opts = {}) {
   const lan = plan.host === "0.0.0.0";
-  return { mode: lan || opts.prod === true ? "start" : "dev", host: lan ? "0.0.0.0" : "127.0.0.1" };
+  return { mode: lan || opts.dev !== true ? "start" : "dev", host: lan ? "0.0.0.0" : "127.0.0.1" };
+}
+
+/** Panelin tercih ettiği port; doluysa sıradaki PORT_TRIES-1 port denenir. 3000 değil: bu bilgisayarda 3000'i başka bir
+ * uygulama (web sitesi) kullanıyor; panel boşta kalan 3000'i alsaydı o uygulama sonra açılamazdı. 3100–3118 e2e testlerinde. */
+export const PANEL_PORT = 3300;
+export const PORT_TRIES = 10;
+
+/** `preferred`'dan başlayarak `tries` port içinde ilk boşu (isFree(port) → true) döndürür; hiçbiri boş değilse null. */
+export async function pickPort(isFree, preferred = PANEL_PORT, tries = PORT_TRIES) {
+  for (let port = preferred; port < preferred + tries; port++) {
+    if (await isFree(port)) return port;
+  }
+  return null;
 }
 
 /** Başlatıcının üretim derlemesi klasörü (BV_DIST_DIR ile next.config.ts'e verilir): `npm run build`/e2e (.next) ve

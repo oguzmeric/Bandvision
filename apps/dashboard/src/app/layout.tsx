@@ -7,6 +7,8 @@ const inter = Inter({ variable: "--font-inter", subsets: ["latin", "latin-ext"] 
 export const metadata: Metadata = {
   title: { default: "BandVision", template: "%s · BandVision" },
   description: "Banttan geçen ürünleri sayma ve kalite kontrol paneli",
+  // Başlatıcı (tools/panel_baslat.bat) bu işaretle paneli tanır: 3000'de bu bilgisayardaki başka bir uygulama olabilir
+  other: { "bv-panel": "1" },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -35,9 +35,10 @@ Panel analiz sunucusuna (`services/edge`, `bantvision.analyzer`) **kendi sunucu 
 ## Yerel çalıştırma
 **Windows'ta tek tık:** `tools/panel_baslat.bat` (ya da masaüstündeki kısayolu). İlk seferde analiz sunucusu ortamını (`services/edge/.venv`) ve panel paketlerini kurar, sonra ikisini küçültülmüş pencerelerde başlatıp tarayıcıyı açar; çalışıyorlarsa yeniden başlatmaz. Günlükler: `.logs\analyzer.log`, `.logs\panel.log`.
 
-Paneli kısayol **başlatıcıyla** açar: `tools/panel_run.mjs` (`node tools/panel_run.mjs [--port 3000] [--prod]`).
-- Telefondan erişim kapalıyken paneli yalnızca bu bilgisayarda (`127.0.0.1`), geliştirme kipinde çalıştırır.
-- Açıkken (Telefondan erişim sayfasından, şifreyle) tüm ağ arayüzlerinde **üretim kipinde** çalıştırır: gerekiyorsa önce kendi klasörüne
+Paneli kısayol **başlatıcıyla** açar: `tools/panel_run.mjs` (`node tools/panel_run.mjs [--port 3300] [--dev]`).
+- Port: varsayılan 3300 (3000 bu bilgisayarda başka bir uygulamanın); doluysa sıradaki ilk boş port (3301…). Kısayol portu durum dosyasından okur ve tarayıcıyı o adresle açar.
+- Telefondan erişim kapalıyken paneli yalnızca bu bilgisayarda (`127.0.0.1`), açıkken (Telefondan erişim sayfasından, şifreyle) tüm ağ arayüzlerinde çalıştırır.
+- Her zaman **üretim kipinde** çalıştırır (sayfalar anında açılır; geliştirme kipi yalnızca `--dev` ile ve yalnızca bu bilgisayarda): gerekiyorsa önce kendi klasörüne
   (`.next-lan`) derler (ilk açılış 1–2 dk; `.bat` en çok 240 sn bekler ve "Panel derleniyor" yazar). Derleme başarısız
   olursa ya da derlemede giriş denetimi yoksa yerel ağa açmaz, yalnızca bu bilgisayarda başlatır.
 - Tek kopya çalışır (`.local/panel.lock`); durumunu `.local/panel-state.json`'a yazar; erişim ayarı değişince Next'i yeniden başlatır.

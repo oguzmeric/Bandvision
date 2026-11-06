@@ -1,35 +1,40 @@
 #!/usr/bin/env node
-// Paneli erişim ayarına göre başlatır: telefondan erişim kapalıyken yalnızca bu bilgisayar (127.0.0.1, geliştirme kipi),
-// açıkken (şifreyle) tüm ağ arayüzleri ve HER ZAMAN üretim kipi (`next start`): `next dev`in kendi uç noktaları
-// (yeniden başlatma, dosya açma, kaynak haritası…) middleware'den önce çalıştığı için yerel ağda şifresiz erişilebilirdi.
+// Paneli erişim ayarına göre başlatır: telefondan erişim kapalıyken yalnızca bu bilgisayar (127.0.0.1), açıkken (şifreyle)
+// tüm ağ arayüzleri. Varsayılan üretim kipi (`next start`; sayfalar ilk açılışta derlenmez). Geliştirme kipi yalnızca
+// `--dev` ile ve yalnızca bu bilgisayarda: `next dev`in kendi uç noktaları (yeniden başlatma, dosya açma, kaynak
+// haritası…) middleware'den önce çalıştığı için yerel ağda şifresiz erişilebilirdi.
+// - Port: `--port` verilmezse 3300'den başlayarak ilk boş port (PANEL_PORT; 3000 değil, o bu bilgisayarda başka bir
+//   uygulamanın); `--port N` verilirse yalnızca o (doluysa çıkış kodu 2). Seçilen port durum dosyasına yazılır.
 // - Tek kopya: apps/dashboard/.local/panel.lock (PID; canlı başlatıcı zamanını yeniler). Başka başlatıcı çalışıyorsa
 //   "Panel zaten çalışıyor" yazıp çıkar (0); kilidin süreci yoksa ya da kilit bayatsa devralır; çıkarken siler.
 // - Üretim derlemesi kendi klasörüne (.next-lan, BV_DIST_DIR) yapılır; derleme sıfırla bitince .next-lan/.bv-build-ok
 //   yazılır. İşaret yoksa (derleme hiç bitmedi ya da öldürüldü) ya da kaynaktan eskiyse önce `next build` (1-2 dk).
 //   Derleme başarısız olursa ya da derlemede middleware (giriş denetimi) yoksa yerel ağa AÇILMAZ, yalnızca bu
 //   bilgisayarda geliştirme kipinde başlar.
-// - Durum dosyası apps/dashboard/.local/panel-state.json: {state: building|failed|listening, host, at, message};
-//   panel_baslat.bat (derlenirken bekler ve yazar) ve Ayarlar okur.
+// - Durum dosyası apps/dashboard/.local/panel-state.json: {state: building|failed|listening, host, port, at, message};
+//   panel_baslat.bat (derlenirken bekler, panelin portunu buradan öğrenir) ve Ayarlar okur.
 // apps/dashboard/.local/access.json değişince Next'i yeniden başlatır (≈ 10 sn).
-// Kullanım: node tools/panel_run.mjs [--prod] [--port 3000]
+// Kullanım: node tools/panel_run.mjs [--dev] [--port 3300]   (eski `--prod` kabul edilir, artık varsayılan)
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUILD_MARKER, LAUNCHER_DIST, LOCK_HEARTBEAT_MS, accessFile, buildIsStale, lockDecision, middlewareReady, panelCommand,
-  panelPlan, panelStateFile,
+  PANEL_PORT, PORT_TRIES, panelPlan, panelStateFile, pickPort,
 } from "../apps/dashboard/src/lib/accessCore.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DASH = path.join(ROOT, "apps", "dashboard");
-const prod = process.argv.includes("--prod");
+const dev = process.argv.includes("--dev");
 const portArg = process.argv.indexOf("--port");
-const port = portArg > 0 ? process.argv[portArg + 1] : "3000";
-if (!/^\d{1,5}$/.test(port)) {
-  console.error(`[panel] geçersiz port: ${port}`);
+const fixedPort = portArg > 0 ? process.argv[portArg + 1] : null;
+if (fixedPort !== null && !(/^\d{1,5}$/.test(fixedPort) && Number(fixedPort) >= 1 && Number(fixedPort) <= 65535)) {
+  console.error(`[panel] geçersiz port: ${fixedPort}`);
   process.exit(2);
 }
+let port = "";                                         // kilit alındıktan sonra seçilir
 const FILE = accessFile(process.env, DASH);
 const LOCK = path.join(DASH, ".local", "panel.lock");
 const STATE = panelStateFile(process.env, DASH);
@@ -81,12 +86,12 @@ setInterval(() => { try { const t = new Date(); fs.utimesSync(LOCK, t, t); } cat
 
 // ---------------------------------------------------------------- durum dosyası
 
-/** {state, host, at, message}: panel_baslat.bat ve Ayarlar okur. Yazılamazsa yalnızca bilgi kaybolur. */
+/** {state, host, port, at, message}: panel_baslat.bat ve Ayarlar okur. Yazılamazsa yalnızca bilgi kaybolur. */
 function writeState(state, host, message = "") {
   try {
     fs.mkdirSync(path.dirname(STATE), { recursive: true });
     const tmp = `${STATE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ state, host, at: Date.now() / 1000, message }));
+    fs.writeFileSync(tmp, JSON.stringify({ state, host, port: Number(port), at: Date.now() / 1000, message }));
     fs.renameSync(tmp, STATE);
   } catch { /* yalnızca bilgi amaçlı */ }
 }
@@ -116,10 +121,10 @@ function middlewareInBuild() {
   try { return middlewareReady(fs.readFileSync(path.join(DIST, "server", "middleware-manifest.json"), "utf8")); } catch { return false; }
 }
 
-/** Yalnızca bu bilgisayarda, geliştirme kipinde (yerel ağ derlemesi ya da denetimi başarısız): durum "failed" kalır */
+/** Yalnızca bu bilgisayarda, geliştirme kipinde (üretim derlemesi ya da denetimi başarısız): durum "failed" kalır */
 function fallbackLocal(planEnv, message) {
   writeState("failed", "127.0.0.1", message);
-  launch(panelCommand({ host: "127.0.0.1" }, { prod: false }), planEnv, false);
+  launch(panelCommand({ host: "127.0.0.1" }, { dev: true }), planEnv, false);
 }
 
 function launch(cmd, planEnv, reportListening = true) {
@@ -147,7 +152,7 @@ function launch(cmd, planEnv, reportListening = true) {
 function start() {
   if (child) return;                                   // aynı anda tek süreç (eski Next asılı kalmasın)
   const plan = panelPlan(parse(last), process.env);
-  const cmd = panelCommand(plan, { prod });
+  const cmd = panelCommand(plan, { dev });
   if (cmd.mode === "start" && buildIsStale(DASH, LAUNCHER_DIST)) {
     console.log(`[panel] ${cmd.host === "0.0.0.0" ? "yerel ağ kipi: " : ""}üretim derlemesi hazırlanıyor (1-2 dk)…`);
     writeState("building", cmd.host, BUILDING_MSG);
@@ -168,7 +173,7 @@ function start() {
       }
       // Derleme olmadan `next start` çalışmaz; yerel ağda geliştirme sunucusuna düşmek de güvenli değil: yalnızca yerel
       console.log(`[panel] üretim derlemesi başarısız (kod ${code}); yerel ağa AÇILMIYOR, yalnızca bu bilgisayarda geliştirme kipinde başlıyor`);
-      fallbackLocal(plan.env, `Yerel ağ için derleme başarısız (kod ${code}); panel yalnızca bu bilgisayarda açık. Ayrıntı panel günlüğünde.`);
+      fallbackLocal(plan.env, `Panel derlenemedi (kod ${code}); yalnızca bu bilgisayarda, geliştirme kipinde açık. Ayrıntı panel günlüğünde.`);
     });
     return;
   }
@@ -194,9 +199,35 @@ fs.watchFile(FILE, { interval: 2000 }, () => {
   restartTimer = setTimeout(() => { restartTimer = null; start(); }, 1500);
 });
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => { stop(); process.exit(0); });
+
+/** Port bu bilgisayarda boş mu: hem 127.0.0.1 hem 0.0.0.0'da dinlenebiliyorsa (başka uygulama yalnız birinde dinliyor
+ * olabilir). Denemeden sonra hemen kapatılır. */
+function canListen(p, host) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(false));
+    srv.listen({ port: p, host, exclusive: true }, () => srv.close(() => resolve(true)));
+  });
+}
+const isFree = async (p) => (await canListen(p, "127.0.0.1")) && (await canListen(p, "0.0.0.0"));
 process.on("exit", () => {
   stop();
   try { fs.rmSync(STATE, { force: true }); } catch { /* yok */ }   // çalışmayan panelin durumu "derleniyor" kalmasın
   releaseLock();
 });
+if (fixedPort !== null) {
+  if (!(await isFree(Number(fixedPort)))) {
+    console.error(`[panel] port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı`);
+    process.exit(2);
+  }
+  port = fixedPort;
+} else {
+  const picked = await pickPort(isFree);
+  if (picked === null) {
+    console.error(`[panel] ${PANEL_PORT}-${PANEL_PORT + PORT_TRIES - 1} arasında boş port yok; panel açılmadı`);
+    process.exit(2);
+  }
+  if (picked !== PANEL_PORT) console.log(`[panel] port ${PANEL_PORT} dolu; panel ${picked} portunda açılıyor`);
+  port = String(picked);
+}
 start();

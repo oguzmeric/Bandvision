@@ -6,7 +6,8 @@ import test from "node:test";
 import {
   BUILD_MARKER, LAUNCHER_DIST, LOCK_FRESH_MS, LOCK_STALE_MS, MAX_PASSWORD, MIN_PASSWORD, accessFile, buildIsStale,
   createLoginThrottle, hashPassword, hostAllowed, isJsonContentType, lockDecision, middlewareReady, newSecret,
-  panelCommand, panelPlan, panelState, panelStateFile, updateAccess, verifyPassword, verifyPasswordAsync,
+  PANEL_PORT, PORT_TRIES, panelCommand, panelPlan, panelState, panelStateFile, pickPort, updateAccess, verifyPassword,
+  verifyPasswordAsync,
 } from "./accessCore.mjs";
 
 test("şifre yalnızca özetiyle doğrulanır; düz şifre özette yok", () => {
@@ -141,22 +142,22 @@ test("updateAccess: yalnızca enabled === true açar; şifre değişince oturum 
 
 // ---- Düzeltme turu 1 ----
 
-test("panelCommand: yerel ağda (0.0.0.0) HER ZAMAN next start; yerelde dev, --prod ise start", () => {
+test("panelCommand: varsayılan üretim kipi (next start); geliştirme kipi yalnızca --dev ile ve yalnızca bu bilgisayarda", () => {
   assert.deepEqual(panelCommand({ host: "0.0.0.0" }), { mode: "start", host: "0.0.0.0" });
-  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { prod: false }), { mode: "start", host: "0.0.0.0" });
-  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { prod: true }), { mode: "start", host: "0.0.0.0" });
-  assert.deepEqual(panelCommand({ host: "127.0.0.1" }), { mode: "dev", host: "127.0.0.1" });
-  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { prod: false }), { mode: "dev", host: "127.0.0.1" });
-  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { prod: true }), { mode: "start", host: "127.0.0.1" });
+  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { dev: false }), { mode: "start", host: "0.0.0.0" });
+  assert.deepEqual(panelCommand({ host: "0.0.0.0" }, { dev: true }), { mode: "start", host: "0.0.0.0" });   // yerel ağda ASLA dev
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }), { mode: "start", host: "127.0.0.1" });
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { dev: false }), { mode: "start", host: "127.0.0.1" });
+  assert.deepEqual(panelCommand({ host: "127.0.0.1" }, { dev: true }), { mode: "dev", host: "127.0.0.1" });
   // panelPlan ile birleşimi: hiçbir durumda dev + 0.0.0.0 çıkmaz
   const { salt, hash } = hashPassword("ofis-sifre-1");
   const secret = newSecret();
   for (const access of [null, { enabled: true }, { enabled: true, salt, hash, secret }, { enabled: false, salt, hash, secret }]) {
     for (const env of [{}, { DASHBOARD_PASSWORD: "ortam-sifresi" }]) {
-      for (const prod of [false, true]) {
+      for (const dev of [false, true]) {
         const plan = panelPlan(access, env);
-        const cmd = panelCommand(plan, { prod });
-        assert.ok(!(cmd.mode === "dev" && cmd.host === "0.0.0.0"), JSON.stringify({ access, env, prod }));
+        const cmd = panelCommand(plan, { dev });
+        assert.ok(!(cmd.mode === "dev" && cmd.host === "0.0.0.0"), JSON.stringify({ access, env, dev }));
         assert.equal(cmd.host, plan.host);
       }
     }
@@ -386,3 +387,20 @@ test("isJsonContentType: giriş yalnızca application/json kabul eder (site dı�
     assert.equal(isJsonContentType(bad), false, String(bad));
   }
 });
+
+test("pickPort: tercih edilen port boşsa o; doluysa sıradaki ilk boş port; hepsi doluysa null", async () => {
+  assert.equal(PANEL_PORT, 3300);
+  assert.ok(PORT_TRIES >= 5);
+  const busy = new Set([3300, 3301]);
+  const asked = [];
+  const free = async (p) => { asked.push(p); return !busy.has(p); };
+  assert.equal(await pickPort(free), 3302);
+  assert.deepEqual(asked, [3300, 3301, 3302]);                                   // sırayla, boşu bulunca durur
+  assert.equal(await pickPort(async () => true), 3300);
+  assert.equal(await pickPort(async () => false), null);
+  assert.equal(await pickPort(async (p) => p === 3300 + PORT_TRIES - 1), 3300 + PORT_TRIES - 1);
+  assert.equal(await pickPort(async (p) => p === 3300 + PORT_TRIES), null);       // aralık dışı denenmez
+  assert.equal(await pickPort(async (p) => p === 3000), null);                   // 3000 hiç denenmez (başka uygulama)
+  assert.equal(await pickPort(async (p) => p === 4001, 4000, 3), 4001);
+});
+

@@ -7,7 +7,10 @@ export function verifyPasswordAsync(pw: string, salt: string | undefined, hash: 
 export function newSecret(): string;
 export function accessFile(env: Record<string, string | undefined>, cwd: string): string;
 export function panelPlan(access: Access | null, env: Record<string, string | undefined>): { host: "127.0.0.1" | "0.0.0.0"; env: Record<string, string> };
-export function panelCommand(plan: { host: string }, opts?: { prod?: boolean }): { mode: "dev" | "start"; host: "127.0.0.1" | "0.0.0.0" };
+export function panelCommand(plan: { host: string }, opts?: { dev?: boolean }): { mode: "dev" | "start"; host: "127.0.0.1" | "0.0.0.0" };
+export const PANEL_PORT: number;
+export const PORT_TRIES: number;
+export function pickPort(isFree: (port: number) => Promise<boolean>, preferred?: number, tries?: number): Promise<number | null>;
 export const LAUNCHER_DIST: string;
 export const BUILD_MARKER: string;
 export function buildIsStale(dashDir: string, distDir?: string): boolean;
