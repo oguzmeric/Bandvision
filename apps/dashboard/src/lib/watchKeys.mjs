@@ -5,10 +5,14 @@ const TYPING = "input, select, textarea, [contenteditable]";
 /** Kısayolları kapatan açık pencere ya da menü (Şablon editörü kipsiz `role="dialog"`, bağlam menüsü `role="menu"`) */
 const OVERLAY = "dialog[open], [role=dialog], [role=menu]";
 
+/** Tuş bir yazı alanına mı gidiyor (orada tuş metnindir: kısayol da Ctrl+Z geri alma da çalışmaz) */
+export function isTyping(target) {
+  return !!target && (!!target.isContentEditable || (typeof target.closest === "function" && !!target.closest(TYPING)));
+}
+
 /** Odak yazı alanındaysa ya da bir pencere/menü açıksa kısayollar çalışmaz */
 export function shortcutsBlocked(target, doc) {
-  if (target && (target.isContentEditable || (typeof target.closest === "function" && target.closest(TYPING)))) return true;
-  return !!doc.querySelector(OVERLAY);
+  return isTyping(target) || !!doc.querySelector(OVERLAY);
 }
 
 /**
@@ -17,16 +21,16 @@ export function shortcutsBlocked(target, doc) {
  *   F: ızgarada büyüt / tek kamerada ızgaraya dön ("toggle-single"); Esc: tek kameradan (ve sıralı gösterimden) çık;
  *   Boşluk: sıralı gösterimde duraklat/sürdür, yoksa yutulur ("swallow": sayfa kaymaz); ←/→: tek kamerada önceki/sonraki
  *   dolu kutu; 1–9: n. sekme; ?: yardım. Ctrl/Alt/Cmd ile basılan tuşlar tarayıcınındır; basılı tutulan tuş (ok tuşları
- *   dışında) yinelenmez.
+ *   dışında) yinelenmez: basılı Boşluk yine yutulur (sayfa kaymaz) ama duraklat/sürdür art arda değişmez.
  */
 export function shortcutFor(e, ctx) {
   if (ctx.blocked || e.ctrlKey || e.metaKey || e.altKey) return null;
   const k = e.key;
   if (k === "ArrowLeft" || k === "ArrowRight") return ctx.single ? { type: "step", dir: k === "ArrowRight" ? 1 : -1 } : null;
+  if (k === " ") return ctx.control ? null : ctx.touring && !e.repeat ? { type: "pause" } : { type: "swallow" };
   if (e.repeat) return null;
   if (k === "f" || k === "F") return { type: "toggle-single" };
   if (k === "Escape") return ctx.single ? { type: "escape" } : null;
-  if (k === " ") return ctx.control ? null : ctx.touring ? { type: "pause" } : { type: "swallow" };
   if (k === "?") return { type: "help" };
   if (/^[1-9]$/.test(k)) return { type: "tab", index: Number(k) - 1 };
   return null;

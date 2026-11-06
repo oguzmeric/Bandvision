@@ -7,7 +7,7 @@ const KEYS: Array<[string, string]> = [
   ["F", "Fareyle üstüne gelinen ya da son tıklanan kutuyu büyütür; tek kamerada ızgaraya döner"],
   ["Esc", "Tek kameradan ızgaraya döner, sıralı gösterimi durdurur"],
   ["Boşluk", "Sıralı gösterimi duraklatır ya da sürdürür"],
-  ["← / →", "Tek kamerada önceki ya da sonraki kamera"],
+  ["← / →", "Tek kamerada önceki ya da sonraki kamera; sıralı gösterimde geçiş süresi baştan başlar"],
   ["1–9", "O sıradaki şablon sekmesine geçer"],
   ["?", "Bu listeyi açar ya da kapatır"],
 ];

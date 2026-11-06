@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { moveTab, shortcutFor, shortcutsBlocked } from "./watchKeys.mjs";
+import { isTyping, moveTab, shortcutFor, shortcutsBlocked } from "./watchKeys.mjs";
 
 const key = (k, extra = {}) => ({ key: k, ctrlKey: false, metaKey: false, altKey: false, repeat: false, ...extra });
 const GRID = { blocked: false, single: false, touring: false, control: false };
@@ -24,7 +24,13 @@ test("Boşluk: sıralı gösterimde duraklat/sürdür; yoksa yutulur (sayfa kaym
   assert.deepEqual(shortcutFor(key(" "), GRID), { type: "swallow" });
   assert.deepEqual(shortcutFor(key(" "), SINGLE), { type: "swallow" });
   assert.equal(shortcutFor(key(" "), { ...TOUR, control: true }), null);
-  assert.equal(shortcutFor(key(" ", { repeat: true }), TOUR), null);
+});
+
+test("Boşluk basılı tutulunca: yine yutulur (sayfa kaymaz), duraklat/sürdür yinelenmez; düğmede düğmenin", () => {
+  assert.deepEqual(shortcutFor(key(" ", { repeat: true }), GRID), { type: "swallow" });
+  assert.deepEqual(shortcutFor(key(" ", { repeat: true }), SINGLE), { type: "swallow" });
+  assert.deepEqual(shortcutFor(key(" ", { repeat: true }), TOUR), { type: "swallow" });
+  assert.equal(shortcutFor(key(" ", { repeat: true }), { ...GRID, control: true }), null);
 });
 
 test("←/→: tek kamerada önceki/sonraki; ızgarada yok (kutular kendi gezinir)", () => {
@@ -69,6 +75,14 @@ test("shortcutsBlocked: input/select/textarea/contenteditable içinde ya da aç�
   for (const tag of ["input", "select", "textarea", "[contenteditable]"]) assert.equal(shortcutsBlocked(el([tag]), doc(null)), true, tag);
   assert.equal(shortcutsBlocked(el([], true), doc(null)), true);
   for (const sel of ["dialog[open]", "[role=dialog]", "[role=menu]"]) assert.equal(shortcutsBlocked(el(), doc(sel)), true, sel);
+});
+
+test("isTyping: yalnız yazı alanı (Ctrl+Z bekçisi de kullanır); pencere sayılmaz", () => {
+  for (const tag of ["input", "select", "textarea", "[contenteditable]"]) assert.equal(isTyping(el([tag])), true, tag);
+  assert.equal(isTyping(el([], true)), true);
+  assert.equal(isTyping(el()), false);
+  assert.equal(isTyping(null), false);
+  assert.equal(isTyping({}), false);                          // window/document gibi closest'i olmayan hedef
 });
 
 test("moveTab: sürüklenen sekme bırakıldığı yere geçer; diğerleri sırasını korur", () => {

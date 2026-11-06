@@ -15,7 +15,7 @@ import {
   RECORDER_TEMPLATE_TIMEOUT_MS, TEMPLATE_TIMEOUT_MS, TIMEOUT_NOT_RELOADED, TIMEOUT_RELOADED, UNSAVED_TEXT,
   type Problem, type TileRef, type TileStatus, type ViewLayout, type ViewStatus, type ViewTemplate,
 } from "@/lib/views";
-import { moveTab, shortcutFor, shortcutsBlocked } from "@/lib/watchKeys.mjs";
+import { isTyping, moveTab, shortcutFor, shortcutsBlocked } from "@/lib/watchKeys.mjs";
 import { filledIndexes, stepFilled, tourPosition } from "@/lib/watchTour.mjs";
 import CameraList, { type CamState } from "./CameraList";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
@@ -122,8 +122,8 @@ const TOUR_BTN = "inline-flex h-7 shrink-0 items-center rounded-[2px] border bor
 /** focusLater: o an seçili sekme (sekme kalmadıysa "+") */
 const CURRENT_TAB = "#seçili-sekme";
 
-/** Klavye kısayolu yazı kutusunda mı (Ctrl+Z oradaki metni geri alsın) */
-const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select"));
+/** Klavye kısayolu yazı kutusunda mı (Ctrl+Z oradaki metni geri alsın); kısayolların bekçisiyle aynı seçici (watchKeys.mjs) */
+const typing = (t: EventTarget | null) => isTyping(t instanceof Element ? t : null);
 
 type Single = { sourceId: string; channelId: string | null; name: string; liveHref: string };
 type Menu = { kind: "tab"; id: string; x: number; y: number } | { kind: "tile"; index: number; x: number; y: number };
@@ -209,6 +209,10 @@ export default function WatchView() {
   /** F kısayolunun kutusu: fareyle üstüne gelinen, yoksa son tıklanan */
   const hoverTile = useRef<number | null>(null);
   const clickedTile = useRef<number | null>(null);
+  /** Sıralı gösterim çubuğunun Duraklat/Sürdür düğmesi (gösterim başlayınca odak buraya) */
+  const pauseRef = useRef<HTMLButtonElement>(null);
+  /** Gösterim bitince odaklanacak kutu (son gösterilen) */
+  const refocusTile = useRef<number | null>(null);
   /** Video duvarı (tam ekran) açık mı; tarayıcı tam ekranı desteklemiyorsa (ör. iPhone) düğme gizlenir */
   const [wallOn, setWallOn] = useState(false);
   const [canWall, setCanWall] = useState(false);
@@ -558,7 +562,12 @@ export default function WatchView() {
     try { await wallRef.current?.requestFullscreen(); } catch { /* tarayıcı izin vermedi */ }
   };
   /** Izgaraya dönüş (Esc, "← Izgaraya dön", görüntüye çift tık, F, Durdur): sıralı gösterim de biter */
-  const closeSingle = useCallback(() => { setSingle(null); setTour(null); }, []);
+  const closeSingle = useCallback(() => {
+    const t = live.current.tour;
+    if (t) refocusTile.current = t.index;                  // ızgara dönünce odak son gösterilen kutuya
+    setSingle(null);
+    setTour(null);
+  }, []);
   const closeMenu = useCallback(() => setMenu(null), []);
 
   /** Kameranın canlı durumu (son yoklamadan; kamera başına, kutu sırasından bağımsız: taslak güncellenirken de geçerli) */
@@ -681,6 +690,22 @@ export default function WatchView() {
   useEffect(() => { if (live.current.tour) closeSingle(); }, [tilesKey, closeSingle]);
   // Tek kamera açılınca ızgara kalkar: fareyle üstüne gelinen kutu bilinmez olur
   useEffect(() => { if (single) hoverTile.current = null; }, [single]);
+  // Odak sayfaya (body) düşmesin: gösterim başlayınca (pencere ve Şablon editörü kalktı) çubuğun Duraklat düğmesine
+  const touring = tour !== null;
+  useEffect(() => { if (touring) pauseRef.current?.focus(); }, [touring]);
+  // Gösterim bitip ızgara dönünce (Durdur, Esc…): odak son gösterilen kutuya, o kutu kalmadıysa ızgaranın sekme durağına.
+  // Odak bu arada bir öğeye geçtiyse (ör. sekmeye tıklandı) alınmaz
+  useEffect(() => {
+    const i = refocusTile.current;
+    if (single || i === null) return;
+    refocusTile.current = null;
+    const at = document.activeElement;
+    if (at && at !== document.body) return;
+    const tiles = gridRef.current?.querySelectorAll<HTMLElement>("[data-testid=watch-tile]");
+    if (!tiles?.length) return;
+    if (i < tiles.length) { setFocusIdx(i); tiles[i].focus(); }
+    else gridRef.current?.querySelector<HTMLElement>("[data-testid=watch-tile][tabindex='0']")?.focus();
+  }, [single]);
 
   const addLabels = useCallback((l: Record<string, string>) => setLabels((m) => ({ ...m, ...l })), []);
   const onAlarm = useCallback((id: string) => center?.open(id), [center]);
@@ -930,7 +955,8 @@ export default function WatchView() {
   /**
    * Kayıtlı şablon sekmesini `target` sekmesinin yerine taşır (sürükle-bırak, Sola/Sağa taşı). Sıra sunucuda tutulur
    * (bütün tarayıcılar ve telefon aynı sırayı görür): sekmeler hemen yer değiştirir, istek başarısız olursa eski sıraya
-   * döner ve neden yazılır. Kaydedilmemiş yeni sekme sıraya girmez (sonda kalır).
+   * döner ve neden yazılır. Kaydedilmemiş yeni sekme sıraya girmez (sonda kalır). Şablonu yazan bir işlem sürerken
+   * sekmeler sürüklenmez (`movable`), menüdeki taşıma pasiftir. Farklı tarayıcılar arasında son yazan kazanır.
    */
   const moveTabTo = (id: string, target: string) => {
     const ids = views.map((v) => v.id);
@@ -952,7 +978,7 @@ export default function WatchView() {
   };
 
   const tabs: TabItem[] = [
-    ...views.map((v) => ({ id: v.id, name: v.name, unsaved: v.id === currentId && dirty, movable: true })),
+    ...views.map((v) => ({ id: v.id, name: v.name, unsaved: v.id === currentId && dirty, movable: !busy })),
     ...(isNew ? [{ id: fresh.id, name: fresh.name, unsaved: true, movable: false }] : []),
   ];
 
@@ -1072,14 +1098,17 @@ export default function WatchView() {
             // Video duvarı (tam ekran) bu kapsayıcıdır: tek kameraya geçilince de içinde kalır, tam ekran bozulmaz
             <div ref={wallRef} data-wall={wallOn ? "true" : undefined} className={wallOn ? "grid h-screen w-screen place-items-center bg-black" : undefined}>
               {single ? (
-                <SingleCamera key={refKey(single)} {...single} mode={singleMode} onClose={closeSingle}>
+                // Anahtarsız: sıralı gösterimde kamera değişince çubuk (ve odaktaki Duraklat) yeniden kurulmaz; kameraya
+                // özgü durum SingleCamera'da sıfırlanır
+                <SingleCamera {...single} mode={singleMode} onClose={closeSingle}>
                   {tour && tourPos && (
                     <div role="group" aria-label="Sıralı gösterim" data-testid="tour-bar"
                          className="absolute bottom-2 left-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-2 bg-black/65 px-2 py-1 text-[13px] text-white">
-                      <span className="min-w-0 truncate">
+                      {/* Kamera değişince ekran okuyucu söyler */}
+                      <span aria-live="polite" className="min-w-0 truncate">
                         Sıralı gösterim · {single.name} · {tourPos.n}/{tourPos.total}
                       </span>
-                      <button type="button" onClick={() => setTour((t) => t && { ...t, paused: !t.paused })} className={TOUR_BTN}>
+                      <button ref={pauseRef} type="button" onClick={() => setTour((t) => t && { ...t, paused: !t.paused })} className={TOUR_BTN}>
                         {tour.paused ? "Sürdür" : "Duraklat"}
                       </button>
                       <button type="button" onClick={closeSingle} className={TOUR_BTN}>Durdur</button>

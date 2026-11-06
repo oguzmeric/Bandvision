@@ -3219,9 +3219,15 @@ test("sıralı gösterim: en az 2 kamera; aralık çerezde hatırlanır; saatle 
   // ilk dolu kutudan başlar, 5 sn'de bir sıradakine geçer, boş kutu atlanır, başa sarar
   await expect(tourBar(page)).toContainText("Sıralı gösterim · Kapı · 1/3");
   await expect(singleTitle(page, "Kapı")).toBeVisible();
+  // odak sayfaya düşmez: çubuğun Duraklat düğmesinde; kamera değişince de orada kalır, değişim duyurulur
+  const pause = tourBar(page).getByRole("button", { name: "Duraklat" });
+  await expect(pause).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.textContent)).toBe("Duraklat");
   await page.clock.runFor(5_000);
   await expect(tourBar(page)).toContainText("Sıralı gösterim · Ofis NVR · Kasa · 2/3");
   await expect(singleTitle(page, "Ofis NVR · Kasa")).toBeVisible();
+  await expect(pause).toBeFocused();
+  await expect(tourBar(page).locator("[aria-live=polite]")).toHaveText("Sıralı gösterim · Ofis NVR · Kasa · 2/3");
   await page.clock.runFor(5_000);
   await expect(tourBar(page)).toContainText("Sıralı gösterim · Arka kapı · 3/3");
   await page.clock.runFor(5_000);
@@ -3255,6 +3261,8 @@ test("sıralı gösterim: en az 2 kamera; aralık çerezde hatırlanır; saatle 
   await page.keyboard.press("Escape");
   await expect(tiles).toHaveCount(4);
   await expect(tourBar(page)).toHaveCount(0);
+  await expect(tiles.nth(2)).toBeFocused();                                          // odak son gösterilen kutuda
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("Arka kapı");
   await page.clock.runFor(6_000);
   await expect(tiles).toHaveCount(4);
   // aralık hatırlandı (çerez); Durdur ızgaraya döner
@@ -3267,6 +3275,7 @@ test("sıralı gösterim: en az 2 kamera; aralık çerezde hatırlanır; saatle 
   await tourBar(page).getByRole("button", { name: "Durdur" }).click();
   await expect(tiles).toHaveCount(4);
   await expect(tourBar(page)).toHaveCount(0);
+  await expect(tiles.nth(0)).toBeFocused();                                          // Durdur kalktı: odak sayfaya düşmez
   // sekme değişimi bitirir
   ed = await openEditor(page);
   await item(ed).click();
@@ -3297,9 +3306,12 @@ test("sekme sırası: sürükle-bırak ve Sola/Sağa taşı sunucuya yazılır, 
     ? { json: { id: "v3", layout: "1", tiles: [null] } } : { body: JPEG, contentType: "image/jpeg" }));
   const orders: string[][] = [];
   let fail = false;
-  await page.route("**/api/live/views/order", (r) => {
+  /** Doluyken sıra isteği bu söz çözülene dek bekletilir (işlem sürüyor) */
+  let hold: Promise<void> | null = null;
+  await page.route("**/api/live/views/order", async (r) => {
     const { ids } = r.request().postDataJSON() as { ids: string[] };
     orders.push(ids);
+    if (hold) await hold;
     if (fail) return r.fulfill({ status: 422, json: { detail: "Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin." } });
     store.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
     return r.fulfill({ json: store });
@@ -3312,6 +3324,25 @@ test("sekme sırası: sürükle-bırak ve Sola/Sağa taşı sunucuya yazılır, 
   await expect.poll(() => tabNames(page)).toEqual(["Otopark", "Giriş katı", "Depo katı"]);
   expect(orders.at(-1)).toEqual(["v3", "v1", "v2"]);
   await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  // istek sürerken (şablon işlemi) sekmeler sürüklenmez: sessizce yok sayılan sürükleme yok; bitince yeniden sürüklenir
+  let release: () => void = () => {};
+  hold = new Promise<void>((done) => { release = () => done(); });
+  await tab(page, "Depo katı").dragTo(tab(page, "Otopark"));
+  await expect.poll(() => tabNames(page)).toEqual(["Depo katı", "Otopark", "Giriş katı"]);
+  for (const name of ["Depo katı", "Otopark", "Giriş katı"]) await expect(tab(page, name)).toHaveAttribute("draggable", "false");
+  const pending = orders.length;
+  await tab(page, "Giriş katı").dragTo(tab(page, "Depo katı"));
+  await page.waitForTimeout(300);
+  expect(orders.length).toBe(pending);                                                  // ikinci sürükleme başlamadı
+  await expect.poll(() => tabNames(page)).toEqual(["Depo katı", "Otopark", "Giriş katı"]);
+  hold = null;
+  release();
+  for (const name of ["Depo katı", "Otopark", "Giriş katı"]) await expect(tab(page, name)).toHaveAttribute("draggable", "true");
+  await tab(page, "Otopark").dragTo(tab(page, "Depo katı"));
+  await expect.poll(() => tabNames(page)).toEqual(["Otopark", "Depo katı", "Giriş katı"]);
+  await tab(page, "Giriş katı").dragTo(tab(page, "Depo katı"));
+  await expect.poll(() => tabNames(page)).toEqual(["Otopark", "Giriş katı", "Depo katı"]);
+  expect(orders.at(-1)).toEqual(["v3", "v1", "v2"]);
   // menü: uçlarda pasif; Sağa taşı / Sola taşı (klavyeyle de); odak taşınan sekmede kalır
   const menu = page.getByRole("menu", { name: "Şablon işlemleri" });
   await tab(page, "Otopark").click({ button: "right" });

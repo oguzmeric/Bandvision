@@ -3,7 +3,10 @@
 import { useEffect, useRef } from "react";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
-/** `movable`: kayıtlı şablon (sırası sunucuda); kaydedilmemiş yeni sekme sürüklenmez, yerinde (sonda) kalır */
+/**
+ * `movable`: sürüklenebilir ve üstüne bırakılabilir: kayıtlı şablon (sırası sunucuda) ve şablonu yazan bir işlem sürmüyor.
+ * Kaydedilmemiş yeni sekme sürüklenmez, yerinde (sonda) kalır.
+ */
 export interface TabItem { id: string; name: string; unsaved: boolean; movable: boolean }
 
 /** Sekmeden sekmeye sürükleme (sıra): sürüklenen sekmenin kimliği */
@@ -19,7 +22,8 @@ export const TABLIST_ID = "bv-tablist";
 
 /**
  * Şablon sekmeleri (TRASSIR gibi üstte yan yana; taslak duzen.html): tıklayınca o şablona geçilir, sonda "+" yeni şablon,
- * sağ tık (ya da Shift+F10 / menü tuşu, ya da "⋯" düğmesi) Yeniden adlandır / Kopyala / Sil menüsünü açar.
+ * sağ tık (ya da Shift+F10 / menü tuşu, ya da "⋯" düğmesi) Yeniden adlandır / Kopyala / Sola taşı / Sağa taşı / Sil
+ * menüsünü açar.
  * Klavye: ←/→/Home/End sekmeler arasında odak gezdirir, Enter/Boşluk seçer (seçim kaydedilmemiş değişiklikte soru
  * çıkarabildiği için otomatik değil). Dar ekranda çubuk yatay kaydırılır; seçili sekme görünür alana kaydırılır.
  * Kayıtlı sekmeler sürüklenip başka bir kayıtlı sekmenin üstüne bırakılınca onun yerine geçer (`onMove`); klavye ve
