@@ -2561,6 +2561,8 @@ class _SubDeadNVR:
             return b"\xff\xd8jpeg-" + (b"sub" if substream else b"main")
         if self.kind == "unauthorized":
             raise rec.RecorderError.unauthorized()
+        if self.kind == "http":
+            raise rec.RecorderError.http(404)
         raise rec.RecorderError.unreachable("nvr.example:555 yanıt vermedi")
 
     def keep_alive(self, _url: str) -> None:
@@ -2587,6 +2589,7 @@ def test_thumbnail_falls_back_to_main_and_marks_channel(client: TestClient, monk
     with caplog.at_level("INFO", logger="bantvision.live.api"):
         r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
     assert r.status_code == 200 and r.content == b"\xff\xd8jpeg-main" and nvr.calls == [True, False]
+    assert r.headers.get("x-sub-dead") == "1"                           # panel yalnız bu başlıkla listeyi yeniden okur
     logs = [m.getMessage() for m in caplog.records if "Alt akış" in m.getMessage()]
     assert logs == ["Alt akış görüntü vermiyor, ana akışa geçildi: Ofis NVR/Kanal 4"]
     assert not any("rtsp://" in m.getMessage() or SECRET in m.getMessage() for m in caplog.records)
@@ -2597,10 +2600,40 @@ def test_thumbnail_falls_back_to_main_and_marks_channel(client: TestClient, monk
     assert client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"}).status_code == 200
     assert nvr.calls == [False]
 
+    nvr.calls.clear()                                                   # işaretli kanal, ana jpeg de düştü: 502, alt
+    nvr.main_ok = False                                                 # yeniden denenmez
+    client.app.state.live._snap_failed.clear()
+    r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
+    assert r.status_code == 502 and nvr.calls == [False]
+    nvr.main_ok = True
+
     nvr.calls.clear()                                                   # iki akışı da ölü kanal: 502, işaret yok
     r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "3"})
     assert r.status_code == 502 and nvr.calls == [True, False]
     assert not client.app.state.live.sub_dead(sid, "3")
+
+
+def test_thumbnail_device_refusal_does_not_try_main_or_mark(client: TestClient,
+                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alt akış jpeg'ini cihaz HTTP hata koduyla reddetti (zaman aşımı değil): ana akış denenmez, işaret yok."""
+    nvr = _SubDeadNVR(kind="http")
+    sid = _nvr_source(client, monkeypatch, nvr)
+    r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
+    assert r.status_code == 502 and nvr.calls == [True] and not client.app.state.live.sub_dead(sid, "4")
+    assert "x-sub-dead" not in r.headers
+
+
+def test_stale_opener_cannot_re_mark_after_source_edit(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Düzenlemeden önce açılmış okuyucu/oturum (eski kuşak) düzenlemeden sonra kanalı yeniden işaretleyemez."""
+    mgr = client.app.state.live
+    sid = _nvr_source(client, monkeypatch, _SubDeadNVR())
+    old, _ = mgr.opener(mgr.store.source(sid), "4", True, lazy=True)
+    mgr.forget(sid)                                                     # PUT/DELETE /sources
+    old.mark_sub_dead()
+    assert not mgr.sub_dead(sid, "4")
+    new, _ = mgr.opener(mgr.store.source(sid), "4", True, lazy=True)
+    new.mark_sub_dead()
+    assert mgr.sub_dead(sid, "4")
 
 
 def test_thumbnail_password_rejection_does_not_try_main(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2701,5 +2734,65 @@ def test_session_falls_back_to_main_with_message_and_clears_it_on_sub(monkeypatc
         s.switch_source(streams)
         wait_for(lambda: opened[-1] == "rtsp://nvr/sub" and s.snapshot_status()["state"] == "live", timeout=10)
         wait_for(lambda: s.snapshot_status()["message"] == "", timeout=10)
+    finally:
+        s.stop()
+
+
+def test_session_with_main_stream_choice_never_falls_back_or_shows_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core import Profile
+    from bantvision.live import open_gate
+    from bantvision.live import session as session_mod
+    from bantvision.live.session import LiveSession
+
+    opened: list[str] = []
+    marks: list[int] = []
+
+    def capture(url: str, _level: int | None = None) -> Any:
+        opened.append(url)
+        return _StreamCap(5)                                            # ana akış 5 kare verip kopar (yeniden bağlanır)
+
+    monkeypatch.setattr(session_mod, "open_capture", capture)
+    monkeypatch.setattr(LiveSession, "_wait_reconnect", lambda self, _s: None)
+    streams = open_gate.StreamUrl(lambda sub: (f"rtsp://nvr/{'sub' if sub else 'main'}", True), False,
+                                  lambda: True, lambda: marks.append(1))
+    s = LiveSession("test", streams, Profile.egg())
+    try:
+        wait_for(lambda: len(opened) >= 4, timeout=10)
+        assert set(opened) == {"rtsp://nvr/main"} and marks == []
+        assert s.snapshot_status()["message"] != open_gate.SUB_FALLBACK_MSG
+    finally:
+        s.stop()
+
+
+def test_session_dead_on_both_streams_never_shows_fallback_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core import Profile
+    from bantvision.live import open_gate
+    from bantvision.live import session as session_mod
+    from bantvision.live.session import LiveSession
+
+    opened: list[str] = []
+    messages: list[str] = []
+    holder: dict[str, Any] = {}
+
+    class Silent(_StreamCap):
+        def read(self) -> tuple[bool, Any]:                             # açıldı, kare yok: o anki ileti kaydedilir
+            if "s" in holder:
+                messages.append(holder["s"].snapshot_status()["message"])
+            return False, None
+
+    def capture(url: str, _level: int | None = None) -> Any:
+        opened.append(url)
+        return Silent(0)
+
+    monkeypatch.setattr(session_mod, "open_capture", capture)
+    monkeypatch.setattr(LiveSession, "_wait_reconnect", lambda self, _s: time.sleep(0.05))
+    streams = open_gate.StreamUrl(lambda sub: (f"rtsp://nvr/{'sub' if sub else 'main'}", True), True,
+                                  lambda: False, lambda: None)
+    s = LiveSession("test", streams, Profile.egg())
+    holder["s"] = s
+    try:
+        wait_for(lambda: len(opened) >= 4, timeout=10)
+        assert opened[:4] == ["rtsp://nvr/sub", "rtsp://nvr/main", "rtsp://nvr/sub", "rtsp://nvr/main"]
+        assert len(messages) >= 2 and open_gate.SUB_FALLBACK_MSG not in messages
     finally:
         s.stop()

@@ -467,8 +467,7 @@ class LiveSession:
                 continue
             is_file = not url.lower().startswith(("rtsp://", "http://", "https://"))
             file_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-            # Alt akış kare vermediği için ana akıştayız: kullanıcı bilsin (alt akışa dönünce ileti kalkar)
-            self._set_state("live", open_gate.SUB_FALLBACK_MSG if bound is not None and bound.fell_back else "")
+            self._set_state("live", "")
             backoff = 1.0
             started = time.monotonic()
             last_ping = time.monotonic()
@@ -478,8 +477,12 @@ class LiveSession:
                 if not ok:
                     break
                 n += 1
-                if n == 1 and streams is not None and bound is not None and bound.prefer_main and bound.fell_back:
-                    streams.mark_sub_dead()                 # alt akış kare vermedi, ana akış veriyor: kanal işaretlenir
+                if n == 1 and streams is not None and bound is not None and bound.fell_back:
+                    # Alt akış kare vermediği için ana akıştayız ve ana akış kare veriyor: kullanıcı bilsin (iki akışı
+                    # da ölü kanalda ileti çıkmaz; alt akışla bağlanınca kalkar)
+                    self._set_state("live", open_gate.SUB_FALLBACK_MSG)
+                    if bound.prefer_main:
+                        streams.mark_sub_dead()             # kanal işaretlenir
                 ts = file_offset + n / file_fps if is_file else time.monotonic()
                 with self._frame_cv:
                     self._seq += 1

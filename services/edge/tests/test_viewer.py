@@ -895,3 +895,34 @@ def test_main_quality_tile_never_tries_fallback(monkeypatch: pytest.MonkeyPatch)
         assert set(opened[:3]) == {"rtsp://a/1/main"} and marks == []
     finally:
         hub.stop()
+
+
+def test_url_error_on_main_attempt_makes_next_attempt_sub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ana akış adresi alınamadı (kayıt cihazı yanıt vermedi): sonraki deneme yine alt akışla (ana ipucu kalıcı değil)."""
+    from bantvision.live.open_gate import StreamUrl
+
+    fast_pause(monkeypatch)
+    asked: list[bool] = []
+    opened: list[str] = []
+
+    def make(want_sub: bool) -> tuple[str, bool]:
+        asked.append(want_sub)
+        if not want_sub and asked.count(False) == 1:
+            raise OSError("kayıt cihazı yanıt vermedi")
+        return f"rtsp://a/1/{'sub' if want_sub else 'main'}", True
+
+    def opener(source_id: str, channel_id: str | None, sub: bool) -> tuple[Any, Any]:
+        return StreamUrl(make, sub, lambda: False, lambda: None), None
+
+    def capture(url: str) -> Any:
+        opened.append(url)
+        return FakeCap(frames=0)
+
+    hub = ViewHub(opener, lambda s, c: None, capture=capture, reaper=False, limits=LIMITS_16)
+    try:
+        hub.tile("a", "1")
+        wait(lambda: len(asked) >= 3)
+        assert asked[:3] == [True, False, True]                                  # alt (0 kare) → ana (adres hatası) → alt
+        assert opened[:2] == ["rtsp://a/1/sub", "rtsp://a/1/sub"]
+    finally:
+        hub.stop()
