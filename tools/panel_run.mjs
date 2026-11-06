@@ -11,33 +11,39 @@
 //   yazılır. İşaret yoksa (derleme hiç bitmedi ya da öldürüldü) ya da kaynaktan eskiyse önce `next build` (1-2 dk).
 //   Derleme başarısız olursa ya da derlemede middleware (giriş denetimi) yoksa yerel ağa AÇILMAZ, yalnızca bu
 //   bilgisayarda geliştirme kipinde başlar.
+// - Port denetimi: 127.0.0.1, 0.0.0.0, ::1 ve :: dördünde de dinlenebilmeli (src/lib/portFree.mjs); `next start` öncesi
+//   (ilk açılış ve ayar değişince yeniden başlatma) bir kez daha denetlenir: otomatik kipte yeni boş port, `--port`ta çıkış 2.
+// - .local/panel.port: yalnızca port numarası (Next başlarken yazılır, çıkarken silinir); .bat PowerShell'siz okur.
+// - .local/panel-notice.txt: açılmama nedeni (tek satır Türkçe); .bat gösterir. Çıkışta silinmez, sonraki açılış siler.
 // - Durum dosyası apps/dashboard/.local/panel-state.json: {state: building|failed|listening, host, port, at, message};
 //   panel_baslat.bat (derlenirken bekler, panelin portunu buradan öğrenir) ve Ayarlar okur.
 // apps/dashboard/.local/access.json değişince Next'i yeniden başlatır (≈ 10 sn).
 // Kullanım: node tools/panel_run.mjs [--dev] [--port 3300]   (eski `--prod` kabul edilir, artık varsayılan)
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUILD_MARKER, LAUNCHER_DIST, LOCK_HEARTBEAT_MS, accessFile, buildIsStale, lockDecision, middlewareReady, panelCommand,
-  PANEL_PORT, PORT_TRIES, panelPlan, panelStateFile, pickPort,
+  PANEL_PORT, PORT_TRIES, panelPlan, panelStateFile, parseLauncherArgs, pickPort,
 } from "../apps/dashboard/src/lib/accessCore.mjs";
+import { isFree } from "../apps/dashboard/src/lib/portFree.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DASH = path.join(ROOT, "apps", "dashboard");
-const dev = process.argv.includes("--dev");
-const portArg = process.argv.indexOf("--port");
-const fixedPort = portArg > 0 ? process.argv[portArg + 1] : null;
-if (fixedPort !== null && !(/^\d{1,5}$/.test(fixedPort) && Number(fixedPort) >= 1 && Number(fixedPort) <= 65535)) {
-  console.error(`[panel] geçersiz port: ${fixedPort}`);
+let args;
+try { args = parseLauncherArgs(process.argv.slice(2)); } catch (e) {
+  console.error(`[panel] ${e.message}`);
   process.exit(2);
 }
+const { dev } = args;
+const fixedPort = args.port === null ? null : String(args.port);
 let port = "";                                         // kilit alındıktan sonra seçilir
 const FILE = accessFile(process.env, DASH);
 const LOCK = path.join(DASH, ".local", "panel.lock");
 const STATE = panelStateFile(process.env, DASH);
+const PORT_FILE = path.join(DASH, ".local", "panel.port");         // yalnızca port numarası: .bat PowerShell'siz okur
+const NOTICE = path.join(DASH, ".local", "panel-notice.txt");      // açılmama nedeni (tek satır, UTF-8): .bat gösterir
 const DIST = path.join(DASH, LAUNCHER_DIST);
 const BUILDING_MSG = "Panel derleniyor (ilk açılış 1-2 dk)…";
 
@@ -77,10 +83,29 @@ function releaseLock() {
   try { if (lockInfo()?.pid === process.pid) fs.unlinkSync(LOCK); } catch { /* zaten yok */ }
 }
 
+/** Kullanıcıya gösterilecek tek satırlık not (panel_baslat.bat okur). Yazılamazsa yalnızca günlükte kalır. */
+function writeNotice(message) {
+  try {
+    fs.mkdirSync(path.dirname(NOTICE), { recursive: true });
+    fs.writeFileSync(NOTICE, `${message}\n`, "utf8");
+  } catch { /* yalnızca bilgi amaçlı */ }
+}
+/** Çalışan başlatıcının durum dosyasında sayısal `port` var mı: yoksa bu güncellemeden ÖNCEKİ sürüm çalışıyor */
+function runningIsOldVersion() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STATE, "utf8"));
+    return !(typeof s?.port === "number" && s.port > 0);
+  } catch { return false; }                            // durum dosyası yok/okunamıyor: yeni sürüm henüz yazmamış olabilir
+}
+
 if (!acquireLock()) {
   console.log("[panel] Panel zaten çalışıyor (başka bir başlatıcı açık); bu kopya çıkıyor.");
+  if (runningIsOldVersion()) {
+    writeNotice('Eski sürüm panel çalışıyor: görev çubuğundaki "BandVision panel" penceresini kapatıp kısayolu yeniden çalıştırın.');
+  }
   process.exit(0);
 }
+for (const f of [NOTICE, PORT_FILE]) { try { fs.rmSync(f, { force: true }); } catch { /* yok */ } }   // önceki açılıştan kalanlar
 // Canlı olduğumuzu bildir: PID yeniden kullanılsa da (yeniden başlatma) bayat kilit "çalışıyor" sanılmasın
 setInterval(() => { try { const t = new Date(); fs.utimesSync(LOCK, t, t); } catch { /* kilit silinmiş */ } }, LOCK_HEARTBEAT_MS).unref();
 
@@ -127,7 +152,34 @@ function fallbackLocal(planEnv, message) {
   launch(panelCommand({ host: "127.0.0.1" }, { dev: true }), planEnv, false);
 }
 
-function launch(cmd, planEnv, reportListening = true) {
+/** Başlatma ile Next'in dinlemesi arasında port başkasına geçmiş olabilir: yeniden denetler. Kendi eski Next'imiz yeni
+ * kapandıysa port bir an dolu görünebilir, bu yüzden ~3 sn beklenir. Otomatik kipte yeni boş port seçilir (günlüğe
+ * yazılır); sabit kipte (--port) not yazılıp çıkılır (2). */
+async function ensurePort() {
+  for (let i = 0; i < 10; i++) {
+    if (await isFree(Number(port))) return;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  if (fixedPort !== null) {
+    const msg = `Port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı.`;
+    console.error(`[panel] ${msg}`);
+    writeNotice(msg);
+    process.exit(2);
+  }
+  const picked = await pickPort(isFree);
+  if (picked === null) return noFreePort();
+  console.log(`[panel] port ${port} başlatmadan hemen önce doldu; panel ${picked} portunda açılıyor`);
+  port = String(picked);
+}
+function noFreePort() {
+  const msg = `${PANEL_PORT}–${PANEL_PORT + PORT_TRIES - 1} arasında boş port yok; panel açılmadı.`;
+  console.error(`[panel] ${msg}`);
+  writeNotice(msg);
+  process.exit(2);
+}
+
+let generation = 0;                                    // erişim ayarı değişince artar: bekleyen başlatma bırakılır
+async function launch(cmd, planEnv, reportListening = true) {
   const lan = cmd.host === "0.0.0.0";
   if (lan && cmd.mode !== "start") {                   // son güvenlik ağı: yerel ağda geliştirme sunucusu ASLA
     console.error("[panel] iç hata: yerel ağ için geliştirme kipi istendi; başlatılmıyor");
@@ -137,9 +189,13 @@ function launch(cmd, planEnv, reportListening = true) {
     console.log("[panel] derlemede giriş denetimi (middleware) bulunamadı; yerel ağa AÇILMIYOR, yalnızca bu bilgisayarda geliştirme kipinde başlıyor");
     return fallbackLocal(planEnv, "Derlemede giriş denetimi bulunamadı; panel yerel ağa açılmadı, yalnızca bu bilgisayarda açık.");
   }
+  const gen = generation;
+  await ensurePort();
+  if (gen !== generation || child) return;             // bu arada ayar değişti (yeniden başlatma zamanlandı) ya da başka süreç başladı
   console.log(`[panel] ${lan ? "yerel ağa açık (şifreli)" : "yalnızca bu bilgisayar"} · port ${port} (${cmd.mode === "start" ? "üretim" : "geliştirme"} kipi)`);
   const env = { ...process.env, ...planEnv, PANEL_RUNNER: "1", PANEL_LAN: lan ? "1" : "0", PORT: port };
   if (cmd.mode === "start") env.BV_DIST_DIR = LAUNCHER_DIST;   // next start, başlatıcının derlemesini okur
+  try { fs.writeFileSync(PORT_FILE, port); } catch { /* yalnızca .bat için */ }   // "listening" durumundan ÖNCE
   if (reportListening) writeState("listening", cmd.host, "");
   const c = run(["next", cmd.mode, "-H", cmd.host, "-p", port], { cwd: DASH, env, stdio: "inherit" });
   child = c;
@@ -155,6 +211,7 @@ function start() {
   const cmd = panelCommand(plan, { dev });
   if (cmd.mode === "start" && buildIsStale(DASH, LAUNCHER_DIST)) {
     console.log(`[panel] ${cmd.host === "0.0.0.0" ? "yerel ağ kipi: " : ""}üretim derlemesi hazırlanıyor (1-2 dk)…`);
+    try { fs.rmSync(PORT_FILE, { force: true }); } catch { /* yok */ }
     writeState("building", cmd.host, BUILDING_MSG);
     try { fs.rmSync(path.join(DIST, BUILD_MARKER), { force: true }); } catch { /* yok */ }   // yarıda kalırsa işaret olmasın
     const startedAt = new Date();
@@ -194,39 +251,31 @@ fs.watchFile(FILE, { interval: 2000 }, () => {
   if (t === last) return;
   last = t;
   console.log("[panel] erişim ayarı değişti: yeniden başlatılıyor");
+  generation++;
   stop();
   if (restartTimer) clearTimeout(restartTimer);        // art arda değişimde tek yeniden başlatma
   restartTimer = setTimeout(() => { restartTimer = null; start(); }, 1500);
 });
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => { stop(); process.exit(0); });
 
-/** Port bu bilgisayarda boş mu: hem 127.0.0.1 hem 0.0.0.0'da dinlenebiliyorsa (başka uygulama yalnız birinde dinliyor
- * olabilir). Denemeden sonra hemen kapatılır. */
-function canListen(p, host) {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once("error", () => resolve(false));
-    srv.listen({ port: p, host, exclusive: true }, () => srv.close(() => resolve(true)));
-  });
-}
-const isFree = async (p) => (await canListen(p, "127.0.0.1")) && (await canListen(p, "0.0.0.0"));
 process.on("exit", () => {
   stop();
   try { fs.rmSync(STATE, { force: true }); } catch { /* yok */ }   // çalışmayan panelin durumu "derleniyor" kalmasın
+  try { fs.rmSync(PORT_FILE, { force: true }); } catch { /* yok */ }
+  // panel-notice.txt SİLİNMEZ: .bat çıkış nedenini okuyabilsin (bir sonraki başlatıcı açılışta siler)
   releaseLock();
 });
 if (fixedPort !== null) {
   if (!(await isFree(Number(fixedPort)))) {
-    console.error(`[panel] port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı`);
+    const msg = `Port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı.`;
+    console.error(`[panel] ${msg}`);
+    writeNotice(msg);
     process.exit(2);
   }
   port = fixedPort;
 } else {
   const picked = await pickPort(isFree);
-  if (picked === null) {
-    console.error(`[panel] ${PANEL_PORT}-${PANEL_PORT + PORT_TRIES - 1} arasında boş port yok; panel açılmadı`);
-    process.exit(2);
-  }
+  if (picked === null) noFreePort();
   if (picked !== PANEL_PORT) console.log(`[panel] port ${PANEL_PORT} dolu; panel ${picked} portunda açılıyor`);
   port = String(picked);
 }

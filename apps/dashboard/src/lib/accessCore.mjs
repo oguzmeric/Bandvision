@@ -73,6 +73,23 @@ export function panelCommand(plan, opts = {}) {
 export const PANEL_PORT = 3300;
 export const PORT_TRIES = 10;
 
+/**
+ * Başlatıcının komut satırı: `--dev` (geliştirme kipi, yalnızca bu bilgisayarda), `--port N` (yalnızca o port); eski
+ * `--prod` artık varsayılan olduğundan yok sayılır. Geçersizse Türkçe iletiyle Error fırlatır.
+ * @returns {{dev: boolean, port: number | null}}
+ */
+export function parseLauncherArgs(argv) {
+  let port = null;
+  const i = argv.indexOf("--port");
+  if (i >= 0) {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith("--")) throw new Error("--port için bir port numarası verilmedi (ör. --port 3300)");
+    if (!/^\d{1,5}$/.test(v) || Number(v) < 1 || Number(v) > 65535) throw new Error(`geçersiz port: ${v} (1-65535 arası bir sayı olmalı)`);
+    port = Number(v);
+  }
+  return { dev: argv.includes("--dev"), port };
+}
+
 /** `preferred`'dan başlayarak `tries` port içinde ilk boşu (isFree(port) → true) döndürür; hiçbiri boş değilse null. */
 export async function pickPort(isFree, preferred = PANEL_PORT, tries = PORT_TRIES) {
   for (let port = preferred; port < preferred + tries; port++) {

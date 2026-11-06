@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   BUILD_MARKER, LAUNCHER_DIST, LOCK_FRESH_MS, LOCK_STALE_MS, MAX_PASSWORD, MIN_PASSWORD, accessFile, buildIsStale,
   createLoginThrottle, hashPassword, hostAllowed, isJsonContentType, lockDecision, middlewareReady, newSecret,
-  PANEL_PORT, PORT_TRIES, panelCommand, panelPlan, panelState, panelStateFile, pickPort, updateAccess, verifyPassword,
+  PANEL_PORT, PORT_TRIES, panelCommand, panelPlan, panelState, panelStateFile, parseLauncherArgs, pickPort, updateAccess, verifyPassword,
   verifyPasswordAsync,
 } from "./accessCore.mjs";
 
@@ -404,3 +404,16 @@ test("pickPort: tercih edilen port boşsa o; doluysa sıradaki ilk boş port; he
   assert.equal(await pickPort(async (p) => p === 4001, 4000, 3), 4001);
 });
 
+
+test("parseLauncherArgs: --dev, --prod yok sayılır, --port doğrulanır", () => {
+  assert.deepEqual(parseLauncherArgs([]), { dev: false, port: null });
+  assert.deepEqual(parseLauncherArgs(["--dev"]), { dev: true, port: null });
+  assert.deepEqual(parseLauncherArgs(["--prod"]), { dev: false, port: null });
+  assert.deepEqual(parseLauncherArgs(["--port", "3305", "--dev"]), { dev: true, port: 3305 });
+  assert.deepEqual(parseLauncherArgs(["--port", "65535"]), { dev: false, port: 65535 });
+  assert.throws(() => parseLauncherArgs(["--port"]), /port numarası verilmedi/);
+  assert.throws(() => parseLauncherArgs(["--port", "--dev"]), /port numarası verilmedi/);
+  assert.throws(() => parseLauncherArgs(["--port", "0"]), /geçersiz port: 0/);
+  assert.throws(() => parseLauncherArgs(["--port", "70000"]), /geçersiz port: 70000/);
+  assert.throws(() => parseLauncherArgs(["--port", "abc"]), /geçersiz port: abc/);
+});

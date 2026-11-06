@@ -7,7 +7,9 @@ rem Panel başlatıcısı (tools\panel_run.mjs) tek kopya çalışır (zaten ça
 rem kipinde açar; derleme gerekiyorsa (ilk açılış ya da güncelleme) 1-2 dk sürer: başlatıcının durum dosyası
 rem (apps\dashboard\.local\panel-state.json) "building" iken bu pencere bunu yazar ve en çok 240 sn bekler.
 rem Port: panel 3300'de açılır (3000 bu bilgisayarda başka bir uygulamanın); 3300 doluysa sıradaki boş portta (3301…).
-rem Port durum dosyasından okunur; panel sayfadaki "bv-panel" işaretiyle tanınır (o porttaki başka uygulama panel sanılmaz).
+rem Port apps\dashboard\.local\panel.port dosyasından okunur (PowerShell yok: klasör adındaki kesme işareti bozmaz); panel
+rem sayfadaki "bv-panel" işaretiyle tanınır (o porttaki başka uygulama panel sanılmaz). Başlatıcı açılamazsa nedenini
+rem apps\dashboard\.local\panel-notice.txt dosyasına yazar (eski sürüm panel çalışıyor, boş port yok…); burada gösterilir.
 chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0.."
@@ -58,6 +60,8 @@ if not exist "%DASH%\node_modules\qrcode" (
 curl -s -m 2 http://127.0.0.1:8090/healthz >nul 2>&1
 if errorlevel 1 start "BandVision analiz" /min /d "%EDGE%" "%EDGE%\.venv\Scripts\python.exe" -m bantvision.analyzer --port 8090 --log "%LOGS%\analyzer.log"
 set "STATE=%DASH%\.local\panel-state.json"
+set "NOTICE=%DASH%\.local\panel-notice.txt"
+if exist "%NOTICE%" del "%NOTICE%" >nul 2>&1
 call :panel_hazir
 if errorlevel 1 start "BandVision panel" /min /d "%DASH%" cmd /c "node "%ROOT%\tools\panel_run.mjs" 1>>"%LOGS%\panel.log" 2>&1"
 
@@ -65,6 +69,7 @@ set "SAID_BUILD="
 set "SAID_FAIL="
 echo BandVision paneli aciliyor...
 for /l %%i in (1,1,240) do (
+  if exist "%NOTICE%" goto :bildirim
   curl -s -m 2 http://127.0.0.1:8090/healthz >nul 2>&1 && call :panel_hazir && goto :hazir
   if not defined SAID_BUILD findstr /c:"\"state\":\"building\"" "%STATE%" >nul 2>&1 && (echo Panel derleniyor ^(ilk acilis ya da guncelleme, 1-2 dk^)... & set "SAID_BUILD=1")
   if not defined SAID_FAIL findstr /c:"\"state\":\"failed\"" "%STATE%" >nul 2>&1 && (echo Panel derlenemedi; yalnizca bu bilgisayarda gelistirme kipinde aciliyor ^(ayrinti: panel.log^). & set "SAID_FAIL=1")
@@ -74,16 +79,24 @@ echo Sunucular 240 saniyede acilmadi. Hata icin "%LOGS%\analyzer.log" ve "%LOGS%
 pause
 exit /b 1
 
+:bildirim
+rem Başlatıcının yazdığı tek satırlık neden (UTF-8; pencere chcp 65001)
+type "%NOTICE%"
+del "%NOTICE%" >nul 2>&1
+pause
+exit /b 1
+
 :hazir
 if not "%PANEL_PORT%"=="3300" echo Port 3300 dolu; panel %PANEL_PORT% portunda acildi.
 start "" http://localhost:%PANEL_PORT%/cameras
 exit /b 0
 
-rem Panel çalışıyor ve yanıt veriyor mu: portu durum dosyasından okur (PANEL_PORT), o porttaki sayfada "bv-panel"
-rem işareti var mı bakar. Çıkış 0: hazır.
+rem Panel çalışıyor ve yanıt veriyor mu: portu panel.port dosyasından okur (PANEL_PORT; derlenirken dosya yoktur), o porttaki
+rem sayfada "bv-panel" işareti var mı bakar. Çıkış 0: hazır.
 :panel_hazir
 set "PANEL_PORT="
-for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "try { $s = Get-Content -Raw -LiteralPath '%STATE%' -ErrorAction Stop | ConvertFrom-Json; if ($s.state -ne 'building' -and [int]$s.port -gt 0) { [int]$s.port } } catch {}"`) do set "PANEL_PORT=%%p"
+if not exist "%DASH%\.local\panel.port" exit /b 1
+set /p PANEL_PORT=<"%DASH%\.local\panel.port"
 if not defined PANEL_PORT exit /b 1
 curl -s -m 5 -L "http://127.0.0.1:%PANEL_PORT%/login" 2>nul | findstr /c:"bv-panel" >nul 2>&1
 exit /b %errorlevel%

@@ -1,5 +1,6 @@
 /**
- * Alarmın dikkat çekme seçenekleri — yalnızca BU TARAYICIDA (localStorage; erişilemezse kapalı sayılır):
+ * Alarmın dikkat çekme seçenekleri — yalnızca BU TARAYICIDA (çerez; erişilemezse kapalı sayılır). Çerez port'a bağlı
+ * değildir: panelin portu değişse (3300 doluysa 3301…) ayarlar kaybolmaz (localStorage port başına ayrı olurdu):
  * - masaüstü bildirimi (varsayılan kapalı): sekme arka plandayken yeni alarmda işletim sistemi bildirimi;
  * - sesli uyarı (varsayılan kapalı; alarm tasarım gereği sessiz): yeni alarmda kısa iki tonlu bip (WebAudio, ses
  *   dosyası yok), en çok 10 sn'de bir.
@@ -8,14 +9,38 @@
 
 export type AttentionPref = "desktop" | "sound";
 
-const KEYS: Record<AttentionPref, string> = { desktop: "bv.alarm.desktop", sound: "bv.alarm.sound" };
+const COOKIES: Record<AttentionPref, string> = { desktop: "bv_alarm_desktop", sound: "bv_alarm_sound" };
+/** Önceki sürüm ayarı localStorage'da tutuyordu; çerez yoksa bir kez taşınır */
+const LEGACY_KEYS: Record<AttentionPref, string> = { desktop: "bv.alarm.desktop", sound: "bv.alarm.sound" };
 
 /** Sesli uyarı en çok bu aralıkla çalar */
 export const BEEP_MIN_INTERVAL_MS = 10_000;
 
+function cookieValue(name: string): string | null {
+  for (const part of document.cookie.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=");
+  }
+  return null;
+}
+
+function setCookie(pref: AttentionPref, on: boolean): void {
+  document.cookie = on
+    ? `${COOKIES[pref]}=1; Path=/; Max-Age=31536000; SameSite=Lax`
+    : `${COOKIES[pref]}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
 export function readPref(pref: AttentionPref): boolean {
   try {
-    return window.localStorage.getItem(KEYS[pref]) === "1";
+    const c = cookieValue(COOKIES[pref]);
+    if (c !== null) return c === "1";
+    // çerez yok: eski localStorage ayarı (aynı port) varsa çereze taşı
+    if (window.localStorage.getItem(LEGACY_KEYS[pref]) === "1") {
+      setCookie(pref, true);
+      window.localStorage.removeItem(LEGACY_KEYS[pref]);
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -23,10 +48,10 @@ export function readPref(pref: AttentionPref): boolean {
 
 export function writePref(pref: AttentionPref, on: boolean): void {
   try {
-    if (on) window.localStorage.setItem(KEYS[pref], "1");
-    else window.localStorage.removeItem(KEYS[pref]);
+    setCookie(pref, on);
+    window.localStorage.removeItem(LEGACY_KEYS[pref]);   // eski kopya kalmasın (çerez silinince yeniden taşınmasın)
   } catch {
-    // gizli pencere / engellenmiş depolama: ayar yalnızca bu sayfa açıkken geçerli olmaz, sessizce kapalı kalır
+    // çerez engellenmiş: ayar yalnızca bu sayfa açıkken geçerli olmaz, sessizce kapalı kalır
   }
 }
 

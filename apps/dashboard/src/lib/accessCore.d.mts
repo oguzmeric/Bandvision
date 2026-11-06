@@ -11,6 +11,7 @@ export function panelCommand(plan: { host: string }, opts?: { dev?: boolean }): 
 export const PANEL_PORT: number;
 export const PORT_TRIES: number;
 export function pickPort(isFree: (port: number) => Promise<boolean>, preferred?: number, tries?: number): Promise<number | null>;
+export function parseLauncherArgs(argv: string[]): { dev: boolean; port: number | null };
 export const LAUNCHER_DIST: string;
 export const BUILD_MARKER: string;
 export function buildIsStale(dashDir: string, distDir?: string): boolean;

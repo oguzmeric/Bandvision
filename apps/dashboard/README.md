@@ -36,7 +36,8 @@ Panel analiz sunucusuna (`services/edge`, `bantvision.analyzer`) **kendi sunucu 
 **Windows'ta tek tık:** `tools/panel_baslat.bat` (ya da masaüstündeki kısayolu). İlk seferde analiz sunucusu ortamını (`services/edge/.venv`) ve panel paketlerini kurar, sonra ikisini küçültülmüş pencerelerde başlatıp tarayıcıyı açar; çalışıyorlarsa yeniden başlatmaz. Günlükler: `.logs\analyzer.log`, `.logs\panel.log`.
 
 Paneli kısayol **başlatıcıyla** açar: `tools/panel_run.mjs` (`node tools/panel_run.mjs [--port 3300] [--dev]`).
-- Port: varsayılan 3300 (3000 bu bilgisayarda başka bir uygulamanın); doluysa sıradaki ilk boş port (3301…). Kısayol portu durum dosyasından okur ve tarayıcıyı o adresle açar.
+- Port: varsayılan 3300 (3000 bu bilgisayarda başka bir uygulamanın); doluysa sıradaki ilk boş port (3301…3309). "Boş" = port `127.0.0.1`, `0.0.0.0`, `::1` ve `::` dördünde de dinlenebilir (başka uygulama yalnızca IPv6'da dinliyorsa `localhost` ona giderdi). `next start` öncesi bir kez daha denetlenir. Başlatıcı portu `.local/panel.port` dosyasına yazar (yalnızca numara); kısayol (PowerShell kullanmadan) buradan okur ve tarayıcıyı o adresle açar. Panel açılamazsa nedeni `.local/panel-notice.txt` dosyasına tek satır yazılır ve kısayol penceresinde gösterilir (ör. eski sürüm panel hâlâ çalışıyor: "BandVision panel" penceresini kapatıp kısayolu yeniden çalıştırın; 3300–3309 dolu; `--port N` dolu).
+- Alarm dikkat seçenekleri (sesli uyarı, masaüstü bildirimi) port'tan bağımsız **çerezlerde** tutulur (`bv_alarm_desktop`, `bv_alarm_sound`), yani panelin portu değişse de kalır. Bu güncellemeden önce localStorage'da tutulan ayar bir kez çereze taşınır; farklı bir port'ta (ör. 3000'de) açılmış eski ayar taşınamaz: bu güncellemeden sonra Bildirimler sayfasında bu seçenekleri bir kez yeniden açın.
 - Telefondan erişim kapalıyken paneli yalnızca bu bilgisayarda (`127.0.0.1`), açıkken (Telefondan erişim sayfasından, şifreyle) tüm ağ arayüzlerinde çalıştırır.
 - Her zaman **üretim kipinde** çalıştırır (sayfalar anında açılır; geliştirme kipi yalnızca `--dev` ile ve yalnızca bu bilgisayarda): gerekiyorsa önce kendi klasörüne
   (`.next-lan`) derler (ilk açılış 1–2 dk; `.bat` en çok 240 sn bekler ve "Panel derleniyor" yazar). Derleme başarısız
@@ -61,7 +62,7 @@ Elle (geliştirme):
    npm install
    npm run dev      # ya da derleyip: npm run build && npm start
    ```
-   Tarayıcı: http://localhost:3000. `dev` ve `start` betikleri yalnızca `127.0.0.1`'de dinler (yerel ağdan erişilmez);
+   Tarayıcı: http://localhost:3300 (`dev` ve `start` betikleri `-p 3300` ile çalışır). `dev` ve `start` betikleri yalnızca `127.0.0.1`'de dinler (yerel ağdan erişilmez);
    telefondan erişim için başlatıcı ve Telefondan erişim sayfası kullanılır. Şifre yoksa panel yalnızca `localhost` / `127.0.0.1` / `[::1]`
    adıyla açılır (başka `Host` → `403`).
 

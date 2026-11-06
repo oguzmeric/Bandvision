@@ -748,8 +748,9 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   await sound.check();                                                        // açılınca bir kez çalar (deneme)
   const tones = () => page.evaluate(() => (window as unknown as { __tones: number }).__tones);
   await expect.poll(tones).toBe(2);                                           // iki tonlu tek bip
-  expect(await page.evaluate(() => [localStorage.getItem("bv.alarm.desktop"), localStorage.getItem("bv.alarm.sound")]))
-    .toEqual(["1", "1"]);
+  const prefCookies = async () => (await page.context().cookies()).filter((c) => c.name.startsWith("bv_alarm_"))
+    .map((c) => `${c.name}=${c.value}`).sort();
+  expect(await prefCookies()).toEqual(["bv_alarm_desktop=1", "bv_alarm_sound=1"]);   // çerez: port değişse de kalır
   await page.reload();                                                        // ayarlar bu tarayıcıda kalır (sayaçlar sıfırlanır)
   await expect(desktop).toBeChecked();
   await expect(sound).toBeChecked();
@@ -781,7 +782,17 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   await page.evaluate(() => Object.defineProperty(document, "hidden", { configurable: true, get: () => false }));
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();
   await desktop.uncheck();
-  expect(await page.evaluate(() => localStorage.getItem("bv.alarm.desktop"))).toBeNull();
+  expect(await prefCookies()).toEqual(["bv_alarm_sound=1"]);
+});
+
+test("Bu tarayıcıda: eski localStorage ayarı bir kez çereze taşınır", async ({ page }) => {
+  await login(page);
+  await page.evaluate(() => localStorage.setItem("bv.alarm.sound", "1"));
+  await page.goto("/notifications");
+  const sound = page.getByRole("region", { name: "Bu tarayıcıda" }).getByRole("checkbox", { name: "Sesli uyarı" });
+  await expect(sound).toBeChecked();
+  expect(await page.evaluate(() => localStorage.getItem("bv.alarm.sound"))).toBeNull();
+  expect((await page.context().cookies()).some((c) => c.name === "bv_alarm_sound" && c.value === "1")).toBe(true);
 });
 
 test("Bu tarayıcıda: güvensiz adreste (başka bilgisayardan http) masaüstü bildirimi açılmaz, nedeni yazılır", async ({ page }) => {
@@ -792,7 +803,7 @@ test("Bu tarayıcıda: güvensiz adreste (başka bilgisayardan http) masaüstü 
   await desktop.click();
   await expect(section.getByRole("status")).toHaveText(/^Masaüstü bildirimi yalnızca güvenli adreste çalışır/);
   await expect(desktop).not.toBeChecked();
-  expect(await page.evaluate(() => localStorage.getItem("bv.alarm.desktop"))).toBeNull();
+  expect((await page.context().cookies()).some((c) => c.name === "bv_alarm_desktop")).toBe(false);
 });
 
 test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı izleme'den sonra; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
