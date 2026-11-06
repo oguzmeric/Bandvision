@@ -260,3 +260,47 @@ test("izleme (gerçek yığın): panel vekili taslak yollarını gövde ve durum
     await page.request.delete(`/api/live/sources/${src.id}`);
   }
 });
+
+test("izleme (gerçek yığın): sekme sırası sürükle-bırak ve Sağa taşı ile sunucuya yazılır, yenileyince kalır; liste değişmişse 422", async ({ page }) => {
+  await login(page);
+  const make = async (name: string) => (await (await page.request.post("/api/live/views", { data: {
+    name, layout: "1", tiles: [null] } })).json()) as { id: string; name: string };
+  const created = [await make("Sıra A"), await make("Sıra B"), await make("Sıra C")];
+  const tablist = page.getByRole("tablist", { name: "Şablonlar" });
+  const tab = (name: string) => tablist.getByRole("tab", { name, exact: true });
+  /** Bu testin sekmelerinin sırası (önceki testlerden kalan şablonlar sayılmaz) */
+  const ours = async () => (await tablist.getByRole("tab").allTextContents()).filter((n) => n.startsWith("Sıra "));
+  const ORDER_CHANGED = "Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin.";
+  try {
+    await page.goto("/watch");
+    await expect.poll(ours).toEqual(["Sıra A", "Sıra B", "Sıra C"]);
+    await tab("Sıra C").dragTo(tab("Sıra A"));
+    await expect.poll(ours).toEqual(["Sıra C", "Sıra A", "Sıra B"]);
+    await expect.poll(async () => ((await (await page.request.get("/api/live/views")).json()) as Array<{ name: string }>)
+      .map((v) => v.name).filter((n) => n.startsWith("Sıra "))).toEqual(["Sıra C", "Sıra A", "Sıra B"]);
+    await page.reload();
+    await expect.poll(ours).toEqual(["Sıra C", "Sıra A", "Sıra B"]);
+    await tab("Sıra C").click({ button: "right" });
+    await page.getByRole("menu", { name: "Şablon işlemleri" }).getByRole("menuitem", { name: "Sağa taşı" }).click();
+    await expect.poll(ours).toEqual(["Sıra A", "Sıra C", "Sıra B"]);
+    await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+    await page.reload();
+    await expect.poll(ours).toEqual(["Sıra A", "Sıra C", "Sıra B"]);
+    // sunucu: kayıtlı şablonların tamı değilse (eksik, fazla, yinelenen) 422 ve sıra değişmez
+    const all = ((await (await page.request.get("/api/live/views")).json()) as Array<{ id: string }>).map((v) => v.id);
+    for (const ids of [all.slice(1), [...all, "yok"], [...all, all[0]]]) {
+      const r = await page.request.put("/api/live/views/order", { data: { ids } });
+      expect(r.status()).toBe(422);
+      expect((await r.json()).detail).toBe(ORDER_CHANGED);
+    }
+    // arayüz: liste bu arada başka yerde değişti (yeni şablon) → 422, sekmeler eski sırasına döner, neden yazılır
+    created.push(await make("Sıra D"));
+    await tab("Sıra B").dragTo(tab("Sıra A"));
+    await expect(page.getByRole("main").getByRole("alert")).toHaveText(ORDER_CHANGED);
+    await expect.poll(ours).toEqual(["Sıra A", "Sıra C", "Sıra B"]);
+    await page.reload();
+    await expect.poll(ours).toEqual(["Sıra A", "Sıra C", "Sıra B", "Sıra D"]);
+  } finally {
+    for (const v of created) await page.request.delete(`/api/live/views/${v.id}`);
+  }
+});

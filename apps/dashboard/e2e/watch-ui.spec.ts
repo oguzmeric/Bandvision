@@ -848,7 +848,7 @@ test("sekme menüsü: sağ tık Yeniden adlandır / Kopyala / Sil; Sil onay iste
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
   await tab(page, "Giriş katı").click({ button: "right" });
   const menu = page.getByRole("menu", { name: "Şablon işlemleri" });
-  await expect(menu.getByRole("menuitem")).toHaveText(["Yeniden adlandır", "Kopyala", "Sil"]);
+  await expect(menu.getByRole("menuitem")).toHaveText(["Yeniden adlandır", "Kopyala", "Sola taşı", "Sağa taşı", "Sil"]);
   await expect(menu.getByRole("menuitem", { name: "Yeniden adlandır" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
@@ -3072,4 +3072,287 @@ test("oturum düşünce taslak yazımı durur: panelin 401'i alan POST/PUT yenid
   await expect(tab(page, /^Giriş katı/)).toContainText("*");
   await expect(tiles.nth(3)).toContainText("Depo");
   expect(dialogs).toEqual([]);
+});
+
+// ---------------------------------------------------------------- Ajax'tan: kısayollar, sıralı gösterim, sekme sırası
+
+/** Depo katı (v2) sekmesinin durumu ve akışı */
+async function mockV2(page: Page) {
+  await page.route("**/api/live/views/v2/status", (r) => r.fulfill({ json: { id: "v2", layout: "1", tiles: [
+    { sourceId: "d", channelId: null, name: "Depo", state: "live", message: "", fps: 10, analysis: null }] } }));
+  await page.route("**/api/live/views/v2/stream**", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+}
+/** Tek kamera başlığı (ad tam eşleşir: "Kapı" "Arka kapı"yı da tutmasın) */
+const singleTitle = (page: Page, name: string) => page.getByRole("heading", { name, exact: true });
+const tourBar = (page: Page) => page.getByRole("group", { name: "Sıralı gösterim" });
+const tabNames = (page: Page) => page.getByRole("tablist", { name: "Şablonlar" }).getByRole("tab").allTextContents();
+
+test("kısayollar: F büyütür ve geri döner (üstündeki ya da son tıklanan kutu), ←/→ dolu kutular, Esc, 1–9 sekme, ? ve Kısayollar listesi; yazı kutusunda ve açık menüde çalışmaz", async ({ page }) => {
+  await mock(page, STATUS, [VIEW, V2]);
+  await mockV2(page);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  // F: fareyle üstüne gelinen kutu
+  await tiles.nth(0).hover();
+  await page.keyboard.press("f");
+  await expect(singleTitle(page, "Kapı")).toBeVisible();
+  await page.keyboard.press("F");                                                      // tek kamerada: ızgaraya dön
+  await expect(tiles).toHaveCount(4);
+  // F: fare ızgaradan çıktıysa son tıklanan kutu
+  await tiles.nth(2).click();
+  await page.getByRole("heading", { name: "Canlı izleme" }).hover();
+  await page.keyboard.press("f");
+  await expect(singleTitle(page, "Arka kapı")).toBeVisible();
+  // ←/→: dolu kutular arasında, boş kutu (4.) atlanır, uçta sarar
+  await page.keyboard.press("ArrowRight");
+  await expect(singleTitle(page, "Kapı")).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await expect(singleTitle(page, "Arka kapı")).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await expect(singleTitle(page, "Ofis NVR · Kasa")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tiles).toHaveCount(4);
+  // 1–9: n. sekme; olmayan sekme bir şey yapmaz
+  await page.keyboard.press("2");
+  await expect(tab(page, "Depo katı")).toHaveAttribute("aria-selected", "true");
+  await expect(tiles).toHaveCount(1);
+  await page.keyboard.press("1");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("9");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  // tek kamerada da sekme değişir ve ızgara döner
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await tiles.nth(0).dblclick();
+  await expect(singleTitle(page, "Kapı")).toBeVisible();
+  await page.keyboard.press("2");
+  await expect(tab(page, "Depo katı")).toHaveAttribute("aria-selected", "true");
+  await expect(tiles).toHaveCount(1);
+  await page.keyboard.press("1");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  // ?: liste açılır ve kapanır; Kısayollar düğmesi de açar, Esc kapatır, odak düğmeye döner
+  const help = page.getByRole("dialog", { name: "Klavye kısayolları" });
+  await page.keyboard.press("?");
+  await expect(help).toBeVisible();
+  await expect(help).toContainText("Sıralı gösterimi duraklatır ya da sürdürür");
+  await expect(help).toContainText("Fareyle üstüne gelinen ya da son tıklanan kutuyu büyütür");
+  await page.keyboard.press("?");
+  await expect(help).toBeHidden();
+  await page.getByRole("button", { name: "Kısayollar" }).click();
+  await expect(help).toBeVisible();
+  await page.keyboard.press("2");                                                      // pencere açıkken kısayol yok
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Escape");
+  await expect(help).toBeHidden();
+  await expect(page.getByRole("button", { name: "Kısayollar" })).toBeFocused();
+  // açık Şablon editörü menüsünde kısayol yok
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await openEditor(page);
+  await page.keyboard.press("2");
+  await page.keyboard.press("f");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  await expect(singleTitle(page, "Kapı")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(editor(page)).toBeHidden();
+  // yazı kutusunda kısayol yok (ad penceresi)
+  await tab(page, "Giriş katı").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Yeniden adlandır" }).click();
+  const name = page.getByRole("dialog", { name: "Yeniden adlandır" }).getByLabel("Şablon adı");
+  await name.fill("");
+  await name.pressSequentially("2f?");
+  await expect(name).toHaveValue("2f?");
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  await expect(help).toBeHidden();
+  await expect(singleTitle(page, "Kapı")).toHaveCount(0);
+});
+
+test("kısayollar: Boşluk sıralı gösterim dışında sayfayı kaydırmaz; odaktaki kutunun Boşluk'u kutunundur", async ({ page }) => {
+  await mock(page, STATUS);
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  await page.setViewportSize({ width: 1400, height: 400 });                             // sayfa kaydırılabilsin
+  expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)).toBe(true);
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press(" ");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await tiles.nth(0).focus();                                                          // kutuda Boşluk: seçer, seçiliyken açar
+  await page.keyboard.press(" ");
+  await expect(tiles.nth(0)).toHaveAttribute("data-selected", "true");
+  await page.keyboard.press(" ");
+  await expect(singleTitle(page, "Kapı")).toBeVisible();
+});
+
+test("sıralı gösterim: en az 2 kamera; aralık çerezde hatırlanır; saatle ilerler, boşu atlar, başa sarar; Duraklat/Sürdür ve Boşluk; ←/→ süreyi baştan başlatır; Durdur, Esc ve sekme değişimi bitirir", async ({ page }) => {
+  await mock(page, STATUS, [VIEW, V2]);
+  await mockV2(page);
+  await page.clock.install();
+  await login(page);
+  const tiles = page.getByTestId("watch-tile");
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  const item = (ed: Locator) => ed.getByRole("button", { name: "Sıralı gösterim…" });
+  // tek kameralı şablonda pasif, nedeni ipucunda
+  await tab(page, "Depo katı").click();
+  await expect(tiles).toHaveCount(1);
+  let ed = await openEditor(page);
+  await expect(item(ed)).toBeDisabled();
+  await expect(item(ed)).toHaveAttribute("title", "Sırayla göstermek için en az 2 kamera gerekir.");
+  await page.keyboard.press("Escape");
+  await tab(page, "Giriş katı").click();
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  // pencere: 5/10/20/30/60 sn, varsayılan 10; İptal hiçbir şey başlatmaz
+  ed = await openEditor(page);
+  await expect(item(ed)).toBeEnabled();
+  await item(ed).click();
+  const dlg = page.getByRole("dialog", { name: "Sıralı gösterim" });
+  const interval = dlg.getByLabel("Geçiş aralığı");
+  await expect(interval).toHaveValue("10");
+  await expect(interval.locator("option")).toHaveText(["5 sn", "10 sn", "20 sn", "30 sn", "60 sn"]);
+  await dlg.getByRole("button", { name: "İptal" }).click();
+  await expect(dlg).toBeHidden();
+  await expect(tiles).toHaveCount(4);
+  ed = await openEditor(page);
+  await item(ed).click();
+  await interval.selectOption("5");
+  await dlg.getByRole("button", { name: "Başlat" }).click();
+  // ilk dolu kutudan başlar, 5 sn'de bir sıradakine geçer, boş kutu atlanır, başa sarar
+  await expect(tourBar(page)).toContainText("Sıralı gösterim · Kapı · 1/3");
+  await expect(singleTitle(page, "Kapı")).toBeVisible();
+  await page.clock.runFor(5_000);
+  await expect(tourBar(page)).toContainText("Sıralı gösterim · Ofis NVR · Kasa · 2/3");
+  await expect(singleTitle(page, "Ofis NVR · Kasa")).toBeVisible();
+  await page.clock.runFor(5_000);
+  await expect(tourBar(page)).toContainText("Sıralı gösterim · Arka kapı · 3/3");
+  await page.clock.runFor(5_000);
+  await expect(tourBar(page)).toContainText("Sıralı gösterim · Kapı · 1/3");
+  // Duraklat: süre işlemez; Sürdür: yeniden başlar
+  await tourBar(page).getByRole("button", { name: "Duraklat" }).click();
+  await page.clock.runFor(12_000);
+  await expect(tourBar(page)).toContainText("Kapı · 1/3");
+  await tourBar(page).getByRole("button", { name: "Sürdür" }).click();
+  await page.clock.runFor(5_000);
+  await expect(tourBar(page)).toContainText("Ofis NVR · Kasa · 2/3");
+  // Boşluk (odak bir düğmede değilken): duraklat / sürdür
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press(" ");
+  await expect(tourBar(page).getByRole("button", { name: "Sürdür" })).toBeVisible();
+  await page.clock.runFor(12_000);
+  await expect(tourBar(page)).toContainText("2/3");
+  await page.keyboard.press(" ");
+  await expect(tourBar(page).getByRole("button", { name: "Duraklat" })).toBeVisible();
+  // →: hemen sıradaki, süre baştan başlar
+  await page.clock.runFor(3_000);
+  await page.keyboard.press("ArrowRight");
+  await expect(tourBar(page)).toContainText("Arka kapı · 3/3");
+  await page.clock.runFor(3_000);                                                     // eski süre dolsaydı geçerdi
+  await expect(tourBar(page)).toContainText("Arka kapı · 3/3");
+  await page.clock.runFor(2_500);
+  await expect(tourBar(page)).toContainText("Kapı · 1/3");
+  await page.keyboard.press("ArrowLeft");
+  await expect(tourBar(page)).toContainText("Arka kapı · 3/3");
+  // Esc: ızgara döner, gösterim biter
+  await page.keyboard.press("Escape");
+  await expect(tiles).toHaveCount(4);
+  await expect(tourBar(page)).toHaveCount(0);
+  await page.clock.runFor(6_000);
+  await expect(tiles).toHaveCount(4);
+  // aralık hatırlandı (çerez); Durdur ızgaraya döner
+  ed = await openEditor(page);
+  await item(ed).click();
+  await expect(interval).toHaveValue("5");
+  expect((await page.context().cookies()).find((c) => c.name === "bv_watch_tour_s")?.value).toBe("5");
+  await dlg.getByRole("button", { name: "Başlat" }).click();
+  await expect(tourBar(page)).toContainText("Kapı · 1/3");
+  await tourBar(page).getByRole("button", { name: "Durdur" }).click();
+  await expect(tiles).toHaveCount(4);
+  await expect(tourBar(page)).toHaveCount(0);
+  // sekme değişimi bitirir
+  ed = await openEditor(page);
+  await item(ed).click();
+  await dlg.getByRole("button", { name: "Başlat" }).click();
+  await expect(tourBar(page)).toBeVisible();
+  await page.keyboard.press("2");
+  await expect(tab(page, "Depo katı")).toHaveAttribute("aria-selected", "true");
+  await expect(tiles).toHaveCount(1);
+  await expect(tourBar(page)).toHaveCount(0);
+  // yenileyince gösterim sürmez (ızgara)
+  await tab(page, "Giriş katı").click();
+  await expect(tiles.nth(0)).toContainText("Kapı");
+  ed = await openEditor(page);
+  await item(ed).click();
+  await dlg.getByRole("button", { name: "Başlat" }).click();
+  await expect(tourBar(page)).toBeVisible();
+  await page.reload();
+  await expect(tiles).toHaveCount(4);
+  await expect(tourBar(page)).toHaveCount(0);
+});
+
+test("sekme sırası: sürükle-bırak ve Sola/Sağa taşı sunucuya yazılır, yenileyince kalır; hata olursa eski sıra ve ileti; yeni sekme taşınmaz", async ({ page }) => {
+  await mock(page, STATUS);
+  const V3 = { id: "v3", name: "Otopark", layout: "1", createdAt: 3, updatedAt: 3, tiles: [null] };
+  const { store } = await mockStore(page, [VIEW, V2, V3]);
+  await mockV2(page);
+  await page.route("**/api/live/views/v3/**", (r) => r.fulfill(r.request().url().includes("/status")
+    ? { json: { id: "v3", layout: "1", tiles: [null] } } : { body: JPEG, contentType: "image/jpeg" }));
+  const orders: string[][] = [];
+  let fail = false;
+  await page.route("**/api/live/views/order", (r) => {
+    const { ids } = r.request().postDataJSON() as { ids: string[] };
+    orders.push(ids);
+    if (fail) return r.fulfill({ status: 422, json: { detail: "Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin." } });
+    store.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    return r.fulfill({ json: store });
+  });
+  await login(page);
+  await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
+  expect(await tabNames(page)).toEqual(["Giriş katı", "Depo katı", "Otopark"]);
+  // sürükle-bırak: bırakılan sekmenin yerine geçer; seçim değişmez
+  await tab(page, "Otopark").dragTo(tab(page, "Giriş katı"));
+  await expect.poll(() => tabNames(page)).toEqual(["Otopark", "Giriş katı", "Depo katı"]);
+  expect(orders.at(-1)).toEqual(["v3", "v1", "v2"]);
+  await expect(tab(page, "Giriş katı")).toHaveAttribute("aria-selected", "true");
+  // menü: uçlarda pasif; Sağa taşı / Sola taşı (klavyeyle de); odak taşınan sekmede kalır
+  const menu = page.getByRole("menu", { name: "Şablon işlemleri" });
+  await tab(page, "Otopark").click({ button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "Sola taşı" })).toBeDisabled();
+  await menu.getByRole("menuitem", { name: "Sağa taşı" }).click();
+  await expect.poll(() => tabNames(page)).toEqual(["Giriş katı", "Otopark", "Depo katı"]);
+  await expect(tab(page, "Otopark")).toBeFocused();
+  await tab(page, "Depo katı").press("Shift+F10");
+  await expect(menu.getByRole("menuitem", { name: "Sağa taşı" })).toBeDisabled();
+  await menu.getByRole("menuitem", { name: "Sola taşı" }).click();
+  await expect.poll(() => tabNames(page)).toEqual(["Giriş katı", "Depo katı", "Otopark"]);
+  expect(orders.at(-1)).toEqual(["v1", "v2", "v3"]);
+  await tab(page, "Otopark").dragTo(tab(page, "Depo katı"));
+  await expect.poll(() => tabNames(page)).toEqual(["Giriş katı", "Otopark", "Depo katı"]);
+  // yenileyince sunucudaki sıra
+  await page.reload();
+  await expect.poll(() => tabNames(page)).toEqual(["Giriş katı", "Otopark", "Depo katı"]);
+  // sunucu reddederse eski sıraya döner ve neden yazılır
+  fail = true;
+  await tab(page, "Depo katı").dragTo(tab(page, "Giriş katı"));
+  await expect(page.getByRole("main").getByRole("alert")).toHaveText("Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin.");
+  await expect.poll(() => tabNames(page)).toEqual(["Giriş katı", "Otopark", "Depo katı"]);
+  expect(orders.at(-1)).toEqual(["v2", "v1", "v3"]);
+  fail = false;
+  // kaydedilmemiş yeni sekme sıraya girmez: sürüklenmez, menüde taşıma pasif, gönderilen sırada yok
+  await page.getByRole("button", { name: "Yeni şablon" }).click();
+  const fresh = tab(page, /^Yeni şablon/);
+  await expect(fresh).toHaveAttribute("draggable", "false");
+  await expect(tab(page, "Otopark")).toHaveAttribute("draggable", "true");
+  await fresh.click({ button: "right" });
+  await expect(menu.getByRole("menuitem", { name: "Sola taşı" })).toBeDisabled();
+  await expect(menu.getByRole("menuitem", { name: "Sağa taşı" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  const n = orders.length;
+  await fresh.dragTo(tab(page, "Giriş katı"));
+  await page.waitForTimeout(300);
+  expect(orders.length).toBe(n);
+  await tab(page, "Depo katı").click({ button: "right" });
+  await menu.getByRole("menuitem", { name: "Sola taşı" }).click();
+  await expect.poll(async () => (await tabNames(page)).slice(0, 3)).toEqual(["Giriş katı", "Depo katı", "Otopark"]);
+  expect((await tabNames(page))[3]).toMatch(/^Yeni şablon \*/);
+  expect(orders.at(-1)).toEqual(["v1", "v2", "v3"]);
+  await expect(fresh).toHaveAttribute("aria-selected", "true");                           // yeni sekme seçili kaldı
 });

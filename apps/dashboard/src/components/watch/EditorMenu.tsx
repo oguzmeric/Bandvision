@@ -48,17 +48,19 @@ function LayoutIcon({ id }: { id: string }) {
 
 /**
  * "Şablon editörü" düğmesi ve açılan menü (taslak sayfalar.html): Yeni şablon, Geri al, Yinele, Kaydet, Farklı kaydet…,
- * NVR'dan şablon; 10 düzen düğmesi ve N×M (satır × sütun, en çok 128 kutu). Menü kipsiz bir pencere (`role="dialog"`):
+ * Seçili kutuyu boşalt, Sıralı gösterim… (en az 2 dolu kutuda), NVR'dan şablon; 10 düzen düğmesi ve N×M (satır × sütun, en çok 128 kutu). Menü kipsiz bir pencere (`role="dialog"`):
  * içinde sayı kutuları da olduğundan `role="menu"` değil. Esc ya da dışarı tıklama kapatır, odak düğmeye döner.
  * Düzen, N×M, Geri al, Yinele ve "Seçili kutuyu boşalt" menüyü açık bırakır (art arda denenebilsin); diğerleri kapatır.
  * Odak menünün dışına çıkınca (Tab ile ya da başka bir öğeye) menü kapanır.
  */
-export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSaveAs, canClearSelected, busy, disabled, recorders,
-  onNew, onUndo, onRedo, onSave, onSaveAs, onClearSelected, onLayout, onFromRecorder }: {
+export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSaveAs, canClearSelected, canTour, busy, disabled, recorders,
+  onNew, onUndo, onRedo, onSave, onSaveAs, onClearSelected, onTour, onLayout, onFromRecorder }: {
   layoutId: string | null; canUndo: boolean; canRedo: boolean; canSave: boolean; canSaveAs: boolean; canClearSelected: boolean;
+  /** Sıralı gösterim: şablonda en az 2 dolu kutu */
+  canTour: boolean;
   busy: boolean; disabled: boolean; recorders: Source[];
   onNew: () => void; onUndo: () => void; onRedo: () => void; onSave: () => void; onSaveAs: () => void; onClearSelected: () => void;
-  onLayout: (id: string) => void; onFromRecorder: (sourceId: string) => void;
+  onTour: () => void; onLayout: (id: string) => void; onFromRecorder: (sourceId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [grid, setGrid] = useState<{ rows: string; cols: string }>({ rows: String(DEFAULT_GRID.rows), cols: String(DEFAULT_GRID.cols) });
@@ -129,6 +131,8 @@ export default function EditorMenu({ layoutId, canUndo, canRedo, canSave, canSav
           <button type="button" className={item} disabled={!canSave || busy} onClick={act(onSave)}>Kaydet</button>
           <button type="button" className={item} disabled={!canSaveAs || busy} onClick={act(onSaveAs)}>Farklı kaydet…</button>
           <button type="button" className={item} disabled={!canClearSelected} onClick={onClearSelected}>Seçili kutuyu boşalt</button>
+          <button type="button" className={item} disabled={!canTour} onClick={act(onTour)}
+                  title={canTour ? undefined : "Sırayla göstermek için en az 2 kamera gerekir."}>Sıralı gösterim…</button>
           {recorders.length > 0 && (
             <label className="flex items-center gap-2 px-3 py-1">
               <span className="shrink-0">NVR&apos;dan şablon</span>

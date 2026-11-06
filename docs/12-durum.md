@@ -236,6 +236,7 @@ Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran k
 
 - **Video yükleme (2026-11-02):** panelden 10 MB üstü video yüklenemiyordu (Next ara katman gövdesini 10 MB'ta kesiyordu; doğru anahtarla da "ulaşılamadı"). `/api/jobs` ara katmandan çıktı, aynı denetimi kendisi yapar; analiz sunucusunun sınırına kadar bellekte biriktirmeden akar, yanlış anahtar videoyu beklemeden söylenir.
 - **Host denetimi ve başka site reddi (2026-11-02):** anahtarsız kipte analiz sunucusu ve panel yalnızca geri döngü adlarıyla (`Host`) açılır ve başka siteden gelen tarayıcı istekleri (`Origin`, `Sec-Fetch-Site: cross-site`, virgüllü tek satır dahil) `403` alır; panelde Next'in `/_next/data/…` veri yolları da aynı kapıdan geçer. Origin kuralının ortak tablosu `contracts/loopback-origins.json`: iki test takımı aynı dosyayı okur. Ayrıntı: `13-web-platform.md` → "Analiz sunucusu API" → Güvenlik.
+- **Ajax'tan görüntüleme özellikleri (2026-11-06):** Canlı izlemede sıralı gösterim (tek kamera dolu kutuları 5–60 sn'de bir gezer; Duraklat/Sürdür/Durdur), klavye kısayolları (F, Esc, Boşluk, ←/→, 1–9, ?; başlıkta "Kısayollar") ve şablon sekmelerinin sürükle-bırak ya da Sola/Sağa taşı ile sıralanması (sıra analiz sunucusunda, `PUT /views/order`; bütün tarayıcılarda ve telefonda aynı). Kayıt arşivi, eşzamanlı zaman çizelgesi ve klip dışa aktarma kayıt cihazı markaları gelince. Plan: `docs/superpowers/plans/2026-11-06-izleme-hizli-kazanclar.md`; ayrıntı `13-web-platform.md` "Çoklu izleme".
 
 ## 5i. Ekran kartı desteği ve Cihaz ayarları (web, 2026-11-03)
 
