@@ -41,7 +41,7 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await page.getByLabel("RTSP adresi").fill(CLIP);
   await page.getByRole("textbox", { name: /^Ad/ }).fill("Tezgah kamerası");
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
-  await page.getByTestId("source-card").filter({ hasText: "Tezgah kamerası" }).getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").filter({ hasText: "Tezgah kamerası" }).getByRole("button", { name: "Analiz başlat" }).click();
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await dialog.getByRole("button", { name: "+ Kuyumcu güvenliği profili ekle" }).click();
   await dialog.getByRole("button", { name: /^Kuyumcu güvenliği/ }).click();

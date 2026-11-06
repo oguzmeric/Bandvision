@@ -97,7 +97,7 @@ export function liveHref(a: TileAnalysis | null | undefined): string {
 }
 
 export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "info" } {
-  if (a.mode === "safety") return a.healthy === false ? { text: "Uyarı", tone: "warn" } : { text: "Nöbette", tone: "ok" };
+  if (a.mode === "safety") return a.healthy === false ? { text: "Alarm: sorun", tone: "warn" } : { text: "Alarm açık", tone: "ok" };
   if (a.mode === "detect") return { text: `G ${a.entered ?? 0} · Ç ${a.exited ?? 0}`, tone: "info" };
   return { text: `Sayılan ${a.total ?? 0}`, tone: "info" };
 }

@@ -53,12 +53,12 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
               </span>
             )}
             {s.state !== "live" ? (
-              // kamera ölüyse "Nöbette" denmez: gerçek durum yazılır
+              // kamera ölüyse "Güvenlik alarmı açık" denmez: gerçek durum yazılır
               <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-ink" : "text-pl-muted"}`}>{STATE_LABELS[s.state]}</span>
             ) : !health.healthy ? (
               // canlı ama izlemiyor (model yükleniyor/yüklenemedi, görüntü işlenemiyor…): neden üstüne gelince görünür
-              <span className="text-[13px] font-medium text-warn-ink" title={health.reason ?? undefined} data-testid="watch-state">Uyarı</span>
-            ) : !alarmed && <span className="text-[13px] text-pl-muted">Nöbette</span>}
+              <span className="text-[13px] font-medium text-warn-ink" title={health.reason ?? undefined} data-testid="watch-state">Sorun</span>
+            ) : !alarmed && <span className="text-[13px] text-pl-muted">Güvenlik alarmı açık</span>}
           </>
         ) : s.twoWay ? (
           <>
@@ -261,7 +261,7 @@ export default function LiveView() {
           ) : (
             <>
               <p className="font-medium">Açık canlı sayım yok</p>
-              <p className="mt-1 text-sm text-pl-muted">Kameralar sayfasından bir kamera seçip &quot;Canlı sayım&quot;ı başlat.</p>
+              <p className="mt-1 text-sm text-pl-muted">Kameralar sayfasından bir kamera seçip &quot;Analiz başlat&quot;a bas.</p>
               <Link href="/cameras" className="pl-btn pl-btn-primary mt-4">Kameralara git</Link>
             </>
           )}

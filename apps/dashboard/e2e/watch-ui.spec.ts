@@ -1364,7 +1364,7 @@ interface Role {
 const ROLES: Role[] = [
   { key: "alarm", ref: { sourceId: "b", channelId: "2" }, name: "Ofis NVR · Kasa",
     status: { ...LIVE, analysis: { ...GUARD, sessionId: "s2", alarm: { id: "al2", type: "lying" } } },
-    alarm: true, badge: "Nöbette", state: null, dot: "canlı" },
+    alarm: true, badge: "Alarm açık", state: null, dot: "canlı" },
   { key: "canlı", ref: { sourceId: "a", channelId: null }, name: "Mağaza girişi kamerası",
     status: { ...LIVE, analysis: { mode: "detect", sessionId: "s1", name: "Mağaza girişi", entered: 120, exited: 99, alarm: null } },
     alarm: false, badge: "G 120 · Ç 99", state: null, dot: "beyaz" },
@@ -1375,7 +1375,7 @@ const ROLES: Role[] = [
   // alarmlı ama kamerası kopuk: nokta bağlantı rengindedir (alarm kırmızı çerçeve ve etiketle görünür)
   { key: "alarm ve bağlantı yok", ref: { sourceId: "b", channelId: "1" }, name: "Ofis NVR · Giriş",
     status: { ...NO_LINK, analysis: { ...GUARD, sessionId: "s3", alarm: { id: "al3", type: "hands_up" } } },
-    alarm: true, badge: "Nöbette", state: NO_LINK_TEXT, dot: "sorunlu" },
+    alarm: true, badge: "Alarm açık", state: NO_LINK_TEXT, dot: "sorunlu" },
 ];
 
 function geom(id: string): { cols: number; count: number } {

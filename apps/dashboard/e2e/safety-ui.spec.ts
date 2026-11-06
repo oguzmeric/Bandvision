@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
  * Güvenlik arayüzü, SAHTE API ile (page.route): gerçek poz modeli ya da alarm gerekmez, hızlı ve deterministik.
- * İzleme sağlığı (Uyarı/Nöbette, neden), izlenmeyen kamera uyarısı, yapışkan şerit, deneme alarmı ve Bildirimler.
+ * İzleme sağlığı (Sorun/Güvenlik alarmı açık, neden), izlenmeyen kamera uyarısı, yapışkan şerit, deneme alarmı ve Bildirimler.
  * Gerçek uçtan uca akış e2e/safety.spec.ts'te.
  */
 async function login(page: Page) {
@@ -42,7 +42,7 @@ function fakeSession(f: Fake, id = "abc123", name = "Tezgah kamerası") {
 
 const MODEL_ERR = "Poz modeli yüklenemedi: internete ulaşılamadı (bağlantıyı kontrol edin)";
 
-test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera durumu, Başlat/Sıfırla yok", async ({ page }) => {
+test("güvenlik paneli (sahte API): izleme nedeni, kart Sorun/Güvenlik alarmı açık, kamera durumu, Başlat/Sıfırla yok", async ({ page }) => {
   await login(page);
   await page.clock.install();                                 // 1 sn'lik oturum yoklaması beklenmez: saat ileri sarılır
   const f: Fake = { state: "live", message: "", model: "loading", lastAlarmAt: Date.now() / 1000 - 20,
@@ -78,11 +78,11 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
   await expect(card).toContainText("Alarm");                    // son 5 dakikada alarm
   await expect(card).not.toContainText("duruyor");
 
-  // model yükleniyor: panel nedeni yazar, kart "Nöbette" değil "Uyarı" (neden üstüne gelince)
+  // model yükleniyor: panel nedeni yazar, kart "Güvenlik alarmı açık" değil "Sorun" (neden üstüne gelince)
   await expect(reason).toHaveText("Poz modeli yükleniyor…");
-  await expect(card.getByTestId("watch-state")).toHaveText("Uyarı");
+  await expect(card.getByTestId("watch-state")).toHaveText("Sorun");
   await expect(card.getByTestId("watch-state")).toHaveAttribute("title", "Poz modeli yükleniyor");
-  await expect(card).not.toContainText("Nöbette");
+  await expect(card).not.toContainText("Güvenlik alarmı açık");
   // model yüklenemedi: sabit "internet" metni değil, sunucunun gerçek nedeni
   Object.assign(f, { model: "error", modelError: MODEL_ERR, reason: MODEL_ERR });
   await nextPoll();
@@ -102,13 +102,13 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
   Object.assign(f, { model: "ready", modelError: null, reason: "Görüntü işlenemiyor: bozuk kare", lastAlarmAt: null });
   await nextPoll();
   await expect(reason).toHaveText("Görüntü işlenemiyor: bozuk kare");
-  await expect(card.getByTestId("watch-state")).toHaveText("Uyarı");
-  await expect(card).not.toContainText("Nöbette");
-  // kamera ölür: kart "Nöbette" demez, durumu yazar; panel başlığı kalır, nokta yeşil değildir
+  await expect(card.getByTestId("watch-state")).toHaveText("Sorun");
+  await expect(card).not.toContainText("Güvenlik alarmı açık");
+  // kamera ölür: kart "Güvenlik alarmı açık" demez, durumu yazar; panel başlığı kalır, nokta yeşil değildir
   Object.assign(f, { state: "error", message: "Bağlantı koptu", reason: "Kamera bağlantısı yok" });
   await nextPoll();
   await expect(card).toContainText("Hata");
-  await expect(card).not.toContainText("Nöbette");
+  await expect(card).not.toContainText("Güvenlik alarmı açık");
   await expect(reason).toHaveCount(0);
   await expect(panel.getByTestId("safety-state")).toHaveText("Kamera: Hata — Bağlantı koptu");
   await expect(panel.getByText("İzleniyor")).toBeVisible();     // başlık her durumda
@@ -117,10 +117,10 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Uyarı/Nöbette, kamera 
   await nextPoll();
   await expect(card).toContainText("Bağlanıyor…");
   await expect(panel.getByTestId("safety-state")).toHaveText("Kamera: Bağlanıyor…");
-  // gerçekten izleniyor: "Nöbette", neden satırı yok
+  // gerçekten izleniyor: "Güvenlik alarmı açık", neden satırı yok
   Object.assign(f, { state: "live", healthy: true, reason: null });
   await nextPoll();
-  await expect(card).toContainText("Nöbette");
+  await expect(card).toContainText("Güvenlik alarmı açık");
   await expect(card.getByTestId("watch-state")).toHaveCount(0);
   await expect(panel.getByTestId("safety-state")).toHaveCount(0);
   await expect(reason).toHaveCount(0);
@@ -606,7 +606,7 @@ test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üs
   await page.route("**/api/live/sources/src1/snapshot*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
   await page.route("**/api/live/sessions", (route) => route.fulfill({ json: [] }));
   await page.goto("/cameras");
-  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").getByRole("button", { name: "Analiz başlat" }).click();
   const start = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await expect(start).toBeVisible();
 

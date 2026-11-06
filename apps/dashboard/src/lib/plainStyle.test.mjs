@@ -146,7 +146,7 @@ test("yazı/zemin karşıtlığı ≥4,5:1 (WCAG 1.4.3): durum kutuları, rozetl
     ["warn-ink", "warn-50", "uyarı/bilgi kutuları (role=status)"], ["warn-ink", WHITE, "\"Kaydedilmemiş değişiklik var\""],
     ["nok-ink", "nok-50", "hata kutuları (role=alert)"], ["nok-ink", WHITE, "hata yazısı"], ["nok-ink", "pl-side", "Sil düğmesi"],
     ["ok-ink", "ok-50", "\"Canlı\" çipi, başarı kutuları"], ["ok-ink", WHITE, "başarı yazısı"],
-    [WHITE, "ok-ink", "rozet \"Nöbette\", Başlat"], [WHITE, "warn-ink", "rozet \"Uyarı\""], [WHITE, "nok-600", "alarm şeridi ve etiketi"],
+    [WHITE, "ok-ink", "rozet \"Güvenlik alarmı açık\", Başlat"], [WHITE, "warn-ink", "rozet \"Güvenlik alarmı: sorun\""], [WHITE, "nok-600", "alarm şeridi ve etiketi"],
     ["pl-faint", "pl-head", "başlık şeridinde yardım yazısı"], ["pl-faint", "pl-side", "menü ve durum şeridi"],
     ["pl-faint", WHITE, "yardım yazısı"], ["pl-faint", "pl-sel", "seçili satırda yardım"], ["pl-muted", "pl-head", "ikincil yazı"],
     ["pl-ink", "pl-head", "başlık"],
