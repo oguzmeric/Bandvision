@@ -96,8 +96,18 @@ export function liveHref(a: TileAnalysis | null | undefined): string {
   return a ? `/live?s=${a.sessionId}` : "/cameras";
 }
 
-export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "info" } {
-  if (a.mode === "safety") return a.healthy === false ? { text: "Alarm: sorun", tone: "warn" } : { text: "Alarm açık", tone: "ok" };
+/** Sağlıklı güvenlik alarmının noktasının ipucu ve ekran okuyucu metni (yazı rozeti yok: nokta yeter) */
+export const GUARD_OK_TEXT = "Güvenlik alarmı izleniyor";
+
+/** Noktanın rengi: güvenlikte sağlıklı yeşil, sorunlu sarı; sayımda rozetin rengi */
+export function analysisTone(a: TileAnalysis): "ok" | "warn" | "info" {
+  if (a.mode === "safety") return a.healthy === false ? "warn" : "ok";
+  return "info";
+}
+
+/** Kutu rozeti; sağlıklı güvenlik alarmında yok (kutudaki nokta yeter), sorunluda "Sorun" */
+export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "info" } | null {
+  if (a.mode === "safety") return a.healthy === false ? { text: "Sorun", tone: "warn" } : null;
   if (a.mode === "detect") return { text: `G ${a.entered ?? 0} · Ç ${a.exited ?? 0}`, tone: "info" };
   return { text: `Sayılan ${a.total ?? 0}`, tone: "info" };
 }

@@ -20,19 +20,20 @@ function describe(s: Source): string {
 
 /**
  * Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir).
- * Güvenlik kamerası "Güvenlik alarmı açık" (gerçekten izleniyor) ya da "Güvenlik alarmı: sorun" (izlenmiyor; neden üstüne gelince) gösterir.
+ * Yazı yok: nokta ve "Analiz"; anlamı ipucunda ve erişilebilir adda (güvenlik izleniyor / sorun + neden / sayım çalışıyor).
  */
 /** Sayımı süren kamera: o oturuma gider, oturumun türüne süzülmüş canlı sayım sayfasında (menüde o tür seçili) */
 function CountingLink({ session }: { session: LiveSession }) {
   const safety = session.profile.countMode === "safety";
   const health = safety ? safetyHealth(session) : null;
   const warn = health !== null && !health.healthy;
+  const meaning = !safety ? "Sayım çalışıyor" : warn ? `Güvenlik alarmı: sorun${health.reason ? ` — ${health.reason}` : ""}` : "Güvenlik alarmı izleniyor";
   return (
     <Link href={`/live?s=${session.id}&tur=${kindOfMode(session.profile.countMode ?? "blob")}`}
-          title={warn ? health.reason ?? undefined : undefined}
+          title={meaning} aria-label={meaning}
           className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-warn-line bg-warn-50 text-warn-ink" : "border-ok-line bg-ok-50 text-ok-ink"}`}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
-      {!safety ? "Sayım çalışıyor" : warn ? "Güvenlik alarmı: sorun" : "Güvenlik alarmı açık"}
+      Analiz
     </Link>
   );
 }
