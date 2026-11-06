@@ -20,7 +20,7 @@ function describe(s: Source): string {
 
 /**
  * Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir).
- * Güvenlik kamerası "Nöbette" (gerçekten izleniyor) ya da "Uyarı" (izlenmiyor; neden üstüne gelince) gösterir.
+ * Güvenlik kamerası "Güvenlik alarmı açık" (gerçekten izleniyor) ya da "Güvenlik alarmı: sorun" (izlenmiyor; neden üstüne gelince) gösterir.
  */
 /** Sayımı süren kamera: o oturuma gider, oturumun türüne süzülmüş canlı sayım sayfasında (menüde o tür seçili) */
 function CountingLink({ session }: { session: LiveSession }) {
@@ -32,7 +32,7 @@ function CountingLink({ session }: { session: LiveSession }) {
           title={warn ? health.reason ?? undefined : undefined}
           className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 text-[12.5px] font-semibold hover:brightness-95 ${warn ? "border-warn-line bg-warn-50 text-warn-ink" : "border-ok-line bg-ok-50 text-ok-ink"}`}>
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${warn ? "bg-warn-700" : "bg-ok-600"}`} />
-      {!safety ? "Sayılıyor" : warn ? "Uyarı" : "Nöbette"}
+      {!safety ? "Sayım çalışıyor" : warn ? "Güvenlik alarmı: sorun" : "Güvenlik alarmı açık"}
     </Link>
   );
 }
@@ -74,7 +74,7 @@ function RecorderChannels({ source, sessions, onStart }: {
                 const active = sessions.find((x) => x.sourceId === source.id && x.channelId === c.id);
                 return active ? <CountingLink session={active} /> : (
                   <button type="button" onClick={() => onStart(c)} className="pl-btn pl-btn-primary h-7 shrink-0 text-[12.5px]">
-                    Canlı sayım
+                    Analiz başlat
                   </button>
                 );
               })()}
@@ -121,7 +121,7 @@ export default function CamerasView() {
       {kind && (
         // Menüden "Yeni analiz" ile gelindi: başlatma penceresi yalnız bu türün profillerini sunar; "Tümü" süzmeyi kaldırır
         <p data-testid="kind-filter" className="flex flex-wrap items-center gap-x-2 border border-pl-sel-line bg-pl-sel px-3 py-1.5 text-[13px] text-pl-ink lg:col-span-2">
-          <span className="min-w-0 flex-1">Yeni analiz: <b>{KIND_TITLE[kind]}</b>. &quot;Canlı sayım&quot; yalnız bu türün profilleriyle başlar.</span>
+          <span className="min-w-0 flex-1">Yeni analiz: <b>{KIND_TITLE[kind]}</b>. &quot;Analiz başlat&quot; yalnız bu türün profilleriyle başlar.</span>
           <Link href="/cameras" className="font-semibold text-pl-accent underline">Tümü</Link>
         </p>
       )}
@@ -168,7 +168,7 @@ export default function CamerasView() {
                     <CountingLink session={sessions.find((x) => x.sourceId === s.id)!} />
                   ) : (
                     <button type="button" onClick={() => setStarting({ source: s, channel: null })} className="pl-btn pl-btn-primary h-8">
-                      Canlı sayım
+                      Analiz başlat
                     </button>
                   )}
                   <button type="button" onClick={() => setEditing(s)} className="pl-btn h-8">Düzenle</button>

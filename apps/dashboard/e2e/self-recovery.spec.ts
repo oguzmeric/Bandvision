@@ -142,7 +142,7 @@ test("kendiliğinden düzelme: Canlı sayımı başlat penceresi profil listesin
   await page.route("**/api/live/sources/a/snapshot*", (r) => r.fulfill({ status: 404, json: { detail: "yok" } }));
   const profiles = await refusable(page, "**/api/live/profiles", (r) => r.continue(), "GET");
   await login(page, "/cameras");
-  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").getByRole("button", { name: "Analiz başlat" }).click();
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   const alert = dialog.getByRole("alert").filter({ hasText: KEY_TEXT });
   await expect(alert).toBeVisible();

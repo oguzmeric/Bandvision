@@ -52,7 +52,7 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   await expect.poll(() => imageWidth(page, "Test bandı"), { timeout: 20_000 }).toBeGreaterThan(0);  // küçük resim
 
   // Ne sayılacağını seç → başlat → canlı sayfa
-  await card.getByRole("button", { name: "Canlı sayım" }).click();
+  await card.getByRole("button", { name: "Analiz başlat" }).click();
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Kişi sayımı")).toBeVisible();
@@ -98,14 +98,14 @@ test("canlı sayım: kamera ekle, başlat, say, kalibrasyon, kapat", async ({ pa
   // İkinci kamera: ilk sayım sürerken başka kamerada da canlı sayım açılır; ikisi kartlarda görünür
   await expect(page.getByTestId("session-card")).toHaveCount(1);
   await page.getByRole("link", { name: "+ Kamera ekle" }).click();
-  // Sayımı süren kamera "Sayılıyor" ile işaretli (yeniden başlatılmaz, o sayıma gider)
-  await expect(page.getByTestId("source-card").filter({ hasText: "Test bandı" }).getByRole("link", { name: "Sayılıyor" })).toBeVisible();
+  // Sayımı süren kamera "Sayım çalışıyor" ile işaretli (yeniden başlatılmaz, o sayıma gider)
+  await expect(page.getByTestId("source-card").filter({ hasText: "Test bandı" }).getByRole("link", { name: "Sayım çalışıyor" })).toBeVisible();
   await page.getByRole("radio", { name: "IP kamera" }).click();
   await page.getByLabel("Kamera markası").selectOption("custom");
   await page.getByLabel("RTSP adresi").fill(CLIP);
   await page.getByRole("textbox", { name: /^Ad/ }).fill("İkinci bant");
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
-  await page.getByTestId("source-card").filter({ hasText: "İkinci bant" }).getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").filter({ hasText: "İkinci bant" }).getByRole("button", { name: "Analiz başlat" }).click();
   const dialog2 = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await dialog2.getByRole("button", { name: /^Yumurta/ }).click();
   await dialog2.getByRole("button", { name: "Başlat", exact: true }).click();
@@ -134,7 +134,7 @@ test("kişi sayımı: personel rengi öğret, örnek görünür, sil", async ({ 
   await page.getByLabel("RTSP adresi").fill(CLIP);
   await page.getByRole("textbox", { name: /^Ad/ }).fill("Giriş kamerası");
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
-  await page.getByTestId("source-card").filter({ hasText: "Giriş kamerası" }).getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").filter({ hasText: "Giriş kamerası" }).getByRole("button", { name: "Analiz başlat" }).click();
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await dialog.getByRole("button", { name: /^Mağaza girişi/ }).click();
   await dialog.getByRole("button", { name: "Başlat", exact: true }).click();
@@ -241,7 +241,7 @@ test("analiz süzmesi (sahte API): ?tur= oturumları ve başlatma profillerini t
   await expect(page).toHaveURL(/\/cameras\?tur=kisi$/);
   await expect(page.getByTestId("kind-filter")).toContainText("Yeni analiz: Kişi sayımı.");
   await expect(page.locator("main h1")).toHaveText("Kameralar ve kayıt cihazları");
-  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").getByRole("button", { name: "Analiz başlat" }).click();
   const dialog = page.getByRole("dialog", { name: "Canlı sayımı başlat" });
   await expect(dialog.getByTestId("profile-row")).toHaveCount(1);
   await expect(dialog.getByTestId("profile-row")).toContainText("Mağaza girişi");
@@ -252,14 +252,14 @@ test("analiz süzmesi (sahte API): ?tur= oturumları ve başlatma profillerini t
   await page.getByTestId("kind-filter").getByRole("link", { name: "Tümü" }).click();
   await expect(page).toHaveURL(/\/cameras$/);
   await expect(page.getByTestId("kind-filter")).toHaveCount(0);
-  await page.getByTestId("source-card").getByRole("button", { name: "Canlı sayım" }).click();
+  await page.getByTestId("source-card").getByRole("button", { name: "Analiz başlat" }).click();
   await expect(page.getByRole("dialog", { name: "Canlı sayımı başlat" }).getByTestId("profile-row")).toHaveCount(3);
   await page.getByRole("dialog", { name: "Canlı sayımı başlat" }).getByRole("button", { name: "Vazgeç" }).click();
 
-  // kamerada sayım sürüyorsa "Sayılıyor" bağlantısı oturumun türüne süzülmüş sayfaya gider (?tur= kaybolmaz)
+  // kamerada sayım sürüyorsa "Sayım çalışıyor" bağlantısı oturumun türüne süzülmüş sayfaya gider (?tur= kaybolmaz)
   sessions[2] = { ...sessions[2], sourceId: "src1" };
   await page.goto("/cameras?tur=urun");
-  const counting = page.getByTestId("source-card").getByRole("link", { name: "Sayılıyor" });
+  const counting = page.getByTestId("source-card").getByRole("link", { name: "Sayım çalışıyor" });
   await expect(counting).toHaveAttribute("href", "/live?s=k1&tur=kisi");
   await counting.click();
   await expect(page).toHaveURL(/\/live\?s=k1&tur=kisi$/);
