@@ -53,12 +53,12 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
               </span>
             )}
             {s.state !== "live" ? (
-              // kamera ölüyse "Güvenlik alarmı açık" denmez: gerçek durum yazılır
+              // kamera ölüyse "izleniyor" noktası yanmaz: gerçek durum yazılır
               <span className={`text-[13px] ${s.state === "error" ? "font-medium text-nok-ink" : "text-pl-muted"}`}>{STATE_LABELS[s.state]}</span>
             ) : !health.healthy ? (
               // canlı ama izlemiyor (model yükleniyor/yüklenemedi, görüntü işlenemiyor…): neden üstüne gelince görünür
               <span className="text-[13px] font-medium text-warn-ink" title={health.reason ?? undefined} data-testid="watch-state">Sorun</span>
-            ) : !alarmed && <span className="text-[13px] text-pl-muted">Güvenlik alarmı açık</span>}
+            ) : !alarmed && <span role="img" aria-label="Güvenlik alarmı izleniyor" title="Güvenlik alarmı izleniyor" data-testid="watch-ok" className="h-2 w-2 rounded-full bg-ok-600" />}
           </>
         ) : s.twoWay ? (
           <>

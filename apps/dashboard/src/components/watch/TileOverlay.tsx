@@ -4,7 +4,7 @@ import Link from "next/link";
 import { memo } from "react";
 import { stateLines, tileSize, tileTier } from "@/lib/layoutGrid.mjs";
 import { ALARM_TITLES } from "@/lib/live";
-import { badge, cellBox, liveHref, stateText, type TileStatus, type ViewLayout } from "@/lib/views";
+import { analysisTone, badge, cellBox, GUARD_OK_TEXT, liveHref, stateText, type TileStatus, type ViewLayout } from "@/lib/views";
 import { CAMERA_MIME } from "./CameraList";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
@@ -107,6 +107,7 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
   const state = !filled ? null : tile ? (tile.state === "live" ? null : stateText(tile)) : "Bağlanıyor…";
   const name = tile?.name ?? (filled ? label : null);
   const b = tile?.analysis ? badge(tile.analysis) : null;
+  const guardOk = tile?.analysis?.mode === "safety" && !b;
   const badgeTitle = tile?.analysis ? tile.analysis.reason ?? tile.analysis.name : undefined;
   const tier = tileTier(layout, index, grid, rem);
   const full = tier === "full";
@@ -119,7 +120,7 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
   const hint = (full ? state : [name, alarmTitle, state].filter(Boolean).join(" — ")) || undefined;
   // Nokta: canlı değilken bağlantı rengi halka, canlıyken rozet rengi dolu; ipucu ve ekran okuyucu metni ikisini de söyler
   const conn = state === null ? null : tile?.state === "error" ? "error" : "connecting";
-  const dotLook = conn ? `border-[0.125rem] bg-transparent ${RING[conn]}` : b ? DOT[b.tone] : null;
+  const dotLook = conn ? `border-[0.125rem] bg-transparent ${RING[conn]}` : tile?.analysis ? DOT[analysisTone(tile.analysis)] : null;
   /**
    * En küçük kutunun ortasındaki nokta (px): 0.5 rem, ama kutunun kısa kenarından 2 px küçük (kutunun içinde kalır). Halka
    * 0.125 rem'dir; nokta çok küçülürse halka incelir (en az 1 px) ki delik en az 3 px kalsın: halka dolu noktadan ayırt
@@ -130,7 +131,7 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
     const d = Math.max(5, Math.min(0.5 * rem, size ? Math.min(size.w, size.h) - 2 : 0.5 * rem));
     return { width: d, height: d, ...(conn ? { borderWidth: Math.max(1, Math.min(0.125 * rem, (d - 3) / 2)) } : {}) };
   })();
-  const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), state].filter((t): t is string => !!t);
+  const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), guardOk && GUARD_OK_TEXT, state].filter((t): t is string => !!t);
 
   const alarmButton = (cls: string) => alarm && (
     <button type="button" data-part="alarm" aria-label={`Alarmı aç: ${alarmTitle}`}
