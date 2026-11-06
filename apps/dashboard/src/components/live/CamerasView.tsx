@@ -51,8 +51,8 @@ function RecorderChannels({ source, sessions, onStart }: {
       .then(setChannels).catch((e: Error) => setError(e.message));
   }, [source.id]);
   useEffect(() => { load(false); }, [load]);
-  // Küçük resim ana akıştan geldiyse sunucu kanalı "alt akış ölü" işaretler: liste sessizce (önbellekten) yeniden
-  // okunur, ipucu satırı görünür. Birçok küçük resim art arda yüklenince tek istek.
+  // Küçük resim yanıtı `X-Sub-Dead: 1` derse (sunucu kanalı "alt akış ölü" işaretledi) liste sessizce (önbellekten)
+  // yeniden okunur, ipucu satırı görünür. Birkaç kanal art arda işaretlenince tek istek.
   const recheck = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recheckSubDead = useCallback(() => {
     if (recheck.current) clearTimeout(recheck.current);
@@ -79,7 +79,7 @@ function RecorderChannels({ source, sessions, onStart }: {
         {shown.map((c) => (
           <div key={c.id} className="rounded-[2px] border border-pl-line-soft bg-white p-1.5">
             <Thumb src={`/api/live/sources/${source.id}/snapshot?channel=${encodeURIComponent(c.id)}`} alt={c.title}
-                   onLoaded={c.subDead ? undefined : recheckSubDead} />
+                   onSubDead={c.subDead ? undefined : recheckSubDead} />
             {c.subDead && <p className="mt-1 px-0.5 text-xs text-pl-faint">Alt akış görüntü vermiyor; ana akış kullanılıyor.</p>}
             <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
               <div className="min-w-0">

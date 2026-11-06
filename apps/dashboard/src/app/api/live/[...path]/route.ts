@@ -9,8 +9,10 @@ type Ctx = { params: Promise<{ path: string[] }> };
 const SAFE = /^(?!\.+$)[A-Za-z0-9._-]{1,80}$/;
 /** Analiz sunucusuna giden istek başlıkları: gövde türü ve video sarma (`Range`, alarm kaydı) */
 const REQUEST_HEADERS = ["content-type", "range", "if-range"];
-/** Tarayıcıya dönen yanıt başlıkları: video parçası (206) için `content-range` ve `accept-ranges` de */
-const RESPONSE_HEADERS = ["content-type", "content-length", "content-disposition", "cache-control", "content-range", "accept-ranges"];
+/** Tarayıcıya dönen yanıt başlıkları: video parçası (206) için `content-range` ve `accept-ranges` de; küçük resimde
+ * `x-sub-dead` (kanalın alt akışı görüntü vermiyor, resim ana akıştan) */
+const RESPONSE_HEADERS = ["content-type", "content-length", "content-disposition", "cache-control", "content-range", "accept-ranges",
+  "x-sub-dead"];
 
 /**
  * Canlı sayım API'si (`/api/v1/live/...`) vekili. Erişim anahtarı yalnızca sunucuda; canlı görüntü (MJPEG) akışı
