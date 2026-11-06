@@ -289,3 +289,28 @@ test("panelin kendi reddi ({error}) okunur metinle görünür: 'İstek başarıs
   await expect(page.getByRole("alert").filter({ hasText: "Giriş gerekli." })).toBeVisible({ timeout: 12_000 });
   await expect(page.getByText(/HTTP \d{3}/)).toHaveCount(0);
 });
+
+test("kayıt cihazı (sahte API): alt akışı görüntü vermeyen kanalın altında ana akış ipucu", async ({ page }) => {
+  await login(page);
+  const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  let marked = false;                                        // küçük resim ana akıştan geldi: sunucu kanalı işaretler
+  await page.route("**/api/live/sessions", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/live/sources", (route) => route.fulfill({ json: [{
+    id: "nvr1", kind: "recorder", name: "Ofis NVR", brand: "hikvision", host: "nvr.example", port: 554, channel: 1, substream: true,
+    customUrl: "", recorderBrand: "trassir", httpPort: null, rtspPort: null, username: "u", hasPassword: true, createdAt: 1,
+  }] }));
+  await page.route("**/api/live/sources/*/channels*", (route) => route.fulfill({ json: [
+    { id: "4", name: "Kanal 4", number: 4, title: "Kanal 4", hasSubstream: true, subDead: marked },
+    { id: "5", name: "Kanal 5", number: 5, title: "Kanal 5", hasSubstream: true, subDead: false },
+  ] }));
+  await page.route("**/api/live/sources/*/snapshot*", (route) => {
+    if (route.request().url().includes("channel=4")) marked = true;
+    return route.fulfill({ contentType: "image/gif", body: GIF });
+  });
+  await page.goto("/cameras");
+  await page.getByRole("button", { name: "Kameraları göster" }).click();
+  const hint = page.getByText("Alt akış görüntü vermiyor; ana akış kullanılıyor.");
+  await expect(hint).toHaveCount(1);                         // küçük resim yüklenince liste sessizce yeniden okunur
+  await expect(page.getByAltText("Kanal 4").locator("xpath=../following-sibling::p[1]")).toHaveText(
+    "Alt akış görüntü vermiyor; ana akış kullanılıyor.");      // ipucu yalnız o kanalın küçük resminin altında
+});

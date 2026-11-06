@@ -806,3 +806,92 @@ def test_limit_rejection_is_not_cached() -> None:
 def test_default_sub_limit_is_128_and_message_follows_it() -> None:
     assert viewer_mod.MAX_SUB == 128 and viewer_mod.MAX_MAIN == 2
     assert viewer_mod.LIMITS["sub"] == (128, "Sınır aşıldı (en çok 128 kamera).")
+
+
+# ------------------------------------------------------------------ alt akışı görüntü vermeyen kanal → ana akış
+
+def _fallback_hub(main_frames: int, dead: dict[str, bool]) -> tuple[ViewHub, list[str], list[str]]:
+    """Alt akışı "açılıp" hiç kare vermeyen kayıt cihazı kanalı; ana akış `main_frames` kare verir. `dead` yönetici
+    belleği yerine (anahtar "a/1")."""
+    from bantvision.live.open_gate import StreamUrl
+
+    opened: list[str] = []
+    marks: list[str] = []
+
+    def opener(source_id: str, channel_id: str | None, sub: bool) -> tuple[Any, Any]:
+        key = f"{source_id}/{channel_id}"
+
+        def make(want_sub: bool) -> tuple[str, bool]:
+            return f"rtsp://{key}/{'sub' if want_sub else 'main'}", True
+
+        def mark() -> None:
+            marks.append(key)
+            dead[key] = True
+
+        return StreamUrl(make, sub, lambda: dead.get(key, False), mark), None
+
+    def capture(url: str) -> Any:
+        opened.append(url)
+        return FakeCap(frames=0 if url.endswith("/sub") else main_frames)
+
+    hub = ViewHub(opener, lambda s, c: None, capture=capture, reaper=False, limits=LIMITS_16)
+    return hub, opened, marks
+
+
+def test_sub_stream_without_frames_falls_back_to_main_and_marks_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    fast_pause(monkeypatch)
+    dead: dict[str, bool] = {}
+    hub, opened, marks = _fallback_hub(10_000, dead)
+    try:
+        t = wait(lambda: (x := hub.tile("a", "1")).state == "live" and x.frame is not None and x)
+        assert opened == ["rtsp://a/1/sub", "rtsp://a/1/main"]                   # alt 0 kare → sonraki deneme ana
+        assert marks == ["a/1"] and dead == {"a/1": True}                        # ana kare verdi: kanal işaretlendi
+        assert t.frame.shape[1] == 960 and hub.open_count("sub") == 1            # anahtar ve sınır yine "sub"
+    finally:
+        hub.stop()
+
+
+def test_marked_channel_reconnects_on_main_and_sub_is_retried_after_mark_expires(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    fast_pause(monkeypatch)
+    dead = {"a/1": True}                                                         # küçük resim önceden işaretledi
+    hub, opened, marks = _fallback_hub(3, dead)                                  # ana akış 3 kare verip kopar
+    try:
+        hub.tile("a", "1")
+        wait(lambda: len(opened) >= 3)
+        assert set(opened[:3]) == {"rtsp://a/1/main"} and marks == []            # her yeniden bağlanışta ana
+        dead.clear()                                                             # işaret süresi doldu
+        wait(lambda: "rtsp://a/1/sub" in opened)
+        i = opened.index("rtsp://a/1/sub")
+        wait(lambda: len(opened) > i + 1)
+        assert opened[i + 1] == "rtsp://a/1/main"                                # alt yine sessiz: yeniden ana
+        wait(lambda: marks == ["a/1"])
+    finally:
+        hub.stop()
+
+
+def test_channel_dead_on_both_streams_alternates_and_is_never_marked(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits = fast_pause(monkeypatch)
+    dead: dict[str, bool] = {}
+    hub, opened, marks = _fallback_hub(0, dead)                                  # gerçek sinyalsiz kanal
+    try:
+        hub.tile("a", "1")
+        wait(lambda: len(opened) >= 4)
+        assert opened[:4] == ["rtsp://a/1/sub", "rtsp://a/1/main", "rtsp://a/1/sub", "rtsp://a/1/main"]
+        assert marks == [] and dead == {}
+        assert waits[:3] == [1.0, 2.0, 4.0]                                      # geri çekilme sürer
+        assert hub.tile("a", "1").state == "error"
+    finally:
+        hub.stop()
+
+
+def test_main_quality_tile_never_tries_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    fast_pause(monkeypatch)
+    dead: dict[str, bool] = {}
+    hub, opened, marks = _fallback_hub(0, dead)
+    try:
+        hub.tile("a", "1", "main")
+        wait(lambda: len(opened) >= 3)
+        assert set(opened[:3]) == {"rtsp://a/1/main"} and marks == []
+    finally:
+        hub.stop()

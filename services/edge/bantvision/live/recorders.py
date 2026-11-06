@@ -555,9 +555,12 @@ class RecorderClient(ABC):
     def stream_url(self, channel: RecorderChannel, substream: bool) -> str:
         """Şifresiz RTSP adresi. Her bağlanışta yeniden çağrılmalı: TRASSIR'da adres kısa ömürlü jeton içerir."""
 
+    # Küçük resim kanalın alt akışından mı alınır (alınamazsa yönetici bir kez ana akışla dener)
+    snapshot_uses_substream: bool = False
+
     @abstractmethod
-    def snapshot(self, channel: RecorderChannel) -> bytes:
-        """JPEG; desteklenmiyorsa RecorderError (arayüz RTSP ile ilk kareye düşer)."""
+    def snapshot(self, channel: RecorderChannel, substream: bool = True) -> bytes:
+        """JPEG; desteklenmiyorsa RecorderError (arayüz RTSP ile ilk kareye düşer). `substream=False`: ana akıştan."""
 
     def keep_alive(self, stream_url: str) -> None:
         """Akış açıkken düzenli çağrılır (TRASSIR jetonu canlı tutulur). Varsayılan: hiçbir şey."""
@@ -613,7 +616,7 @@ class HikvisionClient(RecorderClient):
         n = _channel_number(channel)
         return _rtsp_url(self.host, self.rtsp_port, f"/Streaming/Channels/{n}0{2 if substream else 1}")
 
-    def snapshot(self, channel: RecorderChannel) -> bytes:
+    def snapshot(self, channel: RecorderChannel, substream: bool = True) -> bytes:
         n = _channel_number(channel)
         try:
             return _require_jpeg(self._http.get(f"/ISAPI/Streaming/channels/{n}01/picture"))
@@ -642,7 +645,7 @@ class DahuaClient(RecorderClient):
         n = _channel_number(channel)
         return _rtsp_url(self.host, self.rtsp_port, f"/cam/realmonitor?channel={n}&subtype={1 if substream else 0}")
 
-    def snapshot(self, channel: RecorderChannel) -> bytes:
+    def snapshot(self, channel: RecorderChannel, substream: bool = True) -> bytes:
         n = _channel_number(channel)
         return _require_jpeg(self._http.get("/cgi-bin/snapshot.cgi", [("channel", str(n))]))
 
@@ -677,8 +680,10 @@ class TrassirClient(RecorderClient):
         token = self._video_token(channel, "rtsp", "sub" if substream and channel.has_substream else "main")
         return _rtsp_url(self.host, self.rtsp_port, "/" + token)
 
-    def snapshot(self, channel: RecorderChannel) -> bytes:
-        token = self._video_token(channel, "jpeg", "sub" if channel.has_substream else "main")
+    snapshot_uses_substream = True
+
+    def snapshot(self, channel: RecorderChannel, substream: bool = True) -> bytes:
+        token = self._video_token(channel, "jpeg", "sub" if substream and channel.has_substream else "main")
         return _require_jpeg(self._http.get_url(f"http://{self.host}:{self.rtsp_port}/{token}",
                                                 timeout=SNAPSHOT_TIMEOUT_S))
 

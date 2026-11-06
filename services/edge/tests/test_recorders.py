@@ -346,6 +346,7 @@ class _TrassirVideoHandler(http.server.BaseHTTPRequestHandler):
 
     jpeg: ClassVar[bytes] = b""
     pings: ClassVar[list[str]] = []
+    jpegs: ClassVar[list[str]] = []
 
     def log_message(self, fmt: str, *args: object) -> None:
         pass
@@ -353,6 +354,7 @@ class _TrassirVideoHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path, _, query = self.path.partition("?")
         if path.startswith("/jpg"):
+            _TrassirVideoHandler.jpegs.append(path)
             body, ctype = self.jpeg, "image/jpeg"
         elif path.startswith("/tok") and query == "ping":
             _TrassirVideoHandler.pings.append(path)
@@ -468,7 +470,12 @@ def test_trassir_against_mock(mock_nvr: MockNVR) -> None:
         assert url == f"rtsp://127.0.0.1:{mock_nvr.video_port}/tokbant1sub"
         assert c.stream_url(kapi, substream=True) == f"rtsp://127.0.0.1:{mock_nvr.video_port}/tokkapimain"
         assert c.stream_url(bant, substream=False) == f"rtsp://127.0.0.1:{mock_nvr.video_port}/tokbant1main"
+        _TrassirVideoHandler.jpegs.clear()
         assert c.snapshot(bant) == mock_nvr.jpeg
+        assert c.snapshot(bant, substream=False) == mock_nvr.jpeg       # alt akış ölü: küçük resim ana akıştan
+        assert c.snapshot(kapi) == mock_nvr.jpeg                        # alt akışı yok: ana akış
+        assert _TrassirVideoHandler.jpegs == ["/jpgbant1sub", "/jpgbant1main", "/jpgkapimain"]
+        assert c.snapshot_uses_substream
         c.keep_alive(url)
         assert _TrassirVideoHandler.pings == ["/tokbant1sub"]
 
