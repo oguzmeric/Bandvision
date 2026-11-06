@@ -299,13 +299,15 @@ test("kayıt cihazı (sahte API): alt akışı görüntü vermeyen kanalın alt�
     id: "nvr1", kind: "recorder", name: "Ofis NVR", brand: "hikvision", host: "nvr.example", port: 554, channel: 1, substream: true,
     customUrl: "", recorderBrand: "trassir", httpPort: null, rtspPort: null, username: "u", hasPassword: true, createdAt: 1,
   }] }));
-  await page.route("**/api/live/sources/*/channels*", (route) => route.fulfill({ json: [
+  await page.route("**/api/live/sources/*/channels*", (route) => { channelReads++; return route.fulfill({ json: [
     { id: "4", name: "Kanal 4", number: 4, title: "Kanal 4", hasSubstream: true, subDead: marked },
     { id: "5", name: "Kanal 5", number: 5, title: "Kanal 5", hasSubstream: true, subDead: false },
-  ] }));
+  ] }); });
+  let channelReads = 0;
   await page.route("**/api/live/sources/*/snapshot*", (route) => {
-    if (route.request().url().includes("channel=4")) marked = true;
-    return route.fulfill({ contentType: "image/gif", body: GIF });
+    const ch4 = route.request().url().includes("channel=4");
+    if (ch4) marked = true;                                  // yalnız bu yanıt "işaretlendi" der
+    return route.fulfill({ contentType: "image/gif", body: GIF, headers: ch4 ? { "X-Sub-Dead": "1" } : {} });
   });
   await page.goto("/cameras");
   await page.getByRole("button", { name: "Kameraları göster" }).click();
@@ -313,4 +315,7 @@ test("kayıt cihazı (sahte API): alt akışı görüntü vermeyen kanalın alt�
   await expect(hint).toHaveCount(1);                         // küçük resim yüklenince liste sessizce yeniden okunur
   await expect(page.getByAltText("Kanal 4").locator("xpath=../following-sibling::p[1]")).toHaveText(
     "Alt akış görüntü vermiyor; ana akış kullanılıyor.");      // ipucu yalnız o kanalın küçük resminin altında
+  await expect(page.getByAltText("Kanal 5")).toBeVisible();
+  await page.waitForTimeout(1500);                           // başlıksız küçük resim listeyi yeniden okutmaz
+  expect(channelReads).toBe(2);                              // ilk okuma + kanal 4'ün işareti
 });
