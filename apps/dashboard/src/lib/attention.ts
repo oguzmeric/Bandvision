@@ -34,7 +34,8 @@ export function readPref(pref: AttentionPref): boolean {
   try {
     const c = cookieValue(COOKIES[pref]);
     if (c !== null) return c === "1";
-    // çerez yok: eski localStorage ayarı (aynı port) varsa çereze taşı
+    // çerez yok: eski localStorage ayarı varsa çereze taşı. localStorage origin (port) başınadır: bu yalnızca eski ayar bu
+    // portta saklanmışsa işe yarar, ki bu güncellemeden sonra seyrektir (çoğu kez ayar 3000 gibi başka bir portta kalmıştır)
     if (window.localStorage.getItem(LEGACY_KEYS[pref]) === "1") {
       setCookie(pref, true);
       window.localStorage.removeItem(LEGACY_KEYS[pref]);

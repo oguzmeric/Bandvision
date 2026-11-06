@@ -2,15 +2,22 @@
 // ortamda çalışabilir); yalnızca başlatıcı (tools/panel_run.mjs) ve testler bunu kullanır.
 import net from "node:net";
 
-/** Yalnızca bu hatalar "dolu" demektir; adres yok (IPv6 kapalı) gibi diğerleri o adres için sorun değildir. */
-const BUSY = new Set(["EADDRINUSE", "EACCES"]);
+/** Yalnızca bu hatalar "o adres ailesi bu bilgisayarda yok" demektir (ör. IPv6 kapalı): o adres için sorun değil.
+ * Başka HER hata (EADDRINUSE, EACCES, EPERM, bilinmeyen…) dolu sayılır: bilinmeyen hatada yanlışlıkla "boş" demek
+ * paneli başka uygulamanın portuna bindirirdi. */
+const ABSENT = new Set(["EADDRNOTAVAIL", "EAFNOSUPPORT"]);
 
-/** `host:port` dinlenebilir mi (denemeden sonra hemen kapatılır). Dolu/izinsiz → false; adres yok → true.
+/** Dinleme hata koduna göre: "free" (adres ailesi yok, sorun değil) ya da "busy" */
+export function classifyListenError(code) {
+  return ABSENT.has(code) ? "free" : "busy";
+}
+
+/** `host:port` dinlenebilir mi (denemeden sonra hemen kapatılır). Adres ailesi yoksa (EADDRNOTAVAIL/EAFNOSUPPORT) true, başka her hata false.
  * `ipv6Only`: yalnızca `::` için anlamlı (çift yığın olmayan bağlama). */
 export function canListen(port, host, ipv6Only = false) {
   return new Promise((resolve) => {
     const srv = net.createServer();
-    srv.once("error", (e) => resolve(!BUSY.has(e.code)));
+    srv.once("error", (e) => resolve(classifyListenError(e.code) === "free"));
     srv.listen({ port, host, exclusive: true, ...(ipv6Only ? { ipv6Only: true } : {}) }, () => srv.close(() => resolve(true)));
   });
 }

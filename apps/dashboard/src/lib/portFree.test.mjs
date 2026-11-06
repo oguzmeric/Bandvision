@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import test from "node:test";
-import { canListen, isFree } from "./portFree.mjs";
+import { canListen, classifyListenError, isFree } from "./portFree.mjs";
 
 function occupy(host, extra = {}) {
   return new Promise((resolve, reject) => {
@@ -34,4 +34,10 @@ test("kapatılmış port boş", async () => {
 
 test("canListen: kullanılamayan adres (EADDRNOTAVAIL) sorun sayılmaz", async () => {
   assert.equal(await canListen(0, "203.0.113.77"), true);
+});
+
+test("classifyListenError: yalnızca adres-yok hataları boş; geri kalan her şey dolu", () => {
+  assert.equal(classifyListenError("EADDRNOTAVAIL"), "free");
+  assert.equal(classifyListenError("EAFNOSUPPORT"), "free");
+  for (const code of ["EADDRINUSE", "EACCES", "EPERM", "EWHATEVER", undefined]) assert.equal(classifyListenError(code), "busy", String(code));
 });

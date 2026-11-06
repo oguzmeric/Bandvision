@@ -153,23 +153,16 @@ function fallbackLocal(planEnv, message) {
 }
 
 /** Başlatma ile Next'in dinlemesi arasında port başkasına geçmiş olabilir: yeniden denetler. Kendi eski Next'imiz yeni
- * kapandıysa port bir an dolu görünebilir, bu yüzden ~3 sn beklenir. Otomatik kipte yeni boş port seçilir (günlüğe
- * yazılır); sabit kipte (--port) not yazılıp çıkılır (2). */
+ * kapandıysa port bir an dolu görünebilir, bu yüzden ~3 sn beklenir. Yan etkisi yoktur (port'u değiştirmez, çıkmaz):
+ * {port} kullanılacak port (otomatik kipte yeni boş port olabilir), {busy} sabit portta dolu, {none} boş port yok. */
 async function ensurePort() {
   for (let i = 0; i < 10; i++) {
-    if (await isFree(Number(port))) return;
+    if (await isFree(Number(port))) return { port };
     await new Promise((r) => setTimeout(r, 300));
   }
-  if (fixedPort !== null) {
-    const msg = `Port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı.`;
-    console.error(`[panel] ${msg}`);
-    writeNotice(msg);
-    process.exit(2);
-  }
+  if (fixedPort !== null) return { busy: true };
   const picked = await pickPort(isFree);
-  if (picked === null) return noFreePort();
-  console.log(`[panel] port ${port} başlatmadan hemen önce doldu; panel ${picked} portunda açılıyor`);
-  port = String(picked);
+  return picked === null ? { none: true } : { port: String(picked) };
 }
 function noFreePort() {
   const msg = `${PANEL_PORT}–${PANEL_PORT + PORT_TRIES - 1} arasında boş port yok; panel açılmadı.`;
@@ -178,6 +171,7 @@ function noFreePort() {
   process.exit(2);
 }
 
+const QUICK_EXIT_MS = 15_000;                          // Next bu süreden önce kapanırsa "açılamadı" sayılır
 let generation = 0;                                    // erişim ayarı değişince artar: bekleyen başlatma bırakılır
 async function launch(cmd, planEnv, reportListening = true) {
   const lan = cmd.host === "0.0.0.0";
@@ -190,17 +184,33 @@ async function launch(cmd, planEnv, reportListening = true) {
     return fallbackLocal(planEnv, "Derlemede giriş denetimi bulunamadı; panel yerel ağa açılmadı, yalnızca bu bilgisayarda açık.");
   }
   const gen = generation;
-  await ensurePort();
-  if (gen !== generation || child) return;             // bu arada ayar değişti (yeniden başlatma zamanlandı) ya da başka süreç başladı
+  const chosen = await ensurePort();
+  if (gen !== generation || child) return;             // bu arada ayar değişti (yeniden başlatma zamanlandı) ya da başka süreç başladı: bayat başlatma ne port atar ne çıkar
+  if (chosen.busy) {
+    const msg = `Port ${fixedPort} dolu (başka bir uygulama kullanıyor); panel açılmadı.`;
+    console.error(`[panel] ${msg}`);
+    writeNotice(msg);
+    process.exit(2);
+  }
+  if (chosen.none) return noFreePort();
+  let moved = "";
+  if (chosen.port !== port) {
+    console.log(`[panel] port ${port} başlatmadan hemen önce doldu; panel ${chosen.port} portunda açılıyor`);
+    moved = `Panel şimdi ${chosen.port} portunda.`;
+    port = chosen.port;
+  }
   console.log(`[panel] ${lan ? "yerel ağa açık (şifreli)" : "yalnızca bu bilgisayar"} · port ${port} (${cmd.mode === "start" ? "üretim" : "geliştirme"} kipi)`);
   const env = { ...process.env, ...planEnv, PANEL_RUNNER: "1", PANEL_LAN: lan ? "1" : "0", PORT: port };
   if (cmd.mode === "start") env.BV_DIST_DIR = LAUNCHER_DIST;   // next start, başlatıcının derlemesini okur
   try { fs.writeFileSync(PORT_FILE, port); } catch { /* yalnızca .bat için */ }   // "listening" durumundan ÖNCE
-  if (reportListening) writeState("listening", cmd.host, "");
+  if (reportListening) writeState("listening", cmd.host, moved);
   const c = run(["next", cmd.mode, "-H", cmd.host, "-p", port], { cwd: DASH, env, stdio: "inherit" });
   child = c;
+  const spawnedAt = Date.now();
   onEnd(c, (code) => {
     console.log(`[panel] Next kapandı (kod ${code}); başlatıcı da çıkıyor`);
+    // Açıldıktan hemen sonra kapandıysa (port yarışı, çökme) hiç ulaşılabilir olmamıştır: .bat 240 sn beklemesin
+    if (Date.now() - spawnedAt < QUICK_EXIT_MS) writeNotice(`Panel açılamadı (Next kod ${code}); ayrıntı: .logs\\panel.log`);
     process.exit(code);
   });
 }
