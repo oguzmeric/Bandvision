@@ -273,6 +273,14 @@ Video ile test sayfasının "Ürün" listesine **Araç (giriş / çıkış)**, *
 - **Doğrulama durumu:** birim testleri (sahte tanıma ve poz modeli; panelde `safetyAlarms`, `resultFile`) ve sahte iş yanıtlı Playwright testleri. Gerçek modellerle duman denemesi yapıldı (kontrolcü, 2026-11-04): güvenlik alarmı, içinde kimse olmayan bir videoda 0 alarm verdi; sonuç dosyaları `annotated.mp4`, `alarms.csv`, `profile.json`; ekran kartında yaklaşık 21 kare/sn. Araç videosu 0 giriş / 0 çıkış verdi. Karışık seçenek `422` ve Türkçe ileti aldı. Alarm anları ve sayı doğruluğu ölçülmedi; gerçek alarmlı video denenmedi; doğruluk ölçümü yok, başarım iddiası yok.
 - **Ölçüm BEKLİYOR:** gerçek bir güvenlik kamerası videosunda canlı oturumla aynı alarm anlarının çıkması (aynı video, aynı süreler), araç ve hayvan videosunda sayı doğruluğu.
 
+## 5k. Alt akışı görüntü vermeyen kanallar: ana akışa düşme (web, 2026-11-06)
+
+Ofis TRASSIR'ında 16 kanalın 8'i panelde "Görüntü yok" idi; 7'sinde alt akış açılıp hiç kare vermiyor, ana akış veriyordu (ayrıntı: `13-web-platform.md` "Alt akışı görüntü vermeyen kanal → ana akış").
+
+- **Ne var:** kanal başına "alt akış ölü" belleği (10 dk); küçük resim, izleme okuyucusu ve analiz oturumu alt akış görüntü vermeyince ana akışı dener, gelirse kanalı işaretler. Kameralar sayfasında ipucu satırı, oturumda durum iletisi.
+- **Doğrulama durumu:** birim testleri (izleme, oturum, küçük resim, `subDead`, 600 sn) ve sahte API'li Playwright testi; ofis NVR'ında (2026-11-06) kanal 4'ün küçük resmi ana akıştan JPEG geldi (~6 sn) ve kanal işaretlendi; izleme okuyucusu aynı kanalda alt akışı 18 sn bekleyip ana akışla görüntü verdi (704×576, ~22 sn); "RTSP 3" ikisinde de "Görüntü yok" kaldı.
+- **Ölçüm BEKLİYOR:** panelde 16 kanallı izleme duvarında 15 kanalın görüntü vermesi (işlemci yükü dahil).
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.

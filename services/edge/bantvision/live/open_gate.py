@@ -120,6 +120,53 @@ def _url(open_url: Callable[[], str]) -> str:
         raise UrlError(str(e)) from e
 
 
+SUB_FALLBACK_MSG = "Alt akış görüntü vermiyor; ana akış kullanılıyor."
+
+
+class StreamUrl:
+    """Kayıt cihazı kanalının adres üreticisi (alt akış istenmişse ana akışa düşebilir).
+
+    Bazı kanallarda alt akış "açılır" ama hiç kare vermez (kayıt cihazı yine alt akış var der). Okuyucu bir alt akış
+    denemesi açılıp 0 kare verince sonraki denemeyi `prefer_main=True` ile yapar; ana akış kare verirse
+    `mark_sub_dead()` çağırır ve kanal bir süre (yönetici belleği) doğrudan ana akışla açılır. `sub_dead` her çağrıda
+    sorulur: işaret yeni bağlanışta etkili olur, okuyucu/oturum yeniden kurulmaz.
+
+    `make(alt_istendi_mi) -> (adres, kanalın alt akışı var mı)`; düz `Callable[[], str]` gibi de çağrılabilir."""
+
+    def __init__(self, make: Callable[[bool], tuple[str, bool]], sub: bool, sub_dead: Callable[[], bool],
+                 mark_sub_dead: Callable[[], None]) -> None:
+        self._make, self.sub, self._sub_dead, self._mark = make, sub, sub_dead, mark_sub_dead
+
+    def resolve(self, prefer_main: bool = False) -> tuple[str, bool, bool]:
+        """(adres, alt akış mı, alt akış istendiği halde ana akışa düşüldü mü)."""
+        want_sub = self.sub and not prefer_main and not self._sub_dead()
+        url, has_sub = self._make(want_sub)
+        return url, want_sub and has_sub, self.sub and has_sub and not want_sub
+
+    def __call__(self, prefer_main: bool = False) -> str:
+        return self.resolve(prefer_main)[0]
+
+    def bind(self, prefer_main: bool) -> BoundUrl:
+        return BoundUrl(self, prefer_main)
+
+    def mark_sub_dead(self) -> None:
+        self._mark()
+
+
+class BoundUrl:
+    """Bir bağlantı denemesinin adres üreticisi: son alınan adres alt akış mı (`sub`), ana akışa düşüldü mü
+    (`fell_back`)."""
+
+    def __init__(self, owner: StreamUrl, prefer_main: bool) -> None:
+        self.owner, self.prefer_main = owner, prefer_main
+        self.sub = False
+        self.fell_back = False
+
+    def __call__(self) -> str:
+        url, self.sub, self.fell_back = self.owner.resolve(self.prefer_main)
+        return url
+
+
 def resolve_and_open(open_url: Callable[[], str], open_fn: Callable[[str], T], level: int,
                      clock: Callable[[], float] = time.monotonic) -> tuple[str, T]:
     """Adresi al ve aç: (adres, açılan). Adres önce kapı DIŞINDA alınır (ulaşılamayan kayıt cihazının HTTP zaman aşımı

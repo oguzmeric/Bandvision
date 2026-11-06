@@ -438,15 +438,20 @@ class LiveSession:
         backoff = 1.0
         file_offset = 0.0                                    # dosya başa sarınca zaman geriye gitmesin
         got_frames = True                                    # ilk deneme öncelikli; görüntü vermeyen sonra sıraya
+        try_main = False                                     # alt akış açıldı ama 0 kare: sonraki deneme ana akışla
         while not self._stop.is_set():
             if self._switch.is_set():                        # yeni kaynak: ilk denemesi yine öncelikli
-                got_frames = True
+                got_frames, try_main = True, False
             self._switch.clear()
             level = open_gate.SESSION if got_frames else open_gate.SESSION_RETRY
             with self._lock:
                 open_url = self._open_url
+            streams = open_url if isinstance(open_url, open_gate.StreamUrl) else None
+            bound = streams.bind(try_main) if streams is not None else None
+            try_main = False
             try:
-                url, cap = open_gate.resolve_and_open(open_url, lambda u, lv=level: open_capture(u, lv), level)
+                url, cap = open_gate.resolve_and_open(bound or open_url, lambda u, lv=level: open_capture(u, lv),
+                                                      level)
             except open_gate.UrlError as e:                  # adres alınamadı (kayıt cihazı yanıt vermedi); yeniden denenir
                 got_frames = False
                 self._set_state("reconnecting", f"Kaynağa ulaşılamadı: {e.__cause__}")
@@ -462,7 +467,8 @@ class LiveSession:
                 continue
             is_file = not url.lower().startswith(("rtsp://", "http://", "https://"))
             file_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-            self._set_state("live", "")
+            # Alt akış kare vermediği için ana akıştayız: kullanıcı bilsin (alt akışa dönünce ileti kalkar)
+            self._set_state("live", open_gate.SUB_FALLBACK_MSG if bound is not None and bound.fell_back else "")
             backoff = 1.0
             started = time.monotonic()
             last_ping = time.monotonic()
@@ -472,6 +478,8 @@ class LiveSession:
                 if not ok:
                     break
                 n += 1
+                if n == 1 and streams is not None and bound is not None and bound.prefer_main and bound.fell_back:
+                    streams.mark_sub_dead()                 # alt akış kare vermedi, ana akış veriyor: kanal işaretlenir
                 ts = file_offset + n / file_fps if is_file else time.monotonic()
                 with self._frame_cv:
                     self._seq += 1
@@ -489,6 +497,7 @@ class LiveSession:
                     threading.Thread(target=self._ping, args=(url,), daemon=True).start()
             cap.release()
             got_frames = n > 0
+            try_main = bound is not None and bound.sub and n == 0 and not self._switch.is_set()
             clips = self._clips
             if clips is not None:                           # kamera koptuysa süresi dolan yakalamalar beklemesin
                 clips.flush_due(time.monotonic())

@@ -31,6 +31,8 @@ export interface Channel {
   number: number | null;
   title: string;
   hasSubstream: boolean;
+  /** Alt akış görüntü vermiyor; izleme, sayım ve küçük resim ana akışı kullanıyor (sunucu 10 dk sonra alt akışı yeniden dener) */
+  subDead?: boolean;
 }
 
 /** Personel üniforma rengi (CIE Lab, D65; sözleşme `staffColors`) */
