@@ -2532,3 +2532,174 @@ def test_max_sub_env_parsing(monkeypatch: pytest.MonkeyPatch, raw: str, want: in
     assert viewer._env_max_sub() == want
     monkeypatch.delenv("BV_WATCH_MAX_SUB")
     assert viewer._env_max_sub() == 128
+
+
+# ---------------------------------------------------------------------- alt akışı görüntü vermeyen kanal → ana akış
+
+class _SubDeadNVR:
+    """TRASSIR gibi: küçük resim alt akıştan; `sub_ok`/`main_ok` hangi akışın jpeg verdiğini seçer (yalnız kanal 4)."""
+
+    snapshot_uses_substream = True
+
+    def __init__(self, sub_ok: bool = False, main_ok: bool = True, kind: str = "unreachable") -> None:
+        self.sub_ok, self.main_ok, self.kind = sub_ok, main_ok, kind
+        self.calls: list[bool] = []
+
+    def channels(self) -> list[Any]:
+        from bantvision.live import recorders as rec
+
+        return [rec.RecorderChannel("4", "Kanal 4", 4, True), rec.RecorderChannel("3", "RTSP 3", 3, True)]
+
+    def stream_url(self, channel: Any, substream: bool) -> str:
+        return f"rtsp://nvr.example:555/{'sub' if substream else 'main'}{channel.id}"
+
+    def snapshot(self, channel: Any, substream: bool = True) -> bytes:
+        from bantvision.live import recorders as rec
+
+        self.calls.append(substream)
+        if (self.sub_ok if substream else self.main_ok) and channel.id == "4":
+            return b"\xff\xd8jpeg-" + (b"sub" if substream else b"main")
+        if self.kind == "unauthorized":
+            raise rec.RecorderError.unauthorized()
+        raise rec.RecorderError.unreachable("nvr.example:555 yanıt vermedi")
+
+    def keep_alive(self, _url: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _nvr_source(client: TestClient, monkeypatch: pytest.MonkeyPatch, nvr: _SubDeadNVR) -> str:
+    r = client.post("/api/v1/live/sources", json={"kind": "recorder", "recorderBrand": "trassir", "host": "nvr.example",
+                                                  "username": "u", "password": SECRET, "name": "Ofis NVR"})
+    assert r.status_code == 201, r.text
+    monkeypatch.setattr(client.app.state.live, "recorder", lambda _src: nvr)
+    return r.json()["id"]
+
+
+def test_thumbnail_falls_back_to_main_and_marks_channel(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                                        caplog: pytest.LogCaptureFixture) -> None:
+    nvr = _SubDeadNVR()
+    sid = _nvr_source(client, monkeypatch, nvr)
+    chans = client.get(f"/api/v1/live/sources/{sid}/channels").json()
+    assert [c["subDead"] for c in chans] == [False, False]
+    with caplog.at_level("INFO", logger="bantvision.live.api"):
+        r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
+    assert r.status_code == 200 and r.content == b"\xff\xd8jpeg-main" and nvr.calls == [True, False]
+    logs = [m.getMessage() for m in caplog.records if "Alt akış" in m.getMessage()]
+    assert logs == ["Alt akış görüntü vermiyor, ana akışa geçildi: Ofis NVR/Kanal 4"]
+    assert not any("rtsp://" in m.getMessage() or SECRET in m.getMessage() for m in caplog.records)
+    chans = client.get(f"/api/v1/live/sources/{sid}/channels").json()
+    assert [(c["id"], c["subDead"]) for c in chans] == [("4", True), ("3", False)]
+
+    nvr.calls.clear()                                                   # işaretli kanal: doğrudan ana akış
+    assert client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"}).status_code == 200
+    assert nvr.calls == [False]
+
+    nvr.calls.clear()                                                   # iki akışı da ölü kanal: 502, işaret yok
+    r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "3"})
+    assert r.status_code == 502 and nvr.calls == [True, False]
+    assert not client.app.state.live.sub_dead(sid, "3")
+
+
+def test_thumbnail_password_rejection_does_not_try_main(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    nvr = _SubDeadNVR(kind="unauthorized", main_ok=False)
+    sid = _nvr_source(client, monkeypatch, nvr)
+    r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
+    assert r.status_code == 502 and "şifre" in r.json()["detail"] and nvr.calls == [True]
+
+
+def test_sub_dead_mark_expires_after_600s_and_source_edit_clears_it(client: TestClient,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live import api as live_api
+
+    mgr = client.app.state.live
+    sid = _nvr_source(client, monkeypatch, _SubDeadNVR())
+    mgr.mark_sub_dead(sid, "4")
+    assert live_api.DEAD_SUB_RETRY_S == 600 and mgr.sub_dead(sid, "4") and not mgr.sub_dead(sid, None)
+    mgr._dead_sub[(sid, "4")] -= live_api.DEAD_SUB_RETRY_S - 1          # 599 sn önce: hâlâ işaretli
+    assert mgr.sub_dead(sid, "4")
+    mgr._dead_sub[(sid, "4")] -= 2                                      # 601 sn: alt akış yeniden denenir
+    assert not mgr.sub_dead(sid, "4")
+    mgr.mark_sub_dead(sid, "4")
+    mgr.forget(sid)                                                     # kaynak düzenlendi/silindi
+    assert not mgr.sub_dead(sid, "4")
+
+
+def test_opener_consults_sub_dead_on_every_connect(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live import open_gate
+
+    mgr = client.app.state.live
+    sid = _nvr_source(client, monkeypatch, _SubDeadNVR())
+    src = mgr.store.source(sid)
+    open_url, _ = mgr.opener(src, "4", True, lazy=True)
+    assert isinstance(open_url, open_gate.StreamUrl)
+    assert open_url().endswith("/sub4") and open_url(prefer_main=True).endswith("/main4")
+    mgr.mark_sub_dead(sid, "4")                                          # aynı üretici: sonraki bağlanış ana akış
+    bound = open_url.bind(False)
+    assert bound().endswith("/main4") and bound.fell_back and not bound.sub
+    main_only, _ = mgr.opener(src, "4", False, lazy=True)               # kullanıcı ana akış seçti: düşme yok
+    b2 = main_only.bind(False)
+    assert b2().endswith("/main4") and not b2.fell_back
+
+
+class _StreamCap:
+    """Açılır; `frames` kare verip biter (alt akış 0 kare = açıldı ama görüntü yok)."""
+
+    def __init__(self, frames: int) -> None:
+        self._left = frames
+
+    def isOpened(self) -> bool:
+        return True
+
+    def get(self, _prop: int) -> float:
+        return 25.0
+
+    def read(self) -> tuple[bool, Any]:
+        import numpy as np
+
+        if self._left <= 0:
+            return False, None
+        self._left -= 1
+        time.sleep(0.01)
+        return True, np.full((120, 160, 3), 100, np.uint8)
+
+    def release(self) -> None:
+        pass
+
+
+def test_session_falls_back_to_main_with_message_and_clears_it_on_sub(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core import Profile
+    from bantvision.live import open_gate
+    from bantvision.live import session as session_mod
+    from bantvision.live.session import LiveSession
+
+    opened: list[str] = []
+    state = {"dead": False, "sub_frames": 0}
+    marks: list[int] = []
+
+    def capture(url: str, _level: int | None = None) -> Any:
+        opened.append(url)
+        return _StreamCap(state["sub_frames"] if url.endswith("/sub") else 10_000)
+
+    def mark() -> None:
+        marks.append(1)
+        state["dead"] = True
+
+    monkeypatch.setattr(session_mod, "open_capture", capture)
+    monkeypatch.setattr(LiveSession, "_wait_reconnect", lambda self, _s: None)
+    streams = open_gate.StreamUrl(lambda sub: (f"rtsp://nvr/{'sub' if sub else 'main'}", True), True,
+                                  lambda: bool(state["dead"]), mark)
+    s = LiveSession("test", streams, Profile.egg())
+    try:
+        wait_for(lambda: s.snapshot_status()["state"] == "live" and s._seq > 3, timeout=10)
+        assert opened[:2] == ["rtsp://nvr/sub", "rtsp://nvr/main"] and marks == [1]
+        assert s.snapshot_status()["message"] == "Alt akış görüntü vermiyor; ana akış kullanılıyor."
+
+        state["dead"], state["sub_frames"] = False, 10_000                  # işaret düştü, alt akış düzeldi
+        s.switch_source(streams)
+        wait_for(lambda: opened[-1] == "rtsp://nvr/sub" and s.snapshot_status()["state"] == "live", timeout=10)
+        wait_for(lambda: s.snapshot_status()["message"] == "", timeout=10)
+    finally:
+        s.stop()

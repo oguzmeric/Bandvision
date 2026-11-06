@@ -13,6 +13,8 @@
 - Kopunca katlanarak bekler (1 → 30 sn); bekleme, akış en az GOOD_AFTER_S sn kare verdikten sonra sıfırlanır.
 - Kaynak silinir ya da düzenlenirse `drop(kaynak)` o kaynağın okuyucularını kapatır (açıcı reddi önbelleği de silinir).
 - Açıcının reddi (silinmiş kaynak, kanalsız kayıt cihazı, açıcı hatası) OPEN_FAIL_CACHE_S önbellekte; sınır reddi canlı.
+- Kayıt cihazı kanalında alt akış açılıp hiç kare vermezse sonraki deneme ana akışla yapılır (`open_gate.StreamUrl`);
+  ana akış kare verirse kanal yöneticide "alt akış ölü" işaretlenir (anahtar ve sınır yine "sub").
 - `peek` (durum yoklaması) varsayılan olarak kare işlemez (küçültme yok), yalnızca durumu verir.
 - Verilen kareler salt okunurdur (yanlışlıkla üzerine çizen kod gürültüyle hata alır).
 """
@@ -121,6 +123,7 @@ class CameraViewer:
         self._state, self._message = "connecting", ""
         self._stamps: list[float] = []
         self._no_frames = False                 # son deneme hiç kare vermedi: açılış sırasında en sona (open_gate)
+        self._try_main = False                  # son deneme alt akışta açıldı ama 0 kare: sonraki deneme ana akışla
         self.last_used = clock()
         self._thread = threading.Thread(target=self._run, name=f"izleme-{key[0][:8]}", daemon=True)
         self._thread.start()
@@ -173,8 +176,11 @@ class CameraViewer:
     def _attempt(self) -> tuple[int, float, str, bool]:
         """Bir bağlantı denemesi: (okunan kare, kare gelen süre sn, kopma iletisi, dosya kaynağı mı)."""
         level = open_gate.RETRY if self._no_frames else open_gate.VIEWER
+        streams = self._open_url if isinstance(self._open_url, open_gate.StreamUrl) else None
+        bound = streams.bind(self._try_main) if streams is not None else None
+        self._try_main = False
         try:
-            url, cap = open_gate.resolve_and_open(self._open_url, self._capture, level)
+            url, cap = open_gate.resolve_and_open(bound or self._open_url, self._capture, level)
         except open_gate.UrlError as e:                      # kayıt cihazı yanıt vermedi; yeniden denenir
             return 0, 0.0, f"Kaynağa ulaşılamadı: {_detail(e.__cause__ or e)}", False
         try:
@@ -191,6 +197,8 @@ class CameraViewer:
                 n += 1
                 if n == 1:
                     first = time.monotonic()
+                    if streams is not None and bound is not None and bound.prefer_main and bound.fell_back:
+                        streams.mark_sub_dead()              # alt akış kare vermedi, ana akış veriyor: kanal işaretlenir
                 small = _readonly(downscale(frame, max_w))
                 now = self._clock()
                 with self._lock:
@@ -206,6 +214,8 @@ class CameraViewer:
                     last_ping = time.monotonic()
                     threading.Thread(target=self._ping, args=(url,), daemon=True).start()
             good = time.monotonic() - first if n else 0.0
+            # Alt akış açıldı ama hiç kare vermedi: sonraki deneme ana akışla (ana da vermezse yine alt)
+            self._try_main = bound is not None and bound.sub and n == 0 and not self._stop.is_set()
             return n, good, "Görüntü kesildi; yeniden bağlanılıyor.", is_file
         finally:
             with contextlib.suppress(Exception):

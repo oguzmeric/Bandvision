@@ -445,6 +445,9 @@ class LiveManager:
         self._channels: dict[str, list[rec.RecorderChannel]] = {}
         self._lock = threading.Lock()
         self._snap_failed: dict[str, float] = {}         # küçük resmi alınamayan kamera → zaman (1 dk tekrar denenmez)
+        # Alt akışı görüntü vermeyen kayıt cihazı kanalları → işaret anı (tekdüze); DEAD_SUB_RETRY_S sonra alt yeniden denenir
+        self._dead_sub: dict[tuple[str, str], float] = {}
+        self._dead_lock = threading.Lock()
         root = data_dir or store.root.parent
         # Cihaz ayarları (<data>/devices.json): ortak modeller hiçbiri ısınmadan önce kayıtlı seçimi alır ("auto" yükleme
         # anında donanıma göre çözülür); "video" seçimini analiz işçisi her iş başında okur
@@ -821,6 +824,9 @@ class LiveManager:
         with self._lock:
             cached = self._clients.pop(source_id, None)
             self._channels.pop(source_id, None)
+        with self._dead_lock:                                # ayar değişti: alt akış yeniden denensin
+            for k in [k for k in self._dead_sub if k[0] == source_id]:
+                del self._dead_sub[k]
         if cached:
             cached[1].close()
 
@@ -856,6 +862,41 @@ class LiveManager:
                 return f"{name} · {c.title.strip()}"
         return f"{name} · {channel_id}"
 
+    def mark_sub_dead(self, source_id: str, channel_id: str) -> None:
+        """Kanalın alt akışı görüntü vermiyor (ana akış veriyor): DEAD_SUB_RETRY_S boyunca izleme, oturum ve küçük
+        resim ana akışı kullanır. Kanal yeni işaretlendiyse günlüğe bir kez yazılır (adres/jeton yazılmaz)."""
+        with self._dead_lock:
+            fresh = not self._sub_dead_locked(source_id, channel_id)
+            self._dead_sub[(source_id, channel_id)] = time.monotonic()
+        if fresh:
+            _LOG.info("Alt akış görüntü vermiyor, ana akışa geçildi: %s/%s",
+                      self._source_label(source_id), self._channel_label(source_id, channel_id))
+
+    def sub_dead(self, source_id: str, channel_id: str | None) -> bool:
+        if not channel_id:
+            return False
+        with self._dead_lock:
+            return self._sub_dead_locked(source_id, channel_id)
+
+    def _sub_dead_locked(self, source_id: str, channel_id: str) -> bool:
+        at = self._dead_sub.get((source_id, channel_id))
+        if at is None:
+            return False
+        if time.monotonic() - at >= DEAD_SUB_RETRY_S:        # süre doldu: alt akış yeniden denenir
+            del self._dead_sub[(source_id, channel_id)]
+            return False
+        return True
+
+    def _source_label(self, source_id: str) -> str:
+        src = self.store.source(source_id)
+        return str((src or {}).get("name") or "").strip() or source_id[:8]
+
+    def _channel_label(self, source_id: str, channel_id: str) -> str:
+        for c in self._channels.get(source_id, []):
+            if c.id == channel_id:
+                return c.title.strip() or channel_id
+        return channel_id
+
     def _view_opener(self, source_id: str, channel_id: str | None, sub: bool
                      ) -> tuple[Callable[[], str], Callable[[str], None] | None]:
         """İzleme okuyucusunun adres üreticisi: kanal bilgisi ilk bağlanışta istenir (açılış beklemez)."""
@@ -889,7 +930,9 @@ class LiveManager:
                lazy: bool = False) -> tuple[Any, Any]:
         """(adres üretici, canlı tutma). Kayıt cihazında adres her bağlanışta yeniden alınır (TRASSIR jetonu).
         `substream` verilirse kaynağın alt/ana akış ayarı yerine o kullanılır (oturum başına seçim). `lazy`: kanal
-        bilgisi şimdi değil ilk bağlanışta istenir (alınamazsa okuyucu yeniden dener)."""
+        bilgisi şimdi değil ilk bağlanışta istenir (alınamazsa okuyucu yeniden dener). Kayıt cihazında üretici
+        `open_gate.StreamUrl`: alt akışı ölü işaretli kanalda (`sub_dead`, her bağlanışta sorulur) ana akış verir;
+        okuyucu/oturum alt akış 0 kare verince `prefer_main` ile ana akışı dener ve kare gelirse kanalı işaretler."""
         if substream is not None:
             src = {**src, "substream": substream}
         if src["kind"] == "camera":
@@ -903,15 +946,21 @@ class LiveManager:
         brand = rec.RecorderBrand(src.get("recorderBrand", "trassir"))
         username, password = src.get("username", ""), self.store.password(src["id"])
 
-        def open_url() -> str:
+        sid = str(src.get("id") or "")
+
+        def make(sub: bool) -> tuple[str, bool]:
             if not found:
                 found.append(self.channel(src, channel_id))
-            url = client.stream_url(found[0], substream)
+            url = client.stream_url(found[0], sub)
             if brand != rec.RecorderBrand.TRASSIR and username:
                 url = rec.with_credentials(url, username, password)
-            return url
+            return url, found[0].has_substream
 
-        return open_url, client.keep_alive
+        if not sid:                                         # kaydedilmemiş kaynak: bellek yok, düz üretici
+            return (lambda: make(substream)[0]), client.keep_alive
+        streams = open_gate.StreamUrl(make, substream, lambda: self.sub_dead(sid, channel_id),
+                                      lambda: self.mark_sub_dead(sid, channel_id))
+        return streams, client.keep_alive
 
     def snapshot(self, src: dict[str, Any], channel_id: str | None) -> bytes:
         key = f"{src['id']}|{channel_id}"
@@ -929,14 +978,28 @@ class LiveManager:
         if src["kind"] == "recorder" and channel_id:
             client = self.recorder(src)
             ch = self.channel(src, channel_id)
+            sid = str(src.get("id") or "")
+            # Alt akıştan alınan küçük resim gelmezse bir kez ana akış denenir (bazı kanallarda alt akış ölü); ana
+            # akış verirse kanal işaretlenir. İşaretli kanalda doğrudan ana akış.
+            can_fall_back = bool(sid) and getattr(client, "snapshot_uses_substream", False) and ch.has_substream
+            dead = can_fall_back and self.sub_dead(sid, channel_id)
             try:
-                return client.snapshot(ch)
+                return client.snapshot(ch, not dead) if can_fall_back else client.snapshot(ch)
             except rec.RecorderError as e:
                 if e.kind == "unauthorized":
                     raise
-                # Kayıt cihazının görüntü API'si var: alınamadıysa kamera görüntü vermiyor. RTSP'yi ayrıca denemek
-                # küçük resmi 10+ sn bekletiyordu (kapalı kanallar listeyi ve paneli tıkıyordu).
+                if not can_fall_back or dead or e.kind not in ("unreachable", "unexpected"):
+                    # Kayıt cihazının görüntü API'si var: alınamadıysa kamera görüntü vermiyor. RTSP'yi ayrıca denemek
+                    # küçük resmi 10+ sn bekletiyordu (kapalı kanallar listeyi ve paneli tıkıyordu).
+                    raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).") from e
+            try:
+                jpeg = client.snapshot(ch, False)
+            except rec.RecorderError as e:
+                if e.kind == "unauthorized":
+                    raise
                 raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).") from e
+            self.mark_sub_dead(sid, channel_id)
+            return jpeg
         open_url, _ = self.opener(src, channel_id)          # küçük resim API'si yok: RTSP'den ilk kare
         return grab_jpeg(open_url())
 
@@ -1024,6 +1087,7 @@ class BenchmarkFailed(Exception):
     """Hız testi modeli kurulamadı ya da çalışmadı (ileti Türkçe, kullanıcıya gösterilir)."""
 
 
+DEAD_SUB_RETRY_S = 600.0                    # alt akışı ölü işaretli kanalda alt akış 10 dk sonra yeniden denenir
 SNAPSHOT_RETRY_S = 300.0                    # görüntüsü gelmeyen kamera 5 dk denenmez ("Yenile" ile hemen)
 _GRAB_SLOTS = threading.BoundedSemaphore(2)   # aynı anda en çok 2 RTSP küçük resim: kayıt cihazını ve canlı oturumu boğmasın
 
@@ -1067,9 +1131,10 @@ def _grab(url: str, result: dict[str, bytes], deadline: float = float("inf")) ->
         cap.release()
 
 
-def _public_channel(c: rec.RecorderChannel) -> dict[str, Any]:
+def _public_channel(c: rec.RecorderChannel, sub_dead: bool = False) -> dict[str, Any]:
+    """`subDead`: alt akış görüntü vermiyor, ana akış kullanılıyor (panel küçük resim altında yazar)."""
     return {"id": c.id, "name": c.name.strip(), "number": c.number, "title": c.title.strip(),
-            "hasSubstream": c.has_substream}
+            "hasSubstream": c.has_substream, "subDead": sub_dead}
 
 
 def make_router(manager: LiveManager, auth: Any) -> APIRouter:
@@ -1176,7 +1241,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         if src["kind"] != "recorder":
             raise HTTPException(400, "Bu kaynak bir kayıt cihazı değil.")
         try:
-            return [_public_channel(c) for c in manager.channels(src, refresh)]
+            return [_public_channel(c, manager.sub_dead(source_id, c.id)) for c in manager.channels(src, refresh)]
         except rec.RecorderError as e:
             raise _err(e) from e
 

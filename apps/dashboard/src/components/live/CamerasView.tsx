@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { KIND_TITLE, kindOfMode, parseKind } from "@/lib/analysisKind";
@@ -50,6 +50,19 @@ function RecorderChannels({ source, sessions, onStart }: {
       .then(setChannels).catch((e: Error) => setError(e.message));
   }, [source.id]);
   useEffect(() => { load(false); }, [load]);
+  // Küçük resim ana akıştan geldiyse sunucu kanalı "alt akış ölü" işaretler: liste sessizce (önbellekten) yeniden
+  // okunur, ipucu satırı görünür. Birçok küçük resim art arda yüklenince tek istek.
+  const recheck = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recheckSubDead = useCallback(() => {
+    if (recheck.current) clearTimeout(recheck.current);
+    recheck.current = setTimeout(() => {
+      recheck.current = null;
+      api<Channel[]>(`sources/${source.id}/channels`)
+        .then((fresh) => setChannels((cur) => cur && cur.map((c) => ({ ...c, subDead: fresh.find((f) => f.id === c.id)?.subDead ?? c.subDead }))))
+        .catch(() => undefined);
+    }, 800);
+  }, [source.id]);
+  useEffect(() => () => { if (recheck.current) clearTimeout(recheck.current); }, []);
 
   const shown = (channels ?? []).filter((c) => c.title.toLocaleLowerCase("tr").includes(query.toLocaleLowerCase("tr")));
   return (
@@ -64,7 +77,9 @@ function RecorderChannels({ source, sessions, onStart }: {
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {shown.map((c) => (
           <div key={c.id} className="rounded-[2px] border border-pl-line-soft bg-white p-1.5">
-            <Thumb src={`/api/live/sources/${source.id}/snapshot?channel=${encodeURIComponent(c.id)}`} alt={c.title} />
+            <Thumb src={`/api/live/sources/${source.id}/snapshot?channel=${encodeURIComponent(c.id)}`} alt={c.title}
+                   onLoaded={c.subDead ? undefined : recheckSubDead} />
+            {c.subDead && <p className="mt-1 px-0.5 text-xs text-pl-faint">Alt akış görüntü vermiyor; ana akış kullanılıyor.</p>}
             <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
               <div className="min-w-0">
                 <p className="truncate text-[13px] font-medium">{c.title}</p>

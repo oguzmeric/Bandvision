@@ -28,7 +28,7 @@ function thumbSlot(): Promise<() => void> {
 }
 
 /** Küçük resim: kayıt cihazının görüntü API'si ya da RTSP'den ilk kare */
-export default function Thumb({ src, alt }: { src: string; alt: string }) {
+export default function Thumb({ src, alt, onLoaded }: { src: string; alt: string; onLoaded?: () => void }) {
   const [state, setState] = useState<"waiting" | "loading" | "ok" | "error">("waiting");
   const release = useRef<(() => void) | null>(null);
   useEffect(() => {
@@ -45,7 +45,7 @@ export default function Thumb({ src, alt }: { src: string; alt: string }) {
     <div className="relative aspect-video overflow-hidden rounded-[2px] bg-[#111]">
       {(state === "loading" || state === "ok") && (
         // eslint-disable-next-line @next/next/no-img-element -- kamera küçük resmi (yerel sunucudan)
-        <img src={src} alt={alt} onLoad={() => done(true)} onError={() => done(false)}
+        <img src={src} alt={alt} onLoad={() => { done(true); onLoaded?.(); }} onError={() => done(false)}
              className={`h-full w-full object-cover transition-opacity ${state === "ok" ? "opacity-100" : "opacity-0"}`} />
       )}
       {(state === "waiting" || state === "loading") && <div className="absolute inset-0 animate-pulse bg-white/5" />}
