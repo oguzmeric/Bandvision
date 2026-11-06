@@ -19,11 +19,14 @@ from .jsonfile import JsonRead, quarantine, read_json, write_json_atomic
 from .layouts import layout_by_id
 
 _LOG = logging.getLogger(__name__)
-__all__ = ["JsonRead", "ViewStore", "ViewsBusy", "check_layout_tiles", "read_json"]
+__all__ = ["ORDER_CHANGED", "JsonRead", "ViewStore", "ViewsBusy", "check_layout_tiles", "read_json"]
 
 
 class ViewsBusy(Exception):
     """Şablon dosyası şu an okunamıyor ya da yazılamıyor."""
+
+
+ORDER_CHANGED = "Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin."
 
 
 def _num(x: Any) -> bool:
@@ -170,3 +173,20 @@ class ViewStore:
                 self._views = old
                 raise
             return True
+
+    def reorder(self, ids: list[str]) -> list[dict[str, Any]]:
+        """Şablonları `ids` sırasına dizer ve yeni listeyi döndürür. `ids` kayıtlı şablon kimliklerinin TAMI olmalı (eksik,
+        fazla ya da yinelenen yok); değilse `ValueError` (`ORDER_CHANGED`). Sıra içerik değildir: `updatedAt` değişmez
+        (panelin Kaydet çakışma denetimi sıralamayı "başka yerde değişti" saymaz)."""
+        with self._lock:
+            self._ensure_read()
+            by_id = {v["id"]: v for v in self._views}
+            if len(ids) != len(by_id) or set(ids) != set(by_id):
+                raise ValueError(ORDER_CHANGED)
+            old, self._views = self._views, [by_id[i] for i in ids]
+            try:
+                self._save()
+            except ViewsBusy:
+                self._views = old
+                raise
+            return copy.deepcopy(self._views)
