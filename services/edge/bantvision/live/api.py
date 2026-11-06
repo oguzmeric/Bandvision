@@ -12,7 +12,7 @@ import pathlib
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import cv2
 import numpy as np
@@ -155,6 +155,10 @@ class ViewIn(_Strict):
 class DraftIn(_Strict):
     layout: str = Field(max_length=5)
     tiles: list[TileIn | None] = Field(max_length=MAX_TILES)
+
+
+class ViewOrderIn(_Strict):
+    ids: list[Annotated[str, Field(max_length=128)]] = Field(max_length=1000)
 
 
 class FromRecorderIn(_Strict):
@@ -1232,6 +1236,16 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         name, layout, tiles = _view_body(body)
         try:
             return manager.views.create(name, layout, tiles)
+        except ViewsBusy as e:
+            raise HTTPException(503, str(e)) from e
+
+    # `/views/{view_id}`den ÖNCE: aksi halde "order" bir şablon kimliği sanılır
+    @r.put("/views/order")
+    def order_views(body: ViewOrderIn) -> list[dict[str, Any]]:
+        try:
+            return manager.views.reorder(body.ids)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
         except ViewsBusy as e:
             raise HTTPException(503, str(e)) from e
 

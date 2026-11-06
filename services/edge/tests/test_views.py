@@ -337,3 +337,96 @@ def test_from_recorder_names_stay_unique_within_60_chars(client: TestClient, mon
     assert len(set(names)) == 3 and all(len(n) <= 60 for n in names)
     assert [n.rsplit("tüm kanallar", 1)[1] for n in names] == ["", " 2", " 3"]      # ek ve sıra numarası kesilmedi
     assert [x["name"] for x in client.get("/api/v1/live/views").json()] == names
+
+
+# ---------------------------------------------------------------- şablon sırası (PUT /views/order)
+
+ORDER_CHANGED = "Şablon listesi değişmiş; sayfayı yenileyip yeniden deneyin."
+
+
+def test_reorder_moves_views_and_keeps_updated_at(tmp_path: pathlib.Path) -> None:
+    store = ViewStore(tmp_path)
+    a, b, c = (store.create(n, "1", [None]) for n in ("A", "B", "C"))
+    out = store.reorder([c["id"], a["id"], b["id"]])
+    assert [v["name"] for v in out] == ["C", "A", "B"]
+    assert out == store.list()
+    on_disk = json.loads((tmp_path / "live" / "views.json").read_text(encoding="utf-8"))
+    assert [v["id"] for v in on_disk] == [c["id"], a["id"], b["id"]]
+    assert {v["id"]: v["updatedAt"] for v in out} == {v["id"]: v["updatedAt"] for v in (a, b, c)}   # içerik değişmedi
+    assert [v["name"] for v in ViewStore(tmp_path).list()] == ["C", "A", "B"]                        # yeniden açınca da
+
+
+@pytest.mark.parametrize("ids", [
+    ["A"],                    # eksik
+    ["A", "B", "X"],          # bilinmeyen (eksik + fazla)
+    ["A", "B", "C"],          # fazla
+    ["A", "A"],               # yinelenen (aynı küme ama eksik B)
+    ["A", "B", "B"],          # yinelenen
+    [],
+])
+def test_reorder_rejects_anything_but_the_exact_set(tmp_path: pathlib.Path, ids: list[str]) -> None:
+    store = ViewStore(tmp_path)
+    real = {n: store.create(n, "1", [None])["id"] for n in ("A", "B")}
+    before = (tmp_path / "live" / "views.json").read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="Şablon listesi değişmiş"):
+        store.reorder([real.get(x, x) for x in ids])
+    assert (tmp_path / "live" / "views.json").read_text(encoding="utf-8") == before
+    assert [v["name"] for v in store.list()] == ["A", "B"]
+
+
+def test_reorder_failed_save_rolls_back_memory(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.live import views as views_mod
+
+    store = ViewStore(tmp_path)
+    a, b = store.create("A", "1", [None]), store.create("B", "1", [None])
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise OSError("disk dolu")
+
+    monkeypatch.setattr(views_mod, "write_json_atomic", boom)
+    with pytest.raises(ViewsBusy):
+        store.reorder([b["id"], a["id"]])
+    assert [v["name"] for v in store.list()] == ["A", "B"]
+
+
+def test_reorder_on_locked_file_is_busy_and_never_overwrites(tmp_path: pathlib.Path,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    rec_ = {"id": "eski", "name": "Eski", "layout": "1", "tiles": [None], "createdAt": 1.0, "updatedAt": 1.0}
+    store, _locked, f = _locked_store(tmp_path, monkeypatch, json.dumps([rec_]))
+    with pytest.raises(ViewsBusy):
+        store.reorder(["eski"])
+    assert json.loads(f.read_text(encoding="utf-8")) == [rec_]
+
+
+def test_order_endpoint_reorders_and_persists(client: TestClient) -> None:
+    ids = [client.post("/api/v1/live/views", json={"name": n, "layout": "1", "tiles": [None]}).json()["id"]
+           for n in ("A", "B", "C")]
+    r = client.put("/api/v1/live/views/order", json={"ids": [ids[2], ids[0], ids[1]]})
+    assert r.status_code == 200, r.text
+    assert [v["name"] for v in r.json()] == ["C", "A", "B"]
+    assert [v["name"] for v in client.get("/api/v1/live/views").json()] == ["C", "A", "B"]
+
+
+def test_order_endpoint_conflict_is_422_turkish(client: TestClient) -> None:
+    a = client.post("/api/v1/live/views", json={"name": "A", "layout": "1", "tiles": [None]}).json()["id"]
+    b = client.post("/api/v1/live/views", json={"name": "B", "layout": "1", "tiles": [None]}).json()["id"]
+    for ids in ([a], [a, b, "yok"], [a, a], [b, a, a]):
+        r = client.put("/api/v1/live/views/order", json={"ids": ids})
+        assert r.status_code == 422 and r.json()["detail"] == ORDER_CHANGED, ids
+    assert [v["name"] for v in client.get("/api/v1/live/views").json()] == ["A", "B"]
+
+
+@pytest.mark.parametrize("body", [{}, {"ids": "a"}, {"ids": [1]}, {"ids": ["a"], "fazla": 1}, {"ids": ["x" * 200]}])
+def test_order_endpoint_rejects_malformed_body(client: TestClient, body: dict[str, Any]) -> None:
+    assert client.put("/api/v1/live/views/order", json=body).status_code == 422
+
+
+def test_order_endpoint_maps_busy_to_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    a = client.post("/api/v1/live/views", json={"name": "A", "layout": "1", "tiles": [None]}).json()["id"]
+
+    def busy(*_a: Any, **_k: Any) -> Any:
+        raise ViewsBusy("Şablonlar kaydedilemedi (disk ya da dosya kilidi).")
+
+    monkeypatch.setattr(client.app.state.live.views, "reorder", busy)
+    r = client.put("/api/v1/live/views/order", json={"ids": [a]})
+    assert r.status_code == 503 and "kaydedilemedi" in r.json()["detail"]
