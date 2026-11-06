@@ -32,6 +32,16 @@ export default function SingleCamera({ sourceId, channelId, name, liveHref, mode
   const [quality, setQuality] = useState<"sub" | "main">("sub");
   const [cam, setCam] = useState<CameraStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
+  // Kamera değişti (sıralı gösterim, ←/→): bileşen yeniden kurulmaz (üstündeki çubukta odak kalsın); kameraya özgü durum
+  // çizim sırasında sıfırlanır: hızlı görüntü, önceki kameranın durumu ve uyarısı bir an bile görünmez
+  const camKey = `${sourceId}|${channelId ?? ""}`;
+  const [shownKey, setShownKey] = useState(camKey);
+  if (shownKey !== camKey) {
+    setShownKey(camKey);
+    setQuality("sub");
+    setCam(null);
+    setProblem(null);
+  }
   const { streamKey, onError, bump, visible } = useStreamKey();
   /** Görüntüye açıldıktan sonra basılma sayısı: kutuyu açan çift tıkın artığı (ilk basışı açılıştan önce) kapatmasın */
   const presses = useRef(0);
