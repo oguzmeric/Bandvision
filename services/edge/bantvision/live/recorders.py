@@ -20,7 +20,8 @@ import threading
 import urllib.parse
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
@@ -44,6 +45,7 @@ __all__ = [
     "flag",
     "hikvision_channels",
     "make_recorder",
+    "parse_trassir_any",
     "parse_trassir_json",
     "trassir_channels",
     "trassir_error",
@@ -109,7 +111,8 @@ class RecorderChannel:
         return None if self.number is None else f"Kanal {self.number}"
 
 
-RecorderErrorKind = Literal["unauthorized", "unreachable", "http", "unexpected", "trassir", "no_channels"]
+RecorderErrorKind = Literal["unauthorized", "unreachable", "http", "unexpected", "trassir", "no_channels",
+                            "unsupported"]
 
 
 class RecorderError(Exception):
@@ -145,6 +148,10 @@ class RecorderError(Exception):
     def no_channels(cls) -> RecorderError:
         return cls("no_channels")
 
+    @classmethod
+    def unsupported(cls) -> RecorderError:
+        return cls("unsupported")
+
     def _message(self) -> str:
         match self.kind:
             case "unauthorized":
@@ -157,6 +164,8 @@ class RecorderError(Exception):
                 return f"Kayıt cihazının yanıtı anlaşılamadı ({self.detail})."
             case "trassir":
                 return f"TRASSIR: {self.detail}"
+            case "unsupported":
+                return "Bu kayıt cihazında dışa aktarma henüz desteklenmiyor."
             case _:
                 return "Kayıt cihazında kamera bulunamadı."
 
@@ -191,6 +200,14 @@ def flag(value: object) -> bool:
 
 def parse_trassir_json(data: bytes) -> dict[str, Any]:
     """TRASSIR SDK yanıtı JSON'dur ama sonuna `/* … */` açıklaması ekleyebilir; açıklamalar ayıklanır."""
+    obj = parse_trassir_any(data)
+    if not isinstance(obj, dict):
+        raise RecorderError.unexpected("JSON değil")
+    return obj
+
+
+def parse_trassir_any(data: bytes) -> Any:
+    """`parse_trassir_json` gibi, ama kök liste de olabilir (arşiv `archive_status` yanıtı)."""
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -202,12 +219,9 @@ def parse_trassir_json(data: bytes) -> dict[str, Any]:
             break
         text = text[:start] + text[end + 2:]
     try:
-        obj = json.loads(text)
+        return json.loads(text)
     except ValueError:
         raise RecorderError.unexpected("JSON değil") from None
-    if not isinstance(obj, dict):
-        raise RecorderError.unexpected("JSON değil")
-    return obj
 
 
 def trassir_error(code: str) -> RecorderError:
@@ -492,24 +506,60 @@ class _DeviceHTTP:
         self._client = httpx.Client(verify=not insecure, follow_redirects=False,
                                     timeout=httpx.Timeout(REQUEST_TIMEOUT_S), trust_env=False)
 
-    def get(self, path: str, query: list[tuple[str, str]] | None = None) -> bytes:
+    def url(self, path: str, query: list[tuple[str, str]] | None = None) -> str:
         scheme = "https" if self.https else "http"
         url = f"{scheme}://{self.host}:{self.port}{path}"
         if query:
             url += "?" + "&".join(f"{_encode(k)}={_encode(v)}" for k, v in query)
-        return self.get_url(url)
+        return url
+
+    def get(self, path: str, query: list[tuple[str, str]] | None = None) -> bytes:
+        return self.get_url(self.url(path, query))
 
     def get_url(self, url: str, timeout: float | None = None) -> bytes:
+        parsed = self._check(url)
+        with self._mapped_errors(parsed):
+            response = self._client.get(parsed, auth=_DeviceAuth(self._username, self._password),
+                                        **({"timeout": timeout} if timeout else {}))
+        return self._content(response)
+
+    def post(self, path: str, body: bytes, content_type: str,
+             query: list[tuple[str, str]] | None = None) -> bytes:
+        """Gövdeli istek (Hikvision ISAPI arama XML'i, TRASSIR dışa aktarma JSON'u); hata eşlemesi `get_url` gibi."""
+        parsed = self._check(self.url(path, query))
+        with self._mapped_errors(parsed):
+            response = self._client.post(parsed, content=body, headers={"Content-Type": content_type},
+                                         auth=_DeviceAuth(self._username, self._password))
+        return self._content(response)
+
+    def stream(self, url: str, timeout: float) -> Generator[bytes, None, None]:
+        """Gövdeyi parça parça verir (büyük dosya belleğe alınmaz). `timeout`: okuma zaman aşımı (parçalar arası).
+        Üreteçtir: istek ilk `next()` ile gider; hatalar (`get_url` eşlemesi) o anda ya da okurken yükselir."""
+        parsed = self._check(url)
+        with (
+            self._mapped_errors(parsed),
+            self._client.stream("GET", parsed, auth=_DeviceAuth(self._username, self._password),
+                                timeout=httpx.Timeout(REQUEST_TIMEOUT_S, read=timeout)) as response,
+        ):
+            if not 200 <= response.status_code < 300:
+                self._raise_status(response.status_code)
+            yield from response.iter_bytes()
+
+    def _check(self, url: str) -> httpx.URL:
+        """Yalnızca kullanıcının girdiği adrese gidilir."""
         try:
             parsed = httpx.URL(url)
         except httpx.InvalidURL:
             raise RecorderError.unexpected("geçersiz adres") from None
         if parsed.host != self.host.lower():
             raise RecorderError.unexpected("geçersiz adres")
+        return parsed
+
+    @contextmanager
+    def _mapped_errors(self, parsed: httpx.URL) -> Iterator[None]:
         target = f"{self.host}:{parsed.port or ''}"
         try:
-            response = self._client.get(parsed, auth=_DeviceAuth(self._username, self._password),
-                                        **({"timeout": timeout} if timeout else {}))
+            yield
         except httpx.TimeoutException:
             raise RecorderError.unreachable(f"{target} yanıt vermedi") from None
         except httpx.ConnectError as exc:
@@ -520,11 +570,17 @@ class _DeviceHTTP:
             raise RecorderError.unexpected("geçersiz adres") from None
         except httpx.HTTPError:
             raise RecorderError.unreachable("ağ hatası") from None
-        if 200 <= response.status_code < 300:
-            return response.content
-        if response.status_code == 401:
+
+    @staticmethod
+    def _raise_status(status: int) -> None:
+        if status == 401:
             raise RecorderError.unauthorized()
-        raise RecorderError.http(response.status_code)
+        raise RecorderError.http(status)
+
+    def _content(self, response: httpx.Response) -> bytes:
+        if not 200 <= response.status_code < 300:
+            self._raise_status(response.status_code)
+        return response.content
 
     def close(self) -> None:
         self._client.close()
