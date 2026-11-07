@@ -73,7 +73,8 @@ for /l %%i in (1,1,240) do (
   curl -s -m 2 http://127.0.0.1:8090/healthz >nul 2>&1 && call :panel_hazir && goto :hazir
   if not defined SAID_BUILD findstr /c:"\"state\":\"building\"" "%STATE%" >nul 2>&1 && (echo Panel derleniyor ^(ilk acilis ya da guncelleme, 1-2 dk^)... & set "SAID_BUILD=1")
   if not defined SAID_FAIL findstr /c:"\"state\":\"failed\"" "%STATE%" >nul 2>&1 && (echo Panel derlenemedi; yalnizca bu bilgisayarda gelistirme kipinde aciliyor ^(ayrinti: panel.log^). & set "SAID_FAIL=1")
-  timeout /t 1 >nul
+  rem 1 sn bekle: `timeout`, girdi yonlendirilmisken (konsolsuz calistirma, gorev zamanlayici) hemen cikiyor; ping her yerde bekler
+  ping -n 2 127.0.0.1 >nul
 )
 echo Sunucular 240 saniyede acilmadi. Hata icin "%LOGS%\analyzer.log" ve "%LOGS%\panel.log" dosyalarina bak.
 pause
