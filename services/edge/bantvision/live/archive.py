@@ -573,7 +573,8 @@ class TrassirArchive(ArchiveClient):
 
 
 def _is_session_error(exc: RecorderError) -> bool:
-    return exc.kind == "trassir" and any(w in exc.detail.lower() for w in ("sid", "session"))
+    """TRASSIR oturum hatası: ayrıntıda tam kelime `sid` ya da `session` geçer ("consider" eşleşmez)."""
+    return exc.kind == "trassir" and re.search(r"\bsid\b|session", exc.detail, re.IGNORECASE) is not None
 
 
 def _url_token(stream_url: str) -> str | None:
