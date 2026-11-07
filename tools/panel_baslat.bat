@@ -1,15 +1,16 @@
 @echo off
-rem BandVision web paneli (yerel demo): analiz sunucusu + panel, hazır olunca tarayıcı.
-rem Çalışıyorlarsa yeniden başlatmaz. Kapatmak için görev çubuğundaki "BandVision analiz" ve
-rem "BandVision panel" pencerelerini kapat. Günlükler: .logs\analyzer.log ve .logs\panel.log
-rem (Pencere içinde metin seçmek Windows'ta yazan süreci durdurur; bu yüzden çıktı dosyaya gider.)
-rem Panel başlatıcısı (tools\panel_run.mjs) tek kopya çalışır (zaten çalışıyorsa yeni kopya hemen çıkar) ve üretim
-rem kipinde açar; derleme gerekiyorsa (ilk açılış ya da güncelleme) 1-2 dk sürer: başlatıcının durum dosyası
-rem (apps\dashboard\.local\panel-state.json) "building" iken bu pencere bunu yazar ve en çok 240 sn bekler.
-rem Port: panel 3300'de açılır (3000 bu bilgisayarda başka bir uygulamanın); 3300 doluysa sıradaki boş portta (3301…).
-rem Port apps\dashboard\.local\panel.port dosyasından okunur (PowerShell yok: klasör adındaki kesme işareti bozmaz); panel
-rem sayfadaki "bv-panel" işaretiyle tanınır (o porttaki başka uygulama panel sanılmaz). Başlatıcı açılamazsa nedenini
-rem apps\dashboard\.local\panel-notice.txt dosyasına yazar (eski sürüm panel çalışıyor, boş port yok…); burada gösterilir.
+rem BandVision web paneli (yerel demo): analiz sunucusu + panel, hazir olunca tarayici.
+rem Calisiyorlarsa yeniden baslatmaz. Kapatmak icin gorev cubugundaki "BandVision analiz" ve
+rem "BandVision panel" pencerelerini kapat. Gunlukler: .logs\analyzer.log ve .logs\panel.log
+rem (Pencere icinde metin secmek Windows'ta yazan sureci durdurur; bu yuzden cikti dosyaya gider.)
+rem Panel baslaticisi (tools\panel_run.mjs) tek kopya calisir (zaten calisiyorsa yeni kopya hemen cikar) ve uretim
+rem kipinde acar; derleme gerekiyorsa (ilk acilis ya da guncelleme) 1-2 dk surer: baslaticinin durum dosyasi
+rem (apps\dashboard\.local\panel-state.json) "building" iken bu pencere bunu yazar ve en cok 240 sn bekler.
+rem Port: panel 3300'de acilir (3000 bu bilgisayarda baska bir uygulamanin); 3300 doluysa siradaki bos portta (3301...).
+rem Port apps\dashboard\.local\panel.port dosyasindan okunur (PowerShell yok: klasor adindaki kesme isareti bozmaz); panel
+rem sayfadaki "bv-panel" isaretiyle taninir (o porttaki baska uygulama panel sanilmaz). Baslatici acilamazsa nedenini
+rem apps\dashboard\.local\panel-notice.txt dosyasina yazar (eski surum panel calisiyor, bos port yok...); burada gosterilir.
+rem Bu dosya SALT ASCII kalmali: chcp 65001 sonrasinda cmd cok baytli karakter iceren dosyayi kaymis okur (testi: tests/test_launcher_ascii.py).
 chcp 65001 >nul
 setlocal
 set "ROOT=%~dp0.."
@@ -81,7 +82,7 @@ pause
 exit /b 1
 
 :bildirim
-rem Başlatıcının yazdığı tek satırlık neden (UTF-8; pencere chcp 65001)
+rem Baslaticinin yazdigi tek satirlik neden (UTF-8; pencere chcp 65001)
 type "%NOTICE%"
 del "%NOTICE%" >nul 2>&1
 pause
@@ -92,8 +93,8 @@ if not "%PANEL_PORT%"=="3300" echo Port 3300 dolu; panel %PANEL_PORT% portunda a
 start "" http://localhost:%PANEL_PORT%/cameras
 exit /b 0
 
-rem Panel çalışıyor ve yanıt veriyor mu: portu panel.port dosyasından okur (PANEL_PORT; derlenirken dosya yoktur), o porttaki
-rem sayfada "bv-panel" işareti var mı bakar. Çıkış 0: hazır.
+rem Panel calisiyor ve yanit veriyor mu: portu panel.port dosyasindan okur (PANEL_PORT; derlenirken dosya yoktur), o porttaki
+rem sayfada "bv-panel" isareti var mi bakar. Cikis 0: hazir.
 :panel_hazir
 set "PANEL_PORT="
 if not exist "%DASH%\.local\panel.port" exit /b 1
