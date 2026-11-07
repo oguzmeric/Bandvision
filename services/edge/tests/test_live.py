@@ -1912,7 +1912,7 @@ def _store_clip(mgr: Any, aid: str) -> bytes:
     frames = []
     for i in range(20):
         _ok, buf = cv2.imencode(".jpg", np.full((120, 160, 3), i * 10, np.uint8))
-        frames.append((i / 10, 5000.0 + i / 10, buf.tobytes()))
+        frames.append((i / 10, 5000.0 + i / 10, buf.tobytes(), None))
     path = mgr.alarms.clips / f"{aid}.webm"
     clips.encode_webm(path, frames, 10.0)
     assert mgr.alarms.set_clip(aid, 5000.0)
@@ -2082,6 +2082,44 @@ def test_pending_capture_is_written_while_the_camera_is_down() -> None:
         assert jobs[0].ids == ("a" * 32,) and len(jobs[0].frames) >= 10
     finally:
         s.stop()
+
+
+def test_safety_session_publishes_skeletons_and_clip_frames_carry_them() -> None:
+    """İşleyici her güvenlik karesinin iskeletini (yalnızca sayılar, kaynak piksel + kare boyutu) ön kayda bırakır;
+    yakalanan kaydın kareleri bu işareti taşır ve yazımda çizilir. Deneme alarmı kaydı işaretsiz kalır."""
+    import cv2
+    import numpy as np
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.live import clips
+    from bantvision.live.session import LiveSession
+
+    jobs: list[Any] = []
+    s = LiveSession("t", lambda: str(CLIP), Profile.jeweler(), detector=FakeDetector([(280, 80, 360, 440)]),
+                    pose=FakePose(hands_up_kp()), clip_sink=jobs.append)
+    s.loop_file = True
+    try:
+        wait_for(lambda: sum(f[3] is not None for f in s._clips.frames()) >= 5)
+        assert s.capture_clip(["a" * 32], post_s=0.5)
+        assert s.capture_clip(["b" * 32], post_s=0.0, raw=True)               # deneme alarmı
+        wait_for(lambda: len(jobs) == 2)
+    finally:
+        s.stop()
+    by_id = {j.ids[0]: j for j in jobs}
+    cap = cv2.VideoCapture(str(CLIP))
+    ok, src = cap.read()
+    cap.release()
+    assert ok
+    marked = [f for f in by_id["a" * 32].frames if f[3] is not None]
+    assert marked
+    ov = marked[-1][3]
+    assert ov.size == (src.shape[1], src.shape[0])                             # eklemlerin kaynak karesi
+    assert [tid for tid, _b in ov.tracks] == [tid for tid, _kp in ov.poses]   # tek kişi: izi ve eklemleri
+    assert np.array_equal(ov.poses[0][1], hands_up_kp())
+    raw = clips._decode(marked[-1][2])
+    assert not np.array_equal(clips.annotate(raw.copy(), ov), raw)              # yazımda iskelet çizilir
+    assert all(f[3] is None for f in by_id["b" * 32].frames)
 
 
 def _lock_watch_json(monkeypatch: pytest.MonkeyPatch) -> list[bool]:

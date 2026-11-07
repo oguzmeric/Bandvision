@@ -1624,7 +1624,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify,
                                   clip_pending=bool(s is not None and safety and s.records_clips))
         if s is not None and safety:
-            s.capture_clip([rec_["id"]], post_s=0.0)        # yalnızca ön kayıt; yazım arka planda
+            s.capture_clip([rec_["id"]], post_s=0.0, raw=True)  # yalnızca ön kayıt, iskeletsiz; yazım arka planda
         if notify == "queued":
             manager.notifier.enqueue(rec_["id"], manager._text("test", camera, now), jpeg if send_image else None)
         return rec_
