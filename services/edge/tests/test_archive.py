@@ -864,3 +864,13 @@ def test_dahua_uses_given_zone() -> None:
 def test_module_exports() -> None:
     for name in ("ArchiveClient", "make_archive", "merge_ranges", "parse_hik_search"):
         assert name in arc.__all__
+
+
+def test_session_error_matches_whole_words_only() -> None:
+    """`sid` yalnızca tam kelime olarak oturum hatasıdır ("consider" gibi kelime içi eşleşme değil)."""
+    assert arc._is_session_error(RecorderError.trassir("invalid sid"))
+    assert arc._is_session_error(RecorderError.trassir("SID expired"))
+    assert arc._is_session_error(RecorderError.trassir("invalid user session"))
+    assert not arc._is_session_error(RecorderError.trassir("please consider retrying"))
+    assert not arc._is_session_error(RecorderError.trassir("residual task"))
+    assert not arc._is_session_error(RecorderError.unexpected("invalid sid"))
