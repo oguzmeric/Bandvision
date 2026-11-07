@@ -1,9 +1,9 @@
 """Kayıt cihazı arşivi (kayıttan izleme): marka bağdaştırıcıları, yanıt ayrıştırıcıları, zaman biçimleri.
 
 Her bağdaştırıcı `recorders.py`'deki canlı istemciyi sarar (aynı HTTP oturumu, adres, RTSP portu, TRASSIR'da
-aynı sid). API zamanları epoch saniyedir (UTC, float). Hikvision'a UTC, Dahua ve TRASSIR'a bu bilgisayarın
-yerel saati gider. Gün sınırları yerel saattedir: `day` yerel gece yarısıdır, gün sonu bir sonraki yerel gece
-yarısıdır (yaz saati gününde 23/25 saat).
+aynı sid). API zamanları epoch saniyedir (UTC, float). Hikvision'a UTC, Dahua ve TRASSIR'a yerel saat gider
+(`tz=None`: bu bilgisayarın saat dilimi; testler belirli bir dilim verebilir). Gün sınırları yerel saattedir:
+`day` yerel gece yarısıdır, gün sonu bir sonraki yerel gece yarısıdır (yaz saati gününde 23/25 saat).
 
 - TRASSIR (SDK belgesi): `get_video stream=archive_main|archive_sub` jetonu + `archive_command play/stop`;
   çizelge ve takvim `archive_status type=timeline|calendar`; dışa aktarma `jit-export-*`. Ofis cihazında
@@ -24,8 +24,9 @@ import uuid
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Iterable, Iterator
-from datetime import UTC, date, datetime, timedelta
-from typing import Any, TypeVar
+from datetime import UTC, date, datetime, timedelta, tzinfo
+from types import TracebackType
+from typing import Any, Self, TypeVar
 
 import cv2
 
@@ -50,6 +51,7 @@ from bantvision.live.recorders import (
 __all__ = [
     "ArchiveClient",
     "DahuaArchive",
+    "ExportStream",
     "FileArchive",
     "HikvisionArchive",
     "TrassirArchive",
@@ -81,6 +83,7 @@ EXPORT_READ_TIMEOUT_S = 600.0
 EXPORT_READY_TRIES = 20
 EXPORT_READY_WAIT_S = 1.0
 _EXPORT_PEEK_LIMIT = 64 * 1024
+_EXPORT_HEAD = 12           # MP4: 4 bayt kutu boyu + `ftyp` + marka
 _RESPONSE = "arşiv yanıtı"
 
 
@@ -97,37 +100,39 @@ def hik_iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def dahua_time(epoch: float, sep: str) -> str:
+def dahua_time(epoch: float, sep: str, tz: tzinfo | None = None) -> str:
     """Dahua yerel saati. `sep="_"`: RTSP `YYYY_MM_DD_HH_MM_SS`; başka ayraç (ör. "-"): CGI `YYYY-MM-DD HH:MM:SS`."""
-    local = _local(epoch)
+    local = _local(epoch, tz)
     if sep == "_":
         return local.strftime("%Y_%m_%d_%H_%M_%S")
     return local.strftime(f"%Y{sep}%m{sep}%d %H:%M:%S")
 
 
-def trassir_time(epoch: float) -> str:
+def trassir_time(epoch: float, tz: tzinfo | None = None) -> str:
     """TRASSIR `archive_command` zamanı: yerel `YYYYMMDDTHHMMSS` (SDK'nın kabul ettiği biçimlerden adreste güvenli olanı)."""
-    return _local(epoch).strftime("%Y%m%dT%H%M%S")
+    return _local(epoch, tz).strftime("%Y%m%dT%H%M%S")
 
 
-def _local(epoch: float) -> datetime:
-    """Bu bilgisayarın yerel saatiyle (bölge bilgili) zaman."""
-    return datetime.fromtimestamp(epoch, UTC).astimezone()
+def _local(epoch: float, tz: tzinfo | None) -> datetime:
+    """Yerel saat (bölge bilgili). `tz=None`: bu bilgisayarın saat dilimi."""
+    return datetime.fromtimestamp(epoch, UTC).astimezone(tz)
 
 
-def _local_midnight(d: date) -> float:
-    return time.mktime((d.year, d.month, d.day, 0, 0, 0, 0, 0, -1))
+def _local_epoch(d: date, tz: tzinfo | None, hour: int = 0, minute: int = 0, second: int = 0) -> float:
+    if tz is None:
+        return time.mktime((d.year, d.month, d.day, hour, minute, second, 0, 0, -1))
+    return datetime(d.year, d.month, d.day, hour, minute, second, tzinfo=tz).timestamp()
 
 
-def day_end(day: float) -> float:
+def day_end(day: float, tz: tzinfo | None = None) -> float:
     """`day` gününün bitişi: bir sonraki yerel gece yarısı (yaz saati gününde 23 ya da 25 saat sonra)."""
-    return _local_midnight(_local(day).date() + timedelta(days=1))
+    return _local_epoch(_local(day, tz).date() + timedelta(days=1), tz)
 
 
-def _month_bounds(year: int, month: int) -> tuple[float, float]:
+def _month_bounds(year: int, month: int, tz: tzinfo | None) -> tuple[float, float]:
     first = date(year, month, 1)
     nxt = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
-    return _local_midnight(first), _local_midnight(nxt)
+    return _local_epoch(first, tz), _local_epoch(nxt, tz)
 
 
 # MARK: - Aralıklar
@@ -197,9 +202,10 @@ def _parse_day(value: object) -> date:
     raise RecorderError.unexpected(_RESPONSE)
 
 
-def _trassir_timeline(obj: object, day: float, token: str | None) -> tuple[list[tuple[float, float]], bool]:
+def _trassir_timeline(obj: object, day: float, token: str | None,
+                      tz: tzinfo | None) -> tuple[list[tuple[float, float]], bool]:
     """(aralıklar, gün uyuşmadı mı). `begin`/`end` `day_start` gününün yerel gece yarısından saniyedir."""
-    wanted = _local(day).date()
+    wanted = _local(day, tz).date()
     ranges: list[tuple[float, float]] = []
     mismatch = False
     for item in _for_token(_trassir_items(obj), token):
@@ -210,7 +216,7 @@ def _trassir_timeline(obj: object, day: float, token: str | None) -> tuple[list[
         if got != wanted:
             mismatch = True
             continue
-        base = _local_midnight(got)
+        base = _local_epoch(got, tz)
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
@@ -218,13 +224,14 @@ def _trassir_timeline(obj: object, day: float, token: str | None) -> tuple[list[
             if isinstance(begin, int | float) and isinstance(end, int | float) \
                     and not isinstance(begin, bool) and not isinstance(end, bool):
                 ranges.append((base + begin, base + end))
-    return _clip(ranges, day, day_end(day)), mismatch
+    return _clip(ranges, day, day_end(day, tz)), mismatch
 
 
-def parse_trassir_timeline(obj: object, day: float, token: str | None = None) -> list[tuple[float, float]]:
+def parse_trassir_timeline(obj: object, day: float, token: str | None = None,
+                           tz: tzinfo | None = None) -> list[tuple[float, float]]:
     """`archive_status type=timeline`: `[{"token", "day_start": "YYYY-MM-DD", "timeline": [{"begin", "end"}]}]`.
     `day_start` istenen gün değilse boş liste."""
-    return _trassir_timeline(obj, day, token)[0]
+    return _trassir_timeline(obj, day, token, tz)[0]
 
 
 # MARK: - Hikvision ayrıştırıcıları
@@ -300,50 +307,93 @@ def parse_hik_daily(xml: bytes) -> set[int]:
 
 _DAHUA_FOUND = re.compile(r"^found=(\d+)\s*$", re.MULTILINE)
 _DAHUA_ITEM = re.compile(r"^items\[(\d+)\]\.(StartTime|EndTime)=(.*?)\s*$", re.MULTILINE)
+_DAHUA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})")
 
 
-def _dahua_found(text: str) -> int:
-    match = _DAHUA_FOUND.search(text)
+def _parse_dahua_time(text: str, tz: tzinfo | None) -> float | None:
+    match = _DAHUA_TIME.fullmatch(text)
     if match is None:
-        raise RecorderError.unexpected(_RESPONSE)
-    return int(match.group(1))
-
-
-def _parse_dahua_time(text: str) -> float | None:
+        return None
+    y, mo, d, h, mi, s = (int(g) for g in match.groups())
     try:
-        return time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S"))
-    except ValueError:
+        return _local_epoch(date(y, mo, d), tz, h, mi, s)
+    except (ValueError, OverflowError):
         return None
 
 
-def parse_dahua_find(text: str) -> list[tuple[float, float]]:
-    """`mediaFileFind.cgi?action=findNextFile`: `found=k` ve `items[i].StartTime=`/`EndTime=` (yerel saat)."""
-    _dahua_found(text)
+def _dahua_page(text: str, tz: tzinfo | None) -> tuple[list[tuple[float, float]], int]:
+    """Bir `findNextFile` sayfası → (aralıklar, `found`); `found=` satırı yoksa `unexpected`."""
+    found = _DAHUA_FOUND.search(text)
+    if found is None:
+        raise RecorderError.unexpected(_RESPONSE)
     fields: dict[int, dict[str, str]] = {}
     for match in _DAHUA_ITEM.finditer(text):
         fields.setdefault(int(match.group(1)), {})[match.group(2)] = match.group(3)
     ranges: list[tuple[float, float]] = []
     for index in sorted(fields):
-        start = _parse_dahua_time(fields[index].get("StartTime", ""))
-        end = _parse_dahua_time(fields[index].get("EndTime", ""))
+        start = _parse_dahua_time(fields[index].get("StartTime", ""), tz)
+        end = _parse_dahua_time(fields[index].get("EndTime", ""), tz)
         if start is not None and end is not None:
             ranges.append((start, end))
-    return ranges
+    return ranges, int(found.group(1))
+
+
+def parse_dahua_find(text: str, tz: tzinfo | None = None) -> list[tuple[float, float]]:
+    """`mediaFileFind.cgi?action=findNextFile`: `found=k` ve `items[i].StartTime=`/`EndTime=` (yerel saat)."""
+    return _dahua_page(text, tz)[0]
+
+
+# MARK: - Dışa aktarma akışı
+
+
+class ExportStream(Iterator[bytes]):
+    """Dışa aktarılan dosyanın parçaları. `close()` (ya da `with`) cihaz bağlantısını kapatır; ilk parça
+    okunmadan bırakılsa da kapanır. Sonuna kadar okununca kendiliğinden kapanır."""
+
+    def __init__(self, head: bytes, rest: Generator[bytes, None, None]) -> None:
+        self._head: bytes | None = head
+        self._rest = rest
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> bytes:
+        if self._head is not None:
+            head, self._head = self._head, None
+            return head
+        return next(self._rest)
+
+    def close(self) -> None:
+        self._head = None
+        self._rest.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
+                 tb: TracebackType | None) -> None:
+        self.close()
 
 
 # MARK: - Bağdaştırıcılar
 
 
 class ArchiveClient(ABC):
-    """Bir kayıt cihazının arşivi: oynatma adresi, takvim, çizelge, dışa aktarma. İş parçacığı güvenlidir."""
+    """Bir kayıt cihazının arşivi: oynatma adresi, takvim, çizelge, dışa aktarma.
+
+    Takvim/çizelge çağrıları aynı sid üzerinde eşzamanlı yapılmamalı (TRASSIR `archive_status` jetonsuz; ofis
+    NVR'ında doğrulanacak). `ArchiveManager` (Task 2) bu çağrıları kaynak başına bir kilitle sıralar.
+    `tz`: Dahua/TRASSIR yerel saat çevrimi (None = bu bilgisayarın saat dilimi)."""
 
     speeds: tuple[int, ...] = (1, 2, 4)
     can_export: bool = False
+    tz: tzinfo | None = None
 
     @abstractmethod
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
-        """Şifresiz oynatma adresi. Her açılışta yeniden çağrılmalı (TRASSIR jetonu kısa ömürlü)."""
+        """Şifresiz oynatma adresi. Her açılışta yeniden çağrılmalı (TRASSIR jetonu kısa ömürlü).
+        `speed` `speeds` içinde değilse `ValueError` (programlama hatası)."""
 
     def stop(self, stream_url: str) -> None:
         """Oynatma kapanırken çağrılır. Varsayılan: hiçbir şey."""
@@ -359,9 +409,13 @@ class ArchiveClient(ABC):
     def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
         """`day` (yerel gece yarısı) gününün birleştirilmiş kayıt aralıkları, gün sınırına kırpılmış."""
 
-    def export(self, channel: RecorderChannel, start: float, end: float) -> Iterator[bytes]:
+    def export(self, channel: RecorderChannel, start: float, end: float) -> ExportStream:
         """Aralığın video dosyası (parça parça). Desteklenmiyorsa `RecorderError.unsupported()`."""
         raise RecorderError.unsupported()
+
+    def _check_speed(self, speed: int) -> None:
+        if speed not in self.speeds:
+            raise ValueError(f"hız {speed} desteklenmiyor")
 
 
 class TrassirArchive(ArchiveClient):
@@ -370,24 +424,29 @@ class TrassirArchive(ArchiveClient):
     speeds = (1, 2, 4, 8, 16)
     can_export = True
 
-    def __init__(self, client: TrassirClient) -> None:
+    def __init__(self, client: TrassirClient, tz: tzinfo | None = None) -> None:
         self._live = client
         self._http: _DeviceHTTP = client._http
+        self.tz = tz
         self._sleep: Callable[[float], None] = time.sleep
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
+        self._check_speed(speed)
         token = self._token(channel, substream)
         self._play(token, start, end, speed)
         return _rtsp_url(self._live.host, self._live.rtsp_port, "/" + token)
 
     def stop(self, stream_url: str) -> None:
-        """`archive_command stop`; hata yutulur (oynatıcı zaten kapanıyor)."""
+        """`archive_command stop`: tek istek, yineleme ve yeniden giriş yok (ölü jeton paylaşılan sid'i
+        düşürmesin). Hata yutulur (oynatıcı zaten kapanıyor)."""
         token = _url_token(stream_url)
         if token is None:
             return
         try:
-            self._command(token, [("command", "stop")])
+            data = self._http.get("/archive_command", [("command", "stop"), ("token", token),
+                                                       ("sid", self._live._session())])
+            _trassir_items(parse_trassir_any(data))
         except RecorderError as exc:
             log.debug("TRASSIR arşiv durdurma başarısız: %s", exc.kind)
 
@@ -395,7 +454,7 @@ class TrassirArchive(ArchiveClient):
         self._live.keep_alive(stream_url)
 
     def calendar(self, channel: RecorderChannel, year: int, month: int) -> set[int]:
-        first, nxt = _month_bounds(year, month)
+        first, nxt = _month_bounds(year, month, self.tz)
         prefix = f"{year:04d}-{month:02d}-"
 
         def parse(obj: object, token: str) -> tuple[set[int], bool]:
@@ -406,15 +465,18 @@ class TrassirArchive(ArchiveClient):
         return days
 
     def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
-        ranges, mismatch = self._status(channel, "timeline", day, day_end(day) - 1,
-                                        lambda obj, token: _trassir_timeline(obj, day, token), [])
+        """Gün uyuşmazlığında da 3 kez denenir: cihaz bir önceki `play`'in gününü bildiriyor olabilir
+        (yeni `play` henüz işlenmemiş). Sonunda hâlâ uyuşmuyorsa boş liste ve bir uyarı."""
+        ranges, mismatch = self._status(channel, "timeline", day, day_end(day, self.tz) - 1,
+                                        lambda obj, token: _trassir_timeline(obj, day, token, self.tz), [])
         if mismatch and not ranges:
             log.warning("TRASSIR arşiv çizelgesi başka bir günü döndürdü; çizelge boş gösteriliyor.")
         return ranges
 
-    def export(self, channel: RecorderChannel, start: float, end: float) -> Iterator[bytes]:
-        """`jit-export-create-task` → `jit-export-download`. Cihaz dosyayı hazırlarken JSON döner; 1 sn arayla
-        en çok 20 kez yeniden istenir. İlk parça burada okunur: hata çağıranın elinde, akış başlamadan çıkar."""
+    def export(self, channel: RecorderChannel, start: float, end: float) -> ExportStream:
+        """`jit-export-create-task` → `jit-export-download`. Cihaz dosyayı hazırlarken JSON (ya da boş gövde,
+        HTTP hata durumu) döner; 1 sn arayla en çok 20 kez yeniden istenir. Baş kısım burada okunur ve MP4
+        (`ftyp`) olduğu doğrulanır: hata çağıranın elinde, akış başlamadan çıkar."""
         body = json.dumps({"resource_guid": channel.id, "start_ts": round(start * 1_000_000),
                            "end_ts": round(end * 1_000_000), "is_hardware": 0, "prefer_substream": 0}).encode()
 
@@ -426,36 +488,51 @@ class TrassirArchive(ArchiveClient):
                 raise RecorderError.unexpected(_RESPONSE)
             return str(task)
 
-        task_id = self._live._with_session(create)
+        task_id = self._session_retry(create)
         for attempt in range(EXPORT_READY_TRIES):
             if attempt:
                 self._sleep(EXPORT_READY_WAIT_S)
             url = self._http.url("/jit-export-download", [("sid", self._live._session()), ("task_id", task_id)])
             chunks = self._http.stream(url, EXPORT_READ_TIMEOUT_S)
-            first = b""
+            head = b""
             try:
                 for chunk in chunks:
-                    first += chunk
-                    if first.strip():
+                    head += chunk
+                    if len(head) >= _EXPORT_HEAD or head.lstrip().startswith(b"{"):
                         break
             except RecorderError as exc:
                 if exc.kind != "http":       # "hazır değil" HTTP durumuyla da gelebilir: yeniden denenir
                     raise
                 continue
-            if first.strip() and not first.lstrip().startswith(b"{"):
-                return _chain(first, chunks)
+            if head.strip() and not head.lstrip().startswith(b"{"):
+                if head[4:8] == b"ftyp":
+                    return ExportStream(head, chunks)
+                chunks.close()
+                raise RecorderError.unexpected("dışa aktarma yanıtı")
             # JSON (hazır değil ya da hata) ya da boş gövde
             try:
                 for chunk in chunks:
-                    first += chunk
-                    if len(first) > _EXPORT_PEEK_LIMIT:
+                    head += chunk
+                    if len(head) > _EXPORT_PEEK_LIMIT:
                         break
             finally:
                 chunks.close()
-            _raise_if_auth(first)
+            _raise_if_auth(head)
         raise RecorderError.trassir("Dışa aktarma dosyası hazırlanamadı.")
 
     # MARK: yardımcılar
+
+    def _session_retry(self, body: Callable[[str], R]) -> R:
+        """Yalnızca oturum hatasında (`sid`/`session` geçen TRASSIR hata kodu) bir kez yeniden giriş + yineleme.
+        `http`/`unexpected` yinelenmez: cihazda ikinci görev açılmasın."""
+        sid = self._live._session()
+        try:
+            return body(sid)
+        except RecorderError as exc:
+            if not _is_session_error(exc):
+                raise
+            self._live._drop_session(sid)
+            return body(self._live._session())
 
     def _token(self, channel: RecorderChannel, substream: bool) -> str:
         return self._live._video_token(channel, "rtsp",
@@ -469,9 +546,9 @@ class TrassirArchive(ArchiveClient):
         self._live._with_session(body)
 
     def _play(self, token: str, start: float, end: float | None, speed: int) -> None:
-        params = [("command", "play"), ("start", trassir_time(start))]
+        params = [("command", "play"), ("start", trassir_time(start, self.tz))]
         if end is not None:
-            params.append(("stop", trassir_time(end)))
+            params.append(("stop", trassir_time(end, self.tz)))
         params.append(("speed", str(speed)))
         self._command(token, params)
 
@@ -495,19 +572,15 @@ class TrassirArchive(ArchiveClient):
             self.stop(_rtsp_url(self._live.host, self._live.rtsp_port, "/" + token))
 
 
+def _is_session_error(exc: RecorderError) -> bool:
+    return exc.kind == "trassir" and any(w in exc.detail.lower() for w in ("sid", "session"))
+
+
 def _url_token(stream_url: str) -> str | None:
     path = urllib.parse.urlsplit(stream_url).path
     if not path.startswith("/") or not _TOKEN_RE.fullmatch(path[1:]):
         return None
     return path[1:]
-
-
-def _chain(first: bytes, rest: Generator[bytes, None, None]) -> Iterator[bytes]:
-    try:
-        yield first
-        yield from rest
-    finally:
-        rest.close()
 
 
 def _raise_if_auth(data: bytes) -> None:
@@ -520,11 +593,12 @@ def _raise_if_auth(data: bytes) -> None:
 
 
 class HikvisionArchive(ArchiveClient):
-    """Hikvision ISAPI arşivi (cihazda doğrulanmadı). Hız istemci tarafında kare atlamayla."""
+    """Hikvision ISAPI arşivi (cihazda doğrulanmadı). Hız istemci tarafında kare atlamayla. Saatler UTC."""
 
-    def __init__(self, client: HikvisionClient) -> None:
+    def __init__(self, client: HikvisionClient, tz: tzinfo | None = None) -> None:
         self._live = client
         self._http: _DeviceHTTP = client._http
+        self.tz = tz          # yalnız gün sınırı (yerel gece yarısı) için
 
     @staticmethod
     def _track(channel: RecorderChannel, substream: bool) -> int:
@@ -532,6 +606,7 @@ class HikvisionArchive(ArchiveClient):
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
+        self._check_speed(speed)
         stop = start + DAY_S if end is None else end
         track = self._track(channel, substream)
         return _rtsp_url(self._live.host, self._live.rtsp_port,
@@ -546,7 +621,7 @@ class HikvisionArchive(ArchiveClient):
 
     def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
         track = self._track(channel, False)
-        end = day_end(day)
+        end = day_end(day, self.tz)
         search_id = str(uuid.uuid4()).upper()
         ranges: list[tuple[float, float]] = []
         for page in range(HIK_MAX_PAGES):
@@ -572,25 +647,27 @@ class HikvisionArchive(ArchiveClient):
 class DahuaArchive(ArchiveClient):
     """Dahua CGI arşivi (cihazda doğrulanmadı; kanal numarası 1 tabanlı varsayılır). Hız istemci tarafında."""
 
-    def __init__(self, client: DahuaClient) -> None:
+    def __init__(self, client: DahuaClient, tz: tzinfo | None = None) -> None:
         self._live = client
         self._http: _DeviceHTTP = client._http
+        self.tz = tz
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
+        self._check_speed(speed)
         stop = start + DAY_S if end is None else end
         n = _channel_number(channel)
         sub = 1 if substream and channel.has_substream else 0
         return _rtsp_url(self._live.host, self._live.rtsp_port,
                          f"/cam/playback?channel={n}&subtype={sub}"
-                         f"&starttime={dahua_time(start, '_')}&endtime={dahua_time(stop, '_')}")
+                         f"&starttime={dahua_time(start, '_', self.tz)}&endtime={dahua_time(stop, '_', self.tz)}")
 
     def calendar(self, channel: RecorderChannel, year: int, month: int) -> set[int]:
-        first, nxt = _month_bounds(year, month)
+        first, nxt = _month_bounds(year, month, self.tz)
         days: set[int] = set()
         for start, end in _clip(self._find(channel, first, nxt), first, nxt):
-            d = _local(start).date()
-            last = _local(max(start, end - 0.001)).date()
+            d = _local(start, self.tz).date()
+            last = _local(max(start, end - 0.001), self.tz).date()
             while d <= last:
                 if (d.year, d.month) == (year, month):
                     days.add(d.day)
@@ -598,7 +675,7 @@ class DahuaArchive(ArchiveClient):
         return days
 
     def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
-        end = day_end(day)
+        end = day_end(day, self.tz)
         return _clip(self._find(channel, day, end), day, end)
 
     def _cgi(self, params: list[tuple[str, str]]) -> str:
@@ -617,14 +694,15 @@ class DahuaArchive(ArchiveClient):
         ranges: list[tuple[float, float]] = []
         try:
             ok = self._cgi([("action", "findFile"), ("object", obj), ("condition.Channel", str(n)),
-                            ("condition.StartTime", dahua_time(start, "-")),
-                            ("condition.EndTime", dahua_time(end, "-")), ("condition.Types[0]", "dav")])
+                            ("condition.StartTime", dahua_time(start, "-", self.tz)),
+                            ("condition.EndTime", dahua_time(end, "-", self.tz)), ("condition.Types[0]", "dav")])
             if ok.strip() != "OK":
                 raise RecorderError.unexpected(_RESPONSE)
             for _ in range(DAHUA_MAX_PAGES):
-                text = self._cgi([("action", "findNextFile"), ("object", obj), ("count", str(DAHUA_PAGE))])
-                ranges += parse_dahua_find(text)
-                if _dahua_found(text) < DAHUA_PAGE:
+                page, found = _dahua_page(
+                    self._cgi([("action", "findNextFile"), ("object", obj), ("count", str(DAHUA_PAGE))]), self.tz)
+                ranges += page
+                if found < DAHUA_PAGE:
                     break
         finally:
             for action in ("close", "destroy"):
@@ -645,13 +723,17 @@ class FileArchive(ArchiveClient):
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
+        self._check_speed(speed)
         return self.path
 
     def calendar(self, channel: RecorderChannel, year: int, month: int) -> set[int]:
         return {1} if (year, month) == (1970, 1) else set()
 
     def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
-        return [(0.0, self.duration())] if day == 0 else []
+        if day != 0:
+            return []
+        duration = self.duration()
+        return [(0.0, duration)] if duration > 0 else []
 
     def duration(self) -> float:
         if self._duration is None:
@@ -669,14 +751,17 @@ class FileArchive(ArchiveClient):
         return self._duration
 
 
-def make_archive(client: RecorderClient, brand: RecorderBrand) -> ArchiveClient:
+def make_archive(client: RecorderClient, brand: RecorderBrand | str, tz: tzinfo | None = None) -> ArchiveClient:
     """Canlı istemciyi markasının arşiv bağdaştırıcısıyla sarar (istemci kapanınca bağdaştırıcı da kullanılamaz)."""
-    match RecorderBrand(brand), client:
+    try:
+        kind = RecorderBrand(brand)
+    except ValueError:
+        raise RecorderError.unexpected("bilinmeyen marka") from None
+    match kind, client:
         case RecorderBrand.TRASSIR, TrassirClient():
-            return TrassirArchive(client)
+            return TrassirArchive(client, tz)
         case RecorderBrand.HIKVISION, HikvisionClient():
-            return HikvisionArchive(client)
+            return HikvisionArchive(client, tz)
         case RecorderBrand.DAHUA, DahuaClient():
-            return DahuaArchive(client)
+            return DahuaArchive(client, tz)
     raise RecorderError.unexpected("marka ile istemci uyuşmuyor")
-

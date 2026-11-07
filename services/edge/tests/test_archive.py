@@ -11,7 +11,7 @@ import pathlib
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta, tzinfo
 
 import cv2
 import httpx
@@ -103,18 +103,74 @@ def test_day_end_is_next_local_midnight() -> None:
     assert time.localtime(day_end(dst))[3:6] == (0, 0, 0)
 
 
-@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset yalnız POSIX'te")
-def test_dst_day_is_23_hours_in_a_dst_zone(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TZ", "Europe/Berlin")
-    time.tzset()
-    try:
-        dst = local(2026, 3, 29)
-        assert day_end(dst) - dst == 23 * 3600
-        assert trassir_time(dst) == "20260329T000000"
-        assert hik_iso(dst) == "2026-03-28T23:00:00Z"
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+def _last_sunday(year: int, month: int) -> int:
+    return 31 - (date(year, month, 31).weekday() + 1) % 7
+
+
+class Berlin(tzinfo):
+    """Orta Avrupa kuralı (CET/CEST; geçiş Mart ve Ekim'in son pazarı 01:00 UTC). Windows'ta tzdata olmadığı
+    için `zoneinfo` yerine; yalnız testte."""
+
+    def _bounds(self, year: int) -> tuple[datetime, datetime]:
+        return (datetime(year, 3, _last_sunday(year, 3), 1, tzinfo=UTC),
+                datetime(year, 10, _last_sunday(year, 10), 1, tzinfo=UTC))
+
+    def fromutc(self, dt: datetime) -> datetime:
+        start, end = self._bounds(dt.year)
+        summer = start <= dt.replace(tzinfo=UTC) < end
+        wall = (dt + timedelta(hours=2 if summer else 1)).replace(tzinfo=self)
+        repeated = not summer and wall.month == 10 and wall.day == _last_sunday(dt.year, 10) and wall.hour == 2
+        return wall.replace(fold=1) if repeated else wall
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        assert dt is not None
+        naive = dt.replace(tzinfo=None, fold=0)
+        begin = datetime(dt.year, 3, _last_sunday(dt.year, 3), 2)  # noqa: DTZ001 - duvar saati karşılaştırması
+        end = datetime(dt.year, 10, _last_sunday(dt.year, 10), 3)  # noqa: DTZ001
+        summer = begin <= naive < end and not (dt.fold and naive >= end - timedelta(hours=1))
+        return timedelta(hours=2 if summer else 1)
+
+    def dst(self, dt: datetime | None) -> timedelta:
+        return self.utcoffset(dt) - timedelta(hours=1)
+
+    def tzname(self, dt: datetime | None) -> str:
+        return "CEST" if self.dst(dt) else "CET"
+
+
+BERLIN = Berlin()
+
+
+def berlin(y: int, mo: int, d: int, h: int = 0, mi: int = 0, s: int = 0) -> float:
+    return datetime(y, mo, d, h, mi, s, tzinfo=BERLIN).timestamp()
+
+
+def test_berlin_test_zone_is_sane() -> None:
+    assert berlin(2026, 1, 1) == utc(2025, 12, 31, 23)
+    assert berlin(2026, 7, 1) == utc(2026, 6, 30, 22)
+    assert berlin(2026, 3, 29, 3) - berlin(2026, 3, 29, 1) == 3600       # 02:00 → 03:00 atlanır
+    assert berlin(2026, 10, 25, 3) - berlin(2026, 10, 25, 2) == 2 * 3600  # 02:00–03:00 iki kez
+
+
+def test_dst_days_in_a_dst_zone() -> None:
+    spring, autumn = berlin(2026, 3, 29), berlin(2026, 10, 25)
+    assert day_end(spring, BERLIN) - spring == 23 * 3600
+    assert day_end(autumn, BERLIN) - autumn == 25 * 3600
+    assert day_end(spring, BERLIN) == berlin(2026, 3, 30)
+    assert day_end(autumn, BERLIN) == berlin(2026, 10, 26)
+    assert trassir_time(spring, BERLIN) == "20260329T000000"
+    assert trassir_time(day_end(spring, BERLIN) - 1, BERLIN) == "20260329T235959"
+    assert hik_iso(spring) == "2026-03-28T23:00:00Z"
+    assert hik_iso(autumn) == "2026-10-24T22:00:00Z"
+    assert dahua_time(berlin(2026, 10, 25, 23, 59, 59), "-", BERLIN) == "2026-10-25 23:59:59"
+    assert parse_dahua_find("found=1\r\nitems[0].StartTime=2026-03-29 01:00:00\r\n"
+                            "items[0].EndTime=2026-03-29 04:00:00\r\n", BERLIN) == [
+        (berlin(2026, 3, 29, 1), berlin(2026, 3, 29, 1) + 2 * 3600)]
+
+
+def test_trassir_timeline_on_25_hour_day() -> None:
+    autumn = berlin(2026, 10, 25)
+    obj = {"day_start": "2026-10-25", "timeline": [{"begin": 0, "end": 90000}, {"begin": 89000, "end": 95000}]}
+    assert parse_trassir_timeline(obj, autumn, tz=BERLIN) == [(autumn, autumn + 25 * 3600)]
 
 
 # MARK: - Aralık birleştirme
@@ -478,6 +534,7 @@ class FakeTrassir:
         self.timeline: list[object] = []      # sırayla verilecek archive_status yanıtları
         self.calendar: list[object] = []
         self.download: list[httpx.Response] = []
+        self.create: list[httpx.Response] = []
         self.command_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -494,6 +551,8 @@ class FakeTrassir:
             source = self.timeline if q["type"] == "timeline" else self.calendar
             return httpx.Response(200, text=json.dumps(source.pop(0) if source else []))
         if path == "/jit-export-create-task":
+            if self.create:
+                return self.create.pop(0)
             return httpx.Response(200, text='{"success":1,"task_id":"T9"}')
         if path == "/jit-export-download":
             return self.download.pop(0)
@@ -538,7 +597,12 @@ def test_trassir_stop_sends_command_and_swallows_errors() -> None:
     a.stop(f"rtsp://{HOST}:555/TOK1")
     assert fake.last("/archive_command") == {"command": "stop", "token": "TOK1", "sid": "S1"}
     fake.command_status = 500
+    before = len(fake.requests)
     a.stop(f"rtsp://{HOST}:555/TOK1")                 # hata yutulur
+    # tek istek: yeniden giriş yok, ikinci stop yok, paylaşılan sid korunur
+    assert fake.paths()[before:] == ["/archive_command"]
+    assert fake.paths().count("/login") == 1
+    assert a._live._sid == "S1"
     n = len(fake.requests)
     a.stop("rtsp://x/../bozuk jeton")
     assert len(fake.requests) == n
@@ -634,6 +698,67 @@ def test_trassir_export_body() -> None:
                        "is_hardware": 0, "prefer_substream": 0}]
 
 
+def test_trassir_export_create_is_not_retried_on_http_error() -> None:
+    fake = FakeTrassir()
+    fake.create = [httpx.Response(500)]
+    a = trassir(fake)
+    with pytest.raises(RecorderError) as e:
+        a.export(GUID, 0, 60)
+    assert e.value.kind == "http"
+    assert fake.paths().count("/jit-export-create-task") == 1
+    assert fake.paths().count("/login") == 1
+
+
+def test_trassir_export_create_relogs_once_on_session_error() -> None:
+    fake = FakeTrassir()
+    fake.create = [httpx.Response(200, text='{"success":0,"error_code":"invalid sid"}')]
+    fake.download = [httpx.Response(200, content=b"\x00\x00\x00\x18ftypmp42")]
+    a = trassir(fake)
+    assert b"".join(a.export(GUID, 0, 60)).startswith(b"\x00\x00\x00\x18ftyp")
+    assert fake.paths().count("/jit-export-create-task") == 2
+    assert fake.paths().count("/login") == 2
+
+
+def test_trassir_export_rejects_non_mp4_body() -> None:
+    fake = FakeTrassir()
+    fake.download = [httpx.Response(200, content=b"<html>giris sayfasi</html>")]
+    a = trassir(fake)
+    with pytest.raises(RecorderError) as e:
+        a.export(GUID, 0, 60)
+    assert e.value == RecorderError.unexpected("dışa aktarma yanıtı")
+    assert fake.paths().count("/jit-export-download") == 1
+
+
+class TrackedStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self.chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_trassir_export_close_before_first_next_closes_response() -> None:
+    fake = FakeTrassir()
+    body = TrackedStream([b"\x00\x00\x00\x18ftypmp42", b"v" * 100, b"w" * 100])
+    fake.download = [httpx.Response(200, stream=body)]
+    a = trassir(fake)
+    stream = a.export(GUID, 0, 60)
+    assert not body.closed
+    stream.close()
+    assert body.closed
+    with pytest.raises(StopIteration):
+        next(stream)
+    body2 = TrackedStream([b"\x00\x00\x00\x18ftypmp42", b"v" * 100])
+    fake.download = [httpx.Response(200, stream=body2)]
+    with a.export(GUID, 0, 60) as s2:
+        assert next(s2).startswith(b"\x00\x00\x00\x18ftyp")
+    assert body2.closed
+
+
 def test_trassir_export_gives_up_after_20_tries() -> None:
     fake = FakeTrassir()
     fake.download = [httpx.Response(200, text='{"success":0}') for _ in range(20)]
@@ -683,6 +808,12 @@ def test_file_archive(video: str) -> None:
     assert e.value.kind == "unsupported"
 
 
+def test_file_archive_empty_duration(video: str) -> None:
+    a = FileArchive(video)
+    a._duration = 0.0
+    assert a.timeline(CH1, 0) == []
+
+
 def test_file_archive_missing_file(tmp_path: pathlib.Path) -> None:
     a = FileArchive(os.fspath(tmp_path / "yok.mp4"))
     with pytest.raises(RecorderError) as e:
@@ -701,6 +832,33 @@ def test_make_archive_dispatches_by_brand() -> None:
     with pytest.raises(RecorderError) as e:
         make_archive(DahuaClient(http, HOST, 554), RecorderBrand.TRASSIR)
     assert e.value.kind == "unexpected"
+    with pytest.raises(RecorderError) as e:
+        make_archive(DahuaClient(http, HOST, 554), "uniview")
+    assert e.value == RecorderError.unexpected("bilinmeyen marka")
+    assert make_archive(DahuaClient(http, HOST, 554), RecorderBrand.DAHUA, BERLIN).tz is BERLIN
+
+
+def test_unsupported_speed_is_a_programming_error(tmp_path: pathlib.Path) -> None:
+    http = fake_http(lambda r: httpx.Response(500))
+    adapters = [HikvisionArchive(HikvisionClient(http, HOST, 554)), DahuaArchive(DahuaClient(http, HOST, 554)),
+                FileArchive(os.fspath(tmp_path / "v.mp4")),
+                TrassirArchive(TrassirClient(http, HOST, 555, "u", "p"))]
+    for a in adapters:
+        with pytest.raises(ValueError, match="hız 3 desteklenmiyor"):
+            a.stream_url(CH1, 0, None, False, 3)
+    with pytest.raises(ValueError):
+        adapters[0].stream_url(CH1, 0, None, False, 8)       # 8× yalnız TRASSIR
+
+
+def test_dahua_uses_given_zone() -> None:
+    spring = berlin(2026, 3, 29)
+    fake = FakeDahua([[]])
+    a = DahuaArchive(DahuaClient(fake_http(fake), HOST, 554), BERLIN)
+    assert a.timeline(CH1, spring) == []
+    assert fake.actions[1]["condition.StartTime"] == "2026-03-29 00:00:00"
+    assert fake.actions[1]["condition.EndTime"] == "2026-03-30 00:00:00"
+    assert a.stream_url(CH1, spring, None, False, 1).endswith(
+        "starttime=2026_03_29_00_00_00&endtime=2026_03_30_01_00_00")
 
 
 def test_module_exports() -> None:
