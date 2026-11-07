@@ -12,9 +12,12 @@ type Want = { owner: string; body: DraftBody };
 const draftPath = (id: string) => `views/drafts/${encodeURIComponent(id)}`;
 
 /** Taslağı arka planda siler; sayfa kapanırken de gitsin diye `keepalive` (silinemezse sunucu 10 dk sonra kendisi siler) */
-function dropDraft(id: string): void {
-  void api(draftPath(id), { method: "DELETE", keepalive: true }).catch(() => undefined);
+function dropDraft(id: string): Promise<void> {
+  return api(draftPath(id), { method: "DELETE", keepalive: true }).then(() => undefined, () => undefined);
 }
+
+/** Onaylı çıkışta (`release`) silme/açma isteklerini en çok bu kadar beklenir: takılan istek Çıkış'ı sonsuza dek tutmasın */
+const RELEASE_WAIT_MS = 3000;
 
 /**
  * Kaydedilmemiş düzenlemenin analiz sunucusundaki canlı taslağı. `edit` kayıtlı şablondan farklıysa (null değilse)
@@ -36,7 +39,7 @@ function dropDraft(id: string): void {
  * Düzenleme sessionStorage'da durur; giriş tam sayfa gezinmesidir, durumu yeniden kurar.
  */
 export function useDraft(owner: string | null, edit: DraftBody | null, sessionLost = false): {
-  draftId: string | null; error: string | null; lost: (id: string) => void; release: () => void;
+  draftId: string | null; error: string | null; lost: (id: string) => void; release: () => Promise<void>;
 } {
   const [current, setCurrent] = useState<{ owner: string; id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +52,14 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
   const running = useRef(false);
   const again = useRef(false);
   const alive = useRef(true);
+  /** `sync` döngüsü bitince çağrılacaklar (`release` süren açma isteğinin bitmesini bekler) ve süren silme istekleri */
+  const idle = useRef<Array<() => void>>([]);
+  const drops = useRef(new Set<Promise<void>>());
+  const drop = (id: string) => {
+    const p = dropDraft(id);
+    drops.current.add(p);
+    void p.then(() => drops.current.delete(p));
+  };
   const retry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** Onaylı çıkış (`release`): sayfa gidiyor, yeni taslak açılmaz */
   const released = useRef(false);
@@ -59,7 +70,7 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
    * dek taslağa istek gitmez, yeniden denenmez */
   const authLost = useRef(false);
   /** Sayfadan çıkarken (kapanış, söküm) taslağı siler; oturum düştüyse göndermez */
-  const leaving = (id: string) => { if (!noSession.current && !authLost.current) dropDraft(id); };
+  const leaving = (id: string) => { if (!noSession.current && !authLost.current) void dropDraft(id); };
 
   const sync = useCallback(async () => {
     if (running.current) { again.current = true; return; }
@@ -72,7 +83,7 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
         const w = released.current ? null : want.current;
         // İstenmiyor ya da başka sekmenin taslağı: eskisi silinir
         if (draft.current && (w === null || draft.current.owner !== w.owner)) {
-          if (!authLost.current) dropDraft(draft.current.id);        // oturum yok: silme 401 alırdı (taslak 10 dk'da kendiliğinden gider)
+          if (!authLost.current) drop(draft.current.id);        // oturum yok: silme 401 alırdı (taslak 10 dk'da kendiliğinden gider)
           draft.current = null;
           sent.current = null;
           setCurrent(null);
@@ -118,6 +129,7 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
       } while (again.current);
     } finally {
       running.current = false;
+      for (const done of idle.current.splice(0)) done();
     }
     if (!alive.current && draft.current) { leaving(draft.current.id); draft.current = null; }
   }, []);
@@ -176,11 +188,22 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
    * açılmaz (süren açma isteği bitince o taslak da silinir). Çıkış'ta oturum çerezi az sonra silinir; taslak sayfa
    * kapanırken (pagehide) silinmeye bırakılsaydı istek girişsiz gider (401), taslak sunucuda 10 dk kalırdı; tarayıcı bağlantıyı
    * yarıda keserse Next bu girişsiz isteği "uncaughtException: aborted ECONNRESET" diye günlüğe yazıyordu.
+   * Dönen söz, silme isteği tamamlanınca (süren açma isteği varsa onun bitmesi ve yeni taslağın silinmesi dahil; silinecek
+   * bir şey yoksa hemen) çözülür; en çok RELEASE_WAIT_MS bekler. Çıkış, `/api/logout`'u bu sözden sonra gönderir: açma isteği
+   * sürerken Çıkış'a basılırsa silme, oturum çerezi silinmeden önce gider.
    */
-  const release = useCallback(() => {
+  const release = useCallback((): Promise<void> => {
     released.current = true;
     clearTimeout(retry.current);
     void sync();
+    // Süren açma isteği (POST) bitince döngü yeni açılan taslağı da siler: Çıkış isteği bunların hepsinden sonra gider
+    const settled = (async () => {
+      if (running.current) await new Promise<void>((resolve) => idle.current.push(resolve));
+      await Promise.all([...drops.current]);
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, RELEASE_WAIT_MS); });
+    return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
   }, [sync]);
 
   return { draftId: current && current.owner === owner ? current.id : null, error, lost, release };

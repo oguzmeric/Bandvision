@@ -8,12 +8,14 @@ interface UnsavedGuard {
    * Sayfada kaydedilmemiş değişiklik var mı (sayfa bildirir; ayrılırken temizler). `discard`: kullanıcı çıkmayı
    * onaylayınca çağrılır (sayfa sakladığı düzenlemeyi siler).
    */
-  setDirty: (dirty: boolean, discard?: () => void) => void;
+  setDirty: (dirty: boolean, discard?: () => void | Promise<void>) => void;
   /** Ayrılmak serbest mi: değişiklik yoksa evet; varsa "Kaydedilmedi, çıkılsın mı?" sorulur, onaylanırsa değişiklik bırakılır */
   confirmLeave: () => boolean;
+  /** Onaylanan ayrılışta `discard`'ın sözü (sunucudaki taslak silindi); Çıkış `/api/logout`'u bunu bekleyip gönderir. Bekleyen yoksa çözülmüştür */
+  discarded: () => Promise<void>;
 }
 
-const Ctx = createContext<UnsavedGuard>({ setDirty: () => undefined, confirmLeave: () => true });
+const Ctx = createContext<UnsavedGuard>({ setDirty: () => undefined, confirmLeave: () => true, discarded: () => Promise.resolve() });
 
 /**
  * Bu özniteliği taşıyan bağlantı (oturum süresi dolunca çıkan "Giriş yap") kaydedilmemiş düzenlemeyi atmadan çıkar: sormaz,
@@ -57,11 +59,12 @@ const KEEP_WINDOW_MS = 1000;
  */
 export function UnsavedGuardProvider({ children }: { children: React.ReactNode }) {
   const dirty = useRef(false);
-  const discard = useRef<(() => void) | undefined>(undefined);
+  const discard = useRef<(() => void | Promise<void>) | undefined>(undefined);
+  const dropped = useRef<Promise<void>>(Promise.resolve());
   /** Düzenlemeyi koruyan bağlantıya basıldı (zaman damgası): hemen ardından gelen kapanma sorusu çıkmaz */
   const keptAt = useRef(Number.NEGATIVE_INFINITY);
 
-  const setDirty = useCallback((d: boolean, onDiscard?: () => void) => {
+  const setDirty = useCallback((d: boolean, onDiscard?: () => void | Promise<void>) => {
     dirty.current = d;
     discard.current = d ? onDiscard : undefined;
   }, []);
@@ -73,7 +76,7 @@ export function UnsavedGuardProvider({ children }: { children: React.ReactNode }
     const drop = discard.current;
     dirty.current = false;
     discard.current = undefined;
-    drop?.();
+    dropped.current = Promise.resolve(drop?.()).catch(() => undefined);
     return true;
   }, []);
 
@@ -100,6 +103,7 @@ export function UnsavedGuardProvider({ children }: { children: React.ReactNode }
     };
   }, [confirmLeave]);
 
-  const value = useMemo(() => ({ setDirty, confirmLeave }), [setDirty, confirmLeave]);
+  const discarded = useCallback(() => dropped.current, []);
+  const value = useMemo(() => ({ setDirty, confirmLeave, discarded }), [setDirty, confirmLeave, discarded]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
