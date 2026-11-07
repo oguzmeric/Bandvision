@@ -2796,3 +2796,38 @@ def test_session_dead_on_both_streams_never_shows_fallback_message(monkeypatch: 
         assert len(messages) >= 2 and open_gate.SUB_FALLBACK_MSG not in messages
     finally:
         s.stop()
+
+
+def test_source_edit_bumps_generation_after_save(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PUT /sources: forget kayıttan sonra da çalışır; arada (eski ayarla) açılan üretici işaretleyemez."""
+    mgr = client.app.state.live
+    sid = _nvr_source(client, monkeypatch, _SubDeadNVR())
+    body = {"kind": "recorder", "recorderBrand": "trassir", "host": "nvr.example", "username": "u", "name": "Ofis NVR"}
+    real_save = mgr.store.save_source
+    gap: list[Any] = []
+
+    def save(*a: Any, **k: Any) -> Any:                                 # forget ile kayıt arası: eski ayarla üretici
+        gap.append(mgr.opener(mgr.store.source(sid), "4", True, lazy=True)[0])
+        return real_save(*a, **k)
+
+    monkeypatch.setattr(mgr.store, "save_source", save)
+    assert client.put(f"/api/v1/live/sources/{sid}", json=body).status_code == 200
+    gap[0].mark_sub_dead()
+    assert not mgr.sub_dead(sid, "4")
+
+
+def test_thumbnail_in_flight_across_source_edit_does_not_mark(client: TestClient,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = client.app.state.live
+    nvr = _SubDeadNVR()
+    sid = _nvr_source(client, monkeypatch, nvr)
+    real = nvr.snapshot
+
+    def snapshot(channel: Any, substream: bool = True) -> bytes:
+        if not substream:
+            mgr.forget(sid)                                             # ana jpeg beklenirken kaynak düzenlendi
+        return real(channel, substream)
+
+    monkeypatch.setattr(nvr, "snapshot", snapshot)
+    r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
+    assert r.status_code == 200 and not mgr.sub_dead(sid, "4") and "x-sub-dead" not in r.headers

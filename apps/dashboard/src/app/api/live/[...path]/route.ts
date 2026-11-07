@@ -1,4 +1,5 @@
 import { analyzerHeaders, analyzerUrl, passThrough, unreachable } from "@/lib/analyzer";
+import { LIVE_REQUEST_HEADERS, LIVE_RESPONSE_HEADERS } from "@/lib/liveProxy.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -7,12 +8,9 @@ type Ctx = { params: Promise<{ path: string[] }> };
 
 /** Yalnızca beklenen yol parçaları (kimlik, ad) geçer: yol enjeksiyonu yok ("." / ".." ile /live dışına çıkılamaz) */
 const SAFE = /^(?!\.+$)[A-Za-z0-9._-]{1,80}$/;
-/** Analiz sunucusuna giden istek başlıkları: gövde türü ve video sarma (`Range`, alarm kaydı) */
-const REQUEST_HEADERS = ["content-type", "range", "if-range"];
-/** Tarayıcıya dönen yanıt başlıkları: video parçası (206) için `content-range` ve `accept-ranges` de; küçük resimde
- * `x-sub-dead` (kanalın alt akışı görüntü vermiyor, resim ana akıştan) */
-const RESPONSE_HEADERS = ["content-type", "content-length", "content-disposition", "cache-control", "content-range", "accept-ranges",
-  "x-sub-dead"];
+/** İstek / yanıt başlık izin listeleri: `@/lib/liveProxy.mjs` (birim testli; küçük resmin `x-sub-dead` başlığı dahil) */
+const REQUEST_HEADERS = LIVE_REQUEST_HEADERS;
+const RESPONSE_HEADERS = LIVE_RESPONSE_HEADERS;
 
 /**
  * Canlı sayım API'si (`/api/v1/live/...`) vekili. Erişim anahtarı yalnızca sunucuda; canlı görüntü (MJPEG) akışı

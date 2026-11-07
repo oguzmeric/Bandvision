@@ -51,7 +51,7 @@ export function unreachable(err: unknown): Response {
  * 403 adres) aktarılmaz: 401 tarayıcıda panelin kendi "oturum doldu"su sanılırdı. Gövdesi atılır, nedeni günlüğe yazılır,
  * sayfa 502 + `{detail, code}` alır (docs/13-web-platform.md "Analiz sunucusu API" → Güvenlik).
  */
-export function passThrough(res: Response, keep: string[] = ["content-type"]): Response {
+export function passThrough(res: Response, keep: readonly string[] = ["content-type"]): Response {
   const refusal = refusalFor(res.status);
   if (refusal) {
     void res.body?.cancel().catch(() => undefined);

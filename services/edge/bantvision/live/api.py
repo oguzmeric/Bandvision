@@ -883,6 +883,11 @@ class LiveManager:
             _LOG.info("Alt akış görüntü vermiyor, ana akışa geçildi: %s/%s",
                       self._source_label(source_id), self._channel_label(source_id, channel_id))
 
+    def source_gen(self, source_id: str) -> int:
+        """Kaynak kuşağı (`forget` artırır): üretici/küçük resim açılırken alınır, işaretlerken karşılaştırılır."""
+        with self._dead_lock:
+            return self._source_gen.get(source_id, 0)
+
     def sub_dead(self, source_id: str, channel_id: str | None) -> bool:
         if not channel_id:
             return False
@@ -969,8 +974,7 @@ class LiveManager:
 
         if not sid:                                         # kaydedilmemiş kaynak: bellek yok, düz üretici
             return (lambda: make(substream)[0]), client.keep_alive
-        with self._dead_lock:
-            gen = self._source_gen.get(sid, 0)
+        gen = self.source_gen(sid)
         streams = open_gate.StreamUrl(make, substream, lambda: self.sub_dead(sid, channel_id),
                                       lambda: self.mark_sub_dead(sid, channel_id, gen))
         return streams, client.keep_alive
@@ -989,9 +993,10 @@ class LiveManager:
 
     def _snapshot(self, src: dict[str, Any], channel_id: str | None) -> bytes:
         if src["kind"] == "recorder" and channel_id:
+            sid = str(src.get("id") or "")
+            gen = self.source_gen(sid)                      # istek sürerken kaynak düzenlenirse işaretlemez
             client = self.recorder(src)
             ch = self.channel(src, channel_id)
-            sid = str(src.get("id") or "")
             # Alt akıştan alınan küçük resim yanıt vermezse (zaman aşımı / bağlantı: `unreachable`) bir kez ana akış
             # denenir (bazı kanallarda alt akış ölü); ana akış verirse kanal işaretlenir. Cihazın reddi (HTTP hata
             # kodu, JPEG değil, şifre) düşürmez. Tek bir geçici zaman aşımı da kanalı 10 dk işaretleyebilir (kabul:
@@ -1013,7 +1018,7 @@ class LiveManager:
                 if e.kind == "unauthorized":
                     raise
                 raise HTTPException(502, "Kameradan görüntü gelmiyor (kapalı ya da sinyal yok).") from e
-            self.mark_sub_dead(sid, channel_id)
+            self.mark_sub_dead(sid, channel_id, gen)
             return jpeg
         open_url, _ = self.opener(src, channel_id)          # küçük resim API'si yok: RTSP'den ilk kare
         return grab_jpeg(open_url())
@@ -1236,6 +1241,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         manager.forget(source_id)
         saved = store.save_source(data, body.password, source_id)
         manager.viewers.drop(source_id)                      # izleme okuyucuları eski adres/şifreyi bırakır, yenisiyle açılır
+        # forget ile kayıt arasında açılan üretici eski ayarı taşır: kuşak yeniden artar (o üretici işaretleyemez) ve
+        # o arada eski ayarla önbelleğe giren istemci/kanal listesi de bırakılır
+        manager.forget(source_id)
         return _public_source(saved)
 
     @r.delete("/sources/{source_id}", status_code=204)
