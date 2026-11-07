@@ -7,8 +7,9 @@
   çevirici meşgulse yuvadaki kare en yenisiyle değiştirilir (sıra ve zaman sınırı korunur).
 - **İşaret (iskelet) yan kanalı:** işleyici her güvenlik karesinden sonra çizilecek sonucu (`ClipOverlay`: iz kutuları,
   kaynak kare pikselinde 17×3 eklemler, etkin bölümler, alarmlı izlerin son kutusu — yalnızca sayılar, kare değil)
-  `publish_overlay` ile bırakır. Okuyucunun saklanan her karesi, o an en çok `OVERLAY_MAX_AGE_S` (0,7) sn yaşındaki son
-  işaretin başvurusunu taşır (yoksa işaretsiz); çizim yazımda yapılır. Deneme alarmının kaydı işaretsiz kalır.
+  `publish_overlay` ile, o karenin **yakalama** saatiyle bırakır (son `PRE_S + POST_S + 1` sn tutulur). Yakalama
+  yazıcıya verilirken her kare, yakalama zamanına en yakın (en çok `OVERLAY_MAX_AGE_S` = 0,7 sn uzak) işaretle eşlenir
+  (yoksa işaretsiz); analiz gecikmesi iskeleti kaydırmaz. Çizim yazımda yapılır. Deneme alarmının kaydı işaretsiz kalır.
 - **Yakalama:** alarm anında ön kayıt alınır, ardından `POST_S` (4) sn daha toplanır; aynı karede doğan alarmlar tek
   yakalamayı paylaşır. Kamera koparsa ya da oturum durursa yakalama elindeki karelerle yazılır.
 - **Yazım** (`ClipWriter`): tek arka plan iş parçacığı, sınırlı kuyruk — okuyucu ve işleyici hiç beklemez. Kareler sabit
@@ -29,6 +30,7 @@ import queue
 import shutil
 import threading
 import time
+from bisect import bisect_left
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -55,7 +57,7 @@ MAX_WIDTH = 1280                # daha geniş kare bu genişliğe küçültülü
 JPEG_QUALITY = 80
 QUEUE_MAX = 8                   # yazılmayı bekleyen en çok yakalama (her biri ≈ 120 JPEG)
 STOP_WAIT_S = 60.0              # kapanışta bekleyen kayıtların yazılması için en çok bu kadar beklenir
-OVERLAY_MAX_AGE_S = 0.7         # karenin taşıyacağı işaret (iskelet) en çok bu kadar eski olabilir
+OVERLAY_MAX_AGE_S = 0.7         # kareyle eşlenen işaretin (iskelet) yakalama saati en çok bu kadar uzak olabilir
 
 
 @dataclass(frozen=True)
@@ -137,10 +139,10 @@ class ClipBuffer:
         self._ring: deque[Frame] = deque()
         self._pending: list[_Capture] = []
         self._due = float("-inf")
-        self._overlay: tuple[float, ClipOverlay] | None = None     # işleyicinin son işareti ve tekdüze saati
+        self._overlays: deque[tuple[float, ClipOverlay]] = deque()    # (karenin yakalama saati, işaret), sıralı
         # tek yuvalı çevirici (threaded): yuvadaki çevrilmemiş kare, çevirici meşgul mü, kapandı mı
         self._slot_cv = threading.Condition(threading.Lock())
-        self._slot: tuple[np.ndarray, float, float, ClipOverlay | None] | None = None
+        self._slot: tuple[np.ndarray, float, float] | None = None
         self._busy = False
         self._closed = False
         self._thread: threading.Thread | None = None
@@ -153,28 +155,31 @@ class ClipBuffer:
             return list(self._ring)
 
     def publish_overlay(self, data: ClipOverlay, t: float) -> None:
-        """İşleyicinin son güvenlik sonucu (`t` tekdüze saat). Yalnızca başvuru saklanır (tek atama, kısa kilit)."""
+        """İşleyicinin güvenlik sonucu; `t`: işlenen karenin **yakalama** saati (tekdüze; `push`'a verilenle aynı
+        saat). Boş işaret eklenmez. Bellek sınırlı: ön kayıt + sonrası + 1 sn'den eskiler düşer (≈ 2 KB/işaret)."""
+        if data.empty:
+            return
         with self._lock:
-            self._overlay = (t, data)
+            self._overlays.append((t, data))
+            while self._overlays and self._overlays[0][0] < t - (self._pre + POST_S + 1.0):
+                self._overlays.popleft()
 
     def push(self, frame: np.ndarray, t: float, wall: float) -> None:
         """Okuyucunun yeni karesi (`t` tekdüze saat, `wall` duvar saati). Seyreltme: kare yalnızca zamanı geldiyse
         JPEG'e çevrilir (uzun vadede en çok `CLIP_FPS`/sn; kaynak yavaşsa her kare). Ayrı çeviricide okuyucu yalnızca
-        başvuruyu bırakır (kopya yok: okuyucu her karede yeni dizi alır). Kare, o an en çok `OVERLAY_MAX_AGE_S` sn
-        yaşındaki son işaretin başvurusunu taşır (boş işaret taşınmaz: yazımda boşuna çizim olmaz)."""
+        başvuruyu bırakır (kopya yok: okuyucu her karede yeni dizi alır). Kare işaretsiz saklanır; işaret yazıcıya
+        verilirken eşlenir (`_emit`)."""
         with self._lock:
             keep = t >= self._due
             if keep:
                 self._due = max(self._due + self._period, t + self._period / 2)
-            ov = self._overlay
         if not keep:
             return
-        overlay = ov[1] if ov is not None and t - ov[0] <= OVERLAY_MAX_AGE_S and not ov[1].empty else None
         if self._thread is None:
-            self._add(frame, t, wall, overlay)
+            self._add(frame, t, wall)
             return
         with self._slot_cv:
-            self._slot = (frame, t, wall, overlay)                 # meşgulse önceki çevrilmemiş kare düşer: en yenisi kalır
+            self._slot = (frame, t, wall)                 # meşgulse önceki çevrilmemiş kare düşer: en yenisi kalır
             self._slot_cv.notify_all()
 
     def wait_idle(self, timeout: float = 2.0) -> bool:
@@ -203,10 +208,10 @@ class ClipBuffer:
                     self._slot_cv.wait()
                 if self._slot is None:
                     return
-                frame, t, wall, overlay = self._slot
+                frame, t, wall = self._slot
                 self._slot, self._busy = None, True
             try:
-                self._add(frame, t, wall, overlay)
+                self._add(frame, t, wall)
             except Exception:  # noqa: BLE001 — çevirici ölmesin
                 _LOG.exception("Kayıt karesi eklenemedi")
             finally:
@@ -214,18 +219,18 @@ class ClipBuffer:
                     self._busy = False
                     self._slot_cv.notify_all()
 
-    def _add(self, frame: np.ndarray, t: float, wall: float, overlay: ClipOverlay | None = None) -> None:
+    def _add(self, frame: np.ndarray, t: float, wall: float) -> None:
         """Kareyi JPEG'e çevirip ön kayda ve süren yakalamalara ekler; süresi dolan yakalamaları yazar."""
         jpeg = self._encode(frame)
         with self._lock:
             if jpeg is not None:
-                item: Frame = (t, wall, jpeg, overlay)
+                item: Frame = (t, wall, jpeg, None)
                 self._ring.append(item)
                 while self._ring and self._ring[0][0] < t - self._pre:
                     self._ring.popleft()
                 for c in self._pending:
                     if t <= c.until:
-                        c.frames.append(_raw(item) if c.raw else item)
+                        c.frames.append(item)
             done = self._take(lambda c: t >= c.until)
         self._emit(done)
 
@@ -235,7 +240,7 @@ class ClipBuffer:
         `state(ids, "failed")`)."""
         post = POST_S if post_s is None else post_s
         with self._lock:
-            pre = [(_raw(f) if raw else f) for f in self._ring if f[0] >= t - self._pre]
+            pre = [f for f in self._ring if f[0] >= t - self._pre]
             empty = not pre and post <= 0
             cap = _Capture(tuple(ids), t + post, pre, raw)
             if post > 0:
@@ -268,13 +273,20 @@ class ClipBuffer:
         return done
 
     def _emit(self, done: list[_Capture]) -> None:
+        """Biten yakalamaları yazıcıya verir (kilit dışında çağrılır); deneme alarmı dışındakilerin karelerine işaret
+        eşlenir (`_match`). İşaret listesi kilit altında kopyalanır."""
+        overlays: list[tuple[float, ClipOverlay]] = []
+        if any(not c.raw and c.frames for c in done):
+            with self._lock:
+                overlays = list(self._overlays)
         for c in done:
             if not c.frames:
                 _LOG.warning("Olay kaydı alınamadı: kamerada görüntü yok (%s)", ", ".join(c.ids))
                 self._failed(c.ids)
                 continue
+            frames = tuple(c.frames) if c.raw else _match(c.frames, overlays)
             try:
-                self._sink(ClipJob(c.ids, tuple(c.frames)))
+                self._sink(ClipJob(c.ids, frames))
             except Exception:  # noqa: BLE001 — kayıt hatası okuyucuyu/işleyiciyi durdurmaz
                 _LOG.exception("Olay kaydı yazıcıya verilemedi (%s)", ", ".join(c.ids))
                 self._failed(c.ids)
@@ -300,8 +312,23 @@ class ClipBuffer:
             return None
 
 
-def _raw(f: Frame) -> Frame:
-    return (f[0], f[1], f[2], None) if f[3] is not None else f
+def _match(frames: Sequence[Frame], overlays: Sequence[tuple[float, ClipOverlay]]) -> tuple[Frame, ...]:
+    """Her kareye yakalama saatine en yakın işareti verir (uzaklık `OVERLAY_MAX_AGE_S`'yi aşarsa işaretsiz). İşaretler
+    yakalama saatine göre sıralı: ikili aramayla iki komşu işaretten yakını seçilir (≈ 120 kare × ≈ 100 işaret; iki
+    işaretçili tarama kadar hızlı, daha okunaklı)."""
+    if not overlays:
+        return tuple(frames)
+    times = [t for t, _ov in overlays]
+    out: list[Frame] = []
+    for f in frames:
+        i = bisect_left(times, f[0])
+        j = min((k for k in (i - 1, i) if 0 <= k < len(times)), key=lambda k: abs(times[k] - f[0]))
+        ov = overlays[j][1] if abs(times[j] - f[0]) <= OVERLAY_MAX_AGE_S else None
+        out.append((f[0], f[1], f[2], ov))
+    return tuple(out)
+
+
+_draw_warned = False                    # çizim hatası ilk kez uyarı olarak günlüğe yazıldı mı
 
 
 def annotate(img: np.ndarray, overlay: ClipOverlay | None) -> np.ndarray:
@@ -313,7 +340,12 @@ def annotate(img: np.ndarray, overlay: ClipOverlay | None) -> np.ndarray:
     try:
         return draw_safety(img, overlay.profile, overlay.result(w, h))
     except Exception:  # noqa: BLE001
-        _LOG.debug("Kayıt karesine işaret çizilemedi", exc_info=True)
+        global _draw_warned
+        if not _draw_warned:
+            _draw_warned = True
+            _LOG.warning("Kayıt karesine işaret çizilemedi; kareler işaretsiz yazılıyor", exc_info=True)
+        else:
+            _LOG.debug("Kayıt karesine işaret çizilemedi", exc_info=True)
         return img
 
 

@@ -8,8 +8,9 @@ işlenir; tarayıcıya yerel ağdan işaretli kare gider, hiçbir yere kaydedilm
   gecikmez); koparsa artan beklemeyle yeniden bağlanır, her bağlanışta adres yeniden alınır (TRASSIR jetonu).
   Güvenlik oturumunda ayrıca olay kaydının ön kaydını (`clips.ClipBuffer`, ham kare, ≤ 10 kare/sn) doldurur;
 - işleyici: en yeni kareyi sayım hattından geçirir, işaretli kareyi (en çok ~12/sn) JPEG olarak hazırlar. Güvenlik
-  oturumunda her işlenen karenin çizilecek sonucunu (`clips.ClipOverlay`, yalnızca sayılar) ön kayda bırakır; olay
-  kaydı yazılırken iskelet bu sonuçtan çizilir.
+  oturumunda her işlenen karenin çizilecek sonucunu (`clips.ClipOverlay`, yalnızca sayılar) karenin yakalama saatiyle
+  ön kayda bırakır; yazımda her kare, yakalama zamanına en yakın (en çok 0,7 sn uzak) sonuçla çizilir — analiz
+  gecikmesi iskeleti kaydırmaz.
 """
 from __future__ import annotations
 
@@ -181,6 +182,7 @@ class LiveSession:
         self.calibration_message = ""
         self._counts = _Counts()
         self._latest: tuple[int, float, np.ndarray] | None = None   # (sıra, zaman, kare)
+        self._latest_mono = 0.0                     # en yeni karenin yakalama saati (tekdüze; dosyada `ts` dosya zamanı)
         self._seq = 0
         self._jpeg: bytes | None = None
         self._jpeg_seq = 0
@@ -485,14 +487,16 @@ class LiveSession:
                     self._set_state("live", open_gate.SUB_FALLBACK_MSG)
                     if bound.prefer_main:
                         streams.mark_sub_dead()             # kanal işaretlenir
-                ts = file_offset + n / file_fps if is_file else time.monotonic()
+                mono = time.monotonic()                     # yakalama saati (ön kayıt ve iskelet eşleştirmesi)
+                ts = file_offset + n / file_fps if is_file else mono
                 with self._frame_cv:
                     self._seq += 1
                     self._latest = (self._seq, ts, frame)
+                    self._latest_mono = mono
                     self._frame_cv.notify_all()
                 clips = self._clips
                 if clips is not None:                       # güvenlik: olay kaydının ön kaydı (gerçek zamanlı kareler)
-                    clips.push(frame, time.monotonic(), time.time())
+                    clips.push(frame, mono, time.time())
                 if is_file and self._realtime_file:          # dosya: gerçek zamanlı oynat (canlı kamera gibi)
                     lag = n / file_fps - (time.monotonic() - started)
                     if lag > 0:
@@ -601,6 +605,7 @@ class LiveSession:
                     return
                 assert self._latest is not None
                 seq, ts, frame = self._latest
+                captured = self._latest_mono                 # karenin yakalama saati (iskelet eşleştirmesi)
             done = seq
             with self._lock:
                 profile = self.profile
@@ -627,8 +632,7 @@ class LiveSession:
                     self._after_safety_frame()
                     clips = self._clips
                     if clips is not None and r.safety is not None:      # olay kaydının iskeleti (yalnızca sayılar)
-                        clips.publish_overlay(ClipOverlay.from_result(r.safety, frame.shape, profile),
-                                              time.monotonic())
+                        clips.publish_overlay(ClipOverlay.from_result(r.safety, frame.shape, profile), captured)
             self._notify_safety(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
