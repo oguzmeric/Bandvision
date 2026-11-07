@@ -48,6 +48,8 @@ export default function Sidebar({ canLogout = false, collapsed: initial = null }
   const { confirmLeave, discarded } = useUnsavedGuard();
   const [collapsed, setCollapsed] = useState<string[]>(initial ?? []);
   const [open, setOpen] = useState(false);
+  /** Çıkış başladı (taslak istekleri beklenirken ikinci tıklama ikinci /api/logout başlatmasın) */
+  const [leaving, setLeaving] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
   const soonTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const asideRef = useRef<HTMLElement>(null);
@@ -199,9 +201,10 @@ export default function Sidebar({ canLogout = false, collapsed: initial = null }
           })}
         </nav>
         {canLogout && (
-          <button type="button"
+          <button type="button" disabled={leaving}
                   onClick={async () => {
-                    if (!confirmLeave()) return;
+                    if (leaving || !confirmLeave()) return;
+                    setLeaving(true);
                     // Canlı izlemedeki kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı her sayfadan çıkışta silinir
                     // (Canlı izlemeden Geri ile çıkılmış olabilir): sonraki girişte geri yüklenmez
                     try { window.sessionStorage.removeItem(UNSAVED_KEY); } catch { /* depo yok */ }

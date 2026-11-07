@@ -442,8 +442,10 @@ export default function WatchView() {
   // Kaydedilmemiş düzenleme analiz sunucusunda taslak olarak canlı akar
   const draftBody = useMemo(() => (dirty && present && layout ? { layout: present.layout, tiles: present.tiles } : null),
     [dirty, present, layout]);
-  const { draftId, error: draftError, lost, release } = useDraft(currentId, draftBody, problem === "auth");
+  const { draftId, error: draftError, lost, release, settle } = useDraft(currentId, draftBody, problem === "auth");
   releaseRef.current = release;
+  const { setSettle } = guard;
+  useEffect(() => { setSettle(settle); return () => setSettle(undefined); }, [setSettle, settle]);
   const streamId = dirty && draftId ? draftId : view?.id ?? null;
 
   // Şablon başka bir cihazda düzenlendi: aynı şablonun durumu farklı düzen ya da kutularda farklı kamera bildirir

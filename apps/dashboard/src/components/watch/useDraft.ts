@@ -39,7 +39,7 @@ const RELEASE_WAIT_MS = 3000;
  * Düzenleme sessionStorage'da durur; giriş tam sayfa gezinmesidir, durumu yeniden kurar.
  */
 export function useDraft(owner: string | null, edit: DraftBody | null, sessionLost = false): {
-  draftId: string | null; error: string | null; lost: (id: string) => void; release: () => Promise<void>;
+  draftId: string | null; error: string | null; lost: (id: string) => void; release: () => Promise<void>; settle: () => Promise<void>;
 } {
   const [current, setCurrent] = useState<{ owner: string; id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -110,13 +110,13 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
           if (e instanceof ApiError && e.status === 503) {
             // analiz sunucusu şimdilik kabul etmiyor ("Çok fazla açık taslak var…"): söylenir ve yeniden denenir
             setError(e.message);
-            retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
+            if (!released.current) retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e instanceof ApiError && e.status === 401) {
             // panelin 401'i, oturum doldu: sayfanın durum yoklaması bunu söyler ("Giriş yap"); taslağa bir daha istek gitmez, yeniden denenmez
             authLost.current = true;
           } else if (!(e instanceof ApiError) || e.status >= 500) {
             // sunucu yok ya da panelin isteğini reddetti (502 + kod): sayfanın durum yoklaması bunu zaten söyler; sessizce yeniden denenir
-            retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
+            if (!released.current) retry.current = setTimeout(() => void sync(), STREAM_RETRY_MS);
           } else if (e.status === 404 && target) {
             // taslak sunucuda yok: yenisi açılır (kimlik o ana dek kalır). `lost` bu arada bırakmış da olabilir.
             if (draft.current === target) { draft.current = null; sent.current = null; }
@@ -184,6 +184,20 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
   }, [sync]);
 
   /**
+   * Süren bütün taslak isteklerinin (açma/güncelleme döngüsü ve silmeler) bitmesini bekler; en çok RELEASE_WAIT_MS.
+   * Kaydedilmemiş değişiklik olmasa da (Kaydet, geri alma sonrası) Çıkış `/api/logout`'u bundan sonra gönderir.
+   */
+  const settle = useCallback((): Promise<void> => {
+    const settled = (async () => {
+      if (running.current) await new Promise<void>((resolve) => idle.current.push(resolve));
+      await Promise.all([...drops.current]);
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, RELEASE_WAIT_MS); });
+    return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
+  }, []);
+
+  /**
    * Sayfadan onaylı çıkış (menü bağlantısı, Çıkış): taslak HEMEN, oturum hâlâ geçerliyken silinir ve sayfa gidene dek yenisi
    * açılmaz (süren açma isteği bitince o taslak da silinir). Çıkış'ta oturum çerezi az sonra silinir; taslak sayfa
    * kapanırken (pagehide) silinmeye bırakılsaydı istek girişsiz gider (401), taslak sunucuda 10 dk kalırdı; tarayıcı bağlantıyı
@@ -196,15 +210,8 @@ export function useDraft(owner: string | null, edit: DraftBody | null, sessionLo
     released.current = true;
     clearTimeout(retry.current);
     void sync();
-    // Süren açma isteği (POST) bitince döngü yeni açılan taslağı da siler: Çıkış isteği bunların hepsinden sonra gider
-    const settled = (async () => {
-      if (running.current) await new Promise<void>((resolve) => idle.current.push(resolve));
-      await Promise.all([...drops.current]);
-    })();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, RELEASE_WAIT_MS); });
-    return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
-  }, [sync]);
+    return settle();
+  }, [sync, settle]);
 
-  return { draftId: current && current.owner === owner ? current.id : null, error, lost, release };
+  return { draftId: current && current.owner === owner ? current.id : null, error, lost, release, settle };
 }
