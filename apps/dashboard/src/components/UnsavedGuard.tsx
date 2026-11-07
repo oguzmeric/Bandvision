@@ -13,9 +13,11 @@ interface UnsavedGuard {
   confirmLeave: () => boolean;
   /** Onaylanan ayrılışta `discard`'ın sözü (sunucudaki taslak silindi); Çıkış `/api/logout`'u bunu bekleyip gönderir. Bekleyen yoksa çözülmüştür */
   discarded: () => Promise<void>;
+  /** Sayfa, süren taslak isteklerini bekleten işlevini bildirir (kaydedilmemiş değişiklik olmasa da `discarded` bunu da bekler) */
+  setSettle: (settle: (() => Promise<void>) | undefined) => void;
 }
 
-const Ctx = createContext<UnsavedGuard>({ setDirty: () => undefined, confirmLeave: () => true, discarded: () => Promise.resolve() });
+const Ctx = createContext<UnsavedGuard>({ setDirty: () => undefined, confirmLeave: () => true, discarded: () => Promise.resolve(), setSettle: () => undefined });
 
 /**
  * Bu özniteliği taşıyan bağlantı (oturum süresi dolunca çıkan "Giriş yap") kaydedilmemiş düzenlemeyi atmadan çıkar: sormaz,
@@ -103,7 +105,11 @@ export function UnsavedGuardProvider({ children }: { children: React.ReactNode }
     };
   }, [confirmLeave]);
 
-  const discarded = useCallback(() => dropped.current, []);
-  const value = useMemo(() => ({ setDirty, confirmLeave, discarded }), [setDirty, confirmLeave, discarded]);
+  const settleRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const setSettle = useCallback((f: (() => Promise<void>) | undefined) => { settleRef.current = f; }, []);
+  const discarded = useCallback(async () => {
+    await Promise.all([dropped.current, settleRef.current?.()]);
+  }, []);
+  const value = useMemo(() => ({ setDirty, confirmLeave, discarded, setSettle }), [setDirty, confirmLeave, discarded, setSettle]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
