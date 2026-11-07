@@ -521,33 +521,60 @@ def _written(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, job: ClipJ
     return _GrabWriter.got
 
 
-def test_frames_carry_the_overlay_for_at_most_0_7_s_and_are_drawn_at_write_time(
+def test_frames_get_the_nearest_overlay_within_0_7_s_and_are_drawn_at_write_time(
         monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """Ön kayıttaki kareler ham; yazıcıya verilirken her kare yakalama saatine en yakın (≤ 0,7 sn) işaretle eşlenir
+    ve yazımda `draw_safety` ile çizilir."""
     from bantvision.overlay import draw_safety
 
     jobs: list[ClipJob] = []
     buf = ClipBuffer(jobs.append)
-    _feed(buf, 0.0, 1.0, src_fps=10.0)                           # işaret yok: ham
     ov = _overlay()
-    buf.publish_overlay(ov, 1.0)
-    _feed(buf, 1.0, 2.5, src_fps=10.0, start=10)
-    frames = buf.frames()
-    assert all(f[3] is None for f in frames if f[0] < 1.0 - 1e-9)
-    assert all(f[3] is ov for f in frames if 1.0 - 1e-9 <= f[0] <= 1.65)       # ≤ 0,7 sn: son işaret taşınır
-    assert all(f[3] is None for f in frames if f[0] >= 1.75)                    # daha eski işaret çizilmez
+    buf.publish_overlay(ov, 1.0)                                 # 1,0 sn'de yakalanan karenin sonucu
+    _feed(buf, 0.0, 2.5, src_fps=10.0)
+    assert all(f[3] is None for f in buf.frames())               # halkada işaret yok (yalnızca sayılar ayrı tutulur)
     assert buf.capture(["a" * 32], 2.5, post_s=0)
+    frames = jobs[0].frames
+    for f in frames:
+        assert f[3] is (ov if abs(f[0] - 1.0) <= clips.OVERLAY_MAX_AGE_S else None)
+    assert sum(f[3] is not None for f in frames) >= 13            # 0,3 … 1,7 sn (10 kare/sn)
     got = _written(monkeypatch, tmp_path, jobs[0])
-    assert len(got) == len(jobs[0].frames)
-    drawn = 0
-    for img, f in zip(got, jobs[0].frames, strict=True):
+    assert len(got) == len(frames)
+    for img, f in zip(got, frames, strict=True):
         raw = clips._decode(f[2])
         if f[3] is None:
             assert np.array_equal(img, raw)
         else:
             want = draw_safety(raw.copy(), ov.profile, ov.result(320, 240))
             assert np.array_equal(img, want) and not np.array_equal(img, raw)   # iskelet + alarmlı kutu çizildi
-            drawn += 1
-    assert drawn == 8                                            # 1,0 … 1,7 sn (10 kare/sn)
+
+
+def test_overlay_published_after_the_frame_is_matched_by_capture_time() -> None:
+    """Gecikme telafisi: analiz kareyi geç bitirir (sonuç kare saklandıktan sonra gelir); sonuç karenin yakalama
+    saatiyle verildiği için o kareye eşlenir (yayım anına göre eşleseydi iskelet gövdenin gerisinde kalırdı)."""
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    _feed(buf, 0.0, 2.0, src_fps=10.0)                           # kareler 0 … 1,9 sn'de saklandı
+    late = _overlay()
+    buf.publish_overlay(late, 1.0)                               # 1,0 sn'deki karenin sonucu şimdi (≈ 2 sn) geldi
+    assert buf.capture(["a" * 32], 2.0, post_s=0)
+    by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
+    assert by_t[1.0] is late and by_t[1.5] is late and by_t[0.5] is late
+    assert by_t[0.2] is None and by_t[1.8] is None               # 0,7 sn'den uzak
+
+
+def test_frame_between_two_overlays_takes_the_nearer_one() -> None:
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    a, b = _overlay(), _overlay(fired=False)
+    buf.publish_overlay(a, 1.0)
+    buf.publish_overlay(b, 1.5)
+    _feed(buf, 0.0, 2.0, src_fps=10.0)
+    assert buf.capture(["a" * 32], 2.0, post_s=0)
+    by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
+    assert by_t[1.1] is a and by_t[1.2] is a                     # 1,0'a daha yakın
+    assert by_t[1.3] is b and by_t[1.4] is b and by_t[1.9] is b  # 1,5'e daha yakın
+    assert by_t[0.4] is a and by_t[0.2] is None
 
 
 def test_overlay_keypoints_are_scaled_to_the_clip_frame(monkeypatch: pytest.MonkeyPatch,
@@ -572,24 +599,26 @@ def test_overlay_keypoints_are_scaled_to_the_clip_frame(monkeypatch: pytest.Monk
 
 
 def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    """Deneme alarmında poz yok: işaretli kareler olsa da kayıt işaretsiz (ön kayıt ve sonrası)."""
+    """Deneme alarmında poz yok: işaretler olsa da kayıt işaretsiz (ön kayıt ve sonrası); aynı anda alınan gerçek
+    alarm kaydı işaretli."""
     jobs: list[ClipJob] = []
     buf = ClipBuffer(jobs.append)
     buf.publish_overlay(_overlay(), 0.0)
     _feed(buf, 0.0, 0.6, src_fps=10.0)
-    assert all(f[3] is not None for f in buf.frames())
     assert buf.capture(["a" * 32], 0.6, post_s=0, raw=True)
+    assert buf.capture(["c" * 32], 0.6, post_s=0)
     assert buf.capture(["b" * 32], 0.6, post_s=0.3, raw=True)
     buf.publish_overlay(_overlay(), 0.6)
     _feed(buf, 0.6, 1.0, src_fps=10.0, start=6)
-    assert [j.ids for j in jobs] == [("a" * 32,), ("b" * 32,)]
-    for job in jobs:
-        assert all(f[3] is None for f in job.frames)
-    got = _written(monkeypatch, tmp_path, jobs[0])
-    assert all(np.array_equal(img, clips._decode(f[2])) for img, f in zip(got, jobs[0].frames, strict=True))
+    by_id = {j.ids[0]: j for j in jobs}
+    assert set(by_id) == {"a" * 32, "b" * 32, "c" * 32}
+    assert all(f[3] is None for f in by_id["a" * 32].frames) and all(f[3] is None for f in by_id["b" * 32].frames)
+    assert all(f[3] is not None for f in by_id["c" * 32].frames)
+    got = _written(monkeypatch, tmp_path, by_id["a" * 32])
+    assert all(np.array_equal(img, clips._decode(f[2])) for img, f in zip(got, by_id["a" * 32].frames, strict=True))
 
 
-def test_overlay_stores_copies_and_empty_overlay_is_not_carried() -> None:
+def test_overlay_stores_copies_skips_empty_ones_and_memory_is_bounded() -> None:
     from bantvision.core import Profile
     from bantvision.core.safety import SafetyResult
 
@@ -602,5 +631,24 @@ def test_overlay_stores_copies_and_empty_overlay_is_not_carried() -> None:
     assert ov.size == (640, 480) and dict(ov.poses)[3].sum() == 51 and dict(ov.tracks)[3][2] == 0.5
     buf = ClipBuffer(lambda _j: None)
     buf.publish_overlay(clips.ClipOverlay.from_result(SafetyResult(), (480, 640, 3), Profile.jeweler()), 0.0)
-    buf.push(_frame(0), 0.1, 1.0)
-    assert buf.frames()[0][3] is None                            # çizilecek bir şey yok: yazımda iş yok
+    assert len(buf._overlays) == 0                               # çizilecek bir şey yok: saklanmaz
+    for i in range(400):                                         # 40 sn, 10 sonuç/sn
+        buf.publish_overlay(ov, i / 10)
+    keep = clips.PRE_S + clips.POST_S + 1.0
+    ts = [t for t, _o in buf._overlays]
+    assert ts[-1] - ts[0] <= keep + 1e-9 and len(ts) <= keep * 10 + 1    # en eskiler düşer
+
+
+def test_first_drawing_error_is_logged_as_warning_once(monkeypatch: pytest.MonkeyPatch,
+                                                       caplog: pytest.LogCaptureFixture) -> None:
+    def boom(*_a: Any) -> np.ndarray:
+        raise ValueError("bozuk")
+
+    monkeypatch.setattr(clips, "draw_safety", boom)
+    monkeypatch.setattr(clips, "_draw_warned", False)
+    img = _frame(0)
+    with caplog.at_level(logging.DEBUG, logger="bantvision.live.clips"):
+        assert clips.annotate(img, _overlay()) is img                        # kare işaretsiz kalır
+        clips.annotate(img, _overlay())
+    warns = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warns) == 1 and "işaretsiz yazılıyor" in warns[0].getMessage()
