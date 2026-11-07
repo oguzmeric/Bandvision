@@ -2115,7 +2115,7 @@ def test_safety_session_publishes_skeletons_and_clip_frames_carry_them(monkeypat
                     pose=FakePose(hands_up_kp()), clip_sink=jobs.append)
     s.loop_file = True
     try:
-        wait_for(lambda: len(published) >= 5 and len(s._clips._overlays) >= 5)
+        wait_for(lambda: sum(not o.empty for _t, o in list(s._clips._overlays)) >= 5)   # iz onaylandı: dolu sonuçlar
         assert s.capture_clip(["a" * 32], post_s=0.5)
         assert s.capture_clip(["b" * 32], post_s=0.0, raw=True)               # deneme alarmı
         wait_for(lambda: len(jobs) == 2)

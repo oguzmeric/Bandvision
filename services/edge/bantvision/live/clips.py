@@ -7,11 +7,14 @@
   çevirici meşgulse yuvadaki kare en yenisiyle değiştirilir (sıra ve zaman sınırı korunur).
 - **İşaret (iskelet) yan kanalı:** işleyici her güvenlik karesinden sonra çizilecek sonucu (`ClipOverlay`: iz kutuları,
   kaynak kare pikselinde 17×3 eklemler, etkin bölümler, alarmlı izlerin son kutusu — yalnızca sayılar, kare değil)
-  `publish_overlay` ile, o karenin **yakalama** saatiyle bırakır (son `PRE_S + POST_S + 1` sn tutulur). Yakalama
-  yazıcıya verilirken her kare, yakalama zamanına en yakın (en çok `OVERLAY_MAX_AGE_S` = 0,7 sn uzak) işaretle eşlenir
-  (yoksa işaretsiz); analiz gecikmesi iskeleti kaydırmaz. Çizim yazımda yapılır. Deneme alarmının kaydı işaretsiz kalır.
+  `publish_overlay` ile, o karenin **yakalama** saatiyle bırakır (son `PRE_S + POST_S + 1` sn tutulur; boş sonuç da
+  — "bu anda çizilecek kişi yok"). Yakalama yazıcıya verilirken her kare, yakalama zamanına en yakın (en çok
+  `OVERLAY_MAX_AGE_S` = 0,7 sn uzak) sonuçla eşlenir; en yakın sonuç boşsa ya da yoksa kare işaretsiz kalır. Analiz
+  gecikmesi iskeleti kaydırmaz. Çizim yazımda yapılır. Deneme alarmının kaydı işaretsiz kalır.
 - **Yakalama:** alarm anında ön kayıt alınır, ardından `POST_S` (4) sn daha toplanır; aynı karede doğan alarmlar tek
-  yakalamayı paylaşır. Kamera koparsa ya da oturum durursa yakalama elindeki karelerle yazılır.
+  yakalamayı paylaşır. Yazıcıya `OVERLAY_MAX_AGE_S` (0,7) sn sonra verilir: son karelerin analiz sonuçları eşleşmeden
+  önce yayımlanmış olur. Kamera koparsa (aynı bekleme ile) ya da oturum durursa (hemen) yakalama elindeki karelerle
+  yazılır.
 - **Yazım** (`ClipWriter`): tek arka plan iş parçacığı, sınırlı kuyruk — okuyucu ve işleyici hiç beklemez. Kareler sabit
   `CLIP_FPS` ile (videodaki zaman duvar saatine eşit; boşluk önceki kareyle dolar) OpenCV `VideoWriter` + VP8 ile
   `<data>/live/alarm-clips/<alarmId>.webm` olarak (işaretli karelere `overlay.draw_safety` ile iskelet ve alarmlı kutu
@@ -156,9 +159,8 @@ class ClipBuffer:
 
     def publish_overlay(self, data: ClipOverlay, t: float) -> None:
         """İşleyicinin güvenlik sonucu; `t`: işlenen karenin **yakalama** saati (tekdüze; `push`'a verilenle aynı
-        saat). Boş işaret eklenmez. Bellek sınırlı: ön kayıt + sonrası + 1 sn'den eskiler düşer (≈ 2 KB/işaret)."""
-        if data.empty:
-            return
+        saat). Boş sonuç da saklanır (o anda çizilecek kişi yok: yakın kare eski iskeleti almaz). Bellek sınırlı: ön
+        kayıt + sonrası + 1 sn'den eskiler düşer (≈ 2 KB/işaret)."""
         with self._lock:
             self._overlays.append((t, data))
             while self._overlays and self._overlays[0][0] < t - (self._pre + POST_S + 1.0):
@@ -231,7 +233,7 @@ class ClipBuffer:
                 for c in self._pending:
                     if t <= c.until:
                         c.frames.append(item)
-            done = self._take(lambda c: t >= c.until)
+            done = self._take(lambda c: t >= c.until + OVERLAY_MAX_AGE_S)
         self._emit(done)
 
     def capture(self, ids: Sequence[str], t: float, post_s: float | None = None, raw: bool = False) -> bool:
@@ -253,9 +255,10 @@ class ClipBuffer:
         return True
 
     def flush_due(self, t: float) -> None:
-        """Süresi dolmuş yakalamaları elindeki karelerle yazar (kamera koptu: yeni kare gelmiyor)."""
+        """Süresi dolmuş yakalamaları elindeki karelerle yazar (kamera koptu: yeni kare gelmiyor). Süre, `_add`'deki
+        gibi `until + OVERLAY_MAX_AGE_S`: son analiz sonuçları gelsin."""
         with self._lock:
-            done = self._take(lambda c: t >= c.until)
+            done = self._take(lambda c: t >= c.until + OVERLAY_MAX_AGE_S)
         self._emit(done)
 
     def flush(self) -> None:
@@ -324,6 +327,8 @@ def _match(frames: Sequence[Frame], overlays: Sequence[tuple[float, ClipOverlay]
         i = bisect_left(times, f[0])
         j = min((k for k in (i - 1, i) if 0 <= k < len(times)), key=lambda k: abs(times[k] - f[0]))
         ov = overlays[j][1] if abs(times[j] - f[0]) <= OVERLAY_MAX_AGE_S else None
+        if ov is not None and ov.empty:                 # en yakın sonuç "kişi yok": eski iskelet çizilmez
+            ov = None
         out.append((f[0], f[1], f[2], ov))
     return tuple(out)
 

@@ -125,7 +125,9 @@ def test_flush_emits_pending_capture_with_what_it_has() -> None:
     _feed(buf, 3.0, 4.0, start=500)
     buf.flush_due(4.0)                                           # süresi dolmadı: beklemede kalır
     assert jobs == []
-    buf.flush_due(3.0 + clips.POST_S + 0.1)                      # kamera koptu, süre doldu: elindekiyle yazılır
+    buf.flush_due(3.0 + clips.POST_S + 0.1)                      # sonrası bitti ama son sonuçlar için 0,7 sn beklenir
+    assert jobs == []
+    buf.flush_due(3.0 + clips.POST_S + clips.OVERLAY_MAX_AGE_S)  # kamera koptu, süre doldu: elindekiyle yazılır
     assert len(jobs) == 1 and abs(len(jobs[0].frames) - 40) <= 2
     buf.capture(["e" * 32], 4.0)
     buf.flush()                                                  # oturum durdu: hemen
@@ -384,7 +386,7 @@ def test_threaded_buffer_feeds_captures_in_order_and_completes() -> None:
             buf.push(_frame(i), i / 10, 1000 + i / 10)
             buf.wait_idle(2)
         buf.capture(["a" * 32], 5.0, post_s=1.0)
-        for i in range(50, 65):
+        for i in range(50, 72):                                                   # sonrası (1 sn) + 0,7 sn bekleme
             buf.push(_frame(i), i / 10, 1000 + i / 10)
             buf.wait_idle(2)
         assert len(jobs) == 1
@@ -609,7 +611,7 @@ def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pa
     assert buf.capture(["c" * 32], 0.6, post_s=0)
     assert buf.capture(["b" * 32], 0.6, post_s=0.3, raw=True)
     buf.publish_overlay(_overlay(), 0.6)
-    _feed(buf, 0.6, 1.0, src_fps=10.0, start=6)
+    _feed(buf, 0.6, 1.7, src_fps=10.0, start=6)                  # sonrası (0,9'a dek) + 0,7 sn bekleme
     by_id = {j.ids[0]: j for j in jobs}
     assert set(by_id) == {"a" * 32, "b" * 32, "c" * 32}
     assert all(f[3] is None for f in by_id["a" * 32].frames) and all(f[3] is None for f in by_id["b" * 32].frames)
@@ -618,7 +620,7 @@ def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pa
     assert all(np.array_equal(img, clips._decode(f[2])) for img, f in zip(got, by_id["a" * 32].frames, strict=True))
 
 
-def test_overlay_stores_copies_skips_empty_ones_and_memory_is_bounded() -> None:
+def test_overlay_stores_copies_keeps_empty_ones_and_memory_is_bounded() -> None:
     from bantvision.core import Profile
     from bantvision.core.safety import SafetyResult
 
@@ -631,7 +633,7 @@ def test_overlay_stores_copies_skips_empty_ones_and_memory_is_bounded() -> None:
     assert ov.size == (640, 480) and dict(ov.poses)[3].sum() == 51 and dict(ov.tracks)[3][2] == 0.5
     buf = ClipBuffer(lambda _j: None)
     buf.publish_overlay(clips.ClipOverlay.from_result(SafetyResult(), (480, 640, 3), Profile.jeweler()), 0.0)
-    assert len(buf._overlays) == 0                               # çizilecek bir şey yok: saklanmaz
+    assert len(buf._overlays) == 1                               # "kişi yok" da bir sonuçtur: saklanır
     for i in range(400):                                         # 40 sn, 10 sonuç/sn
         buf.publish_overlay(ov, i / 10)
     keep = clips.PRE_S + clips.POST_S + 1.0
@@ -652,3 +654,39 @@ def test_first_drawing_error_is_logged_as_warning_once(monkeypatch: pytest.Monke
         clips.annotate(img, _overlay())
     warns = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warns) == 1 and "işaretsiz yazılıyor" in warns[0].getMessage()
+
+
+def test_capture_is_handed_over_0_7_s_after_its_end_so_late_results_match() -> None:
+    """Sonrası `until`'da biter (sonraki kare eklenmez) ama yazıcıya `until + 0,7` sn'de verilir: son karelerin geç
+    gelen analiz sonuçları da eşlenir."""
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    _feed(buf, 0.0, 2.0, src_fps=10.0)
+    assert buf.capture(["a" * 32], 2.0, post_s=1.0)              # until = 3,0
+    _feed(buf, 2.0, 3.3, src_fps=10.0, start=20)                 # until'dan hemen sonra (3,1 … 3,2)
+    buf.flush_due(3.5)
+    assert jobs == []                                            # henüz verilmez
+    late = _overlay()
+    buf.publish_overlay(late, 3.0)                               # son karenin sonucu geç geldi
+    _feed(buf, 3.3, 3.9, src_fps=10.0, start=33)                 # 3,7 sonrasında süre doldu
+    assert len(jobs) == 1
+    frames = jobs[0].frames
+    assert abs(frames[-1][0] - 3.0) < 1e-6                       # until sonrası kare yakalamada yok
+    assert frames[-1][3] is late                                 # son kare geç gelen sonuçla çizilir
+
+
+def test_frame_after_the_person_left_gets_no_old_skeleton() -> None:
+    """Kişi kadrajdan çıktı (boş sonuç yayımlandı): sonraki kareler, 0,7 sn içinde eski iskelet olsa da işaretsiz."""
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyResult
+
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    person = _overlay()
+    buf.publish_overlay(person, 1.0)
+    buf.publish_overlay(clips.ClipOverlay.from_result(SafetyResult(), (240, 320, 3), Profile.jeweler()), 1.3)
+    _feed(buf, 0.0, 2.0, src_fps=10.0)
+    assert buf.capture(["a" * 32], 2.0, post_s=0)
+    by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
+    assert by_t[1.0] is person and by_t[1.1] is person           # kişi varken iskelet
+    assert by_t[1.3] is None and by_t[1.4] is None and by_t[1.6] is None   # kişi çıktı: eski iskelet çizilmez
