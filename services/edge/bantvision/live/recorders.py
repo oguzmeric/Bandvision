@@ -772,10 +772,14 @@ class TrassirClient(RecorderClient):
         except RecorderError as exc:
             if exc.kind in ("unreachable", "unauthorized"):
                 raise
-            with self._lock:                       # oturum düşmüş olabilir: bir kez yeniden giriş
-                if self._sid == current:
-                    self._sid = None
+            self._drop_session(current)            # oturum düşmüş olabilir: bir kez yeniden giriş
             return body(self._session())
+
+    def _drop_session(self, sid: str) -> None:
+        """`sid` hâlâ geçerliyse unutulur (sonraki istek yeniden giriş yapar); başkası yenilediyse dokunulmaz."""
+        with self._lock:
+            if self._sid == sid:
+                self._sid = None
 
     def _session(self) -> str:
         with self._lock:
