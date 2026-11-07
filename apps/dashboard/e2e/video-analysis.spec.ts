@@ -474,6 +474,34 @@ test("yükleme formu: Araç ve Hayvan kişi formunu kullanır (giriş yönü, ka
   }
 });
 
+test("yükleme formu: yanıt gelmeden yeni video seçilirse seçim korunur; gecikmiş yanıt formu temizlemez, yeni video gönderilir", async ({ page }) => {
+  const sent: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  await page.route("**/api/jobs", async (r) => {
+    if (r.request().method() !== "POST") return r.fulfill({ json: [] });
+    const body = r.request().postDataBuffer()?.toString("latin1") ?? "";
+    sent.push(/filename="([^"]*)"/.exec(body)![1]);
+    if (sent.length === 1) await gate;                                            // ilk yanıt bekletilir (yavaş ağ)
+    return r.fulfill({ status: 202, json: mockJob(`00000000-0000-4000-8000-0000000005c${sent.length}`, { status: "queued", progress: 0 }) });
+  });
+  await page.goto("/videos");
+  await page.getByTestId("file-input").setInputFiles(CLIP);
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  await expect(page.getByText("Yükleniyor…")).toBeVisible();
+  await page.getByTestId("file-input").setInputFiles({ name: "ikinci.mp4", mimeType: "video/mp4", buffer: Buffer.from("ikinci") });
+  await expect(page.getByText("ikinci.mp4")).toBeVisible();
+  release();
+  await expect(page.getByRole("button", { name: "Analizi başlat" })).toBeVisible();   // yanıt geldi, ilerleme kalktı
+  await expect(page.getByText("ikinci.mp4")).toBeVisible();                           // yeni seçim silinmedi
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1]).toBe("ikinci.mp4");
+  await expect(page.getByText("ikinci.mp4")).toHaveCount(0);                          // yüklenen seçiliydi: form temizlendi
+  await expect(page.getByText("Videoyu sürükle ya da seç")).toBeVisible();
+});
+
 test("dosya vekili: alarms.csv ve alarm-N.jpg analiz sunucusuna iletilir; başka adlar vekilde reddedilir", async ({ page }) => {
   const id = "00000000-0000-4000-8000-0000000005d1";          // olmayan iş: iletilen ad analiz sunucusundan "İş bulunamadı." alır
   const get = async (name: string) => {

@@ -29,6 +29,7 @@ function errorOf(body: unknown, status: number): Failure {
 export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const picked = useRef<File | null>(null);                     // en son seçilen video (yanıt gelince yalnız o temizlenir)
   const [drag, setDrag] = useState(false);
   const [preset, setPreset] = useState<Preset>("egg");
   const [mode, setMode] = useState<CountMode | "">("");          // "" = hazır profilin yöntemi
@@ -49,6 +50,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
 
   function pick(f: File | undefined | null) {
     if (!f) return;
+    picked.current = f;
     setFile(f);
     setGeom(null);                       // başka video: alan ve çizgi yeniden ayarlanır
     setError(null);
@@ -111,8 +113,11 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
         /* gövde JSON değil */
       }
       if (xhr.status === 202) {
-        setFile(null);
-        if (input.current) input.current.value = "";
+        if (picked.current === file) {                          // yanıt beklenirken yeni video seçildiyse seçim korunur
+          picked.current = null;
+          setFile(null);
+          if (input.current) input.current.value = "";
+        }
         onCreated(body as AnalysisJob);
       } else {
         setError(errorOf(body, xhr.status));
