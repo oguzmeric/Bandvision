@@ -372,9 +372,9 @@ export default function WatchView() {
     if (document.activeElement === el) document.getElementById(EDITOR_ID)?.focus();
   });
   /** Sunucudaki taslağı hemen silen işlev (useDraft'tan, aşağıda) */
-  const releaseRef = useRef<() => void>(() => undefined);
+  const releaseRef = useRef<() => Promise<void>>(() => Promise.resolve());
   useEffect(() => {
-    guard.setDirty(dirty, () => { dropped.current = true; leaves.current += 1; clearUnsaved(); releaseRef.current(); });
+    guard.setDirty(dirty, () => { dropped.current = true; leaves.current += 1; clearUnsaved(); return releaseRef.current(); });
   }, [dirty, guard]);
   useEffect(() => () => guard.setDirty(false), [guard]);
 

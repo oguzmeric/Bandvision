@@ -45,7 +45,7 @@ export default function Sidebar({ canLogout = false, collapsed: initial = null }
   const pathname = usePathname() ?? "";
   const params = useSearchParams();
   /** Kaydedilmemiş değişiklik bekçisi: bağlantıları kendisi yakalar; "Çıkış" (bağlantı değil) burada sorar */
-  const { confirmLeave } = useUnsavedGuard();
+  const { confirmLeave, discarded } = useUnsavedGuard();
   const [collapsed, setCollapsed] = useState<string[]>(initial ?? []);
   const [open, setOpen] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
@@ -205,6 +205,8 @@ export default function Sidebar({ canLogout = false, collapsed: initial = null }
                     // Canlı izlemedeki kaydedilmemiş düzenlemenin bu tarayıcı sekmesindeki kaydı her sayfadan çıkışta silinir
                     // (Canlı izlemeden Geri ile çıkılmış olabilir): sonraki girişte geri yüklenmez
                     try { window.sessionStorage.removeItem(UNSAVED_KEY); } catch { /* depo yok */ }
+                    // Taslak oturum çerezi silinmeden (Çıkış isteğinden önce) silinir: süren silme/açma isteği beklenir (en çok 3 sn)
+                    await discarded();
                     await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
                     window.location.assign("/login");          // göreli: ana makine adı değişmez
                   }}
