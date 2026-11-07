@@ -6,8 +6,10 @@ işlenir; tarayıcıya yerel ağdan işaretli kare gider, hiçbir yere kaydedilm
 İki iş parçacığı:
 - okuyucu: kaynaktan sürekli kare çeker, yalnızca en yenisini tutar (sayım hiçbir zaman eski kare kuyruğunda
   gecikmez); koparsa artan beklemeyle yeniden bağlanır, her bağlanışta adres yeniden alınır (TRASSIR jetonu).
-  Güvenlik oturumunda ayrıca olay kaydının ön kaydını (`clips.ClipBuffer`, işaretsiz, ≤ 10 kare/sn) doldurur;
-- işleyici: en yeni kareyi sayım hattından geçirir, işaretli kareyi (en çok ~12/sn) JPEG olarak hazırlar.
+  Güvenlik oturumunda ayrıca olay kaydının ön kaydını (`clips.ClipBuffer`, ham kare, ≤ 10 kare/sn) doldurur;
+- işleyici: en yeni kareyi sayım hattından geçirir, işaretli kareyi (en çok ~12/sn) JPEG olarak hazırlar. Güvenlik
+  oturumunda her işlenen karenin çizilecek sonucunu (`clips.ClipOverlay`, yalnızca sayılar) ön kayda bırakır; olay
+  kaydı yazılırken iskelet bu sonuçtan çizilir.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ from ..core.staff_color import teach_bgr
 from ..overlay import draw_detect, draw_safety
 from ..video import draw, number_label, split_numbers
 from . import open_gate
-from .clips import ClipBuffer, ClipJob
+from .clips import ClipBuffer, ClipJob, ClipOverlay
 
 _LOG = logging.getLogger(__name__)
 
@@ -273,9 +275,9 @@ class LiveSession:
         """Alarm anında olay kaydı yakalanır mı (güvenlik oturumu ve kayıt yazıcısı var)."""
         return self._clips is not None
 
-    def capture_clip(self, ids: list[str], post_s: float | None = None) -> bool:
+    def capture_clip(self, ids: list[str], post_s: float | None = None, raw: bool = False) -> bool:
         """Alarm kayıtları için olay kaydı: ön kayıt + `post_s` (varsayılan `clips.POST_S`) sn sonrası (0: yalnızca ön
-        kayıt, hemen yazılır — deneme alarmı). Güvenlik oturumu değilse (ör. tam bu arada güvenlikten çıkıldı) ya da
+        kayıt, hemen yazılır — deneme alarmı). `raw`: iskeletsiz (deneme alarmı). Güvenlik oturumu değilse (ör. tam bu arada güvenlikten çıkıldı) ya da
         henüz kare yoksa False ve kayıtlar "alınamadı" olur (bekleme asılı kalmaz). Engellemez, hata fırlatmaz."""
         if not ids:
             return False
@@ -284,7 +286,7 @@ class LiveSession:
             self._clip_failed(ids)
             return False
         try:
-            return clips.capture(ids, time.monotonic(), post_s)
+            return clips.capture(ids, time.monotonic(), post_s, raw=raw)
         except Exception:  # noqa: BLE001 — kayıt hatası alarmı/oturumu düşürmez
             _LOG.exception("Olay kaydı başlatılamadı (oturum %s)", self.id[:8])
             self._clip_failed(ids)
@@ -611,6 +613,10 @@ class LiveSession:
                 self._after_frame(r, frame)
                 if profile.countMode == "safety":
                     self._after_safety_frame()
+                    clips = self._clips
+                    if clips is not None and r.safety is not None:      # olay kaydının iskeleti (yalnızca sayılar)
+                        clips.publish_overlay(ClipOverlay.from_result(r.safety, frame.shape, profile),
+                                              time.monotonic())
             self._notify_safety(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]

@@ -1,15 +1,20 @@
 """Poz güvenlik alarmının olay kaydı (video klip): ihlal anının görüntüsü panelde oynatılır.
 
 - **Ön kayıt** (`ClipBuffer`, yalnızca güvenlik oturumunda): okuyucu iş parçacığı kameradan okuduğu HER kareyi verir
-  (analizden bağımsız, daha akıcı); en çok `CLIP_FPS` (10) kare/sn tutulur, işaretsiz, en çok 1280 px genişlikte,
+  (analizden bağımsız, daha akıcı); en çok `CLIP_FPS` (10) kare/sn tutulur, ham (işaretsiz), en çok 1280 px genişlikte,
   JPEG (kalite 80) olarak bellekte. Son `PRE_S` (8) sn kalır, eskiler zamana göre düşer (bellek sınırlı). Canlı
   oturumda JPEG'e çevirme tek yuvalı ayrı bir iş parçacığında yapılır: okuyucu yalnızca kare başvurusunu bırakır;
   çevirici meşgulse yuvadaki kare en yenisiyle değiştirilir (sıra ve zaman sınırı korunur).
+- **İşaret (iskelet) yan kanalı:** işleyici her güvenlik karesinden sonra çizilecek sonucu (`ClipOverlay`: iz kutuları,
+  kaynak kare pikselinde 17×3 eklemler, etkin bölümler, alarmlı izlerin son kutusu — yalnızca sayılar, kare değil)
+  `publish_overlay` ile bırakır. Okuyucunun saklanan her karesi, o an en çok `OVERLAY_MAX_AGE_S` (0,7) sn yaşındaki son
+  işaretin başvurusunu taşır (yoksa işaretsiz); çizim yazımda yapılır. Deneme alarmının kaydı işaretsiz kalır.
 - **Yakalama:** alarm anında ön kayıt alınır, ardından `POST_S` (4) sn daha toplanır; aynı karede doğan alarmlar tek
   yakalamayı paylaşır. Kamera koparsa ya da oturum durursa yakalama elindeki karelerle yazılır.
 - **Yazım** (`ClipWriter`): tek arka plan iş parçacığı, sınırlı kuyruk — okuyucu ve işleyici hiç beklemez. Kareler sabit
   `CLIP_FPS` ile (videodaki zaman duvar saatine eşit; boşluk önceki kareyle dolar) OpenCV `VideoWriter` + VP8 ile
-  `<data>/live/alarm-clips/<alarmId>.webm` olarak geçici adla yazılır, sonra atomik olarak yeniden adlandırılır. Başarıda
+  `<data>/live/alarm-clips/<alarmId>.webm` olarak (işaretli karelere `overlay.draw_safety` ile iskelet ve alarmlı kutu
+  çizilir; eklemler kayıt karesinin boyutuna ölçeklenir) geçici adla yazılır, sonra atomik olarak yeniden adlandırılır. Başarıda
   kayıt `clip: true` ve `clipStartedAt` (ilk karenin duvar saati) alır. Her hata Türkçe günlüğe yazılır, kayıt
   `clip: false` kalır; hiçbir hata oturuma ulaşmaz. Kayıt durumu kayda yansır: yakalama planlanınca `clipPending`,
   yazılınca `clip`, alınamazsa (görüntü yok, kuyruk dolu, kodlayıcı/disk hatası) `clipFailed`.
@@ -33,7 +38,12 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from ..core.people_track import MotTrack
+from ..core.safety import SafetyResult
+from ..overlay import draw_safety
+
 if TYPE_CHECKING:
+    from ..core.profile import Profile
     from .alarms import AlarmStore
 
 _LOG = logging.getLogger(__name__)
@@ -45,8 +55,47 @@ MAX_WIDTH = 1280                # daha geniş kare bu genişliğe küçültülü
 JPEG_QUALITY = 80
 QUEUE_MAX = 8                   # yazılmayı bekleyen en çok yakalama (her biri ≈ 120 JPEG)
 STOP_WAIT_S = 60.0              # kapanışta bekleyen kayıtların yazılması için en çok bu kadar beklenir
+OVERLAY_MAX_AGE_S = 0.7         # karenin taşıyacağı işaret (iskelet) en çok bu kadar eski olabilir
 
-Frame = tuple[float, float, bytes]      # (tekdüze saat, duvar saati, JPEG)
+
+@dataclass(frozen=True)
+class ClipOverlay:
+    """Bir güvenlik karesinin çizilecek sonucu (yalnızca sayılar; dizi kopyaları — işleyicinin dizileri sonradan
+    değişse de bozulmaz). `size`: eklemlerin ait olduğu kaynak karenin (genişlik, yükseklik); kutular normalize (0–1)."""
+    size: tuple[int, int]
+    profile: Profile
+    tracks: tuple[tuple[int, np.ndarray], ...] = ()                 # (iz, kutu) — bu karede gözlenen izler
+    poses: tuple[tuple[int, np.ndarray], ...] = ()                  # (iz, 17×3 eklem, kaynak piksel)
+    active: tuple[tuple[int, str, float, bool], ...] = ()           # (iz, tür, süre sn, alarm verdi mi)
+    boxes: tuple[tuple[int, np.ndarray], ...] = ()                  # alarm vermiş izlerin son bilinen kutusu
+
+    @classmethod
+    def from_result(cls, r: SafetyResult, shape: Sequence[int], profile: Profile) -> ClipOverlay:
+        """`shape`: işlenen karenin `frame.shape` (yükseklik, genişlik, …)."""
+        return cls((int(shape[1]), int(shape[0])), profile,
+                   tuple((int(t.id), np.array(t.box, np.float64)) for t in r.tracks),
+                   tuple((int(i), np.array(kp, np.float64)) for i, kp in r.poses.items()),
+                   tuple((int(i), str(k), float(sec), bool(f)) for i, k, sec, f in r.active),
+                   tuple((int(i), np.array(b, np.float64)) for i, b in r.boxes.items()))
+
+    @property
+    def empty(self) -> bool:
+        """Çizilecek bir şey yok (gözlenen iz yok, alarmlı kutu yok)."""
+        return not self.tracks and not self.boxes
+
+    def result(self, w: int, h: int) -> SafetyResult:
+        """`w`×`h` kayıt karesine çizilecek `SafetyResult`: eklemler kaynak boyuttan bu boyuta ölçeklenir."""
+        sw, sh = self.size
+        scale = np.array([w / sw, h / sh, 1.0]) if sw > 0 and sh > 0 else np.ones(3)
+        z = np.zeros(4)
+        return SafetyResult(
+            tracks=[MotTrack(i, b, z, b, 1.0) for i, b in self.tracks],
+            poses={i: kp * scale for i, kp in self.poses},
+            active=list(self.active),
+            boxes={i: (float(b[0]), float(b[1]), float(b[2]), float(b[3])) for i, b in self.boxes})
+
+
+Frame = tuple[float, float, bytes, ClipOverlay | None]     # (tekdüze saat, duvar saati, JPEG, işaret ya da yok)
 
 
 @dataclass(frozen=True)
@@ -61,6 +110,7 @@ class _Capture:
     ids: tuple[str, ...]
     until: float                        # bu tekdüze saate kadar kare toplanır
     frames: list[Frame]
+    raw: bool = False                   # işaretsiz (deneme alarmı)
 
 
 ClipState = Callable[[Sequence[str], str], None]    # (alarm kimlikleri, "failed") — yakalama alınamadı
@@ -87,9 +137,10 @@ class ClipBuffer:
         self._ring: deque[Frame] = deque()
         self._pending: list[_Capture] = []
         self._due = float("-inf")
+        self._overlay: tuple[float, ClipOverlay] | None = None     # işleyicinin son işareti ve tekdüze saati
         # tek yuvalı çevirici (threaded): yuvadaki çevrilmemiş kare, çevirici meşgul mü, kapandı mı
         self._slot_cv = threading.Condition(threading.Lock())
-        self._slot: tuple[np.ndarray, float, float] | None = None
+        self._slot: tuple[np.ndarray, float, float, ClipOverlay | None] | None = None
         self._busy = False
         self._closed = False
         self._thread: threading.Thread | None = None
@@ -101,21 +152,29 @@ class ClipBuffer:
         with self._lock:
             return list(self._ring)
 
+    def publish_overlay(self, data: ClipOverlay, t: float) -> None:
+        """İşleyicinin son güvenlik sonucu (`t` tekdüze saat). Yalnızca başvuru saklanır (tek atama, kısa kilit)."""
+        with self._lock:
+            self._overlay = (t, data)
+
     def push(self, frame: np.ndarray, t: float, wall: float) -> None:
         """Okuyucunun yeni karesi (`t` tekdüze saat, `wall` duvar saati). Seyreltme: kare yalnızca zamanı geldiyse
         JPEG'e çevrilir (uzun vadede en çok `CLIP_FPS`/sn; kaynak yavaşsa her kare). Ayrı çeviricide okuyucu yalnızca
-        başvuruyu bırakır (kopya yok: okuyucu her karede yeni dizi alır)."""
+        başvuruyu bırakır (kopya yok: okuyucu her karede yeni dizi alır). Kare, o an en çok `OVERLAY_MAX_AGE_S` sn
+        yaşındaki son işaretin başvurusunu taşır (boş işaret taşınmaz: yazımda boşuna çizim olmaz)."""
         with self._lock:
             keep = t >= self._due
             if keep:
                 self._due = max(self._due + self._period, t + self._period / 2)
+            ov = self._overlay
         if not keep:
             return
+        overlay = ov[1] if ov is not None and t - ov[0] <= OVERLAY_MAX_AGE_S and not ov[1].empty else None
         if self._thread is None:
-            self._add(frame, t, wall)
+            self._add(frame, t, wall, overlay)
             return
         with self._slot_cv:
-            self._slot = (frame, t, wall)                   # meşgulse önceki çevrilmemiş kare düşer: en yenisi kalır
+            self._slot = (frame, t, wall, overlay)                 # meşgulse önceki çevrilmemiş kare düşer: en yenisi kalır
             self._slot_cv.notify_all()
 
     def wait_idle(self, timeout: float = 2.0) -> bool:
@@ -144,10 +203,10 @@ class ClipBuffer:
                     self._slot_cv.wait()
                 if self._slot is None:
                     return
-                frame, t, wall = self._slot
+                frame, t, wall, overlay = self._slot
                 self._slot, self._busy = None, True
             try:
-                self._add(frame, t, wall)
+                self._add(frame, t, wall, overlay)
             except Exception:  # noqa: BLE001 — çevirici ölmesin
                 _LOG.exception("Kayıt karesi eklenemedi")
             finally:
@@ -155,29 +214,30 @@ class ClipBuffer:
                     self._busy = False
                     self._slot_cv.notify_all()
 
-    def _add(self, frame: np.ndarray, t: float, wall: float) -> None:
+    def _add(self, frame: np.ndarray, t: float, wall: float, overlay: ClipOverlay | None = None) -> None:
         """Kareyi JPEG'e çevirip ön kayda ve süren yakalamalara ekler; süresi dolan yakalamaları yazar."""
         jpeg = self._encode(frame)
         with self._lock:
             if jpeg is not None:
-                item = (t, wall, jpeg)
+                item: Frame = (t, wall, jpeg, overlay)
                 self._ring.append(item)
                 while self._ring and self._ring[0][0] < t - self._pre:
                     self._ring.popleft()
                 for c in self._pending:
                     if t <= c.until:
-                        c.frames.append(item)
+                        c.frames.append(_raw(item) if c.raw else item)
             done = self._take(lambda c: t >= c.until)
         self._emit(done)
 
-    def capture(self, ids: Sequence[str], t: float, post_s: float | None = None) -> bool:
+    def capture(self, ids: Sequence[str], t: float, post_s: float | None = None, raw: bool = False) -> bool:
         """Alarm: ön kayıt alınır ve `post_s` (varsayılan `POST_S`) sn daha toplanır; 0 ise hemen yazılır (deneme
-        alarmı). Kare yoksa False (kayıt olmaz; `state(ids, "failed")`)."""
+        alarmı). `raw`: kayıt işaretsiz yazılır (deneme alarmı; poz yok). Kare yoksa False (kayıt olmaz;
+        `state(ids, "failed")`)."""
         post = POST_S if post_s is None else post_s
         with self._lock:
-            pre = [f for f in self._ring if f[0] >= t - self._pre]
+            pre = [(_raw(f) if raw else f) for f in self._ring if f[0] >= t - self._pre]
             empty = not pre and post <= 0
-            cap = _Capture(tuple(ids), t + post, pre)
+            cap = _Capture(tuple(ids), t + post, pre, raw)
             if post > 0:
                 self._pending.append(cap)
         if empty:
@@ -240,16 +300,34 @@ class ClipBuffer:
             return None
 
 
+def _raw(f: Frame) -> Frame:
+    return (f[0], f[1], f[2], None) if f[3] is not None else f
+
+
+def annotate(img: np.ndarray, overlay: ClipOverlay | None) -> np.ndarray:
+    """Kayıt karesine iskeleti ve alarmlı kutuyu çizer (`draw_safety`; eklemler karenin boyutuna ölçeklenir). Çizim
+    hatası kaydı düşürmez: kare işaretsiz kalır."""
+    if overlay is None:
+        return img
+    h, w = img.shape[:2]
+    try:
+        return draw_safety(img, overlay.profile, overlay.result(w, h))
+    except Exception:  # noqa: BLE001
+        _LOG.debug("Kayıt karesine işaret çizilemedi", exc_info=True)
+        return img
+
+
 def encode_webm(path: Path, frames: Sequence[Frame], fps: float) -> None:
     """Kareleri sabit `fps` ile VP8 WebM olarak yazar. Video zamanı duvar saatine eşittir: her çıktı anı için zamana
     en yakın (yarım periyot toleranslı) son kare yazılır; boşluk önceki kareyle dolar. Boyutu değişen kare ilk karenin
-    boyutuna getirilir. Hata `RuntimeError`/`OSError` fırlatır."""
+    boyutuna getirilir; işaretli kareye ardından iskelet çizilir (`annotate`). Hata `RuntimeError`/`OSError` fırlatır."""
     if not frames:
         raise RuntimeError("kare yok")
     t0, t_end = frames[0][0], frames[-1][0]
     n = int((t_end - t0) * fps + 1e-6) + 1
     first = _decode(frames[0][2])
     h, w = first.shape[:2]
+    first = annotate(first, frames[0][3])
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"VP80"), fps, (w, h))
     if not writer.isOpened():
         writer.release()
@@ -266,6 +344,7 @@ def encode_webm(path: Path, frames: Sequence[Frame], fps: float) -> None:
                 img = _decode(frames[idx][2])
                 if img.shape[:2] != (h, w):
                     img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+                img = annotate(img, frames[idx][3])
             writer.write(img)
     finally:
         writer.release()

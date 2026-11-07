@@ -6,7 +6,7 @@ import logging
 import pathlib
 import threading
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import cv2
 import numpy as np
@@ -54,7 +54,7 @@ def _count_frames(path: pathlib.Path) -> int:
 def test_ring_keeps_only_the_last_pre_seconds() -> None:
     buf = ClipBuffer(lambda _j: None)
     _feed(buf, 0.0, 20.0)
-    ts = [t for t, _w, _j in buf.frames()]
+    ts = [t for t, _w, _j, _o in buf.frames()]
     assert ts[-1] > 19.8
     assert ts[-1] - ts[0] <= clips.PRE_S + 1e-6                 # en eski kareler zamana göre düşer
     assert ts[-1] - ts[0] >= clips.PRE_S - 0.2
@@ -66,7 +66,7 @@ def test_ring_downsamples_reader_frames_to_clip_fps() -> None:
     kept = buf.frames()
     assert given == 240
     assert 78 <= len(kept) <= 82                                 # ≤ 10 kare/sn (8 sn)
-    gaps = np.diff([t for t, _w, _j in kept])
+    gaps = np.diff([t for t, _w, _j, _o in kept])
     assert gaps.min() >= 0.5 / clips.CLIP_FPS - 1e-6             # art arda iki kare yarım periyottan sık değil
     slow = ClipBuffer(lambda _j: None)                           # kaynak yavaşsa her kare tutulur
     assert _feed(slow, 0.0, 4.0, src_fps=5.0) == len(slow.frames()) == 20
@@ -76,7 +76,7 @@ def test_ring_stores_jpeg_scaled_down_to_1280_wide() -> None:
     buf = ClipBuffer(lambda _j: None)
     buf.push(_frame(1, 1920, 1080), 0.0, 5.0)
     buf.push(_frame(2, 640, 360), 1.0, 6.0)
-    (t1, w1, j1), (t2, w2, j2) = buf.frames()
+    (t1, w1, j1, _o1), (t2, w2, j2, _o2) = buf.frames()
     assert (t1, w1, t2, w2) == (0.0, 5.0, 1.0, 6.0)
     assert j1[:2] == b"\xff\xd8" and j2[:2] == b"\xff\xd8"       # JPEG (bellek sınırlı)
     big = cv2.imdecode(np.frombuffer(j1, np.uint8), cv2.IMREAD_COLOR)
@@ -99,7 +99,7 @@ def test_capture_keeps_pre_buffer_and_collects_post_seconds_then_emits_once() ->
     assert len(jobs) == 1                                        # bir kez
     job = jobs[0]
     assert job.ids == ("a" * 32, "b" * 32)
-    ts = [t for t, _w, _j in job.frames]
+    ts = [t for t, _w, _j, _o in job.frames]
     assert ts == sorted(ts)
     assert abs(ts[0] - (10.0 - clips.PRE_S)) <= 0.2              # alarmdan 8 sn önce
     assert abs(ts[-1] - (10.0 + clips.POST_S)) <= 0.2            # alarmdan 4 sn sonra
@@ -155,7 +155,7 @@ def _job(ids: tuple[str, ...], seconds: float = 12.0, fps: float = 10.0, w: int 
         t = i / fps + (rng.uniform(-jitter, jitter) if 0 < i < n - 1 else 0.0)
         ok, buf = cv2.imencode(".jpg", _frame(i, w, h), [cv2.IMWRITE_JPEG_QUALITY, 80])
         assert ok
-        frames.append((t, 2_000_000.0 + t, buf.tobytes()))
+        frames.append((t, 2_000_000.0 + t, buf.tobytes(), None))
     return ClipJob(ids, tuple(frames))
 
 
@@ -208,7 +208,7 @@ def test_resized_stream_mid_clip_is_written_at_first_frame_size(tmp_path: pathli
     st = AlarmStore(tmp_path)
     a = st.add("s1", "Tezgah", "hands_up", 1.0, 2.0, None, "disabled")
     first, second = _job(("x",), seconds=1.0, w=320, h=240), _job(("x",), seconds=1.0, w=640, h=360)
-    frames = first.frames + tuple((t + 1.1, wall + 1.1, j) for t, wall, j in second.frames)
+    frames = first.frames + tuple((t + 1.1, wall + 1.1, j, o) for t, wall, j, o in second.frames)
     w = ClipWriter(st)
     try:
         w.submit(ClipJob((a["id"],), frames))
@@ -369,7 +369,7 @@ def test_threaded_buffer_push_only_hands_over_the_frame_and_keeps_the_latest() -
             buf.push(_frame(i), i * 0.2, 100.0 + i * 0.2)
         assert _time.monotonic() - t0 < 0.25                                      # okuyucu hiç beklemedi
         assert buf.wait_idle(5)
-        ts = [t for t, _w, _j in buf.frames()]
+        ts = [t for t, _w, _j, _o in buf.frames()]
         assert ts == [0.0, 0.8]                                                   # ilk ve en yeni; aradakiler düştü
     finally:
         buf.close()
@@ -388,7 +388,7 @@ def test_threaded_buffer_feeds_captures_in_order_and_completes() -> None:
             buf.push(_frame(i), i / 10, 1000 + i / 10)
             buf.wait_idle(2)
         assert len(jobs) == 1
-        ts = [t for t, _w, _j in jobs[0].frames]
+        ts = [t for t, _w, _j, _o in jobs[0].frames]
         assert ts == sorted(ts) and ts[0] >= 5.0 - clips.PRE_S - 1e-9 and abs(ts[-1] - 6.0) < 1e-6
     finally:
         buf.close()
@@ -478,3 +478,129 @@ def test_capture_clip_reports_failure_when_buffer_is_gone_or_raises() -> None:
         assert states == [(["a" * 32], "failed"), (["b" * 32], "failed")]
     finally:
         s.stop()
+
+
+# ---------------------------------------------------------------------- iskeletli kayıt (işaret yan kanalı)
+
+def _overlay(size: tuple[int, int] = (320, 240), fired: bool = True) -> clips.ClipOverlay:
+    """Kaynak `size` (genişlik, yükseklik) karesinde bilinen bir iskelet: omuzlar y = h/4, kalçalar y = 5h/6."""
+    from types import SimpleNamespace
+
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyResult
+
+    w, h = size
+    kp = np.zeros((17, 3))
+    kp[5], kp[6] = (w * 0.3, h * 0.25, 0.9), (w * 0.7, h * 0.25, 0.9)
+    kp[11], kp[12] = (w * 0.35, h * 0.83, 0.9), (w * 0.65, h * 0.83, 0.9)
+    track = SimpleNamespace(id=1, box=np.array([0.25, 0.2, 0.75, 0.95]))
+    r = SafetyResult(tracks=[track], poses={1: kp}, active=[(1, "hands_up", 3.0, fired)], boxes={})
+    return clips.ClipOverlay.from_result(r, (h, w, 3), Profile.jeweler())
+
+
+class _GrabWriter:
+    """`cv2.VideoWriter` yerine: yazılan kareleri toplar (kodlayıcı kaybı olmadan karşılaştırma için)."""
+    got: ClassVar[list[np.ndarray]] = []
+
+    def __init__(self, *_a: Any) -> None:
+        _GrabWriter.got = []
+
+    def isOpened(self) -> bool:
+        return True
+
+    def write(self, img: np.ndarray) -> None:
+        _GrabWriter.got.append(img.copy())
+
+    def release(self) -> None:
+        pass
+
+
+def _written(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, job: ClipJob) -> list[np.ndarray]:
+    monkeypatch.setattr(clips.cv2, "VideoWriter", _GrabWriter)
+    clips.encode_webm(tmp_path / "x.webm", job.frames, clips.CLIP_FPS)
+    return _GrabWriter.got
+
+
+def test_frames_carry_the_overlay_for_at_most_0_7_s_and_are_drawn_at_write_time(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    from bantvision.overlay import draw_safety
+
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    _feed(buf, 0.0, 1.0, src_fps=10.0)                           # işaret yok: ham
+    ov = _overlay()
+    buf.publish_overlay(ov, 1.0)
+    _feed(buf, 1.0, 2.5, src_fps=10.0, start=10)
+    frames = buf.frames()
+    assert all(f[3] is None for f in frames if f[0] < 1.0 - 1e-9)
+    assert all(f[3] is ov for f in frames if 1.0 - 1e-9 <= f[0] <= 1.65)       # ≤ 0,7 sn: son işaret taşınır
+    assert all(f[3] is None for f in frames if f[0] >= 1.75)                    # daha eski işaret çizilmez
+    assert buf.capture(["a" * 32], 2.5, post_s=0)
+    got = _written(monkeypatch, tmp_path, jobs[0])
+    assert len(got) == len(jobs[0].frames)
+    drawn = 0
+    for img, f in zip(got, jobs[0].frames, strict=True):
+        raw = clips._decode(f[2])
+        if f[3] is None:
+            assert np.array_equal(img, raw)
+        else:
+            want = draw_safety(raw.copy(), ov.profile, ov.result(320, 240))
+            assert np.array_equal(img, want) and not np.array_equal(img, raw)   # iskelet + alarmlı kutu çizildi
+            drawn += 1
+    assert drawn == 8                                            # 1,0 … 1,7 sn (10 kare/sn)
+
+
+def test_overlay_keypoints_are_scaled_to_the_clip_frame(monkeypatch: pytest.MonkeyPatch,
+                                                        tmp_path: pathlib.Path) -> None:
+    """Eklemler kaynak karenin pikselinde (640×480); kayıt karesi 320×240: iskelet yarı ölçekte, yerinde çizilir."""
+    from bantvision.core.safety import SafetyResult
+    from bantvision.overlay import draw_safety
+
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    ov = _overlay((640, 480), fired=False)
+    buf.publish_overlay(ov, 0.0)
+    buf.push(_frame(0), 0.0, 1.0)
+    assert buf.capture(["a" * 32], 0.0, post_s=0)
+    (img,) = _written(monkeypatch, tmp_path, jobs[0])
+    raw = clips._decode(jobs[0].frames[0][2])
+    kp = dict(ov.poses)[1] * np.array([0.5, 0.5, 1.0])
+    want = draw_safety(raw.copy(), ov.profile, SafetyResult(tracks=ov.result(320, 240).tracks, poses={1: kp}))
+    assert np.array_equal(img, want)
+    assert not np.array_equal(img[60, 160], raw[60, 160])        # omuz çizgisi y = 240/4 = 60
+    assert np.array_equal(img[120, 240:300], raw[120, 240:300])  # ölçeksiz omuz çizgisi y = 120, x = 192…448 olurdu
+
+
+def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """Deneme alarmında poz yok: işaretli kareler olsa da kayıt işaretsiz (ön kayıt ve sonrası)."""
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    buf.publish_overlay(_overlay(), 0.0)
+    _feed(buf, 0.0, 0.6, src_fps=10.0)
+    assert all(f[3] is not None for f in buf.frames())
+    assert buf.capture(["a" * 32], 0.6, post_s=0, raw=True)
+    assert buf.capture(["b" * 32], 0.6, post_s=0.3, raw=True)
+    buf.publish_overlay(_overlay(), 0.6)
+    _feed(buf, 0.6, 1.0, src_fps=10.0, start=6)
+    assert [j.ids for j in jobs] == [("a" * 32,), ("b" * 32,)]
+    for job in jobs:
+        assert all(f[3] is None for f in job.frames)
+    got = _written(monkeypatch, tmp_path, jobs[0])
+    assert all(np.array_equal(img, clips._decode(f[2])) for img, f in zip(got, jobs[0].frames, strict=True))
+
+
+def test_overlay_stores_copies_and_empty_overlay_is_not_carried() -> None:
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyResult
+
+    kp = np.ones((17, 3))
+    box = np.array([0.1, 0.1, 0.5, 0.9])
+    r = SafetyResult(tracks=[type("T", (), {"id": 3, "box": box})()], poses={3: kp}, boxes={3: (0.1, 0.1, 0.5, 0.9)})
+    ov = clips.ClipOverlay.from_result(r, (480, 640, 3), Profile.jeweler())
+    kp[:] = 0
+    box[:] = 0
+    assert ov.size == (640, 480) and dict(ov.poses)[3].sum() == 51 and dict(ov.tracks)[3][2] == 0.5
+    buf = ClipBuffer(lambda _j: None)
+    buf.publish_overlay(clips.ClipOverlay.from_result(SafetyResult(), (480, 640, 3), Profile.jeweler()), 0.0)
+    buf.push(_frame(0), 0.1, 1.0)
+    assert buf.frames()[0][3] is None                            # çizilecek bir şey yok: yazımda iş yok
