@@ -13,9 +13,12 @@ const KEYS: Array<[string, string]> = [
 ];
 
 /**
- * Klavye kısayolları listesi: kipli `<dialog>`; Esc, "?" ya da Kapat kapatır, odak açan öğeye döner.
+ * Klavye kısayolları listesi: kipli `<dialog>`; Esc, "?" ya da Kapat kapatır, odak açan öğeye döner. `keys`/`note`:
+ * başka sayfanın kısayolları (Kayıttan izleme); verilmezse Canlı izleme listesi.
  */
-export default function ShortcutHelp({ onClose }: { onClose: () => void }) {
+export default function ShortcutHelp({ onClose, keys = KEYS, note }: {
+  onClose: () => void; keys?: ReadonlyArray<readonly [string, string]>; note?: string;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -32,13 +35,14 @@ export default function ShortcutHelp({ onClose }: { onClose: () => void }) {
       <h2 id="bv-shortcuts-title" className="border-b border-pl-line bg-pl-head px-3 py-1.5 font-semibold">Klavye kısayolları</h2>
       <div className="grid gap-2 p-3">
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
-          {KEYS.map(([k, text]) => (
+          {keys.map(([k, text]) => (
             <div key={k} className="contents">
               <dt><kbd className="inline-block min-w-8 border border-pl-ctl bg-pl-side px-1.5 text-center font-semibold">{k}</kbd></dt>
               <dd>{text}</dd>
             </div>
           ))}
         </dl>
+        {note && <p className="text-pl-muted">{note}</p>}
         <p className="text-pl-muted">Yazı kutusundayken ya da bir pencere veya menü açıkken kısayollar çalışmaz.</p>
         <div className="flex justify-end">
           <button type="button" autoFocus onClick={onClose} className="pl-btn">Kapat</button>

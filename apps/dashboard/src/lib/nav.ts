@@ -8,6 +8,7 @@ export const NAV: NavGroup[] = [
     title: "İzleme",
     items: [
       { label: "Canlı izleme", href: "/watch" },
+      { label: "Kayıttan izleme", href: "/archive" },
       { label: "Alarmlar", href: "/alarms" },
     ],
   },
