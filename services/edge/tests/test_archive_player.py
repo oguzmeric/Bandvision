@@ -1,6 +1,6 @@
 """Kayıttan izleme oynatıcısı ve yöneticisi (bantvision.live.archive_player).
 
-Ağ yok: sahte yakalama (`FakeCap`) ve sahte arşiv (`FakeArchive`, `stream_url`/`stop`/`keep_alive` çağrılarını kaydeder).
+Ağ yok: sahteler `fakes_archive.py`'de (`FakeCap`, `FakeArchive`, `Rig`).
 Zaman ölçen kurallar (20 sn karesiz, 60 sn boşta, 60 sn önbellek, 5 sn canlı tutma) sahte saatle sınanır.
 """
 from __future__ import annotations
@@ -12,155 +12,22 @@ from datetime import UTC, datetime
 from typing import Any
 
 import cv2
-import numpy as np
 import pytest
+from fakes_archive import CH, START, Clock, FakeArchive, FakeCap, Rig
 
 from bantvision.live import archive_player as ap
-from bantvision.live.archive import ArchiveClient, ExportStream, FileArchive
+from bantvision.live.archive import FileArchive
 from bantvision.live.archive_player import (
-    ArchiveManager,
     ArchivePlayer,
     ExportBusy,
+    ManagerStopped,
+    MissingChannel,
+    NoArchive,
     SourceMissing,
     TooManyPlayers,
+    UnsupportedSpeed,
 )
-from bantvision.live.recorders import RecorderChannel, RecorderError
-
-CH = RecorderChannel("guid-1", "Kapı", None, True)
-START = 1_000.0
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.t = 5_000.0
-
-    def __call__(self) -> float:
-        return self.t
-
-
-class FakeCap:
-    """Sahte yakalama. `frames` kare sonra akış biter (`read` False); `fps` CAP_PROP_FPS; `stall`: hiç kare vermez
-    (`unblock` ya da 5 sn'ye dek bekler, sonra False); `fail_after`: o kadar kareden sonra `read` hata atar."""
-
-    def __init__(self, frames: int = 10_000, fps: float = 25.0, w: int = 40, h: int = 20, opened: bool = True,
-                 stall: bool = False, delay: float = 0.0, fail_after: int | None = None,
-                 on_end: Callable[[], None] | None = None) -> None:
-        self.left, self.fps, self.w, self.h, self.opened = frames, fps, w, h, opened
-        self.on_end = on_end                # akış sonunda (False dönmeden önce): ör. sahte saati ilerletir
-        self.stall, self.delay, self.fail_after = stall, delay, fail_after
-        self.unblock = threading.Event()
-        self.released = False
-        self.sets: list[tuple[int, float]] = []
-        self.read_count = 0
-
-    def isOpened(self) -> bool:
-        return self.opened
-
-    def get(self, prop: int) -> float:
-        return self.fps if prop == cv2.CAP_PROP_FPS else 0.0
-
-    def set(self, prop: int, value: float) -> bool:
-        self.sets.append((prop, value))
-        return True
-
-    def read(self) -> tuple[bool, Any]:
-        if self.stall:
-            self.unblock.wait(5)
-            return False, None
-        if self.fail_after is not None and self.read_count >= self.fail_after:
-            raise cv2.error("okuma hatası")
-        if self.left <= 0:
-            if self.on_end is not None:
-                self.on_end()
-                self.on_end = None
-            return False, None
-        self.left -= 1
-        self.read_count += 1
-        if self.delay:
-            time.sleep(self.delay)
-        return True, np.full((self.h, self.w, 3), self.read_count % 250, np.uint8)
-
-    def release(self) -> None:
-        self.released = True
-        self.unblock.set()
-
-
-class FakeArchive(ArchiveClient):
-    def __init__(self, speeds: tuple[int, ...] = (1, 2, 4), can_export: bool = False) -> None:
-        self.speeds = speeds
-        self.can_export = can_export
-        self.calls: list[tuple[Any, ...]] = []
-        self.n = 0
-        self.cal_calls = 0
-        self.tl_calls = 0
-        self.fail_next: list[BaseException] = []
-        self.slow = 0.0
-        self.active = 0
-        self.max_active = 0
-        self._lock = threading.Lock()
-        self.export_chunks = [b"\x00\x00\x00\x18ftypmp42", b"rest"]
-        self.export_error: BaseException | None = None
-        self.keep_gate: threading.Event | None = None
-
-    def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
-                   speed: int) -> str:
-        self._check_speed(speed)
-        if self.fail_next:
-            raise self.fail_next.pop(0)
-        with self._lock:
-            self.n += 1
-            url = f"rtsp://nvr:554/tok{self.n}"
-            self.calls.append(("url", start, end, substream, speed, url))
-        return url
-
-    def stop(self, stream_url: str) -> None:
-        with self._lock:
-            self.calls.append(("stop", stream_url))
-
-    def keep_alive(self, stream_url: str) -> None:
-        with self._lock:
-            self.calls.append(("keep", stream_url))
-        if self.keep_gate is not None:
-            self.keep_gate.wait(5)
-
-    def _busy(self) -> None:
-        with self._lock:
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-        time.sleep(self.slow)
-        with self._lock:
-            self.active -= 1
-        if self.fail_next:
-            raise self.fail_next.pop(0)
-
-    def calendar(self, channel: RecorderChannel, year: int, month: int) -> set[int]:
-        self.cal_calls += 1
-        self._busy()
-        return {1, month}
-
-    def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
-        self.tl_calls += 1
-        self._busy()
-        return [(day, day + 60.0)]
-
-    def export(self, channel: RecorderChannel, start: float, end: float) -> ExportStream:
-        if not self.can_export:
-            raise RecorderError.unsupported()
-        if self.export_error is not None:
-            raise self.export_error
-        chunks = list(self.export_chunks)
-
-        def rest() -> Iterator[bytes]:
-            yield from chunks[1:]
-
-        return ExportStream(chunks[0], rest())  # type: ignore[arg-type]
-
-    # yardımcılar
-    def urls(self) -> list[tuple[Any, ...]]:
-        return [c for c in self.calls if c[0] == "url"]
-
-    def stops(self) -> list[str]:
-        return [c[1] for c in self.calls if c[0] == "stop"]
+from bantvision.live.recorders import RecorderError
 
 
 def wait_for(pred: Callable[[], bool], timeout: float = 3.0) -> None:
@@ -327,7 +194,7 @@ def test_set_speed_reopens_with_new_speed(players: list[ArchivePlayer]) -> None:
     wait_for(lambda: len(arch.urls()) == 2)
     url = arch.urls()[1]
     assert url[4] == 4 and url[1] >= START
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsupportedSpeed):
         p.set_speed(16)                                    # bu cihazın hızlarında yok
 
 
@@ -572,64 +439,6 @@ def test_seek_while_connecting_reopens_at_new_position(players: list[ArchivePlay
     assert p.view().at >= 9_000.0
 
 
-class FakeStore:
-    def __init__(self, sources: dict[str, dict[str, Any]]) -> None:
-        self._sources = sources
-
-    def source(self, source_id: str) -> dict[str, Any] | None:
-        return self._sources.get(source_id)
-
-    def password(self, source_id: str) -> str:
-        return "s3cr3t"
-
-
-class FakeClient:
-    def __init__(self) -> None:
-        self.channel_calls = 0
-
-    def channels(self) -> list[RecorderChannel]:
-        self.channel_calls += 1
-        return [CH, RecorderChannel("2", "", 2, True)]
-
-
-SOURCES = {
-    "nvr": {"id": "nvr", "kind": "recorder", "name": "NVR", "recorderBrand": "trassir", "host": "10.0.0.1",
-            "username": "admin"},
-    "hik": {"id": "hik", "kind": "recorder", "name": "Hik", "recorderBrand": "hikvision", "host": "10.0.0.2",
-            "username": "admin"},
-    "cam": {"id": "cam", "kind": "camera", "name": "Tek kamera", "brand": "hikvision", "host": "10.0.0.3"},
-}
-
-
-class Rig:
-    def __init__(self, archive: FakeArchive | None = None, sources: dict[str, dict[str, Any]] | None = None,
-                 caps: Callable[[], FakeCap] | None = None) -> None:
-        self.clock = Clock()
-        self.archive = archive or FakeArchive(speeds=(1, 2, 4, 8, 16), can_export=True)
-        self.client = FakeClient()
-        self.opened: list[str] = []
-        self._caps = caps or (lambda: FakeCap(delay=0.002))
-        self.brands: list[str] = []
-
-        def open_capture(url: str) -> FakeCap:
-            self.opened.append(url)
-            return self._caps()
-
-        def archive_factory(client: Any, brand: str) -> ArchiveClient:
-            self.brands.append(str(brand))
-            return self.archive
-
-        self.hosts: list[str] = []
-
-        def recorder_factory(src: dict[str, Any]) -> FakeClient:
-            self.hosts.append(str(src.get("host")))
-            return self.client
-
-        self.sources = {k: dict(v) for k, v in (sources or SOURCES).items()}
-        self.manager = ArchiveManager(FakeStore(self.sources), recorder_factory, open_capture,
-                                      clock=self.clock, archive_factory=archive_factory)
-
-
 @pytest.fixture
 def rig() -> Iterator[Rig]:
     r = Rig()
@@ -684,7 +493,7 @@ def test_export_error_after_lock_releases_lock(rig: Rig) -> None:
     with pytest.raises(RecorderError):
         rig.manager.export("nvr", "guid-1", 0.0, 60.0)
     rig.archive.export_error = None
-    _, s = rig.manager.export("nvr", "guid-1", 0.0, 60.0)    # ExportBusy değil
+    _, _, s = rig.manager.export("nvr", "guid-1", 0.0, 60.0)    # ExportBusy değil
     s.close()
 
 
@@ -711,11 +520,11 @@ def test_third_player_rejected_and_closed_player_frees_slot(rig: Rig) -> None:
 def test_open_validation(rig: Rig) -> None:
     with pytest.raises(SourceMissing):
         rig.manager.open("yok", "guid-1", START, 1, True)
-    with pytest.raises(ValueError):
+    with pytest.raises(MissingChannel):
         rig.manager.open("nvr", None, START, 1, True)        # kanal seçilmemiş
-    with pytest.raises(ValueError):
+    with pytest.raises(NoArchive):
         rig.manager.open("cam", None, START, 1, True)        # kayıt cihazı değil
-    with pytest.raises(ValueError):
+    with pytest.raises(UnsupportedSpeed):
         rig.manager.open("nvr", "guid-1", START, 3, True)    # hız yok
     assert rig.manager.sweep() == 0
 
@@ -781,16 +590,16 @@ def test_calendar_calls_serialized_per_source(rig: Rig) -> None:
 def test_export_lock_and_filename(rig: Rig) -> None:
     rig.archive.tz = UTC                                     # dosya adındaki saat cihazın saat diliminde
     start = datetime(2026, 11, 7, 14, 30, tzinfo=UTC).timestamp()
-    name, stream = rig.manager.export("nvr", "guid-1", start, start + 60)
-    assert name == "NVR-Kapi-20261107-1430.mp4"
+    name, utf8_name, stream = rig.manager.export("nvr", "guid-1", start, start + 60)
+    assert name == "NVR-Kapi-20261107-1430.mp4" and utf8_name == "NVR · Kapı-20261107-1430.mp4"
     with pytest.raises(ExportBusy) as e:
         rig.manager.export("nvr", "guid-1", start, start + 60)
     assert str(e.value) == "Bir dışa aktarma sürüyor."
     assert b"".join(stream) == b"\x00\x00\x00\x18ftypmp42rest"   # sonuna dek okununca kilit kalkar
-    _, again = rig.manager.export("nvr", "guid-1", start, start + 60)
+    _, _, again = rig.manager.export("nvr", "guid-1", start, start + 60)
     next(again)
     again.close()                                            # yarıda kapatma da kilidi bırakır
-    _, third = rig.manager.export("nvr", "guid-1", start, start + 60)
+    _, _, third = rig.manager.export("nvr", "guid-1", start, start + 60)
     third.close()
 
 
@@ -801,7 +610,7 @@ def test_export_unsupported_propagates_and_releases_lock() -> None:
             r.manager.export("nvr", "guid-1", 0.0, 60.0)
         assert e.value.kind == "unsupported"
         r.archive.can_export = True
-        _, s = r.manager.export("nvr", "guid-1", 0.0, 60.0)
+        _, _, s = r.manager.export("nvr", "guid-1", 0.0, 60.0)
         s.close()
     finally:
         r.manager.stop()
@@ -822,7 +631,7 @@ def test_stop_closes_all_players(rig: Rig) -> None:
     assert p is not None
     rig.manager.stop()
     assert p.closed and rig.manager.get(v.id) is None
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ManagerStopped):
         rig.manager.open("nvr", "guid-1", START, 1, True)
 
 
@@ -856,7 +665,22 @@ def test_file_source_uses_file_archive(tmp_path: Any, monkeypatch: pytest.Monkey
     monkeypatch.delenv("ANALYZER_ALLOW_FILE_SOURCES")
     r2 = Rig(sources={"f": src})
     try:
-        with pytest.raises(ValueError):
+        with pytest.raises(NoArchive):
             r2.manager.open("f", None, 0.0, 1, True)
     finally:
         r2.manager.stop()
+
+
+def test_recorder_without_channel_raises_missing_channel_everywhere(rig: Rig) -> None:
+    """Kanalsız kayıt cihazı: açma, takvim, çizelge, dışa aktarma aynı `MissingChannel`; cihaza gidilmez."""
+    with pytest.raises(MissingChannel):
+        rig.manager.calendar("nvr", None, 2026, 11)
+    with pytest.raises(MissingChannel):
+        rig.manager.timeline("nvr", None, START)
+    with pytest.raises(MissingChannel):
+        rig.manager.export("nvr", None, START, START + 60)
+    with pytest.raises(MissingChannel):
+        rig.manager.open("nvr", "", START, 1, True)
+    assert rig.client.channel_calls == 0
+    _, _, s = rig.manager.export("nvr", "guid-1", START, START + 60)    # kilit bırakılmıştı
+    s.close()

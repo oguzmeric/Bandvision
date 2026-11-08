@@ -16,7 +16,6 @@ Yanıtlarda adres, şifre ya da jeton yoktur: görünüm yalnız kimlik, ad, dur
 from __future__ import annotations
 
 import contextlib
-import re
 import time
 import urllib.parse
 from collections.abc import AsyncIterator, Iterator
@@ -32,19 +31,25 @@ from .api import _REF, LiveManager, _ClosingStream, _err, _part, _Strict
 from .archive_player import (
     ArchiveManager,
     ArchivePlayer,
+    ChannelNotFound,
     ExportBusy,
+    ManagerStopped,
+    MissingChannel,
+    NoArchive,
     PlayerView,
     SourceMissing,
     TooManyPlayers,
+    UnsupportedSpeed,
 )
 from .recorders import RecorderError
 
 __all__ = ["add_archive_routes", "export_response"]
 
 MAX_EXPORT_S = 1800.0
+STREAM_IDLE_S = 60.0                    # oynarken/bağlanırken bu kadar yeni kare gelmezse MJPEG akışı biter
 _EPOCH_MAX = 4_102_444_800.0            # 2100-01-01
-_STAMP = re.compile(r"-(\d{8}-\d{4})\.mp4$")
-_UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+_ACTIVE = frozenset({"playing", "connecting"})
+_clock = time.monotonic                 # testler sahte saatle değiştirir
 
 PLAYER_MISSING = "Kayıt oynatıcısı bulunamadı."
 SPEED_MSG = "Hız desteklenmiyor."
@@ -78,40 +83,43 @@ def _view(v: PlayerView) -> dict[str, Any]:
 
 
 def _archive_err(e: Exception) -> HTTPException:
-    """Yönetici istisnası → HTTP (iletiler Türkçe, adres/şifre içermez)."""
-    if isinstance(e, HTTPException):
+    """Yönetici istisnası → HTTP (iletiler Türkçe, adres/şifre içermez). Yalnız `_MAPPED`'deki türler gelir; başka
+    `ValueError`/`LookupError`/`RuntimeError` programlama hatasıdır ve 500 olarak kalır."""
+    if isinstance(e, HTTPException):                    # `LiveManager.recorder`: adres boş (400)
         return e
     if isinstance(e, SourceMissing):
         return HTTPException(404, "Kaynak bulunamadı.")
+    if isinstance(e, ChannelNotFound):
+        return HTTPException(404, str(e))
     if isinstance(e, TooManyPlayers):
         return HTTPException(429, str(e))
     if isinstance(e, ExportBusy):
         return HTTPException(409, str(e))
     if isinstance(e, RecorderError):
         return _err(e)
-    if isinstance(e, ValueError):
-        msg = str(e)
-        return HTTPException(422, SPEED_MSG if "hız" in msg.lower() else msg)
-    if isinstance(e, LookupError):
-        return HTTPException(404, str(e))
-    return HTTPException(503, str(e))                   # RuntimeError: yönetici durduruldu (kapanış)
+    if isinstance(e, UnsupportedSpeed):
+        return HTTPException(422, SPEED_MSG)
+    if isinstance(e, MissingChannel | NoArchive):
+        return HTTPException(422, str(e))
+    return HTTPException(503, str(e))                   # ManagerStopped: uygulama kapanıyor
 
 
-_MAPPED = (HTTPException, SourceMissing, TooManyPlayers, ExportBusy, RecorderError, ValueError, LookupError,
-           RuntimeError)
-
-
-def _utf8_name(name: str, ascii_name: str) -> str:
-    """İndirilecek dosyanın UTF-8 adı: kamera adı + ASCII adla aynı tarih-saat damgası (yerel saat) + `.mp4`."""
-    m = _STAMP.search(ascii_name)
-    stamp = m.group(1) if m else time.strftime("%Y%m%d-%H%M")
-    clean = _UNSAFE_NAME.sub("-", name).strip(" .-") or "kayit"
-    return f"{clean}-{stamp}.mp4"
+_MAPPED = (HTTPException, SourceMissing, ChannelNotFound, TooManyPlayers, ExportBusy, RecorderError,
+           UnsupportedSpeed, MissingChannel, NoArchive, ManagerStopped)
 
 
 class _ExportResponse(_ClosingStream):
     """Dışa aktarma akışı: yanıt hangi yoldan biterse bitsin (sona dek okundu, istemci koptu, gövde hiç başlamadı)
-    alttaki akış kapanır ve dışa aktarma kilidi kalkar."""
+    alttaki akış kapanır ve dışa aktarma kilidi kalkar.
+
+    Kapanış iki katmanlıdır:
+    - Gövde üretecindeki `contextlib.closing(stream)`: üreteç bitince ya da `_ClosingStream` onu `aclose()` ile
+      kapatınca (istemci koptu) `stream.close()` ÜRETECİN içinde, olay döngüsü iş parçacığında ve SENKRON çalışır.
+      Bu kısa sürer (`_LockedStream.close`: httpx yanıtını kapatır, kilidi bırakır; ağ beklemez), döngüyü bekletmez.
+    - `__call__`'daki `finally`: gövde hiç başlamadıysa (başlık gönderilemedi; açılmamış üretecin `aclose()`'u gövdeyi
+      çalıştırmaz, `with` bloğuna girilmemiştir) ya da eski Starlette (ASGI `spec_version` < 2.4) kopuşu
+      `listen_for_disconnect` ile algılayıp görev grubunu İPTAL ettiyse üreteç `GeneratorExit` yerine iptal alır; her
+      iki durumda da akış burada iş parçacığı havuzunda kapanır. `close()` tekrar çağrıya dayanıklıdır."""
 
     def __init__(self, stream: Iterator[bytes], **kw: Any) -> None:
         self._stream = stream
@@ -187,21 +195,25 @@ def add_archive_routes(r: APIRouter, manager: LiveManager) -> None:
 
     @r.get("/archive/players/{player_id}/stream")
     def archive_stream(player_id: str, limit: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
-        """MJPEG (`/cameras/stream` kalıbı). `limit`: yalnızca test/teşhis. Her kare yoklaması boşta sayacını sıfırlar;
-        oynatıcı kapanınca ya da 60 sn yeni kare gelmezse akış biter."""
+        """MJPEG (`/cameras/stream` kalıbı). `limit`: yalnızca test/teşhis. Her kare yoklaması oynatıcının boşta
+        sayacını sıfırlar. Akış oynatıcı kapanınca biter; ayrıca oynarken/bağlanırken STREAM_IDLE_S yeni kare gelmezse.
+        Duraklatılmış, bitmiş ya da hatalı oynatıcıda bu süre işlemez: akış açık kalır, sürdürülünce aynı bağlantıda
+        kare gelir."""
         p = player(player_id)
 
         def frames() -> Iterator[bytes]:
-            last, idle, sent = -1, time.monotonic(), 0
+            last, idle, sent = -1, _clock(), 0
             while (limit is None or sent < limit) and not p.closed:
                 seq, frame = p.frame()
                 if frame is not None and seq != last:
-                    last, idle = seq, time.monotonic()
+                    last, idle = seq, _clock()
                     ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if ok:
                         sent += 1
                         yield _part(buf.tobytes())
-                elif time.monotonic() - idle > 60:
+                elif p.state not in _ACTIVE:
+                    idle = _clock()                     # duraklamada sayılmaz
+                elif _clock() - idle > STREAM_IDLE_S:
                     return
                 time.sleep(0.08)
 
@@ -225,7 +237,7 @@ def add_archive_routes(r: APIRouter, manager: LiveManager) -> None:
                     raise HTTPException(422, "Hız belirtilmedi.")
                 try:
                     p.set_speed(body.speed)
-                except ValueError as e:
+                except UnsupportedSpeed as e:
                     raise HTTPException(422, SPEED_MSG) from e
         return _view(p.view())
 
@@ -241,13 +253,12 @@ def add_archive_routes(r: APIRouter, manager: LiveManager) -> None:
             raise HTTPException(422, "Bitiş, başlangıçtan sonra olmalı.")
         if body.end - body.start > MAX_EXPORT_S:
             raise HTTPException(422, "En çok 30 dakika dışa aktarılabilir.")
-        a = archive()
         try:
-            filename, stream = a.export(body.sourceId, body.channelId, body.start, body.end)
+            ascii_name, utf8_name, stream = archive().export(body.sourceId, body.channelId, body.start, body.end)
         except _MAPPED as e:
             raise _archive_err(e) from e
         try:
-            return export_response(stream, filename, _utf8_name(a.name(body.sourceId, body.channelId), filename))
+            return export_response(stream, ascii_name, utf8_name)
         except BaseException:
             getattr(stream, "close", lambda: None)()
             raise

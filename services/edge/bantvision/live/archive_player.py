@@ -54,10 +54,15 @@ from bantvision.live.viewer import _detail as _viewer_detail
 __all__ = [
     "ArchiveManager",
     "ArchivePlayer",
+    "ChannelNotFound",
     "ExportBusy",
+    "ManagerStopped",
+    "MissingChannel",
+    "NoArchive",
     "PlayerView",
     "SourceMissing",
     "TooManyPlayers",
+    "UnsupportedSpeed",
     "file_source_path",
 ]
 
@@ -105,6 +110,41 @@ class ExportBusy(Exception):
 
 class SourceMissing(LookupError):
     """Kaynak bulunamadı (silinmiş) (API: 404)."""
+
+
+class ChannelNotFound(LookupError):
+    """Kanal kayıt cihazının listesinde yok (API: 404)."""
+
+    def __init__(self, message: str = "Kamera kayıt cihazında bulunamadı.") -> None:
+        super().__init__(message)
+
+
+class UnsupportedSpeed(ValueError):
+    """İstenen hız bu bağdaştırıcıda yok (API: 422)."""
+
+    def __init__(self, message: str = "Bu hız desteklenmiyor.") -> None:
+        super().__init__(message)
+
+
+class MissingChannel(ValueError):
+    """Kayıt cihazı kaynağında kanal seçilmemiş (API: 422)."""
+
+    def __init__(self, message: str = "Kayıt cihazından bir kamera seçin.") -> None:
+        super().__init__(message)
+
+
+class NoArchive(ValueError):
+    """Kaynak kayıt cihazı değil (ve dosya kaynağı da değil) (API: 422)."""
+
+    def __init__(self, message: str = "Bu kaynakta kayıt arşivi yok.") -> None:
+        super().__init__(message)
+
+
+class ManagerStopped(RuntimeError):
+    """Yönetici durduruldu (uygulama kapanıyor) (API: 503)."""
+
+    def __init__(self, message: str = STOPPED_MSG) -> None:
+        super().__init__(message)
 
 
 class _Store(Protocol):
@@ -164,7 +204,7 @@ class ArchivePlayer:
                  substream: bool, clock: Callable[[], float] = time.monotonic, *, source_id: str = "",
                  no_frame_s: float = NO_FRAME_S) -> None:
         if speed not in archive.speeds:
-            raise ValueError("Bu hız desteklenmiyor.")
+            raise UnsupportedSpeed()
         self.id, self.source_id, self.channel_id = player_id, source_id, channel
         self._archive, self._url_fn_factory, self._open_capture = archive, url_fn_factory, open_capture
         self._name, self._substream, self._clock, self._no_frame_s = name, substream, clock, no_frame_s
@@ -194,6 +234,12 @@ class ArchivePlayer:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def state(self) -> str:
+        """Güncel durum (dokunmaz, denetlemez; akış ucu boşta süresini yalnız etkin durumda sayar)."""
+        with self._cond:
+            return self._state
 
     def touch(self) -> None:
         self.last_used = self._clock()
@@ -246,7 +292,7 @@ class ArchivePlayer:
     def set_speed(self, speed: int) -> None:
         """Oynuyorsa aynı konumdan yeni hızla yeniden açar; duraklatılmış/bitmişse yalnız hızı kaydeder."""
         if speed not in self._archive.speeds:
-            raise ValueError("Bu hız desteklenmiyor.")
+            raise UnsupportedSpeed()
         with self._cond:
             if self._closed or speed == self._speed:
                 return
@@ -448,6 +494,15 @@ def _ascii(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-") or "kayit"
 
 
+_UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')     # UTF-8 dosya adında yol/denetim karakterleri
+
+
+def _require_channel(target: _Target, channel_id: str | None) -> None:
+    """Kayıt cihazı kaynağında kanal zorunlu (oynatma, takvim, çizelge, dışa aktarma aynı denetim)."""
+    if target.client is not None and not channel_id:
+        raise MissingChannel()
+
+
 class _Routed(ArchiveClient):
     """Oynatıcının arşivi. Her açılış kaynağın güncel istemcisiyle kurulan bağdaştırıcıdan adres alır
     (`ArchiveManager._url_factory`); `stop`/`keep_alive` o adresi veren bağdaştırıcıya yönlenir. Hızlar ve dışa
@@ -539,7 +594,7 @@ class ArchiveManager:
                     archive = self._files[path] = FileArchive(path)
             return _Target(archive, None, None)
         if src.get("kind") != "recorder":
-            raise ValueError("Bu kaynakta kayıt arşivi yok.")
+            raise NoArchive()
         try:
             brand = RecorderBrand(src.get("recorderBrand", "trassir"))
         except ValueError:
@@ -549,6 +604,7 @@ class ArchiveManager:
 
     def _channel(self, source_id: str, target: _Target, channel_id: str | None) -> RecorderChannel:
         """Kanal (ağa çıkabilir: liste önbellekte yoksa ya da kanal listede yoksa bir kez yenilenir)."""
+        _require_channel(target, channel_id)
         if target.client is None:
             return _FILE_CHANNEL
         for refresh in (False, True):
@@ -561,7 +617,7 @@ class ArchiveManager:
             for c in chans:
                 if c.id == channel_id:
                     return c
-        raise LookupError("Kamera kayıt cihazında bulunamadı.")
+        raise ChannelNotFound()
 
     def _source_lock(self, source_id: str) -> threading.Lock:
         with self._lock:
@@ -644,17 +700,16 @@ class ArchiveManager:
 
     def open(self, source_id: str, channel_id: str | None, at: float, speed: int, substream: bool) -> PlayerView:
         """Oynatıcı açar (ağa çıkmaz; bağlantı oynatıcının iş parçacığında). `TooManyPlayers`, `SourceMissing`,
-        `ValueError` (kanal seçilmemiş, kayıt cihazı değil, hız yok)."""
+        `MissingChannel`, `NoArchive`, `UnsupportedSpeed`, `ManagerStopped`."""
         if self._stop.is_set():
-            raise RuntimeError(STOPPED_MSG)
+            raise ManagerStopped()
         target = self._target(self._source(source_id))
-        if target.client is not None and not channel_id:
-            raise ValueError("Kayıt cihazından bir kamera seçin.")
+        _require_channel(target, channel_id)
         if speed not in target.archive.speeds:
-            raise ValueError("Bu hız desteklenmiyor.")
+            raise UnsupportedSpeed()
         with self._lock:
             if self._stop.is_set():
-                raise RuntimeError(STOPPED_MSG)
+                raise ManagerStopped()
             if len(self._players) >= self.MAX_PLAYERS:
                 raise TooManyPlayers()
             pid = uuid.uuid4().hex
@@ -720,21 +775,27 @@ class ArchiveManager:
 
     # -- dışa aktarma --------------------------------------------------------------------------------------------
 
-    def export(self, source_id: str, channel_id: str | None, start: float, end: float) -> tuple[str, Iterator[bytes]]:
-        """(dosya adı, akış). Aralık denetimi API'nindir. Tek görev: sürerken `ExportBusy`; akış sonuna dek okununca
-        ya da `close()` ile kilit kalkar. Desteklemeyen cihazda `RecorderError.unsupported()`."""
+    def export(self, source_id: str, channel_id: str | None, start: float,
+               end: float) -> tuple[str, str, Iterator[bytes]]:
+        """(ASCII dosya adı, UTF-8 dosya adı, akış). Adlar `<kamera adı>-<YYYYMMDD-HHMM>.mp4` (arşivin saat diliminde;
+        TRASSIR/Dahua/dosya: bu bilgisayarın yerel saati). Aralık denetimi API'nindir. Tek görev: sürerken
+        `ExportBusy`; akış sonuna dek okununca ya da `close()` ile kilit kalkar. Desteklemeyen cihazda
+        `RecorderError.unsupported()`; kanalsız kayıt cihazında `MissingChannel`."""
         target = self._target(self._source(source_id))
+        _require_channel(target, channel_id)
         if not target.archive.can_export:
             raise RecorderError.unsupported()
         channel = self._channel(source_id, target, channel_id)     # kanal adı dosya adına girer
         stamp = datetime.fromtimestamp(start, target.archive.tz).strftime("%Y%m%d-%H%M")
-        filename = f"{_ascii(self.name(source_id, channel_id))}-{stamp}.mp4"      # kilitten önce: sızıntı olmasın
+        name = self.name(source_id, channel_id)                     # kilitten önce: sızıntı olmasın
+        filename = f"{_ascii(name)}-{stamp}.mp4"
+        utf8_name = f"{_UNSAFE_NAME.sub('-', name).strip(' .-') or 'kayit'}-{stamp}.mp4"
         if not self._export_lock.acquire(blocking=False):
             raise ExportBusy()
         stream: Iterator[bytes] | None = None
         try:
             stream = target.archive.export(channel, start, end)
-            return filename, _LockedStream(stream, self._export_lock.release)
+            return filename, utf8_name, _LockedStream(stream, self._export_lock.release)
         except BaseException:
             if stream is not None:
                 with contextlib.suppress(Exception):
