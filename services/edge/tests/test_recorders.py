@@ -6,6 +6,7 @@ sertifika üretilemez ya da sahte cihaz açılamazsa atlanır.
 """
 from __future__ import annotations
 
+import calendar
 import http.server
 import logging
 import os
@@ -18,15 +19,17 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from typing import ClassVar
 
 import cv2
+import httpx
 import numpy as np
 import pytest
 
 from bantvision.live import recorders as rec
+from bantvision.live.archive import ArchiveClient, make_archive
 from bantvision.live.recorders import (
     CameraBrand,
     RecorderBrand,
@@ -422,6 +425,7 @@ def mock_nvr(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MockNVR]:
 
 
 RTSP_PORT = 8554
+MOCK_EXPORT_BYTES = b"\0\0\0ftypisom" + bytes(range(256)) * 8
 
 
 def test_hikvision_against_mock(mock_nvr: MockNVR) -> None:
@@ -601,3 +605,90 @@ def test_panel_recorder_template_timeout_covers_the_worst_case_with_margin() -> 
     dahua = 1 * 2 * 2 * r
     assert trassir == max(trassir, hikvision, dahua)
     assert client_s >= 1.25 * trassir, f"{client_s} sn < 1,25 × {trassir} sn: views.ts'deki RECORDER_TEMPLATE_TIMEOUT_MS'i büyütün"
+
+
+# MARK: - Tümleşik: arşiv uçları (kayıttan izleme)
+
+
+def _local_epoch(day: int, hour: int, minute: int = 0, second: int = 0) -> float:
+    """2026-03-04 gibi sabit günün yerel saati (sahte cihazın Dahua/TRASSIR verisi yerel saatle)."""
+    return time.mktime((2026, 3, day, hour, minute, second, 0, 0, -1))
+
+
+def _utc_epoch(hour: int, minute: int = 0) -> float:
+    return calendar.timegm((2026, 3, 4, hour, minute, 0))
+
+
+ARCHIVE_DAY = _local_epoch(4, 0)
+
+
+def _trassir_log(mock_nvr: MockNVR) -> list[dict[str, str]]:
+    r = httpx.get(f"https://127.0.0.1:{mock_nvr.https_port}/_mock/archive-log", verify=False, timeout=10)
+    return list(r.json())
+
+
+@contextmanager
+def _archive(mock_nvr: MockNVR, brand: RecorderBrand) -> Iterator[tuple[ArchiveClient, RecorderChannel]]:
+    port = mock_nvr.https_port if brand is RecorderBrand.TRASSIR else mock_nvr.http_port
+    rtsp = mock_nvr.video_port if brand is RecorderBrand.TRASSIR else RTSP_PORT
+    with make_recorder(brand, "127.0.0.1", port, rtsp, USER, PASSWORD) as c:
+        archive = make_archive(c, brand)
+        archive._sleep = lambda _s: None       # type: ignore[attr-defined]
+        yield archive, c.channels()[0]
+
+
+def test_hikvision_archive_against_mock(mock_nvr: MockNVR) -> None:
+    with _archive(mock_nvr, RecorderBrand.HIKVISION) as (archive, channel):
+        assert archive.calendar(channel, 2026, 3) == {3, 4, 6}
+        # sayfa 1 `MORE` (dokunan iki aralık birleşir), sayfa 2 `OK`
+        assert archive.timeline(channel, ARCHIVE_DAY) == [(_utc_epoch(12), _utc_epoch(13)),
+                                                          (_utc_epoch(14), _utc_epoch(14, 10))]
+        with pytest.raises(RecorderError) as e:
+            archive.export(channel, ARCHIVE_DAY, ARCHIVE_DAY + 60)
+        assert e.value.kind == "unsupported"
+
+
+def test_dahua_archive_against_mock(mock_nvr: MockNVR) -> None:
+    with _archive(mock_nvr, RecorderBrand.DAHUA) as (archive, channel):
+        assert archive.calendar(channel, 2026, 3) == {4}
+        # sayfa 1: 100 dokunan dakikalık dosya; sayfa 2: 1 sn boşluklu iki dosya
+        assert archive.timeline(channel, ARCHIVE_DAY) == [(_local_epoch(4, 8), _local_epoch(4, 9, 40)),
+                                                          (_local_epoch(4, 12), _local_epoch(4, 12, 20))]
+        assert archive.timeline(channel, _local_epoch(5, 0)) == []
+        with pytest.raises(RecorderError) as e:
+            archive.export(channel, ARCHIVE_DAY, ARCHIVE_DAY + 60)
+        assert e.value.kind == "unsupported"
+
+
+def test_trassir_archive_against_mock(mock_nvr: MockNVR) -> None:
+    with _archive(mock_nvr, RecorderBrand.TRASSIR) as (archive, channel):
+        assert archive.calendar(channel, 2026, 3) == {4, 5}
+        assert archive.timeline(channel, ARCHIVE_DAY) == [(_local_epoch(4, 9), _local_epoch(4, 10)),
+                                                          (_local_epoch(4, 14), _local_epoch(4, 14, 10))]
+        assert archive.timeline(channel, _local_epoch(5, 0)) == [(_local_epoch(5, 9), _local_epoch(5, 10)),
+                                                                 (_local_epoch(5, 14), _local_epoch(5, 14, 10))]
+
+
+def test_trassir_archive_stream_and_stop_against_mock(mock_nvr: MockNVR) -> None:
+    with _archive(mock_nvr, RecorderBrand.TRASSIR) as (archive, channel):
+        before = len(_trassir_log(mock_nvr))
+        url = archive.stream_url(channel, ARCHIVE_DAY, None, False, 4)
+        assert url == f"rtsp://127.0.0.1:{mock_nvr.video_port}/tokbant1archive_main"
+        sub = archive.stream_url(channel, ARCHIVE_DAY, ARCHIVE_DAY + 600, True, 1)
+        assert sub == f"rtsp://127.0.0.1:{mock_nvr.video_port}/tokbant1archive_sub"
+        archive.stop(url)
+        log = _trassir_log(mock_nvr)[before:]
+        assert [(e["command"], e["token"]) for e in log] == [("play", "tokbant1archive_main"),
+                                                             ("play", "tokbant1archive_sub"),
+                                                             ("stop", "tokbant1archive_main")]
+        assert log[0]["speed"] == "4"
+        assert log[1]["stop"] == "20260304T001000"
+
+
+def test_trassir_archive_export_against_mock(mock_nvr: MockNVR) -> None:
+    with _archive(mock_nvr, RecorderBrand.TRASSIR) as (archive, channel):
+        for _ in range(2):      # her görevin ilk indirmesi "hazır değil" döner → bağdaştırıcı yeniden dener
+            with closing(archive.export(channel, ARCHIVE_DAY, ARCHIVE_DAY + 60)) as stream:
+                data = b"".join(stream)
+            assert data == MOCK_EXPORT_BYTES
+            assert data[4:8] == b"ftyp"

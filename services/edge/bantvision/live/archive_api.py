@@ -195,8 +195,8 @@ def add_archive_routes(r: APIRouter, manager: LiveManager) -> None:
 
     @r.get("/archive/players/{player_id}/stream")
     def archive_stream(player_id: str, limit: int | None = Query(None, ge=1, le=100)) -> StreamingResponse:
-        """MJPEG (`/cameras/stream` kalıbı). `limit`: yalnızca test/teşhis. Her kare yoklaması oynatıcının boşta
-        sayacını sıfırlar. Akış oynatıcı kapanınca biter; ayrıca oynarken/bağlanırken STREAM_IDLE_S yeni kare gelmezse.
+        """MJPEG (`/cameras/stream` kalıbı). `limit`: yalnızca test/teşhis. Yoklama oynatıcıya dokunmaz; yalnız
+        gönderilen kare boşta sayacını sıfırlar (terk edilmiş bağlantı oynatıcıyı canlı tutmaz). Akış oynatıcı kapanınca biter; ayrıca oynarken/bağlanırken STREAM_IDLE_S yeni kare gelmezse.
         Duraklatılmış, bitmiş ya da hatalı oynatıcıda bu süre işlemez: akış açık kalır, sürdürülünce aynı bağlantıda
         kare gelir."""
         p = player(player_id)
@@ -204,9 +204,10 @@ def add_archive_routes(r: APIRouter, manager: LiveManager) -> None:
         def frames() -> Iterator[bytes]:
             last, idle, sent = -1, _clock(), 0
             while (limit is None or sent < limit) and not p.closed:
-                seq, frame = p.frame()
+                seq, frame = p.frame(touch=False)
                 if frame is not None and seq != last:
                     last, idle = seq, _clock()
+                    p.touch()                           # yalnız kare gönderirken: terk edilmiş bağlantı canlı tutmaz
                     ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if ok:
                         sent += 1

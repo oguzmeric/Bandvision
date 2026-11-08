@@ -323,6 +323,33 @@ def test_stream_stays_open_while_paused_and_resumes_on_same_connection(
     assert not t.is_alive() and out[0].count(b"--frame\r\n") == 2
 
 
+def test_paused_player_with_open_stream_is_swept_after_idle(client: TestClient, rig: Rig) -> None:
+    """Terk edilmiş bağlantı duraklatılmış oynatıcıyı canlı tutmamalı: akış yalnız kare gönderirken dokunur."""
+    pid = _paused_player(client, rig)
+    p = rig.manager.get(pid)
+    assert p is not None
+    t, out = _stream_in_thread(client, pid, limit=5)
+    wait_for(lambda: out or time.sleep(0.1) or p.last_used == rig.clock.t)
+    time.sleep(0.3)                                      # akış son kareyi verdi, şimdi yalnız yokluyor
+    rig.clock.t += 40.0
+    time.sleep(0.4)                                      # yoklamalar sürüyor ama dokunmuyor
+    assert t.is_alive() and rig.manager.sweep() == 0
+    rig.clock.t += 25.0                                  # son dokunuştan 65 sn > IDLE_S
+    assert rig.manager.sweep() == 1
+    t.join(5)
+    assert not t.is_alive() and p.closed and out[0].count(b"--frame\r\n") == 1
+
+
+def test_player_actions_touch_the_player(client: TestClient, rig: Rig) -> None:
+    pid = _paused_player(client, rig)
+    p = rig.manager.get(pid)
+    assert p is not None
+    for act in (p.resume, p.pause, lambda: p.seek(1100.0), lambda: p.set_speed(2)):
+        rig.clock.t += 10.0
+        act()
+        assert p.last_used == rig.clock.t
+
+
 def test_stream_ends_when_player_closes_and_idles_out_while_playing(
         client: TestClient, rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
     pid = _paused_player(client, rig)
