@@ -9,6 +9,7 @@ type Item = { label: string; href: string | null };
 const GROUPS: { title: string; items: Item[] }[] = [
   { title: "İzleme", items: [
     { label: "Canlı izleme", href: "/watch" },
+    { label: "Kayıttan izleme", href: "/archive" },
     { label: "Alarmlar", href: "/alarms" },
   ] },
   { title: "Analizler", items: [
