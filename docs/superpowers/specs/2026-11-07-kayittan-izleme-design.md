@@ -14,7 +14,7 @@ Hikvision/Dahua cihazı olup olmadığı sorulacak.
 ## Hedefler
 1. Panelde **Kayıttan izleme** sayfası (`/archive`, İzleme grubu): kayıt cihazı kanalı seç → takvim (kayıt olan günler) →
    24 saatlik zaman çizelgesi (kayıt olan aralıklar dolu) → oynatıcı (MJPEG, canlıdaki gibi `<img>`) → kumanda: duraklat/sürdür,
-   hız (TRASSIR 1–16×; Hikvision/Dahua 1/2/4×), ±10 sn, ±1 dk, saat göstergesi, çizelgeye tıklayınca o ana atlama.
+   hız (TRASSIR 1–16×; Hikvision/Dahua 1/2/4× — son incelemede 1×'e indirildi: gerçek zamanlı RTSP'de istemci kare atlaması hızlandırmaz, cihaz tarafı `Scale` doğrulanınca açılır), ±10 sn, ±1 dk, saat göstergesi, çizelgeye tıklayınca o ana atlama.
 2. **Markalar:** TRASSIR (SDK, ofis NVR'ında doğrulanır), Hikvision (ISAPI + oynatma RTSP'si), Dahua (CGI + oynatma RTSP'si).
    Hikvision ve Dahua adres/biçimleri resmî belge ulaşılamadığı için ikincil kaynaktan; **cihazda doğrulanana dek "doğrulanmadı"**
    etiketiyle belgelenir, arayüz cihazın reddini Türkçe gösterir.
@@ -57,7 +57,7 @@ Hikvision/Dahua cihazı olup olmadığı sorulacak.
     Hikvision `ContentMgmt/search`; Dahua `mediaFileFind`). Bitişik/örtüşen aralıklar birleştirilir.
   - `export(channel, start, end) -> Iterator[bytes]` yalnız TRASSIR (`jit-export-create-task` → `jit-export-download`);
     diğerleri `RecorderError("unsupported")` → 501.
-  - `supports_speed: tuple[int, ...]` (TRASSIR `(1,2,4,8,16)`; diğerleri `(1,2,4)` istemci tarafı kare atlama).
+  - `supports_speed: tuple[int, ...]` (TRASSIR `(1,2,4,8,16)`; diğerleri `(1,2,4)` istemci tarafı kare atlama; son incelemede Hikvision/Dahua `(1,)`, dosya kaynağı `(1,2,4)`).
   - `keep_alive(url)` TRASSIR jetonu için (canlıdaki gibi `?ping`).
   - Hikvision/Dahua için `_DeviceHTTP.post(path, body, content_type)` eklenir (ISAPI arama XML gövdesiyle).
 - **`ArchivePlayer`**: kendi iş parçacığı; `open_gate.resolve_and_open(..., VIEWER)` ile açar, kareleri okur, en çok 960 px'e
