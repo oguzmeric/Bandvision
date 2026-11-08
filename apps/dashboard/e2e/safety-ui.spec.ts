@@ -965,7 +965,8 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toHaveCount(0);   // zaten onaylı
   await modal.getByRole("button", { name: "Sonraki alarm" }).click();
   await expect(modal.getByTestId("alarm-state")).toContainText("Yanlış alarm");
-  await expect(modal.getByRole("button", { name: "Yanlış alarm" })).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "Yanlış alarm", exact: true })).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "Yanlış alarm işaretini kaldır" })).toBeVisible();   // işaret geri alınabilir
   await modal.getByRole("button", { name: "Kapat" }).click();
   await expect(modal).toHaveCount(0);
 });

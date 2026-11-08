@@ -6,7 +6,7 @@ export interface ViewLayout { id: string; name: string; cols: number; rows: numb
 export interface TileRef { sourceId: string; channelId: string | null }
 export interface ViewTemplate { id: string; name: string; layout: string; tiles: Array<TileRef | null>; createdAt: number; updatedAt: number }
 export interface TileAnalysis {
-  mode: "blob" | "linescan" | "detect" | "safety";
+  mode: "blob" | "linescan" | "detect" | "safety" | "fire";
   sessionId: string;
   name: string;
   entered?: number; exited?: number; total?: number;
@@ -98,16 +98,27 @@ export function liveHref(a: TileAnalysis | null | undefined): string {
 
 /** Sağlıklı güvenlik alarmının noktasının ipucu ve ekran okuyucu metni (yazı rozeti yok: nokta yeter) */
 export const GUARD_OK_TEXT = "Güvenlik alarmı izleniyor";
+/** Sağlıklı yangın/duman izlemesinin noktasının ipucu ve ekran okuyucu metni */
+export const FIRE_OK_TEXT = "Yangın/duman izleniyor";
 
-/** Noktanın rengi: güvenlikte sağlıklı yeşil, sorunlu sarı; sayımda rozetin rengi */
+/** İzleme (alarm veren) analizi mi: güvenlik ya da yangın/duman */
+export const isGuard = (a: TileAnalysis): boolean => a.mode === "safety" || a.mode === "fire";
+
+/** Sağlıklı izlemenin nokta metni (sayımda null) */
+export function guardOkText(a: TileAnalysis): string | null {
+  if (a.mode === "fire") return FIRE_OK_TEXT;
+  return a.mode === "safety" ? GUARD_OK_TEXT : null;
+}
+
+/** Noktanın rengi: güvenlik ve yangın/duman izlemesinde sağlıklı yeşil, sorunlu sarı; sayımda rozetin rengi */
 export function analysisTone(a: TileAnalysis): "ok" | "warn" | "info" {
-  if (a.mode === "safety") return a.healthy === false ? "warn" : "ok";
+  if (isGuard(a)) return a.healthy === false ? "warn" : "ok";
   return "info";
 }
 
-/** Kutu rozeti; sağlıklı güvenlik alarmında yok (kutudaki nokta yeter), sorunluda "Sorun" */
+/** Kutu rozeti; sağlıklı izlemede (güvenlik, yangın/duman) yok (kutudaki nokta yeter), sorunluda "Sorun" */
 export function badge(a: TileAnalysis): { text: string; tone: "ok" | "warn" | "info" } | null {
-  if (a.mode === "safety") return a.healthy === false ? { text: "Sorun", tone: "warn" } : null;
+  if (isGuard(a)) return a.healthy === false ? { text: "Sorun", tone: "warn" } : null;
   if (a.mode === "detect") return { text: `G ${a.entered ?? 0} · Ç ${a.exited ?? 0}`, tone: "info" };
   return { text: `Sayılan ${a.total ?? 0}`, tone: "info" };
 }

@@ -9,7 +9,7 @@ export default function NotificationsPage() {
   return (
     <div className="mx-auto max-w-[1400px]">
       <PageHeader title="Bildirimler"
-                  text="Güvenlik alarmları (eller yukarı, yerde yatan kişi) panelde alarm penceresiyle ve Telegram'da kamera adı ve saatle görünür." />
+                  text="Güvenlik (eller yukarı, yerde yatan kişi) ve yangın/duman alarmları panelde alarm penceresiyle ve Telegram'da kamera adı ve saatle görünür." />
       <NotifySettings />
       <AttentionSettings />
     </div>

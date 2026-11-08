@@ -12,8 +12,8 @@ export const SAFETY_RULES = {
 
 export const NO_RULE_ON = "En az bir kural açık olmalı.";
 
-/** Alarm türü → tablodaki ad */
-export const ALARM_LABELS = { handsUp: "Eller yukarı", lying: "Yerde yatan kişi" };
+/** Alarm türü → tablodaki ad (güvenlik: poz; yangın/duman işi: `fire`, `smoke`) */
+export const ALARM_LABELS = { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman" };
 
 const SECONDS = /^[0-9]+(?:[.,][0-9]+)?$/;
 
@@ -77,4 +77,19 @@ export function rulesSummary(safety) {
     if (r?.enabled === false) return `${ALARM_LABELS[key]} kapalı`;
     return `${ALARM_LABELS[key]} ${(r?.seconds ?? rule.def).toLocaleString("tr-TR")} sn`;
   }).join(" · ");
+}
+
+/**
+ * Alarmlar sayfasının sayaçları: toplam, tür listesindeki her tür (sırasıyla; listede olmayan tür yalnız toplama girer) ve
+ * yanlış alarm. `types`: canlı alarm türleri (src/lib/live.ts `ALARM_LABELS` anahtarları).
+ */
+export function alarmCounts(list, types) {
+  const counts = { total: list.length };
+  for (const t of types) counts[t] = 0;
+  let falses = 0;
+  for (const a of list) {
+    if (Object.hasOwn(counts, a.type) && a.type !== "total") counts[a.type] += 1;
+    if (a.falseAlarm) falses += 1;
+  }
+  return { ...counts, false: falses };
 }

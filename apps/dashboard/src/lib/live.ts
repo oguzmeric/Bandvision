@@ -1,5 +1,5 @@
 /** Canlı sayım API'si (analiz sunucusu `/api/v1/live`, panel vekili `/api/live`) — services/edge/bantvision/live/api.py */
-import type { CountAnchor, CountMode, Direction, Point } from "./types";
+import type { CountAnchor, CountMode, Direction, FireSensitivity, Point } from "./types";
 
 export type SourceKind = "camera" | "recorder";
 export type CameraBrand = "hikvision" | "dahua" | "axis" | "vivotek" | "milesight" | "custom";
@@ -45,6 +45,16 @@ export interface SafetyConfig {
   sendImage: boolean;
 }
 
+/** Yangın/duman ayarları (sözleşme `fire`): alev 2–10 sn, duman 5–30 sn; hariç bölgeler en çok 8 çokgen × 3–12 köşe,
+ * köşeler normalize `[x, y]` */
+export interface FireConfig {
+  fire: { enabled: boolean; seconds: number };
+  smoke: { enabled: boolean; seconds: number };
+  sensitivity: FireSensitivity;
+  ignoreZones: Array<Array<[number, number]>>;
+  sendImage: boolean;
+}
+
 /** Profil (sözleşme `product-profile.schema.json`); panelin kullandığı alanlar, gerisi olduğu gibi taşınır */
 export interface Profile {
   id: string;
@@ -64,6 +74,8 @@ export interface Profile {
   staffColors?: LabColor[];
   /** Güvenlik (`countMode = "safety"`): poz alarmı ayarları; yoksa varsayılanlar */
   safety?: SafetyConfig;
+  /** Yangın/duman (`countMode = "fire"`): kurallar, hassasiyet, hariç bölgeler; yoksa varsayılanlar */
+  fire?: Partial<FireConfig>;
   [key: string]: unknown;
 }
 
@@ -120,12 +132,33 @@ export interface LiveSession {
     /** Kaç saniyedir sağlıksız (sağlıklıysa null) */
     unhealthyFor?: number | null;
   } | null;
+  /** Yangın/duman oturumunda: süren bölümler, son alarm, modelin durumu ve izleme sağlığı; diğerlerinde null (eski sunucuda yok) */
+  fire?: {
+    active: Array<{ type: AlarmType; trackId: number; seconds: number }>;
+    lastAlarmAt: number | null;
+    model?: ModelState;
+    /** Model yüklenemediyse ya da kurulu değilse Türkçe neden ("Yangın/duman modeli kurulu değil.") */
+    modelError?: string | null;
+    processingError?: string | null;
+    lastOkAt?: number | null;
+    healthy?: boolean;
+    reason?: string | null;
+    unhealthyFor?: number | null;
+  } | null;
 }
 
 export type ModelState = "loading" | "ready" | "error";
 
 /** Güvenlik kamerası bu kadar süredir izlenmiyorsa alarm şeridinde uyarı satırı çıkar */
 export const WATCH_WARN_AFTER_S = 60;
+
+/** Alarm veren (izleme) yöntemleri: sayaç yok, alarm merkezi ve şerit bunları dinler */
+export const isWatchMode = (mode: CountMode | undefined): boolean => mode === "safety" || mode === "fire";
+
+/** Oturumun izleme durumu bloğu: yangın/duman oturumunda `fire`, öteki oturumlarda `safety` (sayımda null) */
+export function watchStatus(s: LiveSession): NonNullable<LiveSession["safety"]> | NonNullable<LiveSession["fire"]> | null {
+  return (s.profile.countMode === "fire" ? s.fire : s.safety) ?? null;
+}
 
 /** Sağlıksızlığın nedeni hangi koşuldan geliyor: kamera, model yükleniyor, model yüklenemedi (1 dk sonra yeniden
  * denenir), görüntü işlenemiyor */
@@ -137,7 +170,8 @@ export type HealthCause = "camera" | "loading" | "modelError" | "processing";
  */
 function healthCause(s: LiveSession): HealthCause {
   if (s.state !== "live") return "camera";
-  for (const st of [s.safety?.model, s.safety?.detector]) {
+  const models = s.profile.countMode === "fire" ? [s.fire?.model] : [s.safety?.model, s.safety?.detector];
+  for (const st of models) {
     if (st === "loading") return "loading";
     if (st === "error") return "modelError";
   }
@@ -145,10 +179,21 @@ function healthCause(s: LiveSession): HealthCause {
 }
 
 /**
- * Güvenlik oturumu gerçekten izleniyor mu (analiz sunucusunun `safety.healthy`/`reason`'ı). Sağlık alanı olmayan eski
- * sunucuda kamera durumu ve poz modelinden çıkarılır. `cause`: gerekçenin geldiği koşul (sağlıklıysa null).
+ * Güvenlik ya da yangın/duman oturumu gerçekten izleniyor mu (analiz sunucusunun `safety`/`fire` bloğundaki
+ * `healthy`/`reason`). Sağlık alanı olmayan eski sunucuda kamera durumu ve modelden çıkarılır. `cause`: gerekçenin geldiği
+ * koşul (sağlıklıysa null).
  */
 export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string | null; cause: HealthCause | null } {
+  if (s.profile.countMode === "fire") {
+    const f = s.fire;
+    if (f && typeof f.healthy === "boolean") {
+      return f.healthy ? { healthy: true, reason: null, cause: null } : { healthy: false, reason: f.reason ?? null, cause: healthCause(s) };
+    }
+    if (s.state !== "live") return { healthy: false, reason: s.state === "connecting" ? "Kameraya bağlanılıyor" : "Kamera bağlantısı yok", cause: "camera" };
+    if (f?.model === "loading") return { healthy: false, reason: "Yangın/duman modeli yükleniyor", cause: "loading" };
+    if (f?.model === "error") return { healthy: false, reason: f.modelError || "Yangın/duman modeli yüklenemedi", cause: "modelError" };
+    return { healthy: true, reason: null, cause: null };
+  }
   const sf = s.safety;
   if (sf && typeof sf.healthy === "boolean") {
     return sf.healthy ? { healthy: true, reason: null, cause: null } : { healthy: false, reason: sf.reason ?? null, cause: healthCause(s) };
@@ -159,7 +204,7 @@ export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string
   return { healthy: true, reason: null, cause: null };
 }
 
-export type AlarmType = "hands_up" | "lying" | "test";
+export type AlarmType = "hands_up" | "lying" | "fire" | "smoke" | "test";
 export interface Alarm {
   id: string; sessionId: string | null; camera: string; type: AlarmType;
   startedAt: number; firedAt: number; endedAt: number | null; acked: boolean;
@@ -178,10 +223,19 @@ export interface Alarm {
   sourceId?: string | null;
   channelId?: string | null;
 }
+/**
+ * "Yanlış alarm" düğmesi iki yönlüdür: işaretli değilse işaretler (gövdesiz istek; alarm onaylanır), işaretliyse geri
+ * alır (`{"falseAlarm": false}`; onay kalır). Yangın/duman alarmında sunucu resmi ve kaydı zor örnek olarak saklar/siler.
+ */
+export function toggleFalseAlarm(a: Pick<Alarm, "id" | "falseAlarm">): Promise<Alarm> {
+  return api<Alarm>(`alarms/${a.id}/false-alarm`, a.falseAlarm ? { method: "POST", json: { falseAlarm: false } } : { method: "POST" });
+}
 /** Alarm anından bu kadar saniye önceden kayıt cihazında izlenir */
 export const ARCHIVE_LEAD_S = 10;
 /** Alarm penceresinin büyük başlığı */
-export const ALARM_TITLES: Record<AlarmType, string> = { hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", test: "DENEME ALARMI" };
+export const ALARM_TITLES: Record<AlarmType, string> = {
+  hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", fire: "Yangın", smoke: "Duman", test: "DENEME ALARMI",
+};
 /** clipPending göndermeyen eski sunucuda: kameralı alarmdan sonra bu kadar saniye "Kayıt hazırlanıyor…" */
 export const CLIP_PENDING_S = 20;
 /** clipPending bayat kalırsa (ör. sunucu çöktü) en çok bu kadar saniye "Kayıt hazırlanıyor…" denir */
@@ -195,7 +249,10 @@ export interface NotifyConfig {
   /** Son Telegram gönderim hatası (Türkçe, anahtarsız); başarılı gönderimde silinir */
   lastError?: { text: string; at: number } | null;
 }
-export const ALARM_LABELS: Record<AlarmType, string> = { hands_up: "Eller yukarı", lying: "Yerde yatan kişi", test: "Deneme alarmı" };
+/** Alarm türünün adı; sıra Alarmlar sayfasındaki tür süzgecinin ve sayaçlarının sırasıdır */
+export const ALARM_LABELS: Record<AlarmType, string> = {
+  hands_up: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman", test: "Deneme alarmı",
+};
 export const NOTIFY_LABELS: Record<Alarm["notify"], string> = {
   disabled: "Telegram kapalı", queued: "Gönderiliyor", sent: "Telegram'a gitti", failed: "Gönderilemedi", suppressed: "Tekrar (gönderilmedi)",
 };

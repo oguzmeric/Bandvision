@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ALARM_LABELS, ALARM_LIST_LIMIT, NOTIFY_LABELS, alarmImageUrl, api, type Alarm, type AlarmType } from "@/lib/live";
+import { ALARM_LABELS, ALARM_LIST_LIMIT, NOTIFY_LABELS, alarmImageUrl, api, toggleFalseAlarm, type Alarm, type AlarmType } from "@/lib/live";
+import { alarmCounts } from "@/lib/safetyAlarms.mjs";
 import { useAlarmCenter } from "./AlarmCenter";
 import AlarmViewer from "./AlarmViewer";
 
@@ -11,6 +12,8 @@ const field = "pl-input h-8";
 /** Süzgeç etiketi: üstte küçük gri yazı, altında denetim */
 const lbl = "grid gap-0.5 text-[12px] text-pl-muted";
 const count = "rounded-[2px] border border-pl-line-soft bg-pl-side px-2.5 py-1";
+/** Tür süzgecinin seçenekleri ve sayaçların sırası: alarm türlerinin listesi */
+const TYPES = Object.keys(ALARM_LABELS) as AlarmType[];
 
 /** Yerel tarih → "yyyy-mm-dd" (tarih kutusu biçimi) */
 function ymd(d: Date): string {
@@ -29,8 +32,8 @@ function state(a: Alarm): { text: string; tone: string } {
 
 /**
  * Alarm geçmişi (en çok 7 gün saklanır): kamera, tür, tarih aralığı (varsayılan son 7 gün) ve "Yalnızca onaylanmamış"
- * süzgeçleri; görünen aralığın sayıları (toplam, tür başına, yanlış alarm). Satıra tıklayınca alarm penceresi (göz
- * atma) açılır: kayıt, Gördüm, Yanlış alarm.
+ * süzgeçleri; görünen aralığın sayıları (toplam, tür listesindeki her tür — güvenlik ve yangın/duman —, yanlış alarm).
+ * Satıra tıklayınca alarm penceresi (göz atma) açılır: kayıt, Gördüm, Yanlış alarm (işaretliyse geri alınır).
  */
 export default function AlarmsView() {
   const [from, setFrom] = useState(() => ymd(new Date(Date.now() - 6 * DAY_MS)));
@@ -73,20 +76,14 @@ export default function AlarmsView() {
     return [...names].sort((x, y) => x.localeCompare(y, "tr"));
   }, [list, camera]);
   const visible = useMemo(() => (list ?? []).filter((a) => !camera || a.camera === camera), [list, camera]);
-  const counts = useMemo(() => ({
-    total: visible.length,
-    hands_up: visible.filter((a) => a.type === "hands_up").length,
-    lying: visible.filter((a) => a.type === "lying").length,
-    test: visible.filter((a) => a.type === "test").length,
-    false: visible.filter((a) => a.falseAlarm).length,
-  }), [visible]);
+  const counts = useMemo(() => alarmCounts(visible, TYPES), [visible]);
 
   const changed = useCallback(() => { setReload((x) => x + 1); center?.refresh(); }, [center]);
   const ack = useCallback(async (a: Alarm) => {
     try { await api(`alarms/${a.id}/ack`, { method: "POST" }); changed(); return true; } catch { return false; }
   }, [changed]);
   const markFalse = useCallback(async (a: Alarm) => {
-    try { await api(`alarms/${a.id}/false-alarm`, { method: "POST" }); changed(); return true; } catch { return false; }
+    try { await toggleFalseAlarm(a); changed(); return true; } catch { return false; }
   }, [changed]);
   const close = useCallback(() => setViewing(null), []);
 
@@ -104,7 +101,7 @@ export default function AlarmsView() {
           <label className={lbl}>Tür
             <select aria-label="Tür" className={field} value={type} onChange={(e) => setType(e.target.value as AlarmType | "")}>
               <option value="">Tüm türler</option>
-              {(Object.keys(ALARM_LABELS) as AlarmType[]).map((k) => <option key={k} value={k}>{ALARM_LABELS[k]}</option>)}
+              {TYPES.map((k) => <option key={k} value={k}>{ALARM_LABELS[k]}</option>)}
             </select>
           </label>
           <label className={lbl}>Başlangıç
@@ -122,9 +119,7 @@ export default function AlarmsView() {
 
       <section aria-label="Sayılar" data-testid="alarm-counts" className="mb-3 flex flex-wrap gap-1.5 text-[13px]">
         <span className={count}>Toplam <b data-testid="count-total">{counts.total}</b></span>
-        <span className={count}>{ALARM_LABELS.hands_up} <b data-testid="count-hands_up">{counts.hands_up}</b></span>
-        <span className={count}>{ALARM_LABELS.lying} <b data-testid="count-lying">{counts.lying}</b></span>
-        <span className={count}>{ALARM_LABELS.test} <b data-testid="count-test">{counts.test}</b></span>
+        {TYPES.map((t) => <span key={t} className={count}>{ALARM_LABELS[t]} <b data-testid={`count-${t}`}>{counts[t]}</b></span>)}
         <span className={count}>Yanlış alarm <b data-testid="count-false">{counts.false}</b></span>
       </section>
 

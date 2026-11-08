@@ -18,6 +18,9 @@ export function stageText(job: Pick<AnalysisJob, "options" | "result" | "stage">
 
 /** Başarısız işin ipucu: işe uygun (bant tavsiyesi yalnızca bant üstü ürün sayımında) */
 export function failureHint(job: Pick<AnalysisJob, "options" | "result">): string {
+  if (job.options.preset === "fire") {
+    return "İpucu: video açılabilir olmalı ve kamera sabit durmalı. Model kurulu değilse yangın/duman analizi çalışmaz; sorun sürerse videoyu yeniden yükle.";
+  }
   if (isSafetyJob(job)) {
     return "İpucu: video açılabilir olmalı ve kamera sabit durmalı; karedeki kişiler net görünmeli. Sorun sürerse videoyu yeniden yükle.";
   }

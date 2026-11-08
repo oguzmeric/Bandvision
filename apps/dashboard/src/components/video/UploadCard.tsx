@@ -7,9 +7,10 @@ import { bytes } from "@/lib/format";
 import { type Failure, failureOf } from "@/lib/failure";
 import { clampLine, type Geometry } from "@/lib/geometry";
 import { ALARM_LABELS, defaultSafetyForm, SAFETY_RULES, safetyOptions } from "@/lib/safetyAlarms.mjs";
+import { defaultFireForm, FIRE_RULES, FIRE_WARNING, fireOptions, SENSITIVITIES, SENSITIVITY_LABELS } from "@/lib/fireAlarms.mjs";
 import {
   ANCHOR_LABELS, BELT_MODES, DIRECTION_LABELS, MODE_LABELS, PRESET_LABELS, PRESET_MODE, TWO_WAY_NOUNS, TWO_WAY_PRESETS,
-  type AnalysisJob, type CountAnchor, type CountMode, type Direction, type JobOptions, type Preset,
+  type AnalysisJob, type CountAnchor, type CountMode, type Direction, type FireSensitivity, type JobOptions, type Preset,
 } from "@/lib/types";
 
 import FailureText from "./FailureText";
@@ -42,7 +43,11 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
   const [editing, setEditing] = useState(false);
   const twoWay = TWO_WAY_PRESETS.includes(preset);
   const safety = preset === "safety";
+  const fire = preset === "fire";
+  /** Alarm veren iş (güvenlik, yangın/duman): sayım ayarı yok */
+  const alarmJob = safety || fire;
   const [rules, setRules] = useState(defaultSafetyForm);
+  const [fireRules, setFireRules] = useState(defaultFireForm);
   const effectiveMode = twoWay ? "detect" : (mode || PRESET_MODE[preset]);
   const subject = TWO_WAY_NOUNS[preset as keyof typeof TWO_WAY_NOUNS] ?? TWO_WAY_NOUNS.people;
   const [progress, setProgress] = useState<number | null>(null);
@@ -63,6 +68,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
 
   function options(): JobOptions | string {
     if (safety) return safetyOptions(rules);   // güvenlikte sayım ayarı (doğru adet, yön, alan, boş bant) hiç gönderilmez
+    if (fire) return fireOptions(fireRules);   // yangın/duman da öyle: yalnızca kurallar ve hassasiyet
     const o: JobOptions = { preset };
     if (!twoWay && mode && mode !== PRESET_MODE[preset]) o.countMode = mode;
     if (truth.trim()) {
@@ -199,6 +205,35 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
             Videodaki herkese uygulanır; canlıdaki güvenlik kamerasıyla aynı kurallar ve aynı analiz.
           </p>
         </fieldset>
+      ) : fire ? (
+        <fieldset className="mt-2.5">
+          <legend className={lbl}>Kurallar</legend>
+          {(["fire", "smoke"] as const).map((key) => {
+            const rule = FIRE_RULES[key], f = fireRules[key];
+            const set = (patch: Partial<typeof f>) => setFireRules({ ...fireRules, [key]: { ...f, ...patch } });
+            return (
+              <div key={key} className="mt-1.5 flex items-center justify-between gap-3">
+                <label className="flex min-w-0 items-center gap-2">
+                  <input type="checkbox" checked={f.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+                  <span>{rule.title}</span>
+                </label>
+                <span className="flex shrink-0 items-center gap-1.5 text-xs text-pl-muted">
+                  <input className="pl-input h-8 w-16" inputMode="decimal" value={f.seconds} disabled={!f.enabled}
+                         aria-label={`${rule.title} süresi (sn)`} onChange={(e) => set({ seconds: e.target.value })} />
+                  sn · {rule.min}–{rule.max}
+                </span>
+              </div>
+            );
+          })}
+          <label className={`${lbl} mt-2.5`}>Hassasiyet
+            <select aria-label="Hassasiyet" className={`${field} mt-1`} value={fireRules.sensitivity}
+                    onChange={(e) => setFireRules({ ...fireRules, sensitivity: e.target.value as FireSensitivity })}>
+              {SENSITIVITIES.map((s) => <option key={s} value={s}>{SENSITIVITY_LABELS[s]}</option>)}
+            </select>
+          </label>
+          <p className="mt-2 text-xs text-pl-faint">Canlıdaki yangın/duman kamerasıyla aynı kurallar ve aynı analiz.</p>
+          <p className="mt-1 text-xs text-warn-ink" data-testid="fire-warning">{FIRE_WARNING}</p>
+        </fieldset>
       ) : twoWay ? (
         <>
           <label className={`${lbl} mt-2.5`}>Kamera
@@ -227,7 +262,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
           </p>
         </>
       )}
-      {!safety && (<>
+      {!alarmJob && (<>
       <div className="mt-2.5 grid grid-cols-2 gap-2.5">
         <label className={lbl}>{twoWay ? "Doğru giriş" : "Doğru adet"} <span className="text-pl-faint">(isteğe bağlı)</span>
           <input className={`${field} mt-1`} inputMode="numeric" placeholder={twoWay ? "12" : "100"} value={truth}
@@ -277,7 +312,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       )}
       <p className="mt-2 text-xs text-pl-faint">{twoWay ? "Doğru girişi" : "Doğru adeti"} yazarsan hata yüzdesi hesaplanır. Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>
       </>)}
-      {safety && <p className="mt-2 text-xs text-pl-faint">Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>}
+      {alarmJob && <p className="mt-2 text-xs text-pl-faint">Videolar 7 gün sonra silinir; sonuç özeti kalır.</p>}
 
       {error && <p role="alert" data-testid="upload-error" className="mt-2.5 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink"><FailureText failure={error} /></p>}
 

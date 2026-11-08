@@ -13,13 +13,14 @@ export interface InUse {
   note: string | null;
 }
 export type Choice = string;   // "auto" | "cpu" | ekran kartı kimliği
-export interface Choices { detector: Choice; pose: Choice; video: Choice }
+/** `fire`: yangın/duman modeli; eski analiz sunucusu bu anahtarı bilmez (göndermeyince kayıtlı seçim korunur) */
+export interface Choices { detector: Choice; pose: Choice; video: Choice; fire?: Choice }
 export interface DevicesState {
   gpuSupport: { available: boolean; reason: string | null };
   devices: DeviceInfo[];
   auto: string;
   choices: Choices;
-  inUse: { detector: InUse; pose: InUse };
+  inUse: { detector: InUse; pose: InUse; fire?: InUse };
 }
 export interface BenchResult { device: UsedDevice; msPerFrame: number; loadS: number }
 

@@ -28,3 +28,5 @@ export function safetyOptions(form: SafetyForm): JobOptions | string;
 export function formatClock(s: number | undefined): string;
 export function alarmRows(result: { alarms?: Alarm[]; files?: readonly string[] } | undefined): AlarmRow[];
 export function rulesSummary(safety: JobOptions["safety"]): string;
+export function alarmCounts(list: ReadonlyArray<{ type: string; falseAlarm?: boolean }>, types: readonly string[]):
+  Record<string, number> & { total: number; false: number };

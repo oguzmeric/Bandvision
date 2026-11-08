@@ -5,13 +5,17 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import GeometryControls from "@/components/geometry/GeometryControls";
 import RoiEditor from "@/components/geometry/RoiEditor";
+import ZonesEditor from "@/components/geometry/ZonesEditor";
 import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
 import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
 import { SafetyPanel, SafetySettings } from "./SafetyPanel";
+import { FireSettings } from "./FireSettings";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
-import { api, safetyHealth, STATE_LABELS, stateDot, type LabColor, type LiveSession, type Profile } from "@/lib/live";
+import { api, isWatchMode, safetyHealth, STATE_LABELS, stateDot, watchStatus, type LabColor, type LiveSession, type Profile } from "@/lib/live";
+import { fireConfig } from "@/lib/fireAlarms.mjs";
+import { FIRE_OK_TEXT, GUARD_OK_TEXT } from "@/lib/views";
 import { KIND_NOUN, kindOfMode, parseKind } from "@/lib/analysisKind";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
@@ -32,10 +36,12 @@ function Counter({ label, value, tone, hint, testId }: { label: string; value: n
 
 /** Açık canlı sayımların özeti: her kamerada giriş/çıkış (ya da adet) bir bakışta; tıklayınca o kamera açılır */
 function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: boolean; onSelect: () => void }) {
-  const watch = s.profile.countMode === "safety";
-  // güvenlik: son 5 dakikada alarm olduysa kırmızı nokta ve "Alarm" (lastAlarmAt: unix saniye)
-  const alarmed = s.safety?.lastAlarmAt != null && Date.now() / 1000 - s.safety.lastAlarmAt < 300;
+  const watch = isWatchMode(s.profile.countMode);
+  // güvenlik ve yangın/duman: son 5 dakikada alarm olduysa kırmızı nokta ve "Alarm" (lastAlarmAt: unix saniye)
+  const last = watchStatus(s)?.lastAlarmAt;
+  const alarmed = last != null && Date.now() / 1000 - last < 300;
   const health = safetyHealth(s);
+  const okText = s.profile.countMode === "fire" ? FIRE_OK_TEXT : GUARD_OK_TEXT;
   return (
     <button type="button" role="tab" aria-selected={selected} onClick={onSelect} data-testid="session-card"
             className={`rounded-[3px] border px-3 py-2 text-left ${selected ? "border-pl-sel-line bg-pl-sel" : "border-pl-line bg-white hover:bg-pl-side"}`}>
@@ -58,7 +64,7 @@ function SessionCard({ s, selected, onSelect }: { s: LiveSession; selected: bool
             ) : !health.healthy ? (
               // canlı ama izlemiyor (model yükleniyor/yüklenemedi, görüntü işlenemiyor…): neden üstüne gelince görünür
               <span className="text-[13px] font-medium text-warn-ink" title={health.reason ?? undefined} data-testid="watch-state">Sorun</span>
-            ) : !alarmed && <span role="img" aria-label="Güvenlik alarmı izleniyor" title="Güvenlik alarmı izleniyor" data-testid="watch-ok" className="h-2 w-2 rounded-full bg-ok-600" />}
+            ) : !alarmed && <span role="img" aria-label={okText} title={okText} data-testid="watch-ok" className="h-2 w-2 rounded-full bg-ok-600" />}
           </>
         ) : s.twoWay ? (
           <>
@@ -126,7 +132,7 @@ export default function LiveView() {
   // kalibrasyonda düzenleyicinin arka planı: işaretsiz son işlenen kare (~1,5/sn). Personel rengi öğretirken görüntü
   // donar: sunucu, en son verdiği kareyi (ve o karenin kişi kutularını) örnekler — tıklanan kare ile aynı.
   useEffect(() => {
-    if (!draft || teaching || draft.countMode === "safety") return;   // güvenlikte alan yok: düzenleyici açılmaz
+    if (!draft || teaching || draft.countMode === "safety") return;   // güvenlikte alan yok: düzenleyici açılmaz (yangında hariç bölgeler var)
     const t = setInterval(() => setFrameTick((x) => x + 1), 650);
     return () => clearInterval(t);
   }, [draft, teaching]);
@@ -224,7 +230,7 @@ export default function LiveView() {
   }
 
   async function closeSession() {
-    const text = session?.profile.countMode === "safety"
+    const text = isWatchMode(session?.profile.countMode)
       ? "Canlı sayım kapatılsın mı? Bu kamera izlenmez ve alarm vermez."
       : "Canlı sayım kapatılsın mı? Sayılar sıfırlanır.";
     if (!session || !confirm(text)) return;
@@ -274,6 +280,9 @@ export default function LiveView() {
   const mode: CountMode = (p.countMode as CountMode | undefined) ?? "blob";
   const twoWay = mode === "detect";
   const safety = mode === "safety";
+  const fire = mode === "fire";
+  /** Alarm veren izleme (güvenlik, yangın/duman): sayaç, Başlat/Sıfırla, alan ve çizgi yok */
+  const watch = safety || fire;
   const g = geometryOf(p);
   const live = session.state === "live";
   const stateTone = live ? "bg-ok-50 text-ok-ink" : session.state === "ended" ? "bg-pl-head text-pl-muted" : "bg-warn-50 text-warn-ink";
@@ -304,7 +313,12 @@ export default function LiveView() {
               {STATE_LABELS[session.state]}{live && session.fps ? ` · ${num(session.fps, 0)} fps` : ""}
             </span>
           </div>
-          {draft && !safety ? (
+          {draft && fire ? (
+            // yangın/duman: alan ve çizgi yok; görüntü üstünde hariç bölgeler çizilir
+            <ZonesEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
+                         zones={fireConfig(p.fire).ignoreZones}
+                         onChange={(z) => edit({ ...p, fire: { ...fireConfig(p.fire), ignoreZones: z } })} />
+          ) : draft && !safety ? (
             // güvenlikte alan kısıtı yok (kullanıcı kararı, 2026-10-07): Ayarla'da da iskeletli canlı görüntü kalır
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
                        value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
@@ -326,10 +340,10 @@ export default function LiveView() {
         <aside className="grid gap-3">
           {!draft ? (
             <>
-              {safety && <SafetyPanel session={session} />}
-              <section className="pl-section mb-0 pb-2.5" aria-label={safety ? "Kamera" : "Sayım"}>
-                <h2>{safety ? "Kamera" : "Sayım"}</h2>
-                {safety ? null : twoWay ? (
+              {watch && <SafetyPanel session={session} />}
+              <section className="pl-section mb-0 pb-2.5" aria-label={watch ? "Kamera" : "Sayım"}>
+                <h2>{watch ? "Kamera" : "Sayım"}</h2>
+                {watch ? null : twoWay ? (
                   <div className="grid grid-cols-2 gap-2">
                     <Counter label="Giriş" value={session.total} tone="in" testId="live-in" />
                     <Counter label="Çıkış" value={session.totalOut} tone="out" testId="live-out" />
@@ -348,7 +362,7 @@ export default function LiveView() {
                     <span className="font-semibold text-pl-accent">⇅ Çevir</span>
                   </button>
                 )}
-                {safety ? (
+                {watch ? (
                   <button type="button" className={`${btn} w-full`} onClick={beginCalibration}>Ayarla</button>
                 ) : (
                   <div className="mt-2.5 grid grid-cols-3 gap-2">
@@ -366,11 +380,11 @@ export default function LiveView() {
                     <StreamChoice value={session.substream} onChange={switchStream} />
                   </div>
                 )}
-                {!session.counting && !safety && (
+                {!session.counting && !watch && (
                   <p className="mt-2 text-xs text-pl-faint">Sayım duruyor: görüntü işleniyor ama sayılmıyor. &quot;Başlat&quot; ile sayım başlar.</p>
                 )}
                 <div className="-mx-2.5 mt-3 flex items-center justify-between border-t border-pl-line-soft px-2.5 pt-2 text-[13px]">
-                  {safety ? <span /> : (
+                  {watch ? <span /> : (
                     <a href={`/api/live/sessions/${session.id}/counts.csv`} className="font-medium text-pl-accent hover:underline">CSV indir</a>
                   )}
                   <button type="button" onClick={closeSession} className="font-medium text-nok-ink hover:underline">Canlı sayımı kapat</button>
@@ -378,9 +392,9 @@ export default function LiveView() {
               </section>
             </>
           ) : (
-            <section className="pl-section mb-0 pb-2.5" aria-label={safety ? "Güvenlik ayarları" : "Kalibrasyon"}>
-              <h2>{twoWay || safety ? "Ayarlar" : "Kalibrasyon"}</h2>
-              {!safety && (session.calibrationMessage || !twoWay) && (
+            <section className="pl-section mb-0 pb-2.5" aria-label={safety ? "Güvenlik ayarları" : fire ? "Yangın/duman ayarları" : "Kalibrasyon"}>
+              <h2>{twoWay || watch ? "Ayarlar" : "Kalibrasyon"}</h2>
+              {!watch && (session.calibrationMessage || !twoWay) && (
                 <p className="rounded-[2px] border border-warn-line bg-warn-50 px-2.5 py-1.5 text-[12.5px] text-warn-ink" aria-live="polite">
                   {session.calibrationMessage || (mode === "linescan"
                     ? "Sarı alanı bandın üstüne, turuncu çizgiyi akışa dik koy. Ürün boyu ilk ürünlerden kendiliğinden öğrenilir."
@@ -390,6 +404,8 @@ export default function LiveView() {
               <div className="mt-3 grid gap-3">
                 {safety ? (
                   <SafetySettings value={p.safety} onChange={(sf) => edit({ ...p, safety: sf })} />
+                ) : fire ? (
+                  <FireSettings value={p.fire} status={session.fire ?? null} onChange={(f) => edit({ ...p, fire: f })} />
                 ) : twoWay ? (
                   <div>
                     <p className="mb-1 text-xs font-medium text-pl-muted">Kamera</p>
@@ -420,7 +436,7 @@ export default function LiveView() {
                     </p>
                   </div>
                 )}
-                {!safety && (
+                {!watch && (
                   <GeometryControls value={g} onChange={(ng) => edit(withGeometry(p, ng))} aspect={aspect} twoWay={twoWay}
                                     allowAngled={mode !== "linescan"} compact />
                 )}
@@ -469,6 +485,7 @@ export default function LiveView() {
               </div>
               <p className="mt-2 text-[11.5px] text-pl-faint">
                 {safety ? "Kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez. Kural görüntüdeki herkese uygulanır."
+                  : fire ? "Kurallar ve hariç bölgeler yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."
                   : "Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."}
               </p>
             </section>

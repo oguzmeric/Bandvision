@@ -1,14 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, alarmImageUrl, api, safetyHealth, stateDot, type Alarm, type LiveSession, type SafetyConfig } from "@/lib/live";
+import {
+  ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, alarmImageUrl, api, safetyHealth, stateDot, toggleFalseAlarm, watchStatus, type Alarm, type LiveSession,
+  type SafetyConfig,
+} from "@/lib/live";
 import { useAlarmCenter } from "./AlarmCenter";
 import AlarmViewer from "./AlarmViewer";
+import { FireWarning } from "./FireSettings";
 
 export const SAFETY_DEFAULTS: SafetyConfig = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false };
 
-/** Güvenlik oturumunun yan paneli: izleniyor (ve izlenmiyorsa nedeni), süren durumlar, son alarmlar (tıklayınca kayıt
- * penceresi), deneme alarmı */
+/** Güvenlik ya da yangın/duman oturumunun yan paneli: izleniyor (ve izlenmiyorsa nedeni), süren durumlar, son alarmlar
+ * (tıklayınca kayıt penceresi), deneme alarmı; yangın/duman oturumunda sabit uyarı */
 export function SafetyPanel({ session }: { session: LiveSession }) {
   // liste hangi oturuma ait olduğunu taşır: kamera değişince önceki kameranın alarmları bir an bile görünmez
   const [loaded, setLoaded] = useState<{ id: string; list: Alarm[] }>({ id: session.id, list: [] });
@@ -28,7 +32,8 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
     return () => { alive = false; clearInterval(t); };
   }, [session.id, reload]);
   const alarms = loaded.id === session.id ? loaded.list : [];
-  const active = session.safety?.active ?? [];
+  const fire = session.profile.countMode === "fire";
+  const active = watchStatus(session)?.active ?? [];
   const health = safetyHealth(session);
   // ekler gerekçeyi üreten koşula göre (bağımsız bayraklara göre değil): yalnızca model hatası yeniden denenir
   const loading = health.cause === "loading";
@@ -39,7 +44,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
     try { await api(`alarms/${a.id}/ack`, { method: "POST" }); changed(); return true; } catch { return false; }
   }, [changed]);
   const markFalse = useCallback(async (a: Alarm) => {
-    try { await api(`alarms/${a.id}/false-alarm`, { method: "POST" }); changed(); return true; } catch { return false; }
+    try { await toggleFalseAlarm(a); changed(); return true; } catch { return false; }
   }, [changed]);
   const close = useCallback(() => setViewing(null), []);
 
@@ -56,7 +61,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
   }
 
   return (
-    <section className="pl-section mb-0 pb-2.5" aria-label="Güvenlik">
+    <section className="pl-section mb-0 pb-2.5" aria-label={fire ? "Yangın / duman" : "Güvenlik"}>
       <h2 className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${stateDot(session.state)}`} aria-hidden="true" />İzleniyor</h2>
       {session.state !== "live" ? (
         <p className={`text-[12.5px] ${session.state === "error" ? "text-nok-ink" : "text-pl-muted"}`} data-testid="safety-state">
@@ -102,6 +107,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
       {test && test.id === session.id && (
         <p role="status" className={`mt-2 text-[12px] ${test.ok ? "text-ok-ink" : "text-nok-ink"}`}>{test.text}</p>
       )}
+      {fire && <div className="mt-2.5"><FireWarning /></div>}
       {viewing && alarms.some((a) => a.id === viewing) && (
         <AlarmViewer alarms={alarms} id={viewing} mode="browse" onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
       )}

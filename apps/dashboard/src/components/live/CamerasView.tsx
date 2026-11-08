@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { KIND_TITLE, kindOfMode, parseKind } from "@/lib/analysisKind";
-import { api, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
+import { api, isWatchMode, RECORDER_BRANDS, safetyHealth, type Channel, type LiveSession, type Source } from "@/lib/live";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 import SourceForm from "./SourceForm";
 import Thumb from "./Thumb";
@@ -20,14 +20,16 @@ function describe(s: Source): string {
 
 /**
  * Kamerada canlı sayım zaten açıksa: yeniden başlatmak yerine o sayıma git (birden çok kamera aynı anda sayılabilir).
- * Yazı yok: nokta ve "Analiz"; anlamı ipucunda ve erişilebilir adda (güvenlik izleniyor / sorun + neden / sayım çalışıyor).
+ * Yazı yok: nokta ve "Analiz"; anlamı ipucunda ve erişilebilir adda (güvenlik ya da yangın/duman izleniyor / sorun + neden /
+ * sayım çalışıyor).
  */
 /** Sayımı süren kamera: o oturuma gider, oturumun türüne süzülmüş canlı sayım sayfasında (menüde o tür seçili) */
 function CountingLink({ session }: { session: LiveSession }) {
-  const safety = session.profile.countMode === "safety";
-  const health = safety ? safetyHealth(session) : null;
+  const watch = isWatchMode(session.profile.countMode);
+  const health = watch ? safetyHealth(session) : null;
   const warn = health !== null && !health.healthy;
-  const meaning = !safety ? "Sayım çalışıyor" : warn ? `Güvenlik alarmı: sorun${health.reason ? ` — ${health.reason}` : ""}` : "Güvenlik alarmı izleniyor";
+  const what = session.profile.countMode === "fire" ? "Yangın/duman" : "Güvenlik alarmı";
+  const meaning = !watch ? "Sayım çalışıyor" : warn ? `${what}: sorun${health.reason ? ` — ${health.reason}` : ""}` : `${what} izleniyor`;
   return (
     <Link href={`/live?s=${session.id}&tur=${kindOfMode(session.profile.countMode ?? "blob")}`}
           title={meaning} aria-label={meaning}

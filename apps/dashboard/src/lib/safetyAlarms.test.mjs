@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALARM_LABELS, alarmRows, defaultSafetyForm, formatClock, rulesSummary, safetyOptions } from "./safetyAlarms.mjs";
+import { ALARM_LABELS, alarmCounts, alarmRows, defaultSafetyForm, formatClock, rulesSummary, safetyOptions } from "./safetyAlarms.mjs";
 
 const form = (hu = {}, ly = {}) => {
   const f = defaultSafetyForm();
@@ -73,8 +73,13 @@ test("formatClock: negatif 00:00, sayı olmayan —", () => {
 
 const alarm = (over = {}) => ({ kind: "handsUp", trackId: 3, startS: 12.4, atS: 15.4, endS: 19, image: "alarm-1.jpg", ...over });
 
-test("ALARM_LABELS: tür adları", () => {
-  assert.deepEqual(ALARM_LABELS, { handsUp: "Eller yukarı", lying: "Yerde yatan kişi" });
+test("ALARM_LABELS: tür adları (güvenlik ve yangın/duman)", () => {
+  assert.deepEqual(ALARM_LABELS, { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman" });
+});
+
+test("alarmRows: yangın/duman işinin alarmları Yangın / Duman adıyla", () => {
+  const rows = alarmRows({ alarms: [alarm({ kind: "fire", trackId: 0 }), alarm({ kind: "smoke", trackId: 1, image: null })], files: ["alarm-1.jpg"] });
+  assert.deepEqual(rows.map((r) => [r.kind, r.label, r.image]), [["fire", "Yangın", "alarm-1.jpg"], ["smoke", "Duman", null]]);
 });
 
 test("alarmRows: tür adı, saat, süre ve resim", () => {
@@ -112,7 +117,7 @@ test("alarmRows: alarm listesi yok ya da boş", () => {
 });
 
 test("alarmRows: bilinmeyen tür ham haliyle gösterilir (çökmez)", () => {
-  assert.equal(alarmRows({ alarms: [alarm({ kind: "fire" })], files: [] })[0].label, "fire");
+  assert.equal(alarmRows({ alarms: [alarm({ kind: "flood" })], files: [] })[0].label, "flood");
 });
 
 test("rulesSummary: iş seçeneklerindeki kurallar; verilmeyen kural varsayılanla, kapalı kural 'kapalı'", () => {
@@ -121,4 +126,19 @@ test("rulesSummary: iş seçeneklerindeki kurallar; verilmeyen kural varsayılan
   assert.equal(rulesSummary({}), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn");
   assert.equal(rulesSummary(undefined), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn");
   assert.equal(rulesSummary({ handsUp: { seconds: 5 } }), "Eller yukarı 5 sn · Yerde yatan kişi 10 sn");
+});
+
+const TYPES = ["hands_up", "lying", "fire", "smoke", "test"];
+
+test("alarmCounts: toplam, tür listesindeki her tür (sıfır dahil) ve yanlış alarm", () => {
+  const c = alarmCounts([
+    { type: "fire" }, { type: "fire", falseAlarm: true }, { type: "smoke" }, { type: "hands_up" }, { type: "test" },
+  ], TYPES);
+  assert.deepEqual(c, { total: 5, hands_up: 1, lying: 0, fire: 2, smoke: 1, test: 1, false: 1 });
+  assert.deepEqual(Object.keys(c), ["total", ...TYPES, "false"]);                  // sayaçların sırası tür listesinden
+});
+
+test("alarmCounts: boş liste sıfırlar; listede olmayan tür yalnız toplama girer", () => {
+  assert.deepEqual(alarmCounts([], TYPES), { total: 0, hands_up: 0, lying: 0, fire: 0, smoke: 0, test: 0, false: 0 });
+  assert.deepEqual(alarmCounts([{ type: "flood" }, { type: "total" }], ["fire"]), { total: 2, fire: 0, false: 0 });
 });

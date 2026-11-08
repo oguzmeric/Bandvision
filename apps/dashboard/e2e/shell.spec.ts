@@ -16,7 +16,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     { label: "Ürün sayımı", href: "/live?tur=urun" },
     { label: "Kişi sayımı", href: "/live?tur=kisi" },
     { label: "Güvenlik alarmı (poz)", href: "/live?tur=guvenlik" },
-    { label: "Yangın ve duman", href: null },
+    { label: "Yangın / duman", href: "/live?tur=yangin" },
     { label: "Kalite kontrol", href: null },
     { label: "Video ile test", href: "/videos" },
     { label: "Raporlar", href: null },

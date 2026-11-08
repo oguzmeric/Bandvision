@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { desktopReady, playBeep, readPref } from "@/lib/attention";
-import { ALARM_LABELS, api, safetyHealth, WATCH_WARN_AFTER_S, type Alarm, type LiveSession } from "@/lib/live";
+import { ALARM_LABELS, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm, type LiveSession } from "@/lib/live";
 import { problemOf, type Problem } from "@/lib/views";
 import AlarmViewer from "./AlarmViewer";
 
@@ -19,14 +19,15 @@ export const TITLE_FLASH_MS = 1000;
 /** Arka plandaki sekmede aynı anda en çok bu kadar masaüstü bildirimi */
 const MAX_NOTIFICATIONS = 3;
 
-export interface Unwatched { id: string; name: string; reason: string }
+/** İzlenmeyen kamera; `fire`: yangın/duman kamerası (şerit "Yangın/duman kamerası izlenmiyor" der) */
+export interface Unwatched { id: string; name: string; reason: string; fire: boolean }
 
 interface AlarmCenterValue {
   /** Onaylanmamış alarmlar, yeniden eskiye */
   alarms: Alarm[];
   /** Alarm akışı koptu: oturum süresi doldu (401), analiz sunucusu reddetti (anahtar, adres) ya da analiz sunucusu yok */
   problem: Problem | null;
-  /** 60 sn'den uzun süredir izlenmeyen güvenlik kameraları */
+  /** 60 sn'den uzun süredir izlenmeyen güvenlik ve yangın/duman kameraları */
   unwatched: Unwatched[];
   /** Son alınan canlı oturum listesi (panel genelinde tek yoklama; ör. Canlı izleme kamera listesinin durum noktaları) */
   sessions: LiveSession[];
@@ -120,8 +121,8 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     return () => { alive = false; clearTimeout(timer); };
   }, []);
 
-  // İzlenmeyen güvenlik kameraları: sağlıksızlık sunucunun bildirdiği süreyle (unhealthyFor) başlatılır, tarayıcı
-  // saatiyle sürdürülür (iki makinenin saati farklı olabilir); 60 sn'yi aşan her kamera için bir uyarı satırı.
+  // İzlenmeyen güvenlik ve yangın/duman kameraları: sağlıksızlık sunucunun bildirdiği süreyle (unhealthyFor) başlatılır,
+  // tarayıcı saatiyle sürdürülür (iki makinenin saati farklı olabilir); 60 sn'yi aşan her kamera için bir uyarı satırı.
   useEffect(() => {
     let alive = true;
     let busy = false;
@@ -138,12 +139,14 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
         const seen = new Set<string>();
         const out: Unwatched[] = [];
         for (const s of list) {
-          if (s.profile.countMode !== "safety") continue;
+          if (!isWatchMode(s.profile.countMode)) continue;
           const h = safetyHealth(s);
           if (h.healthy) continue;
           seen.add(s.id);
-          if (!since.has(s.id)) since.set(s.id, now - (s.safety?.unhealthyFor ?? 0) * 1000);
-          if (now - since.get(s.id)! > WATCH_WARN_AFTER_S * 1000) out.push({ id: s.id, name: s.name, reason: h.reason ?? "neden bilinmiyor" });
+          if (!since.has(s.id)) since.set(s.id, now - (watchStatus(s)?.unhealthyFor ?? 0) * 1000);
+          if (now - since.get(s.id)! > WATCH_WARN_AFTER_S * 1000) {
+            out.push({ id: s.id, name: s.name, reason: h.reason ?? "neden bilinmiyor", fire: s.profile.countMode === "fire" });
+          }
         }
         for (const id of [...since.keys()]) if (!seen.has(id)) since.delete(id);
         setUnwatched(out);
@@ -241,9 +244,9 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const markFalse = useCallback(async (a: Alarm) => {
     seq.current += 1;
     try {
-      await api(`alarms/${a.id}/false-alarm`, { method: "POST" });
+      await toggleFalseAlarm(a);
       seq.current += 1;
-      setAlarms((x) => x.filter((y) => y.id !== a.id));
+      if (!a.falseAlarm) setAlarms((x) => x.filter((y) => y.id !== a.id));   // işaretlenen alarm onaylanır, şeritten kalkar
       refreshRef.current();
       return true;
     } catch {

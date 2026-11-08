@@ -4,7 +4,7 @@ import Link from "next/link";
 import { memo } from "react";
 import { stateLines, tileSize, tileTier } from "@/lib/layoutGrid.mjs";
 import { ALARM_TITLES } from "@/lib/live";
-import { analysisTone, badge, cellBox, GUARD_OK_TEXT, liveHref, stateText, type TileStatus, type ViewLayout } from "@/lib/views";
+import { analysisTone, badge, cellBox, guardOkText, liveHref, stateText, type TileStatus, type ViewLayout } from "@/lib/views";
 import { CAMERA_MIME } from "./CameraList";
 import { isMenuKey, menuPoint } from "./ContextMenu";
 
@@ -107,7 +107,8 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
   const state = !filled ? null : tile ? (tile.state === "live" ? null : stateText(tile)) : "Bağlanıyor…";
   const name = tile?.name ?? (filled ? label : null);
   const b = tile?.analysis ? badge(tile.analysis) : null;
-  const guardOk = tile?.analysis?.mode === "safety" && !b;
+  // sağlıklı izleme (güvenlik, yangın/duman): rozet yok, nokta ve metni
+  const guardOk = tile?.analysis && !b ? guardOkText(tile.analysis) : null;
   const badgeTitle = tile?.analysis ? tile.analysis.reason ?? tile.analysis.name : undefined;
   const tier = tileTier(layout, index, grid, rem);
   const full = tier === "full";
@@ -131,12 +132,12 @@ function TileOverlay({ layout, index, grid, rem, filled, tile, label, selected, 
     const d = Math.max(5, Math.min(0.5 * rem, size ? Math.min(size.w, size.h) - 2 : 0.5 * rem));
     return { width: d, height: d, ...(conn ? { borderWidth: Math.max(1, Math.min(0.125 * rem, (d - 3) / 2)) } : {}) };
   })();
-  const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), guardOk && GUARD_OK_TEXT, state].filter((t): t is string => !!t);
+  const dotText = [b && (badgeTitle ? `${b.text} — ${badgeTitle}` : b.text), guardOk, state].filter((t): t is string => !!t);
 
   const alarmButton = (cls: string) => alarm && (
     <button type="button" data-part="alarm" aria-label={`Alarmı aç: ${alarmTitle}`}
             tabIndex={active ? 0 : -1} onClick={(e) => { e.stopPropagation(); onAlarm(alarm.id); }}
-            className={`min-w-0 truncate bg-nok-600 font-bold text-white ${cls}`}>
+            className={`min-w-0 truncate bg-nok-600 font-bold uppercase text-white ${cls}`}>
       {alarmTitle}
     </button>
   );

@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { type Failure, failureOf } from "@/lib/failure";
 import { bytes, duration, int, num, signedPct, when } from "@/lib/format";
 import { alarmRows, rulesSummary } from "@/lib/safetyAlarms.mjs";
-import { ANCHOR_LABELS, DIRECTION_LABELS, isSafetyJob, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
+import { fireRulesSummary } from "@/lib/fireAlarms.mjs";
+import { ANCHOR_LABELS, DIRECTION_LABELS, isFireJob, isSafetyJob, MODE_LABELS, PRESET_LABELS, type AnalysisJob } from "@/lib/types";
 import { failureHint, stageText } from "@/lib/jobText";
 import CountChart from "./CountChart";
 import FailureText from "./FailureText";
@@ -147,7 +148,9 @@ export default function JobDetail({ job, onDeleted }: { job: AnalysisJob; onDele
               {safety ? (
                 <>
                   <h3 className="mb-1.5 text-[13px] font-semibold">Alarmlar</h3>
-                  <p className="mb-2 text-xs text-pl-muted" data-testid="alarm-rules">Kurallar: {rulesSummary(job.options.safety)}</p>
+                  <p className="mb-2 text-xs text-pl-muted" data-testid="alarm-rules">
+                    Kurallar: {isFireJob(job) ? fireRulesSummary(job.options.fire) : rulesSummary(job.options.safety)}
+                  </p>
                   {alarms.length === 0 ? (
                     <p className="rounded-[2px] border border-pl-line-soft bg-pl-side px-3 py-2 text-[13px]">Bu videoda alarm yok.</p>
                   ) : (

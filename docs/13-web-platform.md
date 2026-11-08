@@ -91,7 +91,7 @@ Kullanıcı isteği (2026-10-28): panel TRASSIR'ın ayar ekranı gibi sade olsun
 | Analizler | Ürün sayımı | `/live?tur=urun` | Canlı sayım (süzülmüş) |
 | Analizler | Kişi sayımı | `/live?tur=kisi` | Canlı sayım (süzülmüş) |
 | Analizler | Güvenlik alarmı (poz) | `/live?tur=guvenlik` | Canlı sayım (süzülmüş) |
-| Analizler | Yangın ve duman | gri, "yakında" | yok (proje 5) |
+| Analizler | Yangın / duman | `/live?tur=yangin` | yok (proje 5) |
 | Analizler | Kalite kontrol | gri, "yakında" | Kalite (NOK), yakında |
 | Analizler | Video ile test | `/videos` | Video analizi (sayfa başlığı "Videodan sayım ve doğruluk" idi) |
 | Analizler | Raporlar | gri, "yakında" | Raporlar, yakında |

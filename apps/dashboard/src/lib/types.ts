@@ -2,14 +2,16 @@
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "expired";
 export type JobStage = "calibrating" | "counting" | "encoding";
-export type Preset = "generic" | "egg" | "flour" | "box" | "people" | "vehicle" | "animal" | "safety";
-export type CountMode = "blob" | "linescan" | "detect" | "safety";
+export type Preset = "generic" | "egg" | "flour" | "box" | "people" | "vehicle" | "animal" | "safety" | "fire";
+export type CountMode = "blob" | "linescan" | "detect" | "safety" | "fire";
 /** Kişi sayımı: kamera tepeden (center) ya da yandan/eğik (bottom, çizgi zeminde) */
 export type CountAnchor = "center" | "bottom";
 export type Direction = "down" | "up" | "right" | "left";
 export type ResultFile = "annotated.mp4" | "counts.csv" | "alarms.csv" | "profile.json" | "background.png";
-/** Güvenlik alarmı: pozun türü */
-export type AlarmKind = "handsUp" | "lying";
+/** Video alarmının türü: güvenlikte pozun türü (`handsUp`, `lying`), yangın/duman işinde `fire`, `smoke` */
+export type AlarmKind = "handsUp" | "lying" | "fire" | "smoke";
+/** Yangın/duman hassasiyeti */
+export type FireSensitivity = "low" | "normal" | "high";
 
 /** Güvenlik kuralı: verilmeyen alan varsayılana düşer (eller yukarı 3 sn, yerde yatma 10 sn); en az biri açık olmalı */
 export interface SafetyRule {
@@ -46,6 +48,8 @@ export interface JobOptions {
   bgRange?: [number, number];
   /** Yalnızca preset safety */
   safety?: { handsUp?: SafetyRule; lying?: SafetyRule };
+  /** Yalnızca preset fire: kurallar ve hassasiyet (verilmeyen varsayılan: alev 3 sn, duman 8 sn, normal) */
+  fire?: { fire?: SafetyRule; smoke?: SafetyRule; sensitivity?: FireSensitivity };
 }
 
 export interface AnalysisJob {
@@ -60,7 +64,7 @@ export interface AnalysisJob {
   progress: number;
   stage?: JobStage;
   result?: {
-    /** Sayılan adet; iki yönlü sayımda giriş; güvenlikte alarm sayısı */
+    /** Sayılan adet; iki yönlü sayımda giriş; güvenlik ve yangın/duman işinde alarm sayısı */
     count: number;
     /** Yalnızca iki yönlü sayımda (kişi, araç, hayvan): çıkış */
     countOut?: number;
@@ -77,7 +81,7 @@ export interface AnalysisJob {
       notes?: string[];
     };
     processingFps: number | null;
-    /** Yalnızca güvenlik işinde: alarm listesi (en çok 500; `count` gerçek toplam) */
+    /** Yalnızca güvenlik ve yangın/duman işinde: alarm listesi (en çok 500; `count` gerçek toplam) */
     alarms?: Alarm[];
     /** Modelin çalıştığı cihaz (yalnız model kullanan analizlerde) */
     device?: { kind: "cpu" | "gpu"; name: string; note?: string | null };
@@ -96,6 +100,7 @@ export const PRESET_LABELS: Record<Preset, string> = {
   vehicle: "Araç (giriş / çıkış)",
   animal: "Hayvan (giriş / çıkış)",
   safety: "Güvenlik alarmı (poz)",
+  fire: "Yangın / duman",
 };
 
 /** Kişi gibi iki yönlü (giriş / çıkış) sayılan ön ayarlar */
@@ -111,7 +116,7 @@ export const TWO_WAY_NOUNS: Record<"people" | "vehicle" | "animal", { plural: st
 /** Hazır profilin varsayılan sayım yöntemi (services/edge Profile ile aynı) */
 export const PRESET_MODE: Record<Preset, CountMode> = {
   egg: "blob", flour: "linescan", box: "linescan", generic: "blob", people: "detect", vehicle: "detect", animal: "detect",
-  safety: "safety",
+  safety: "safety", fire: "fire",
 };
 
 export const MODE_LABELS: Record<CountMode, string> = {
@@ -119,6 +124,7 @@ export const MODE_LABELS: Record<CountMode, string> = {
   linescan: "Bitişik / hacimli (şerit tarama)",
   detect: "Kişi tanıma (giriş / çıkış)",
   safety: "Güvenlik",
+  fire: "Yangın / duman",
 };
 
 /** Bant üstü ürün yöntemleri (yöntem seçicisi); kişi tanıma hazır profille gelir */
@@ -136,9 +142,12 @@ export const DIRECTION_LABELS: Record<Direction, string> = {
   left: "Sağdan sola",
 };
 
-/** Güvenlik alarmı (poz) işi: sonuç sayım değil alarm listesidir */
+/** Alarm veren iş (güvenlik alarmı ya da yangın/duman): sonuç sayım değil alarm listesidir */
 export const isSafetyJob = (job: Pick<AnalysisJob, "options" | "result">) =>
-  job.options.preset === "safety" || job.result?.alarms !== undefined;
+  job.options.preset === "safety" || job.options.preset === "fire" || job.result?.alarms !== undefined;
+
+/** Yangın/duman işi (alarm listesi, kurallar `options.fire`) */
+export const isFireJob = (job: Pick<AnalysisJob, "options">) => job.options.preset === "fire";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isJobId = (id: string) => UUID.test(id);

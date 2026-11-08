@@ -8,9 +8,10 @@ import { ApiError } from "@/lib/live";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
 /** Kullanım satırları: anahtar sunucudaki `choices` anahtarıdır; `live`: altında "Şu an:" satırı olan canlı model */
-const ROWS: { key: keyof Choices; label: string; live: "detector" | "pose" | null }[] = [
+const ROWS: { key: keyof Choices; label: string; live: "detector" | "pose" | "fire" | null }[] = [
   { key: "detector", label: "Kişi ve araç tanıma (canlı)", live: "detector" },
   { key: "pose", label: "Poz — güvenlik alarmı (canlı)", live: "pose" },
+  { key: "fire", label: "Yangın/duman modeli", live: "fire" },
   { key: "video", label: "Video ile test", live: null },
 ];
 
@@ -63,7 +64,8 @@ export default function DeviceSettings() {
 
   // Bir model yeni cihaza yüklenirken "Şu an" satırı sonucu gösterene dek yenilenir; yenileme başarısızsa okuma hatası olur
   // (5 sn'lik yeniden deneme devralır, satır sonsuza dek "yükleniyor" demez). Süren yenileme bitmeden yenisi başlamaz.
-  const loading = data !== null && (data.inUse.detector.state === "loading" || data.inUse.pose.state === "loading");
+  const loading = data !== null && (data.inUse.detector.state === "loading" || data.inUse.pose.state === "loading"
+    || data.inUse.fire?.state === "loading");
   useEffect(() => {
     if (!loading || loadError !== null) return;
     let busy = false;
@@ -90,7 +92,9 @@ export default function DeviceSettings() {
     if (!data) return;
     setSaving(true);
     try {
-      const d = await saveDevices({ detector: value("detector"), pose: value("pose"), video: value("video") });
+      // yangın/duman anahtarı yalnızca sunucu biliyorsa gider (eski sunucu tanımadığı alanı reddeder)
+      const fire = data.choices.fire !== undefined ? { fire: value("fire") } : {};
+      const d = await saveDevices({ detector: value("detector"), pose: value("pose"), video: value("video"), ...fire });
       applied.current = ++seq.current;                  // yolda kalan eski okumalar artık atılır
       apply(d); setDraft({}); setMsg({ ok: true, text: "Kaydedildi." });
     } catch (e) { setMsg({ ok: false, text: errorText(e) }); }
@@ -155,7 +159,8 @@ export default function DeviceSettings() {
       <section className="pl-section">
         <h2>Kullanım</h2>
         {ROWS.map(({ key, label, live }) => {
-          const status: InUse | null = live && data ? data.inUse[live] : null;
+          if (key === "fire" && data !== null && data.choices.fire === undefined) return null;   // eski sunucu: satır yok
+          const status: InUse | null = live && data ? data.inUse[live] ?? null : null;
           const line = status ? inUseText(status, labels) : null;
           return (
             <div key={key} className="pl-row">
@@ -163,7 +168,7 @@ export default function DeviceSettings() {
               <div className="min-w-0">
                 <select id={`use-${key}`} data-testid={`use-${key}`} className="pl-input h-8 w-full" disabled={!ready || saving} value={value(key)}
                         onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}>
-                  {data && choiceOptions(data.devices, data.auto, data.choices[key]).map((o) => (
+                  {data && choiceOptions(data.devices, data.auto, data.choices[key] ?? "auto").map((o) => (
                     <option key={o.value} value={o.value}>{o.label}</option>
                   ))}
                 </select>

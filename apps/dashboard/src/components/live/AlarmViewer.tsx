@@ -19,6 +19,7 @@ interface Props {
   /** Küçült (etkin) / Kapat (göz atma); Esc de bunu yapar — asla "Gördüm" değil */
   onClose: () => void;
   onAck: (a: Alarm) => Promise<boolean>;
+  /** "Yanlış alarm" düğmesi: işaretli değilse işaretler, işaretliyse geri alır (çağıran `toggleFalseAlarm` kullanır) */
   onFalseAlarm: (a: Alarm) => Promise<boolean>;
 }
 
@@ -121,12 +122,18 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
   }
 
   async function act(kind: "ack" | "false") {
-    if (kind === "false" && !confirm("Bu alarm yanlış alarm olarak işaretlensin mi? Alarm kapanır ve listede «Yanlış alarm» olarak görünür.")) return;
+    const undo = kind === "false" && Boolean(a.falseAlarm);
+    if (kind === "false" && !confirm(undo
+      ? "Yanlış alarm işareti kaldırılsın mı? Alarm onaylanmış olarak kalır."
+      : "Bu alarm yanlış alarm olarak işaretlensin mi? Alarm kapanır ve listede «Yanlış alarm» olarak görünür.")) return;
     setBusy(true);
     setError(null);
     const ok = await (kind === "ack" ? onAck(a) : onFalseAlarm(a));
     setBusy(false);
-    if (!ok) setError({ id: a.id, text: kind === "ack" ? "Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin." : "Yanlış alarm kaydedilemedi. Tekrar deneyin." });
+    if (!ok) {
+      setError({ id: a.id, text: kind === "ack" ? "Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin."
+        : undo ? "Yanlış alarm işareti kaldırılamadı. Tekrar deneyin." : "Yanlış alarm kaydedilemedi. Tekrar deneyin." });
+    }
   }
 
   const showVideo = Boolean(a.clip) && playFailed !== a.id;
@@ -167,7 +174,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
         <header className="flex flex-wrap items-start gap-x-4 gap-y-2 bg-nok-600 px-4 py-3 text-white">
           <span className="mt-0.5 text-3xl" aria-hidden="true">🚨</span>
           <div className="min-w-0 flex-1">
-            <p className="text-2xl font-bold tracking-wide md:text-[28px]" data-testid="alarm-title">{ALARM_TITLES[a.type]}</p>
+            <p className="text-2xl font-bold uppercase tracking-wide md:text-[28px]" data-testid="alarm-title">{ALARM_TITLES[a.type]}</p>
             <p className="mt-0.5 truncate text-[15px] font-semibold">{a.camera}</p>
             <p className="text-[13px] text-white/85" data-testid="alarm-time">{new Date(a.firedAt * 1000).toLocaleString("tr-TR")}</p>
           </div>
@@ -267,12 +274,9 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
                 Kayıt cihazında izle
               </Link>
             )}
-            {!a.falseAlarm && (
-              <button type="button" disabled={busy} onClick={() => act("false")}
-                      className="pl-btn h-10 px-4">
-                Yanlış alarm
-              </button>
-            )}
+            <button type="button" disabled={busy} onClick={() => act("false")} className="pl-btn h-10 px-4">
+              {a.falseAlarm ? "Yanlış alarm işaretini kaldır" : "Yanlış alarm"}
+            </button>
             <button type="button" onClick={onClose}
                     className="pl-btn ml-auto h-10 px-4">
               {mode === "active" ? "Küçült" : "Kapat"}

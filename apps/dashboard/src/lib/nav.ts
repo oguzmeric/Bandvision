@@ -18,7 +18,7 @@ export const NAV: NavGroup[] = [
       { label: "Ürün sayımı", href: "/live?tur=urun" },
       { label: "Kişi sayımı", href: "/live?tur=kisi" },
       { label: "Güvenlik alarmı (poz)", href: "/live?tur=guvenlik" },
-      { label: "Yangın ve duman", href: null, soon: true },
+      { label: "Yangın / duman", href: "/live?tur=yangin" },
       { label: "Kalite kontrol", href: null, soon: true },
       { label: "Video ile test", href: "/videos" },
       { label: "Raporlar", href: null, soon: true },

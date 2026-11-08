@@ -10,8 +10,8 @@ import { useAlarmCenter } from "./AlarmCenter";
 const SHOWN = 3;
 
 /**
- * Her panel sayfasında, sayfa kaydırılsa da üstte (yapışkan): onaylanmamış güvenlik alarmları ve 60 sn'den uzun süredir
- * izlenmeyen güvenlik kameraları. Veri `AlarmCenter`'ın tek yoklamasından gelir (ikinci yoklama yok). Alarm penceresi
+ * Her panel sayfasında, sayfa kaydırılsa da üstte (yapışkan): onaylanmamış güvenlik ve yangın/duman alarmları ve 60 sn'den
+ * uzun süredir izlenmeyen güvenlik ve yangın/duman kameraları. Veri `AlarmCenter`'ın tek yoklamasından gelir (ikinci yoklama yok). Alarm penceresi
  * küçültülse de alarm burada kalır; "Kaydı izle" pencereyi o alarmda yeniden açar.
  * Şerit çoğu zaman tek alarm kanalıdır (Telegram varsayılan kapalı): alarm akışı koparsa (oturum süresi doldu, analiz
  * sunucusu yok, analiz sunucusu panelin anahtarını ya da adresini reddetti) eski liste sessizce kalmaz, sarı uyarı satırı çıkar.
@@ -46,7 +46,7 @@ export default function AlarmBanner() {
       {unwatched.map((u) => (
         <p key={u.id} role="status" data-testid="watch-warning"
            className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">
-          <span className="min-w-0 flex-1"><b>Güvenlik kamerası izlenmiyor: {u.name}</b> — {u.reason}</span>
+          <span className="min-w-0 flex-1"><b>{u.fire ? "Yangın/duman kamerası" : "Güvenlik kamerası"} izlenmiyor: {u.name}</b> — {u.reason}</span>
           <Link href={`/live?s=${u.id}`} className="font-medium underline">Kamerayı aç</Link>
         </p>
       ))}
