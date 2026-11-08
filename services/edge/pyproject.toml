@@ -35,3 +35,13 @@ include = ["bantvision*"]
 
 [tool.ruff]
 line-length = 110
+
+[tool.pytest.ini_options]
+# Starlette TestClient httpx2 ister; kurulu ortamda yalnız httpx varsa her oturumda bir kez bu uyarı çıkar (dev bağımlılığı
+# httpx2'yi zaten listeler, bkz. yukarıda). Yalnız bu ileti ve uyarıyı tetikleyen fastapi.testclient modülü susturulur;
+# başka uyarılar görünür kalır. Tür, StarletteDeprecationWarning'in üst sınıfı UserWarning: süzgeçte
+# starlette.exceptions.StarletteDeprecationWarning yazılsaydı fastapi'siz çekirdek oturumunda (test_core_without_fastapi)
+# pytest onu içe aktaramaz ve süzgeç hatası uyarısı verirdi.
+filterwarnings = [
+    'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.:UserWarning:fastapi\.testclient',
+]

@@ -16,10 +16,11 @@ import cv2
 import numpy as np
 import pytest
 from conftest import local_client
+from fakes_archive import CH, FakeCap, Rig
 from fastapi.testclient import TestClient
-from test_archive_player import CH, Rig
 
 from bantvision.analyzer import Settings, create_app
+from bantvision.live import archive_api
 from bantvision.live.archive_api import export_response
 from bantvision.live.recorders import RecorderError
 
@@ -186,7 +187,7 @@ def test_export_streams_with_utf8_filename_and_releases_lock(client: TestClient,
     assert "filename*=UTF-8''" + urllib.parse.quote("NVR · Kapı-20261107-1430.mp4", safe="") in cd
     assert client.post(f"{A}/export", json=body).status_code == 200          # kilit kalktı
 
-    _, held = rig.manager.export("nvr", CH.id, start, start + 60)          # süren görev
+    _, _, held = rig.manager.export("nvr", CH.id, start, start + 60)          # süren görev
     try:
         r = client.post(f"{A}/export", json=body)
         assert r.status_code == 409 and r.json()["detail"] == "Bir dışa aktarma sürüyor."
@@ -196,7 +197,7 @@ def test_export_streams_with_utf8_filename_and_releases_lock(client: TestClient,
 
 
 def test_export_response_closes_stream_when_client_disconnects(rig: Rig) -> None:
-    _, stream = rig.manager.export("nvr", CH.id, 0.0, 60.0)
+    _, _, stream = rig.manager.export("nvr", CH.id, 0.0, 60.0)
     resp = export_response(stream, "a.mp4", "a.mp4")
     sent: list[dict[str, Any]] = []
 
@@ -213,10 +214,10 @@ def test_export_response_closes_stream_when_client_disconnects(rig: Rig) -> None
     with contextlib.suppress(BaseException):
         asyncio.run(resp(scope, receive, send))
     assert any(m["type"] == "http.response.body" for m in sent)
-    _, again = rig.manager.export("nvr", CH.id, 0.0, 60.0)               # ExportBusy değil: akış kapandı
+    _, _, again = rig.manager.export("nvr", CH.id, 0.0, 60.0)               # ExportBusy değil: akış kapandı
     again.close()
 
-    _, unstarted = rig.manager.export("nvr", CH.id, 0.0, 60.0)
+    _, _, unstarted = rig.manager.export("nvr", CH.id, 0.0, 60.0)
     resp = export_response(unstarted, "a.mp4", "a.mp4")
 
     async def failing_send(msg: dict[str, Any]) -> None:
@@ -224,7 +225,7 @@ def test_export_response_closes_stream_when_client_disconnects(rig: Rig) -> None
 
     with contextlib.suppress(BaseException):
         asyncio.run(resp(scope, receive, failing_send))
-    _, third = rig.manager.export("nvr", CH.id, 0.0, 60.0)
+    _, _, third = rig.manager.export("nvr", CH.id, 0.0, 60.0)
     third.close()
 
 
@@ -280,3 +281,111 @@ def test_alarm_records_carry_source_and_channel(client: TestClient) -> None:
     finally:
         del mgr.sessions["y"]
     assert t["sourceId"] == "src2" and t["channelId"] is None
+
+
+# ---------------------------------------------------------------- inceleme düzeltmeleri
+
+
+def _stream_in_thread(client: TestClient, pid: str, limit: int) -> tuple[threading.Thread, list[bytes]]:
+    out: list[bytes] = []
+
+    def run() -> None:
+        out.append(client.get(f"{A}/players/{pid}/stream", params={"limit": limit}).content)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t, out
+
+
+def _paused_player(client: TestClient, rig: Rig) -> str:
+    v = client.post(f"{A}/players", json={"sourceId": "nvr", "channelId": CH.id, "at": 1000.0}).json()
+    p = rig.manager.get(v["id"])
+    assert p is not None
+    wait_for(lambda: p.frame()[1] is not None)
+    p.pause()
+    return str(v["id"])
+
+
+def test_stream_stays_open_while_paused_and_resumes_on_same_connection(
+        client: TestClient, rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(archive_api, "_clock", lambda: now[0])
+    pid = _paused_player(client, rig)
+    t, out = _stream_in_thread(client, pid, limit=2)
+    time.sleep(0.4)                                      # akış duraklatılmış oynatıcının son karesini verdi
+    now[0] += 61.0                                       # 61 sn duraklama: akış kapanmamalı
+    time.sleep(0.4)
+    assert t.is_alive()
+    p = rig.manager.get(pid)
+    assert p is not None
+    p.resume()
+    t.join(5)
+    assert not t.is_alive() and out[0].count(b"--frame\r\n") == 2
+
+
+def test_stream_ends_when_player_closes_and_idles_out_while_playing(
+        client: TestClient, rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    pid = _paused_player(client, rig)
+    t, out = _stream_in_thread(client, pid, limit=5)
+    time.sleep(0.3)
+    assert rig.manager.close(pid)
+    t.join(5)
+    assert not t.is_alive() and out[0].count(b"--frame\r\n") == 1
+
+    now = [0.0]
+    monkeypatch.setattr(archive_api, "_clock", lambda: now[0])
+    silent = Rig(caps=lambda: FakeCap(stall=True))      # bağlanıyor: cihaz hiç kare vermiyor
+    live = client.app.state.live
+    live.archive = silent.manager
+    try:
+        v = client.post(f"{A}/players", json={"sourceId": "nvr", "channelId": CH.id, "at": 1000.0}).json()
+        assert v["state"] == "connecting"
+        t, out = _stream_in_thread(client, v["id"], limit=5)
+        time.sleep(0.3)
+        assert t.is_alive()
+        now[0] += 61.0                                   # etkin durumda 60 sn karesiz: akış biter
+        t.join(5)
+        assert not t.is_alive() and out[0] == b""
+    finally:
+        live.archive = rig.manager
+        silent.manager.stop()
+
+
+def test_export_accepts_exactly_30_minutes(client: TestClient, filecam: str) -> None:
+    r = client.post(f"{A}/export", json={"sourceId": filecam, "start": 0.0, "end": 1800.0})
+    assert r.status_code == 501, r.text                  # aralık geçerli; dosya kaynağı dışa aktarmaz
+
+
+def test_export_30_minutes_streams(client: TestClient, rig: Rig) -> None:
+    r = client.post(f"{A}/export", json={"sourceId": "nvr", "channelId": CH.id, "start": 1000.0, "end": 2800.0})
+    assert r.status_code == 200 and r.content == b"".join(rig.archive.export_chunks)
+
+
+def test_recorder_without_channel_is_422_everywhere(client: TestClient, rig: Rig) -> None:
+    msg = "Kayıt cihazından bir kamera seçin."
+    for r in (client.get(f"{A}/calendar", params={"source": "nvr", "year": 2026, "month": 11}),
+              client.get(f"{A}/timeline", params={"source": "nvr", "day": 1000.0}),
+              client.post(f"{A}/export", json={"sourceId": "nvr", "start": 0.0, "end": 60.0}),
+              client.post(f"{A}/players", json={"sourceId": "nvr", "at": 0.0})):
+        assert r.status_code == 422 and r.json()["detail"] == msg, r.text
+    assert rig.client.channel_calls == 0                 # cihaza gidilmedi
+
+
+def test_only_known_errors_are_mapped(client: TestClient, rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_a: Any) -> Any:
+        raise ValueError("programlama hatası")
+
+    monkeypatch.setattr(rig.manager, "calendar", boom)
+    with pytest.raises(ValueError):                      # 422'ye dönüşmez: 500
+        client.get(f"{A}/calendar", params={"source": "nvr", "channel": CH.id, "year": 2026, "month": 11})
+
+    def stopped(*_a: Any) -> Any:
+        raise RuntimeError("başka bir hata")
+
+    monkeypatch.setattr(rig.manager, "timeline", stopped)
+    with pytest.raises(RuntimeError):                    # 503'e dönüşmez
+        client.get(f"{A}/timeline", params={"source": "nvr", "channel": CH.id, "day": 0})
+
+    rig.manager.stop()
+    r = client.post(f"{A}/players", json={"sourceId": "nvr", "channelId": CH.id, "at": 0.0})
+    assert r.status_code == 503 and r.json()["detail"] == "Kayıttan izleme durduruldu."
