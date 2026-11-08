@@ -47,6 +47,10 @@ async function mockArchive(page: Page) {
     createError: null as { status: number; detail: string } | null,
     /** Oynatıcı sunucudan kayboldu (yeniden başladı): GET/actions 404 */
     gone: false,
+    /** Durum yoklaması bu kodla düşer (ör. 502: analiz sunucusu yok); null: normal */
+    pollError: null as number | null,
+    /** POST players yanıtı bu söz bitene kadar bekler (açılış uçuşta) */
+    createHold: null as Promise<void> | null,
     /** Yalnız kumanda 404 (yoklamadan önce işlem kaybolan oynatıcıya çarpar) */
     actionMissing: false,
     /** Dışa aktarma yanıtı: hata ya da (null) dosya; `hold` verilirse yanıt o söz bitene kadar bekler */
@@ -76,8 +80,9 @@ async function mockArchive(page: Page) {
     const d = Number(log(r).query.get("day"));
     return r.fulfill({ json: { ranges: [[d + H, d + 2 * H], [d + 10 * H, d + 11 * H]] } });
   });
-  await page.route("**/api/live/archive/players", (r) => {
+  await page.route("**/api/live/archive/players", async (r) => {
     const c = log(r);
+    if (fake.createHold) await fake.createHold;
     if (fake.createError) return r.fulfill({ status: fake.createError.status, json: { detail: fake.createError.detail } });
     const b = c.body as { sourceId: string; channelId: string; at: number; speed: number };
     fake.gone = false;
@@ -92,6 +97,7 @@ async function mockArchive(page: Page) {
     const id = c.path.split("/").at(-1)!;
     if (fake.gone || fake.view?.id !== id) return missing(r);
     if (c.method === "DELETE") { fake.view = null; return r.fulfill({ status: 204 }); }
+    if (fake.pollError) return r.fulfill({ status: fake.pollError, json: { detail: "Analiz sunucusuna ulaşılamadı." } });
     return r.fulfill({ json: fake.view });
   });
   await page.route("**/api/live/archive/players/*/actions", (r) => {
@@ -167,12 +173,12 @@ test("kayıttan izleme: menü girişi, sayfa kabuğu, yalnız kayıt cihazı kam
 
   await pickKasa(page);
   await expect(camera(page, "Ofis NVR · Kasa")).toHaveAttribute("aria-pressed", "true");
-  const cal = m.of("GET", /^archive\/calendar$/).at(-1)!;
-  expect(Object.fromEntries(cal.query)).toEqual({ source: "b", channel: "2", year: "2026", month: "11" });
+  await expect.poll(() => { const c = m.of("GET", /^archive\/calendar$/).at(-1); return c && Object.fromEntries(c.query); })
+    .toEqual({ source: "b", channel: "2", year: "2026", month: "11" });
   await expect(dayButton(page, /^3 Kasım 2026, kayıt var$/)).toHaveAttribute("data-recorded", "true");
   await expect(dayButton(page, /^5 Kasım 2026$/)).not.toHaveAttribute("data-recorded", /.*/);
-  const tl = m.of("GET", /^archive\/timeline$/).at(-1)!;
-  expect(Object.fromEntries(tl.query)).toEqual({ source: "b", channel: "2", day: String(DAY7) });
+  await expect.poll(() => { const c = m.of("GET", /^archive\/timeline$/).at(-1); return c && Object.fromEntries(c.query); })
+    .toEqual({ source: "b", channel: "2", day: String(DAY7) });
   // imleç günün ilk kaydında (01:00); saat etiketleri
   await expect(page.getByTestId("player-clock")).toHaveText("01:00:00 07.11.2026");
   await expect(page.getByRole("slider", { name: "Zaman çizelgesi" })).toHaveAttribute("aria-valuetext", "01:00:00");
@@ -204,8 +210,8 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
   await pickKasa(page);
   await expect(page.getByTestId("player-stream")).toHaveCount(0);
   await playButton(page).click();
-  const create = m.of("POST", /^archive\/players$/);
-  expect(create.map((c) => c.body)).toEqual([{ sourceId: "b", channelId: "2", at: DAY7 + H, speed: 1 }]);
+  await expect.poll(() => m.of("POST", /^archive\/players$/).map((c) => c.body))
+    .toEqual([{ sourceId: "b", channelId: "2", at: DAY7 + H, speed: 1 }]);
   await expect(status(page)).toHaveText("Bağlanıyor…");
   const img = page.getByTestId("player-stream");
   await expect(img).toHaveAttribute("src", "/api/live/archive/players/p1/stream");
@@ -219,14 +225,14 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
 
   await playButton(page).click();
   await expect(status(page)).toHaveText("Duraklatıldı");
-  expect(m.of("POST", /actions$/).at(-1)!.body).toEqual({ action: "pause" });
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "pause" });
   await expect(playButton(page)).toHaveText("Sürdür");
 
   m.fake.view!.state = "ended";
   m.fake.view!.at = DAY7 + 2 * H;
   await expect(status(page)).toHaveText("Kayıt bitti");
   await page.getByRole("button", { name: "Sonraki kayda git" }).click();
-  expect(m.of("POST", /actions$/).at(-1)!.body).toEqual({ action: "seek", at: DAY7 + 10 * H });
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "seek", at: DAY7 + 10 * H });
   await expect(status(page)).toHaveText("Sarılıyor…");
   await expect(page.getByTestId("player-clock")).toHaveText("10:00:00 07.11.2026");
   await expect(img).toHaveAttribute("data-mark", "1");                 // duraklatma/sarma akışı yeniden açmaz
@@ -235,7 +241,7 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
   m.fake.view!.message = "Kayıt cihazından görüntü gelmedi.";
   await expect(status(page)).toHaveText("Kayıt cihazından görüntü gelmedi.");
   await playButton(page).click();                                       // Sürdür: hatadan sonra akış baştan açılır
-  expect(m.of("POST", /actions$/).at(-1)!.body).toEqual({ action: "resume" });
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "resume" });
   await expect(status(page)).toHaveText("Bağlanıyor…");
   await expect(img).not.toHaveAttribute("data-mark", "1");
   await expect(img).toHaveAttribute("src", "/api/live/archive/players/p1/stream");
@@ -252,15 +258,13 @@ test("kayıttan izleme: çizelge tıklaması (açar, sonra seek), hız seçimi, 
   const box = (await bar.boundingBox())!;
   // oynatıcı yokken tıklama o andan oynatıcı açar (12:00 civarı)
   await bar.click({ position: { x: box.width / 2, y: box.height / 2 } });
-  const at1 = m.of("POST", /^archive\/players$/).at(-1)!.body!.at as number;
-  expect(Math.abs(at1 - (DAY7 + 12 * H))).toBeLessThan(300);
+  await expect.poll(() => Math.abs(Number(m.of("POST", /^archive\/players$/).at(-1)?.body?.at) - (DAY7 + 12 * H))).toBeLessThan(300);
   m.fake.view!.state = "playing";
   await expect(status(page)).toHaveText("Oynatılıyor");
   // oynatıcı varken tıklama seek gönderir (06:00 civarı)
   await bar.click({ position: { x: box.width / 4, y: box.height / 2 } });
-  const seek = m.of("POST", /actions$/).at(-1)!.body!;
-  expect(seek.action).toBe("seek");
-  expect(Math.abs((seek.at as number) - (DAY7 + 6 * H))).toBeLessThan(300);
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body?.action).toBe("seek");
+  expect(Math.abs(Number(m.of("POST", /actions$/).at(-1)?.body?.at) - (DAY7 + 6 * H))).toBeLessThan(300);
   await expect(status(page)).toHaveText("Sarılıyor…");
   m.fake.view!.state = "playing";
   await expect(status(page)).toHaveText("Oynatılıyor");
@@ -269,7 +273,7 @@ test("kayıttan izleme: çizelge tıklaması (açar, sonra seek), hız seçimi, 
   const speed = page.getByLabel("Hız");
   await expect(speed.locator("option")).toHaveText(["1×", "2×", "4×"]);
   await speed.selectOption("2");
-  expect(m.of("POST", /actions$/).at(-1)!.body).toEqual({ action: "speed", speed: 2 });
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "speed", speed: 2 });
   await expect(status(page)).toHaveText("Sarılıyor…");
   m.fake.view!.state = "playing";
   await expect(status(page)).toHaveText("Oynatılıyor (2×)");
@@ -335,8 +339,8 @@ test("kayıttan izleme: 429 sınır iletisi; kaybolan oynatıcı (404) sonraki i
   await page.getByRole("button", { name: "10 saniye ileri" }).click();   // oynatıcı yokken yalnız imleç
   await expect(page.getByTestId("player-clock")).toHaveText("01:05:10 07.11.2026");
   await playButton(page).click();
+  await expect.poll(() => m.of("POST", /^archive\/players$/).at(-1)?.body).toEqual({ sourceId: "b", channelId: "2", at: DAY7 + H + 310, speed: 1 });
   const creates = m.of("POST", /^archive\/players$/);
-  expect(creates.at(-1)!.body).toEqual({ sourceId: "b", channelId: "2", at: DAY7 + H + 310, speed: 1 });
   await expect(status(page)).toContainText("Oynatıcı yeniden açıldı.");
   await expect(page.getByTestId("player-stream")).toHaveAttribute("src", "/api/live/archive/players/p2/stream");
 
@@ -385,8 +389,8 @@ test("kayıttan izleme: Dışa aktar — desteklenmiyorsa pasif; 30 dk sınırı
   m.fake.exportError = { status: 501, detail: "Bu kayıt cihazı dışa aktarmayı desteklemiyor." };
   await go.click();
   await expect(dlg.getByRole("alert")).toHaveText("Bu kayıt cihazı dışa aktarmayı desteklemiyor.");
-  const sent = m.of("POST", /^archive\/export$/).at(-1)!.body;
-  expect(sent).toEqual({ sourceId: "b", channelId: "2", start: DAY7 + H - 60, end: DAY7 + H + 60 });
+  await expect.poll(() => m.of("POST", /^archive\/export$/).at(-1)?.body)
+    .toEqual({ sourceId: "b", channelId: "2", start: DAY7 + H - 60, end: DAY7 + H + 60 });
   m.fake.exportError = { status: 409, detail: "Bir dışa aktarma sürüyor." };
   await go.click();
   await expect(dlg.getByRole("alert")).toHaveText("Bir dışa aktarma sürüyor.");
@@ -413,18 +417,25 @@ test("kayıttan izleme: derin bağlantı kamerayı ve günü seçip t'den oynat�
   await expect(camera(page, "Ofis NVR · Kasa")).toHaveAttribute("aria-pressed", "true");
   await expect(dayButton(page, /^3 Kasım 2026/)).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("player-clock")).toHaveText("10:20:34 03.11.2026");   // ilk kayıt (01:00) imleci ezmez
-  expect(m.of("GET", /^archive\/timeline$/).at(-1)!.query.get("day")).toBe(String(DAY3));
+  await expect.poll(() => m.of("GET", /^archive\/timeline$/).at(-1)?.query.get("day")).toBe(String(DAY3));
   await expect(status(page)).toHaveText("Bağlanıyor…");
+
+  // sayfa yenilenince derin bağlantı yine oynar (yeni oynatıcı; eskisi sayfadan çıkışta silinir)
+  await page.reload();
+  await expect.poll(() => m.of("POST", /^archive\/players$/).length).toBe(2);
+  expect(m.of("POST", /^archive\/players$/).at(-1)!.body).toEqual({ sourceId: "b", channelId: "2", at: t, speed: 1 });
+  await expect(status(page)).toHaveText("Bağlanıyor…");
+  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", "/api/live/archive/players/p2/stream");
 
   // gün değişince oynatıcı kapanır
   await dayButton(page, /^7 Kasım 2026/).click();
-  await expect.poll(() => m.of("DELETE", /^archive\/players\/p1$/).length).toBe(1);
+  await expect.poll(() => m.of("DELETE", /^archive\/players\/p2$/).length).toBe(1);
   await expect(status(page)).toHaveText("Oynatmak için çizelgede bir ana tıklayın ya da Oynat'a basın.");
   // kamera değişince de
   await playButton(page).click();
   await expect(status(page)).toHaveText("Bağlanıyor…");
   await camera(page, "Ofis NVR · Giriş").click();
-  await expect.poll(() => m.of("DELETE", /^archive\/players\/p2$/).length).toBe(1);
+  await expect.poll(() => m.of("DELETE", /^archive\/players\/p3$/).length).toBe(1);
   // sayfadan çıkış (menüden başka sayfa)
   await playButton(page).click();
   await expect(status(page)).toHaveText("Bağlanıyor…");
@@ -432,5 +443,30 @@ test("kayıttan izleme: derin bağlantı kamerayı ve günü seçip t'den oynat�
   await page.route("**/api/live/view-layouts", (r) => r.fulfill({ json: [] }));
   await page.getByRole("navigation", { name: "Ana menü" }).getByRole("link", { name: "Canlı izleme", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Canlı izleme", level: 1 })).toBeVisible();
-  await expect.poll(() => m.of("DELETE", /^archive\/players\/p3$/).length).toBe(1);
+  await expect.poll(() => m.of("DELETE", /^archive\/players\/p4$/).length).toBe(1);
+});
+
+test("kayıttan izleme: yoklama iki kez düşerse 'ulaşılamıyor' notu, düzelince kalkar; açılış sürerken tıklanan son ana sarılır", async ({ page }) => {
+  const m = await mockArchive(page);
+  await login(page);
+  await pickKasa(page);
+  const bar = page.getByRole("slider", { name: "Zaman çizelgesi" });
+  const box = (await bar.boundingBox())!;
+  let release: () => void = () => undefined;
+  m.fake.createHold = new Promise<void>((res) => { release = res; });
+  await bar.click({ position: { x: box.width / 2, y: box.height / 2 } });              // 12:00'dan açılış (uçuşta)
+  await expect(status(page)).toHaveText("Bağlanıyor…");
+  await bar.click({ position: { x: box.width / 4, y: box.height / 2 } });              // 06:00 (kaybolmamalı)
+  release();
+  m.fake.createHold = null;
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body?.action).toBe("seek");
+  expect(Math.abs(Number(m.of("POST", /actions$/).at(-1)?.body?.at) - (DAY7 + 6 * H))).toBeLessThan(300);
+  expect(m.of("POST", /^archive\/players$/)).toHaveLength(1);
+  m.fake.view!.state = "playing";
+  await expect(status(page)).toHaveText("Oynatılıyor");
+
+  m.fake.pollError = 502;                                       // analiz sunucusu düştü
+  await expect(status(page)).toContainText("Analiz sunucusuna ulaşılamıyor; yeniden deneniyor…");
+  m.fake.pollError = null;
+  await expect(status(page)).toHaveText("Oynatılıyor");
 });

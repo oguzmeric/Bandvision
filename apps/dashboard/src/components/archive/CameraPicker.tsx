@@ -12,7 +12,7 @@ type Loaded = { entries: Entry[]; problems: string[] };
 /** Kayıt cihazları ve kanalları: `GET sources` (yalnız `kind === "recorder"`), her biri için `GET sources/{id}/channels` */
 async function loadEntries(): Promise<Loaded> {
   const recorders = (await api<Source[]>("sources")).filter((s) => s.kind === "recorder");
-  const lists = await Promise.all(recorders.map((s) => api<Channel[]>(`sources/${s.id}/channels`)
+  const lists = await Promise.all(recorders.map((s) => api<Channel[]>(`sources/${encodeURIComponent(s.id)}/channels`)
     .then((chs) => ({ entries: chs.map((c) => ({ sourceId: s.id, channelId: c.id, label: `${s.name} · ${c.title}` })), problem: null }))
     .catch((e: Error) => ({ entries: [] as Entry[], problem: `${s.name}: ${e.message}` }))));
   return {

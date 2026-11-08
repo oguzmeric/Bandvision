@@ -231,7 +231,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 /** Sunucunun alan doğrulama hataları (FastAPI 422) → kullanıcıya Türkçe, tekrarsız ileti */
-function validationMessage(errors: unknown[]): string {
+export function validationMessage(errors: unknown[]): string {
   const msgs = errors.map((e) => {
     const { type = "", loc = [] } = e as { type?: string; loc?: unknown[] };
     const field = String(loc[loc.length - 1] ?? "");

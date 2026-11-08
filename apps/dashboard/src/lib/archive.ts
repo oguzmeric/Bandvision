@@ -1,6 +1,6 @@
 /** Kayıttan izleme API'si (analiz sunucusu `/api/v1/live/archive`, panel vekili `/api/live/archive`) —
  * services/edge/bantvision/live/archive_api.py. Zaman ve dosya adı hesapları `archiveTime.mjs`'tedir (birim testli). */
-import { ApiError, api } from "./live";
+import { ApiError, api, validationMessage } from "./live";
 import { dispositionFilename, fallbackFilename, type Range } from "./archiveTime.mjs";
 
 export type { Range } from "./archiveTime.mjs";
@@ -77,8 +77,9 @@ export async function exportClip(cam: ArchiveCamera, start: number, end: number,
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { detail?: unknown; error?: unknown } | null;
-    const d = body?.detail ?? body?.error;
-    throw new ApiError(typeof d === "string" ? d : `Dışa aktarılamadı (HTTP ${res.status}).`, res.status);
+    const d = body?.detail ?? body?.error;      // `detail` dizi ise Pydantic doğrulama hatası: `api` ile aynı Türkçe ileti
+    throw new ApiError(typeof d === "string" ? d : Array.isArray(d) ? validationMessage(d)
+      : `Dışa aktarılamadı (HTTP ${res.status}).`, res.status);
   }
   const blob = await res.blob();
   return { blob, filename: dispositionFilename(res.headers.get("content-disposition"), fallbackFilename(start)) };

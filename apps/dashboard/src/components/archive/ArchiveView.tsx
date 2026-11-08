@@ -65,8 +65,25 @@ export default function ArchiveView() {
                   text="Kayıt cihazındaki (NVR) eski görüntüyü izleyin: kamerayı ve günü seçin, çizelgede bir ana tıklayın.">
         <button type="button" aria-haspopup="dialog" onClick={() => setHelp(true)} className="pl-btn">Kısayollar</button>
       </PageHeader>
-      {mounted && <ArchiveBody />}
+      {mounted ? <ArchiveBody /> : <Skeleton />}
       {help && <ShortcutHelp keys={KEYS} note={KEYS_NOTE} onClose={() => setHelp(false)} />}
+    </div>
+  );
+}
+
+/** Gövde çizilene dek aynı düzende sabit yükseklikli yer tutucular (düzen kayması olmaz) */
+function Skeleton() {
+  const box = "animate-pulse rounded-[2px] border border-pl-line bg-pl-side";
+  return (
+    <div className="grid gap-3" aria-hidden="true" data-testid="archive-skeleton">
+      <div className={`${box} h-[118px]`} />
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="grid min-w-0 gap-2">
+          <div className={`${box} aspect-video w-full`} />
+          <div className={`${box} h-[92px]`} />
+        </div>
+        <div className={`${box} h-[318px]`} />
+      </div>
     </div>
   );
 }
@@ -84,16 +101,22 @@ function ArchiveBody() {
   const [month, setMonth] = useState(() => { const p = partsOf(deep?.t ?? now()); return { year: p.year, month: p.month }; });
   const [today] = useState(() => dayStart(now()));
   const [cursor, setCursor] = useState(() => deep?.t ?? dayStart(now()));
-  const [ranges, setRanges] = useState<Range[] | null>(null);
-  const [timelineError, setTimelineError] = useState<string | null>(null);
-  const [days, setDays] = useState<Set<number> | null>(null);
-  const [calendarError, setCalendarError] = useState<string | null>(null);
+  // Takvim ve çizelge sonuçları istendikleri anahtarla tutulur: kamera/ay/gün değişince eski işaretler bir kare bile görünmez
+  const [timeline, setTimeline] = useState<{ key: string; ranges: Range[] | null; error: string | null } | null>(null);
+  const [calendar, setCalendar] = useState<{ key: string; days: Set<number> | null; error: string | null } | null>(null);
   const [exporting, setExporting] = useState(false);
   const player = useArchivePlayer();
   /** Derin bağlantının konumu ilk çizelge yüklemesinde varsayılan imleçle ezilmez */
   const keepCursor = useRef(deep !== null);
   const end = dayEnd(day);
   const at = player.view?.at ?? cursor;
+  const camKey = cam ? `${cam.sourceId}|${cam.channelId}` : "";
+  const calendarKey = `${camKey}|${month.year}-${month.month}`;
+  const timelineKey = `${camKey}|${day}`;
+  const days = calendar?.key === calendarKey ? calendar.days : null;
+  const calendarError = calendar?.key === calendarKey ? calendar.error : null;
+  const ranges = timeline?.key === timelineKey ? timeline.ranges : null;
+  const timelineError = timeline?.key === timelineKey ? timeline.error : null;
 
   // Oynatıcının konumu imleçtir (oynatıcı kapanınca imleç son konumda kalır)
   const viewAt = player.view?.at;
@@ -101,42 +124,43 @@ function ArchiveBody() {
 
   // Takvim: seçili kameranın o aydaki kayıtlı günleri
   useEffect(() => {
-    setDays(null);
-    setCalendarError(null);
     if (!cam) return;
     const ctl = new AbortController();
     calendarDays(cam, month.year, month.month, ctl.signal)
-      .then((d) => setDays(new Set(d)))
-      .catch((e: Error) => { if (!ctl.signal.aborted) setCalendarError(e.message); });
+      .then((d) => setCalendar({ key: calendarKey, days: new Set(d), error: null }))
+      .catch((e: Error) => { if (!ctl.signal.aborted) setCalendar({ key: calendarKey, days: null, error: e.message }); });
     return () => ctl.abort();
-  }, [cam, month.year, month.month]);
+  }, [cam, month.year, month.month, calendarKey]);
 
   // Çizelge: seçili günün kayıtlı aralıkları; oynatıcı yoksa imleç günün ilk kaydına gelir
   const hasPlayer = useRef(false);
   hasPlayer.current = player.view !== null;
   useEffect(() => {
-    setRanges(null);
-    setTimelineError(null);
     if (!cam) return;
     const ctl = new AbortController();
     timelineRanges(cam, day, ctl.signal)
       .then((r) => {
-        setRanges(r);
+        setTimeline({ key: timelineKey, ranges: r, error: null });
         if (!keepCursor.current && !hasPlayer.current) setCursor(defaultCursor(r, day, dayEnd(day)));
         keepCursor.current = false;
       })
-      .catch((e: Error) => { if (!ctl.signal.aborted) setTimelineError(e.message); });
+      .catch((e: Error) => { if (!ctl.signal.aborted) setTimeline({ key: timelineKey, ranges: null, error: e.message }); });
     return () => ctl.abort();
-  }, [cam, day]);
+  }, [cam, day, timelineKey]);
 
-  // Derin bağlantı: kamera ve gün seçili, `t`'den oynatılır (bir kez)
+  // Derin bağlantı: kamera ve gün seçili, `t`'den oynatılır (bağlanışta bir kez). Temizlikte bayrak iner: React
+  // StrictMode'un bağla → kaldır → yeniden bağla sınamasında hook ilk açılışı geçersiz kılar (yanıtı gelince silinir),
+  // ikinci bağlanış derin bağlantıyı yeniden koşar; yoksa oynatıcı hiç açılmazdı.
+  // `seek`in kimliği değişince (ör. not değişti) derin bağlantı yeniden koşmasın diye en son hâli ref'ten okunur.
   const started = useRef(false);
-  const { seek } = player;
+  const seekLatest = useRef(player.seek);
+  seekLatest.current = player.seek;
   useEffect(() => {
     if (!deep || started.current) return;
     started.current = true;
-    seek(deep.cam, deep.t);
-  }, [deep, seek]);
+    seekLatest.current(deep.cam, deep.t);
+    return () => { started.current = false; };
+  }, [deep]);
 
   const selectCamera = (c: ArchiveCamera, label: string) => {
     setCamLabel(label);
@@ -158,10 +182,11 @@ function ArchiveBody() {
     if (p.year !== month.year || p.month !== month.month) setMonth({ year: p.year, month: p.month });
   };
 
-  /** Konuma git: oynatıcı varsa sarar, yoksa yalnız imleç taşınır (gün içine kırpılır) */
+  /** Konuma git: oynatıcı varsa (ya da açılıyorsa) sarar, yoksa yalnız imleç taşınır. Gün içine kırpılır; oynatma gece
+   * yarısını geçip seçili günün dışına çıktıysa kırpılmaz (ileri adım 23:59:59'a geri sarmasın). */
   const moveTo = (t: number) => {
-    const target = clampToDay(t, day, end);
-    if (cam && player.view) player.seek(cam, target);
+    const target = at >= day && at < end ? clampToDay(t, day, end) : Math.max(0, t);
+    if (cam && (player.view || player.opening)) player.seek(cam, target);
     else setCursor(target);
   };
   /** Çizelge tıklaması: oynatıcı yoksa o andan oynatmaya başlar */
