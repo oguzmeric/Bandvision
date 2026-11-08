@@ -351,6 +351,35 @@ def test_export_command_and_shapes(tmp_path: pathlib.Path) -> None:
     assert ex.main(["--check-only", "--out", str(tmp_path / "yok.onnx")]) == 2
 
 
+def test_export_main_resolves_relative_paths(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                             capsys: pytest.CaptureFixture[str]) -> None:
+    """README'deki göreli yollar: komut cwd=YOLOX klasöründe koşar; betik, ağırlık ve çıktı yolu mutlak olmalı ve
+    çıktı, çağıranın çalışma klasörüne göre yazılıp orada denetlenmeli."""
+    (tmp_path / "YOLOX" / "tools").mkdir(parents=True)
+    (tmp_path / "YOLOX" / "tools" / "export_onnx.py").write_text("")
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work" / "best_ckpt.pth").write_bytes(b"w")
+    monkeypatch.chdir(tmp_path / "work")
+    seen: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], cwd: Any, check: bool) -> Any:
+        seen["cmd"], seen["cwd"] = cmd, cwd
+        pathlib.Path(cmd[cmd.index("--output-name") + 1]).write_bytes(b"onnx")   # YOLOX çıktıyı bu yola yazar
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(ex.subprocess, "run", fake_run)
+    monkeypatch.setattr(ex, "run_onnx", lambda path: ([1, 3, 640, 640], [1, 8400, 7]))
+    assert ex.main(["--yolox", "../YOLOX", "--ckpt", "best_ckpt.pth"]) == 0
+    cmd = seen["cmd"]
+    for flag in ("-f", "-c", "--output-name"):
+        assert pathlib.Path(cmd[cmd.index(flag) + 1]).is_absolute()
+    assert pathlib.Path(cmd[1]).is_absolute() and pathlib.Path(cmd[1]).is_file()
+    assert pathlib.Path(cmd[cmd.index("-c") + 1]) == (tmp_path / "work" / "best_ckpt.pth").resolve()
+    assert pathlib.Path(seen["cwd"]) == (tmp_path / "YOLOX").resolve()
+    assert (tmp_path / "work" / ex.MODEL_NAME).is_file()                            # varsayılan --out: çağıranın klasörü
+    assert "SHA-256: " in capsys.readouterr().out
+
+
 def test_tools_do_not_import_training_stack() -> None:
     for mod in (prep, ev, ex):
         src = pathlib.Path(mod.__file__).read_text(encoding="utf-8")  # type: ignore[arg-type]

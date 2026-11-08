@@ -31,7 +31,8 @@ EXPECTED_OUTPUT = (1, ANCHORS, 5 + NUM_CLASSES)
 
 def export_command(python: str, yolox_dir: pathlib.Path, ckpt: pathlib.Path, out: pathlib.Path,
                    exp: pathlib.Path = EXP) -> list[str]:
-    """YOLOX `tools/export_onnx.py` komutu (kod çözmesiz, onnxsim'siz, opset 11, toplu iş 1)."""
+    """YOLOX `tools/export_onnx.py` komutu (kod çözmesiz, onnxsim'siz, opset 11, toplu iş 1). Komut `cwd=yolox_dir` ile
+    çalıştığından yollar mutlak verilmelidir (`main` çözer)."""
     return [python, str(yolox_dir / "tools" / "export_onnx.py"), "-f", str(exp), "-c", str(ckpt),
             "--output-name", str(out), "-o", str(OPSET), "--batch-size", "1", "--no-onnxsim"]
 
@@ -72,12 +73,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=MODEL_NAME, help=f"çıkış dosyası (varsayılan {MODEL_NAME})")
     ap.add_argument("--check-only", action="store_true", help="çevirme yapma; var olan --out dosyasını denetle")
     a = ap.parse_args(argv)
-    out = pathlib.Path(a.out)
+    out = pathlib.Path(a.out).resolve()                 # YOLOX cwd=yolox_dir ile çalışır: göreli yollar buraya göre
     if not a.check_only:
         if not a.yolox or not a.ckpt:
             print("Hata: --yolox ve --ckpt gerekli (ya da --check-only)", file=sys.stderr)
             return 2
-        yolox_dir, ckpt = pathlib.Path(a.yolox), pathlib.Path(a.ckpt)
+        yolox_dir, ckpt = pathlib.Path(a.yolox).resolve(), pathlib.Path(a.ckpt).resolve()
         if not (yolox_dir / "tools" / "export_onnx.py").is_file() or not ckpt.is_file():
             print("Hata: YOLOX kaynağı (tools/export_onnx.py) ya da ağırlık dosyası bulunamadı", file=sys.stderr)
             return 2
