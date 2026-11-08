@@ -285,7 +285,7 @@ Ofis TRASSIR'ında 16 kanalın 8'i panelde "Görüntü yok" idi; 7'sinde alt ak�
 
 Panelde seçilen kayıt cihazı kanalının **arşivi** oynatılır (ayrıntı: `13-web-platform.md` "Kayıttan izleme (`/archive`)"; TRASSIR uçları `08-trassir-integration.md` "Kayıttan izleme: arşiv SDK uçları").
 
-- **Ne var:** menüde İzleme → **Kayıttan izleme**: kayıt cihazı kanalı seçici, ay takvimi (kayıtlı günler), 24 saatlik çizelge (tıklayınca o ana), MJPEG oynatıcı (durum satırı, saat), duraklat/sürdür, ±10 sn, ±1 dk, hız (TRASSIR 1–16×; Hikvision/Dahua 1/2/4×), klavye kısayolları ve "?" listesi; TRASSIR'da ≤ 30 dk **dışa aktarma** (.mp4 tarayıcıya iner). Aynı anda en çok 2 oynatıcı, 60 sn boşta kapanma, 20 sn kare yoksa hata. Derin bağlantı `/archive?source=&channel=&t=`; alarm penceresinde **Kayıt cihazında izle** (alarm kaydı artık kaynak ve kanalı taşır; alarm anından 10 sn önceye açar; eski kayıtta ve tek IP kamerada düğme yok). Görüntü yalnız panel oturumuna gider, hiçbir şey saklanmaz, Telegram'a gitmez.
+- **Ne var:** menüde İzleme → **Kayıttan izleme**: kayıt cihazı kanalı seçici, ay takvimi (kayıtlı günler), 24 saatlik çizelge (tıklayınca o ana), MJPEG oynatıcı (durum satırı, saat), duraklat/sürdür, ±10 sn, ±1 dk, hız (TRASSIR 1–16×; Hikvision/Dahua cihaz tarafı hız doğrulanana dek 1×), klavye kısayolları ve "?" listesi; TRASSIR'da ≤ 30 dk **dışa aktarma** (.mp4 tarayıcıya iner). Aynı anda en çok 2 oynatıcı, 60 sn boşta kapanma, 20 sn kare yoksa hata. Derin bağlantı `/archive?source=&channel=&t=`; alarm penceresinde **Kayıt cihazında izle** (alarm kaydı artık kaynak ve kanalı taşır; alarm anından 10 sn önceye açar; eski kayıtta ve tek IP kamerada düğme yok). Görüntü yalnız panel oturumuna gider, hiçbir şey saklanmaz, Telegram'a gitmez.
 - **Doğrulama durumu:** edge birim ve API testleri (üç markanın adres/zaman biçimleri, ayrıştırıcılar, oynatıcı ve yönetici, hata eşlemesi), sahte NVR'ın arşiv uçlarıyla tümleşik testler; panel birim testleri; Playwright sahte API'li arayüz testi ve **gerçek yığın** testi (dosya kaynağı arşiv gibi: akış, sarma, duraklat, 2×, dışa aktarma pasif, çıkışta kapanma); alarm düğmesi var/yok testi. Yerelde tüm edge testleri, ruff, tsc, eslint, panel birim testleri, derleme ve ilgili Playwright testleri yeşil; CI dalda koşacak. **Gerçek cihazda henüz denenmedi**: TRASSIR ofis NVR'ında doğrulama bekliyor (ağa erişim olunca); Hikvision ve Dahua uçları **cihazda doğrulanmadı** (cihaz bulununca). Başarım iddiası yok.
 - **Donanım doğrulama listesi** (salt okunur; sonuçlar buraya):
   - **TRASSIR (ofis NVR'ı):**
@@ -296,13 +296,16 @@ Panelde seçilen kayıt cihazı kanalının **arşivi** oynatılır (ayrıntı: 
     - [ ] `stop`: jeton ve RTSP bağlantısı kapanıyor mu; duraklat/sürdür yeni jetonla açılıyor mu.
     - [ ] Arşiv jetonunun ömrü (`?ping` ile canlı kalması), uzun oynatmada kopma.
     - [ ] Dışa aktarma (`jit-export-create-task` → `jit-export-download`): hazırlanma süresi, hazır değilken yanıt, 2 dakikalık aralığın .mp4 inmesi (kabul ölçütü 1).
+    - [ ] Dışa aktarma "hazır değil" turlarında bekleme: en kötü durumda 20 × (1 sn + 600 sn okuma zaman aşımı) ölçülmeli; cihaz "hazır değil"i hemen yanıtlıyorsa sorun yok, yanıtı geciktiriyorsa hazırlık turları için daha kısa okuma zaman aşımı düşünülmeli.
     - [ ] Dünkü kaydın panelden oynaması; alarm penceresinden "Kayıt cihazında izle"nin alarm anından 10 sn önceye açması (kabul ölçütü 2).
     - [ ] Arşiv oynarken canlı izleme ve analiz oturumlarının kare hızı belirgin düşmüyor (kabul ölçütü 4).
   - **Hikvision / Dahua (cihaz bulununca):**
     - [ ] Oynatma adresi (Hikvision `/Streaming/tracks/<iz>?starttime=…Z`, Dahua `/cam/playback?channel=&subtype=&starttime=`), zaman biçimi ve saat dilimi (Hikvision UTC, Dahua yerel).
     - [ ] Hikvision ISAPI `ContentMgmt/search` (sayfalama, `MORE`) ve `record/tracks/<iz>/dailyDistribution`.
     - [ ] Dahua `mediaFileFind.cgi` (`factory.create` → `findFile` → `findNextFile` → `close`/`destroy`); kanal numarasının **1 tabanlı** olduğu.
-    - [ ] Panel tarafı hız (kare atlama) 2× ve 4×'te akıcı mı, konum doğru mu; cihaz reddinin Türkçe gösterilmesi.
+    - [ ] Cihaz tarafı hız (RTSP `Scale` başlığı) çalışıyor mu; çalışıyorsa hız listesi açılır (bugün yalnız 1×: gerçek zamanlı akışta panelde kare atlamak hızlandırmaz). Cihaz reddinin Türkçe gösterilmesi.
+    - [ ] Kayıt boşluğundan sonra konum (`at`): oynatma boşlukları atlıyorsa `at = başlangıç + okunan kare / fps` boşluk kadar geride kalır; `CAP_PROP_POS_MSEC` tekdüze artıyor ve > 0 ise konum ondan alınmalı.
+  - **Sonraya:** "Net görüntü" (ana akış) seçeneği (API `substream=false` hazır, panelde düğme yok).
   - Dosya kaynağının arşiv gibi davranması **yalnız test kancasıdır** (dosya kaynaklarına izin veren test ayarıyla); sahada kullanılmaz.
 
 ## 6. Araştırma ve tasarım notları
