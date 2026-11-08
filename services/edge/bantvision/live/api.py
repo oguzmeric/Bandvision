@@ -850,6 +850,8 @@ class LiveManager:
             self._source_gen[source_id] = self._source_gen.get(source_id, 0) + 1
         if cached:
             cached[1].close()
+        if self.archive is not None:                        # kayıttan izleme: oynatıcılar, kanal listesi, önbellek
+            self.archive.forget(source_id)
 
     def channels(self, src: dict[str, Any], refresh: bool = False) -> list[rec.RecorderChannel]:
         sid = src["id"]

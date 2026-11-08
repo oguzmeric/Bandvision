@@ -429,3 +429,27 @@ def test_only_known_errors_are_mapped(client: TestClient, rig: Rig, monkeypatch:
     rig.manager.stop()
     r = client.post(f"{A}/players", json={"sourceId": "nvr", "channelId": CH.id, "at": 0.0})
     assert r.status_code == 503 and r.json()["detail"] == "Kayıttan izleme durduruldu."
+
+
+def test_source_edit_or_delete_closes_archive_players(client: TestClient, filecam: str) -> None:
+    """`LiveManager.forget` (kaynak düzenlendi/silindi) arşiv oynatıcılarını da kapatır: sonraki istek 404 alır,
+    panel "oynatıcı yeniden açılır" yolundan yeni oynatıcıyı güncel kayıtla açar."""
+    pid = client.post(f"{A}/players", json={"sourceId": filecam, "at": 0.0}).json()["id"]
+    assert client.get(f"{A}/players/{pid}").status_code == 200
+    src = client.get("/api/v1/live/sources").json()[0]
+    r = client.put(f"/api/v1/live/sources/{filecam}", json={**{k: src[k] for k in ("kind", "brand", "customUrl")},
+                                                             "name": "Yeni ad"})
+    assert r.status_code == 200, r.text
+    assert client.get(f"{A}/players/{pid}").status_code == 404
+    v = client.post(f"{A}/players", json={"sourceId": filecam, "at": 0.0}).json()
+    assert v["name"] == "Yeni ad"
+    assert client.delete(f"/api/v1/live/sources/{filecam}").status_code in (200, 204)
+    assert client.get(f"{A}/players/{v['id']}").status_code == 404
+
+
+def test_speed_above_16_is_rejected(client: TestClient, filecam: str) -> None:
+    r = client.post(f"{A}/players", json={"sourceId": filecam, "at": 0.0, "speed": 32})
+    assert r.status_code == 422
+    pid = client.post(f"{A}/players", json={"sourceId": filecam, "at": 0.0}).json()["id"]
+    r = client.post(f"{A}/players/{pid}/actions", json={"action": "speed", "speed": 32})
+    assert r.status_code == 422

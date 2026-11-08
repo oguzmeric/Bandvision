@@ -684,3 +684,83 @@ def test_recorder_without_channel_raises_missing_channel_everywhere(rig: Rig) ->
     assert rig.client.channel_calls == 0
     _, _, s = rig.manager.export("nvr", "guid-1", START, START + 60)    # kilit bırakılmıştı
     s.close()
+
+
+# MARK: - Son inceleme: bitmişte sürdürme, forget, görünüm dosya okumaz
+
+
+@pytest.mark.parametrize("start,expect_at", [(START, START + 2.0 - 5.0), (1.0, 0.0)])
+def test_resume_after_ended_rewinds_5s(players: list[ArchivePlayer], start: float, expect_at: float) -> None:
+    """Bitmiş kayıtta "Sürdür" sondan açıp hemen yine bitmesin: 5 sn geriden (≥ 0) açılır."""
+    arch = FakeArchive()
+    p = make_player(arch, [FakeCap(frames=50, fps=25.0), FakeCap(delay=0.002)], start=start)
+    players.append(p)
+    wait_for(lambda: p.view().state == "ended")
+    assert p.view().at == pytest.approx(start + 2.0)
+    p.resume()
+    assert p.view().at == pytest.approx(expect_at)
+    wait_for(lambda: p.view().state == "playing")
+    assert arch.urls()[1][1] == pytest.approx(expect_at)
+    assert ap.RESUME_REWIND_S == 5.0
+
+
+def test_resume_after_pause_does_not_rewind(players: list[ArchivePlayer]) -> None:
+    arch = FakeArchive()
+    p = make_player(arch, [FakeCap(delay=0.002), FakeCap(delay=0.002)])
+    players.append(p)
+    wait_for(lambda: p.frame()[0] >= 5)
+    p.pause()
+    at = p.view().at
+    p.resume()
+    assert p.view().at == pytest.approx(at)
+
+
+def test_forget_closes_source_players_and_drops_archive_state(rig: Rig) -> None:
+    keep_src = {"id": "nvr2", "kind": "recorder", "name": "NVR2", "recorderBrand": "trassir", "host": "10.0.0.9"}
+    rig.sources["nvr2"] = keep_src
+    v1 = rig.manager.open("nvr", "guid-1", START, 1, True)
+    v2 = rig.manager.open("nvr2", "guid-1", START, 1, True)
+    p1, p2 = rig.manager.get(v1.id), rig.manager.get(v2.id)
+    assert p1 is not None and p2 is not None
+    rig.manager.calendar("nvr", "guid-1", 2026, 11)
+    rig.manager.calendar("nvr2", "guid-1", 2026, 11)
+    calls = rig.client.channel_calls
+    m = rig.manager
+    assert "nvr" in m._channels and "nvr" in m._source_locks and any(k[1] == "nvr" for k in m._cache)
+
+    m.forget("nvr")
+    assert p1.closed and m.get(v1.id) is None
+    assert not p2.closed and m.get(v2.id) is p2                 # başka kaynağın oynatıcısı sürer
+    assert "nvr" not in m._channels and "nvr" not in m._source_locks
+    assert not any(k[1] == "nvr" for k in m._cache) and any(k[1] == "nvr2" for k in m._cache)
+    assert "nvr2" in m._channels
+    rig.manager.calendar("nvr", "guid-1", 2026, 11)             # güncel kayıtla yeniden kurulur
+    assert rig.client.channel_calls == calls + 1
+    m.forget("yok")                                             # bilinmeyen kaynak: sorun değil
+
+
+def test_forget_keeps_lock_that_is_held(rig: Rig) -> None:
+    lock = rig.manager._source_lock("nvr")
+    with lock:
+        rig.manager.forget("nvr")
+        assert rig.manager._source_lock("nvr") is lock          # tutulan kilit silinmez (sıralama bozulmasın)
+
+
+def test_view_does_not_read_sources_or_secrets(rig: Rig) -> None:
+    """Görünüm saniyede bir yoklanır: sources.json ya da secrets.json okunmaz (ad açılışta alınır)."""
+    v = rig.manager.open("nvr", "guid-1", START, 1, True)
+    p = rig.manager.get(v.id)
+    assert p is not None
+    wait_for(lambda: p.view().state == "playing" and p.view().name == "NVR · Kapı")
+    store = rig.manager._store
+    store.calls.clear()                                         # type: ignore[attr-defined]
+    for _ in range(5):
+        assert p.view().name == "NVR · Kapı"
+    assert store.calls == []                                    # type: ignore[attr-defined]
+
+
+def test_name_reads_records_without_password(rig: Rig) -> None:
+    store = rig.manager._store
+    store.calls.clear()                                         # type: ignore[attr-defined]
+    assert rig.manager.name("nvr", None) == "NVR"
+    assert store.calls == ["source_records"]                    # type: ignore[attr-defined]
