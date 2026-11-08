@@ -109,6 +109,11 @@ class FireAnalyzer:
         self.episodes = {}
         return ends
 
+    def active(self) -> list[tuple[int, str, float, bool]]:
+        """Açık bölümler: (iz, tür, süre sn, alarm verdi mi) — `FireResult.active` ve canlı durum bloğu."""
+        return [(TRACK_IDS[k], k, self.episodes[k].last_pos - self.episodes[k].started, self.episodes[k].fired)
+                for k in KINDS if k in self.episodes]
+
     def process(self, frame: np.ndarray, ts: float, profile: Profile) -> FireResult:
         cfg: FireConfig = getattr(profile, "fire", None) or FireConfig()
         bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
@@ -164,7 +169,6 @@ class FireAnalyzer:
                     ep.box = votes.box_at(cell) or (0.0, 0.0, 1.0, 1.0)
                     res.fired.append(FireAlarm(kind, TRACK_IDS[kind], ep.box, ep.started, ts))
 
-        res.active = [(TRACK_IDS[k], k, self.episodes[k].last_pos - self.episodes[k].started, self.episodes[k].fired)
-                      for k in KINDS if k in self.episodes]
+        res.active = self.active()
         res.boxes = {TRACK_IDS[k]: ep.box for k, ep in self.episodes.items() if ep.fired and ep.box is not None}
         return res

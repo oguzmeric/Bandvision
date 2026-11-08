@@ -558,7 +558,8 @@ def test_get_devices_shape(client: TestClient) -> None:
         "choices": DEFAULTS,
         "inUse": {"detector": {"state": "ready", "device": {"id": "cpu", "kind": "cpu", "name": "İşlemci"},
                                "note": None},                           # sahte model "auto"yu işlemcide kurar
-                  "pose": {"state": "idle", "device": None, "note": None}},
+                  "pose": {"state": "idle", "device": None, "note": None},
+                  "fire": {"state": "idle", "device": None, "note": None}},
     }
 
 
@@ -814,7 +815,8 @@ def test_non_windows_has_one_cpu_device(tmp_path: pathlib.Path, monkeypatch: pyt
     assert j["devices"] == [{"id": "cpu", "kind": "cpu", "name": "İşlemci"}]
     assert j["auto"] == "cpu" and j["choices"] == DEFAULTS
     assert j["inUse"] == {"detector": {"state": "idle", "device": None, "note": None},
-                          "pose": {"state": "idle", "device": None, "note": None}}
+                          "pose": {"state": "idle", "device": None, "note": None},
+                          "fire": {"state": "idle", "device": None, "note": None}}
 
 
 def test_devices_routes_require_the_access_key(tmp_path: pathlib.Path, windows_gpus: None,

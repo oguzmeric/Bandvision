@@ -11,6 +11,10 @@ işlenir; tarayıcıya yerel ağdan işaretli kare gider, hiçbir yere kaydedilm
   oturumunda her işlenen karenin çizilecek sonucunu (`clips.ClipOverlay`, yalnızca sayılar) karenin yakalama saatiyle
   ön kayda bırakır; yazımda her kare, yakalama zamanına en yakın (en çok 0,7 sn uzak) sonuçla çizilir — analiz
   gecikmesi iskeleti kaydırmaz.
+
+Yangın/duman oturumu (`countMode = "fire"`) güvenlikle aynı alarm yolunu kullanır (ön kayıt, alarm alıcısı, olay kaydı,
+izleme sağlığı); kareler en çok `fire_rules.MAX_FPS` (5) /sn analiz edilir — arada gelenler analiz edilmez ama önizleme
+ve ön kayıt her kareyle sürer.
 """
 from __future__ import annotations
 
@@ -30,6 +34,8 @@ import cv2
 import numpy as np
 
 from ..core import Pipeline, Profile
+from ..core.fire_model import FireModelMissing
+from ..core.fire_rules import MAX_FPS as FIRE_MAX_FPS
 from ..core.pipeline import FrameResult
 from ..core.staff_color import teach_bgr
 from ..overlay import draw_detect, draw_safety
@@ -61,6 +67,7 @@ class SessionStatus:
     last_ok_at: float | None = None         # son başarıyla işlenen karenin zamanı (duvar saati)
 
 
+ALARM_MODES = ("safety", "fire")            # alarm veren yöntemler: ön kayıt, alarm alıcısı, izleme listesi
 STALE_S = 10.0                              # bu kadar süredir kare işlenmediyse güvenlik kamerası izlenmiyor sayılır
 _PROCESSING = "İşleme hatası: "
 _LOG_EVERY_S = 60.0                         # aynı işleme hatası günlüğe en çok dakikada bir (her karede değil)
@@ -81,6 +88,25 @@ def safety_health(state: str, model: str, model_error: str, detector: str, detec
             return False, f"{kind} yükleniyor"
         if st != "ready":
             return False, err or f"{kind} yüklenemedi"
+    if processing_error:
+        return False, f"Görüntü işlenemiyor: {processing_error}"
+    if last_ok_at is None:
+        return False, "Görüntü işlenemiyor: henüz kare işlenmedi"
+    if now - last_ok_at > STALE_S:
+        return False, f"Görüntü işlenemiyor: {STALE_S:g} sn'dir yeni kare yok"
+    return True, None
+
+
+def fire_health(state: str, model: str, model_error: str, processing_error: str | None, last_ok_at: float | None,
+                now: float) -> tuple[bool, str | None]:
+    """Yangın/duman kamerası gerçekten izleniyor mu (`safety_health` deseni, tek model): (sağlıklı, ilk tutmayan koşulun
+    Türkçe nedeni). Model kurulu değilse neden "Yangın/duman modeli kurulu değil."."""
+    if state != "live":
+        return False, "Kameraya bağlanılıyor" if state == "connecting" else "Kamera bağlantısı yok"
+    if model == "loading":
+        return False, "Yangın/duman modeli yükleniyor"
+    if model != "ready":
+        return False, model_error or "Yangın/duman modeli yüklenemedi"
     if processing_error:
         return False, f"Görüntü işlenemiyor: {processing_error}"
     if last_ok_at is None:
@@ -136,16 +162,17 @@ class LiveSession:
 
     def __init__(self, name: str, open_url: Callable[[], str], profile: Profile,
                  keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True,
-                 detector: Any | None = None, pose: Any | None = None,
+                 detector: Any | None = None, pose: Any | None = None, fire: Any | None = None,
                  alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None],
                                       list[str] | None] | None = None,
                  clip_sink: Callable[[ClipJob], None] | None = None,
                  clip_state: Callable[[Sequence[str], str], None] | None = None) -> None:
-        """`detector`: kişi tanıma modeli, `pose`: poz modeli (ikisi de birden çok kamerada ortak; yoksa ilk karede
-        yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik alarmları (çalışma
-        iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının kimliklerini döndürür; çalışma döngüsü
-        biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı yazıcısı (engellemez); verilirse
-        güvenlik oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım oturumunda tampon yok, ek iş yok).
+        """`detector`: kişi tanıma modeli, `pose`: poz modeli, `fire`: yangın/duman modeli (hepsi birden çok kamerada
+        ortak; yoksa ilk karede yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik
+        ve yangın/duman alarmları (çalışma iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının
+        kimliklerini döndürür; çalışma döngüsü biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı
+        yazıcısı (engellemez); verilirse güvenlik/yangın oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım
+        oturumunda tampon yok, ek iş yok).
         `clip_state(kimlikler, "failed")`: yakalama alınamadı (alarm kaydı `clipFailed` olur)."""
         self.id = str(uuid.uuid4())
         self.name = name
@@ -161,20 +188,25 @@ class LiveSession:
         self._pipe.detect.enable_gate()                     # boş sahnede tanıma atlanır: çok kamerada işlemci paylaşımı
         self._detector = detector
         self._pose = pose
+        self._fire = fire
         self._alarm_sink = alarm_sink
         self._clip_sink = clip_sink
         self._clip_state = clip_state
-        self._clips: ClipBuffer | None = None               # yalnızca güvenlik oturumunda (okuyucu doldurur)
+        self._clips: ClipBuffer | None = None               # yalnızca güvenlik/yangın oturumunda (okuyucu doldurur)
         self._last_alarm_at: float | None = None
         # Güvenlik izleme sağlığı karelerden çıkar (panelin yoklamasından değil): izleme başladığı an ve son sağlıklı
         # karenin anı (tekdüze). Panel kamera sağlıksızlaştıktan çok sonra açılsa da süreyi doğru görür.
         self._watch_start = time.monotonic()
         self._last_healthy: float | None = None
         self._model_check_at = 0.0
+        self._fire_last_ts: float | None = None             # son analiz edilen yangın karesinin zamanı (MAX_FPS)
+        self._fire_missing: str | None = None               # dedektör "model kurulu değil" dedi (ortak model dışı yol)
         if detector is not None:
             self._pipe.detect._detector = detector
         if profile.countMode == "safety":
             self._setup_safety()
+        elif profile.countMode == "fire":
+            self._setup_fire()
         self._warm(profile)
         self.counting = False
         self.status = SessionStatus()
@@ -245,11 +277,15 @@ class LiveSession:
             mode_changed = profile.countMode != self.profile.countMode
             self.profile = profile
             self._pipe.set_profile(profile, reset_background=mode_changed)
+            # alarm yönteminden çıkış ya da güvenlik ↔ yangın: ön kayıt bırakılır (eski yöntemin işaretleri yeni
+            # yöntemin kaydına karışmasın); yeni alarm yöntemi taze ön kayıt kurar
+            leaving = self._clips if profile.countMode not in ALARM_MODES or mode_changed else None
+            if leaving is not None:
+                self._clips = None
             if profile.countMode == "safety" and (mode_changed or self._pipe.safety is None):
                 self._setup_safety()                        # güvenliğe geçiş: ortak modellerle taze analizör
-            leaving = self._clips if profile.countMode != "safety" else None
-            if leaving is not None:
-                self._clips = None                          # güvenlikten çıkış: ön kayıt bırakılır
+            if profile.countMode == "fire" and (mode_changed or self._pipe.fire is None):
+                self._setup_fire()                          # yangına geçiş: ortak modelle taze analizör
             self._warm(profile)
             self._numbers.clear()
             self._labels.clear()
@@ -272,14 +308,37 @@ class LiveSession:
             # JPEG'e çevirme ayrı tek yuvalı iş parçacığında: okuyucu yalnızca kare başvurusunu bırakır
             self._clips = ClipBuffer(self._clip_sink, state=self._clip_state, threaded=True)
 
+    def _setup_fire(self) -> None:
+        """Yangın/duman analizörü: oturumun (ortak) yangın modeliyle; izleme sağlığı ve analiz hızı sınırı baştan."""
+        from ..core.fire import FireAnalyzer
+
+        self._pipe.fire = FireAnalyzer(detector=self._fire)
+        self._fire_last_ts = None
+        self._fire_missing = None
+        self._watch_start = time.monotonic()                # yangına geçiş: izleme yeniden kanıtlanmalı
+        self._last_healthy = None
+        if self._clip_sink is not None and self._clips is None:
+            self._clips = ClipBuffer(self._clip_sink, state=self._clip_state, threaded=True)
+
+    def _fire_due(self, ts: float) -> bool:
+        """Kilit altında: yangın modunda bu kare analiz edilsin mi? Son analiz edilen kareden en az `1 / MAX_FPS` sn
+        sonra gelen kare edilir (zaman geri gittiyse de); diğer yöntemlerde her kare. Analiz edilecekse zaman tutulur."""
+        if self.profile.countMode != "fire":
+            return True
+        last = self._fire_last_ts
+        if last is not None and last <= ts < last + 1 / FIRE_MAX_FPS - 1e-6:
+            return False
+        self._fire_last_ts = ts
+        return True
+
     @property
     def records_clips(self) -> bool:
-        """Alarm anında olay kaydı yakalanır mı (güvenlik oturumu ve kayıt yazıcısı var)."""
+        """Alarm anında olay kaydı yakalanır mı (güvenlik/yangın oturumu ve kayıt yazıcısı var)."""
         return self._clips is not None
 
     def capture_clip(self, ids: list[str], post_s: float | None = None, raw: bool = False) -> bool:
         """Alarm kayıtları için olay kaydı: ön kayıt + `post_s` (varsayılan `clips.POST_S`) sn sonrası (0: yalnızca ön
-        kayıt, hemen yazılır — deneme alarmı). `raw`: iskeletsiz (deneme alarmı). Güvenlik oturumu değilse (ör. tam bu arada güvenlikten çıkıldı) ya da
+        kayıt, hemen yazılır — deneme alarmı). `raw`: iskeletsiz (deneme alarmı). Güvenlik/yangın oturumu değilse (ör. tam bu arada çıkıldı) ya da
         henüz kare yoksa False ve kayıtlar "alınamadı" olur (bekleme asılı kalmaz). Engellemez, hata fırlatmaz."""
         if not ids:
             return False
@@ -304,12 +363,15 @@ class LiveSession:
 
     def _warm(self, profile: Profile) -> None:
         """Ortak modeller ilk kişiyi/kareyi beklemeden arka planda yüklenmeye başlar: kişi sayımı ve güvenlik tanıma
-        modelini, güvenlik ayrıca poz modelini kullanır (bant sayımı hiçbirini). Model hazırsa bir şey yapılmaz."""
+        modelini, güvenlik ayrıca poz modelini, yangın/duman yalnızca yangın modelini kullanır (bant sayımı hiçbirini).
+        Model hazırsa bir şey yapılmaz."""
         models = []
         if profile.countMode in ("detect", "safety"):
             models.append(self._detector)
         if profile.countMode == "safety":
             models.append(self._pose)
+        if profile.countMode == "fire":
+            models.append(self._fire)
         for m in models:
             warm = getattr(m, "warm", None)
             if callable(warm):
@@ -360,6 +422,7 @@ class LiveSession:
                 "staffIn": c.staff_in, "staffOut": c.staff_out,
                 "twoWay": self.profile.countMode == "detect",
                 "safety": self._safety_status() if self.profile.countMode == "safety" else None,
+                "fire": self._fire_status() if self.profile.countMode == "fire" else None,
                 "ratePerMinute": rate // 2 if rate else 0,
                 "calibrating": self.calibrating, "calibrationMessage": self.calibration_message,
                 "profile": self.profile.to_dict(),
@@ -381,6 +444,30 @@ class LiveSession:
             "lastAlarmAt": self._last_alarm_at,
             "model": model, "modelError": model_error or None,          # "loading" | "ready" | "error"
             "detector": det, "detectorError": det_error or None,
+            "processingError": st.processing_error, "lastOkAt": st.last_ok_at,
+            "healthy": healthy, "reason": reason,
+            "unhealthyFor": None if healthy else round(max(0.0, time.monotonic() - since), 1),
+        }
+
+    def _fire_model(self) -> tuple[str, str]:
+        """Yangın modelinin durumu ve hatası: dedektör doğrudan "kurulu değil" dediyse o; değilse ortak modelinki."""
+        if self._fire_missing:
+            return "error", self._fire_missing
+        return str(getattr(self._fire, "state", "ready")), str(getattr(self._fire, "error", "") or "")
+
+    def _fire_status(self) -> dict[str, Any]:
+        """Yangın/duman durumu (kilit altında; `_safety_status` deseni): süren bölümler, son alarm, model durumu ve
+        izleme sağlığı (`unhealthyFor`: son sağlıklı kareden — hiç olmadıysa izlemenin başından — bu yana saniye)."""
+        model, model_error = self._fire_model()
+        st = self.status
+        healthy, reason = fire_health(st.state, model, model_error, st.processing_error, st.last_ok_at, time.time())
+        since = self._last_healthy if self._last_healthy is not None else self._watch_start
+        an = self._pipe.fire
+        return {
+            "active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
+                       for tid, k, sec, _f in (an.active() if an else [])],
+            "lastAlarmAt": self._last_alarm_at,
+            "model": model, "modelError": model_error or None,          # "loading" | "ready" | "error"
             "processingError": st.processing_error, "lastOkAt": st.last_ok_at,
             "healthy": healthy, "reason": reason,
             "unhealthyFor": None if healthy else round(max(0.0, time.monotonic() - since), 1),
@@ -495,7 +582,7 @@ class LiveSession:
                     self._latest_mono = mono
                     self._frame_cv.notify_all()
                 clips = self._clips
-                if clips is not None:                       # güvenlik: olay kaydının ön kaydı (gerçek zamanlı kareler)
+                if clips is not None:                       # güvenlik/yangın: olay kaydının ön kaydı (gerçek zamanlı)
                     clips.push(frame, mono, time.time())
                 if is_file and self._realtime_file:          # dosya: gerçek zamanlı oynat (canlı kamera gibi)
                     lag = n / file_fps - (time.monotonic() - started)
@@ -555,23 +642,25 @@ class LiveSession:
             self._end_safety()
 
     def _end_safety(self) -> None:
-        """Çalışma döngüsü bitti (oturum durduruldu ya da döngü çöktü): alarm vermiş açık bölümler sona erer; alarm
-        günlüğünde sonsuza dek "açık" kalmasın."""
+        """Çalışma döngüsü bitti (oturum durduruldu ya da döngü çöktü): alarm vermiş açık bölümler (güvenlik ve
+        yangın) sona erer; alarm günlüğünde sonsuza dek "açık" kalmasın."""
         if self._alarm_sink is None:
             return
         with self._lock:
-            an = self._pipe.safety
-            ended = an.end_all() if an else []              # açık alarmlı bölümler + reset() ile kesilip bildirilmemişler
+            ended: list[tuple[int, str, bool]] = []
+            for an in (self._pipe.safety, self._pipe.fire):
+                if an is not None:                          # açık alarmlı bölümler + reset() ile kesilip bildirilmemişler
+                    ended += an.end_all()
         if ended:
             try:
                 self._alarm_sink(self, [], ended, None)
             except Exception:  # noqa: BLE001 — kapanışta alıcı hatası yutulur (günlüğe yazılır)
                 _LOG.exception("Alarm alıcısı kapanışta hata verdi (oturum %s)", self.id[:8])
 
-    def _notify_safety(self, r: FrameResult, frame: np.ndarray, profile: Profile) -> None:
-        """Doğan alarmlar ve biten bölümler alarm alıcısına (sayım kilidi dışında). Resim ya da alıcı hatası oturumu
-        düşürmez: resim alınamazsa alarm resimsiz iletilir."""
-        sr = r.safety
+    def _notify_alarms(self, r: FrameResult, frame: np.ndarray, profile: Profile) -> None:
+        """Doğan alarmlar ve biten bölümler (güvenlik ya da yangın/duman) alarm alıcısına (sayım kilidi dışında). Resim
+        ya da alıcı hatası oturumu düşürmez: resim alınamazsa alarm resimsiz iletilir."""
+        sr: Any = r.safety if r.safety is not None else r.fire
         if sr is None or not (sr.fired or sr.ended) or self._alarm_sink is None:
             return
         jpeg: bytes | None = None
@@ -592,6 +681,8 @@ class LiveSession:
             self.capture_clip(list(ids))
 
     def _work(self) -> None:
+        """İşleyici döngüsü. Yangın modunda `MAX_FPS`'i aşan kareler analiz edilmez (`_fire_due`); önizleme onlarla da
+        güncellenir (yangın önizlemesi çizimsizdir), ön kayıt okuyucuda zaten her kareyle sürer."""
         done = 0
         last_render = 0.0
         shape: tuple[int, ...] | None = None
@@ -612,8 +703,17 @@ class LiveSession:
                 if shape is not None and frame.shape != shape and profile.countMode != "detect":
                     self._pipe.set_profile(profile, reset_background=True)   # akış değişti: arka plan yeni boyutta
                 shape = frame.shape
+                due = self._fire_due(ts)
+            if not due:                                      # yangın: analiz hızı sınırı; önizleme yine güncellenir
+                last_render = self._preview(frame, profile, None, last_render)
+                continue
+            with self._lock:
                 try:
                     r = self._pipe.process(frame, ts)
+                except FireModelMissing as e:                # model kurulu değil: sağlık "kurulu değil" (işleme hatası
+                    self._fire_missing = str(e)             # değil); sonraki karelerde yeniden denenir, oturum düşmez
+                    last_render = self._preview(frame, profile, None, last_render)
+                    continue
                 except Exception as e:                       # noqa: BLE001 — tek karelik hata oturumu düşürmesin
                     self.status.message = f"{_PROCESSING}{e}"
                     self.status.processing_error = str(e) or type(e).__name__
@@ -623,6 +723,7 @@ class LiveSession:
                         _LOG.warning("Kare işlenemedi (oturum %s)", self.id[:8], exc_info=True)
                     continue
                 self.status.last_ok_at = time.time()
+                self._fire_missing = None
                 if self.status.processing_error is not None:  # hata geçti: durum ve ileti temizlenir
                     self.status.processing_error = None
                     if self.status.message.startswith(_PROCESSING):
@@ -633,21 +734,45 @@ class LiveSession:
                     clips = self._clips
                     if clips is not None and r.safety is not None:      # olay kaydının iskeleti (yalnızca sayılar)
                         clips.publish_overlay(ClipOverlay.from_result(r.safety, frame.shape, profile), captured)
-            self._notify_safety(r, frame, profile)
+                elif profile.countMode == "fire":
+                    self._after_fire_frame()
+            self._notify_alarms(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
             with self._lock:
                 self.status.fps = fps_from_stamps(stamps)
                 self.status.height, self.status.width = frame.shape[:2]
-            if now - last_render >= 1 / 12:
-                last_render = now
-                img = self._render(frame.copy(), profile, r)
-                ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if ok:
-                    with self._frame_cv:
-                        self._jpeg = buf.tobytes()
-                        self._jpeg_seq += 1
-                        self._frame_cv.notify_all()
+            last_render = self._preview(frame, profile, r, last_render)
+
+    def _preview(self, frame: np.ndarray, profile: Profile, r: FrameResult | None, last_render: float) -> float:
+        """İşaretli önizleme karesi (en çok ~12/sn); son çizim anını döndürür. `r` None: analiz edilmeyen kare (yalnızca
+        yangın modunda; yangın önizlemesi çizimsizdir)."""
+        now = time.monotonic()
+        if now - last_render < 1 / 12:
+            return last_render
+        img = self._render(frame.copy(), profile, r)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if ok:
+            with self._frame_cv:
+                self._jpeg = buf.tobytes()
+                self._jpeg_seq += 1
+                self._frame_cv.notify_all()
+        return now
+
+    def _after_fire_frame(self) -> None:
+        """Kilit altında, başarıyla analiz edilen her yangın karesinden sonra (`_after_safety_frame` deseni): izleme
+        sağlıklıysa anı kaydedilir; hatadaki ortak yangın modeli en çok `MODEL_RETRY_CHECK_S`'de bir yeniden denenir
+        (asıl bekleme SharedModel'de) — model sonradan kurulunca analiz kendiliğinden başlar."""
+        mono = time.monotonic()
+        model, _ = self._fire_model()
+        healthy, _ = fire_health(self.status.state, model, "", None, self.status.last_ok_at, time.time())
+        if healthy:
+            self._last_healthy = mono
+        if mono - self._model_check_at >= MODEL_RETRY_CHECK_S:
+            self._model_check_at = mono
+            warm = getattr(self._fire, "warm", None)
+            if model == "error" and callable(warm):
+                warm()
 
     def _after_safety_frame(self) -> None:
         """Kilit altında, başarıyla işlenen her güvenlik karesinden sonra: izleme sağlıklıysa anı kaydedilir
@@ -741,7 +866,7 @@ class LiveSession:
                 f"Ürün boyu öğrenildi (alanın %{float(value) * 100:.0f}'i). Kontrol edip Kaydet'e bas."
                 if p.countMode == "linescan" else "Ürün boyutu öğrenildi. Kontrol edip Kaydet'e bas.")
 
-    def _render(self, frame: np.ndarray, profile: Profile, r: FrameResult) -> np.ndarray:
+    def _render(self, frame: np.ndarray, profile: Profile, r: FrameResult | None) -> np.ndarray:
         with self._lock:
             labels = dict(self._labels)
             flash, flash_in = self._flash, self._flash_in
@@ -751,7 +876,9 @@ class LiveSession:
             h0, w0 = frame.shape[:2]
             frame = cv2.resize(frame, (720, round(h0 * 720 / w0)), interpolation=cv2.INTER_LINEAR)
             scale = np.array([frame.shape[1] / w0, frame.shape[0] / h0, 1.0])
-        if profile.countMode == "safety":
+        if profile.countMode == "fire" or r is None:
+            img = frame                                       # yangın/duman: önizleme çizimsiz (sayım çizgisi yok)
+        elif profile.countMode == "safety":
             sr = r.safety
             if sr is not None and not np.all(scale == 1.0):
                 sr = dataclasses.replace(sr, poses={tid: kp * scale for tid, kp in sr.poses.items()})
