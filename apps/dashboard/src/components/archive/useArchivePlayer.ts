@@ -11,6 +11,9 @@ import { POLL_MS } from "@/lib/archiveTime.mjs";
 export const VANISHED_NOTICE = "Oynatıcı kapanmış (analiz sunucusu yeniden başlamış olabilir); sonraki işlemde yeniden açılır.";
 /** Kaybolan oynatıcı bir işlemde yeniden açıldı */
 export const REOPENED_NOTICE = "Oynatıcı yeniden açıldı.";
+/** Ardışık iki yoklama 404 dışı bir hatayla düştü (analiz sunucusu ya da vekil yanıt vermiyor) */
+export const OFFLINE_NOTICE = "Analiz sunucusuna ulaşılamıyor; yeniden deneniyor…";
+const OFFLINE_AFTER = 2;
 
 const ACTIVE = new Set(["connecting", "playing"]);
 export const isActive = (v: PlayerView | null) => !!v && ACTIVE.has(v.state);
@@ -51,6 +54,7 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const [opening, setOpening] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
   const [speed, setSpeedState] = useState(1);
+  const [offline, setOffline] = useState(false);
 
   const idRef = useRef<string | null>(null);
   const viewRef = useRef<PlayerView | null>(null);
@@ -61,7 +65,10 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const seqRef = useRef(0);
   const appliedRef = useRef(0);
   const openingRef = useRef<object | null>(null);
-
+  /** Açılış uçuştayken istenen son konum: POST bitince oraya sarılır */
+  const pendingRef = useRef<number | null>(null);
+  /** Ardışık başarısız (404 dışı) yoklama sayısı */
+  const failsRef = useRef(0);
   const show = useCallback((v: PlayerView | null) => {
     viewRef.current = v;
     idRef.current = v?.id ?? null;
@@ -90,11 +97,15 @@ export function useArchivePlayer(): ArchivePlayerApi {
         setStreamKey((k) => k + 1);
         setNotice(reopened ? REOPENED_NOTICE : null);
       })
-      .catch((e: unknown) => { if (epoch === epochRef.current) setError(message(e)); })
+      .catch((e: unknown) => { if (epoch === epochRef.current) { pendingRef.current = null; setError(message(e)); } })
       .finally(() => {
         if (openingRef.current !== token) return;
         openingRef.current = null;
         setOpening(false);
+        // açılış sürerken başka ana tıklandıysa (çizelge, kısayol) şimdi oraya sarılır
+        const next = pendingRef.current;
+        pendingRef.current = null;
+        if (next !== null && epoch === epochRef.current && idRef.current && next !== at) seekRef.current(cam, next);
       });
   }, [show]);
 
@@ -137,9 +148,12 @@ export function useArchivePlayer(): ArchivePlayerApi {
   }, [act, open, notice]);
 
   const seek = useCallback((cam: ArchiveCamera, at: number) => {
-    if (!idRef.current) open(cam, at, notice === VANISHED_NOTICE);
+    if (openingRef.current) pendingRef.current = at;          // açılış bitince bu konuma sarılır
+    else if (!idRef.current) open(cam, at, notice === VANISHED_NOTICE);
     else act(cam, { action: "seek", at }, at);
   }, [act, open, notice]);
+  const seekRef = useRef(seek);
+  seekRef.current = seek;
 
   const setSpeed = useCallback((cam: ArchiveCamera, s: number, at: number) => {
     speedRef.current = s;
@@ -150,17 +164,23 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const close = useCallback(() => {
     epochRef.current += 1;
     openingRef.current = null;
+    pendingRef.current = null;
+    failsRef.current = 0;
     if (idRef.current) deletePlayer(idRef.current);
     show(null);
     setOpening(false);
     setError(null);
     setNotice(null);
+    setOffline(false);
     setSeeking(false);
   }, [show]);
 
-  // Durum yoklaması (1 sn): oynatıcı varken; 404 → oynatıcı kayboldu
+  // Durum yoklaması (1 sn): oynatıcı varken. 404 → oynatıcı kayboldu; başka hata iki kez üst üste → "ulaşılamıyor" notu
+  // (ilk başarılı yoklamada kalkar; başarılı yoklama son işlemin hatasını da siler)
   const id = view?.id ?? null;
   useEffect(() => {
+    failsRef.current = 0;
+    setOffline(false);
     if (!id) return;
     let busy = false;
     const timer = setInterval(() => {
@@ -170,12 +190,21 @@ export function useArchivePlayer(): ArchivePlayerApi {
       const seq = ++seqRef.current;
       getPlayer(id)
         .then((v) => {
-          if (epoch !== epochRef.current || idRef.current !== id || seq < appliedRef.current) return;
+          if (epoch !== epochRef.current || idRef.current !== id) return;
+          failsRef.current = 0;
+          setOffline(false);
+          setError(null);
+          if (seq < appliedRef.current) return;
           appliedRef.current = seq;
           show(v);
         })
         .catch((e: unknown) => {
-          if (epoch !== epochRef.current || idRef.current !== id || !missing(e)) return;
+          if (epoch !== epochRef.current || idRef.current !== id) return;
+          if (!missing(e)) {
+            failsRef.current += 1;
+            if (failsRef.current >= OFFLINE_AFTER) setOffline(true);
+            return;
+          }
           show(null);
           setNotice(VANISHED_NOTICE);
         })
@@ -184,21 +213,26 @@ export function useArchivePlayer(): ArchivePlayerApi {
     return () => clearInterval(timer);
   }, [id, show]);
 
-  // Sayfadan çıkış: sekme kapanır/başka siteye gidilir (`pagehide`) ya da panelde başka sayfaya geçilir (bileşen kalkar)
-  // (sayfa geri/ileri önbelleğinden dönerse oynatıcı durmuş görünür; Oynat yenisini açar).
+  // Sayfadan çıkış: sekme kapanır/başka siteye gidilir (`pagehide`) ya da panelde başka sayfaya geçilir (bileşen kalkar).
+  // Hook tamamen sıfırlanır: uçuştaki açılış geçersiz (yanıtı gelince oynatıcı silinir), açılış kilidi ve bekleyen konum
+  // temizlenir. Böylece React StrictMode'un (`next dev`) bağla → kaldır → yeniden bağla sınamasında ikinci bağlamada yeni
+  // oynatıcı açılabilir (ArchiveView derin bağlantıyı aynı nedenle yeniden koşar). Sayfa geri/ileri önbelleğinden dönerse
+  // oynatıcı durmuş görünür; Oynat yenisini açar.
   useEffect(() => {
     const leave = () => {
       epochRef.current += 1;
+      openingRef.current = null;
+      pendingRef.current = null;
       if (idRef.current) deletePlayer(idRef.current);
-      idRef.current = null;
+      show(null);
+      setOpening(false);
     };
-    const hide = () => { leave(); show(null); setOpening(false); openingRef.current = null; };
-    window.addEventListener("pagehide", hide);
+    window.addEventListener("pagehide", leave);
     return () => {
-      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pagehide", leave);
       leave();
     };
   }, [show]);
 
-  return { view, seeking, error, notice, opening, streamKey, speed, toggle, seek, setSpeed, close };
+  return { view, seeking, error, notice: offline ? OFFLINE_NOTICE : notice, opening, streamKey, speed, toggle, seek, setSpeed, close };
 }
