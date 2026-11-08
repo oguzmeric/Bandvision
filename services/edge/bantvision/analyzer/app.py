@@ -52,6 +52,8 @@ COUNTING_OPTIONS = ("countMode", "truth", "direction", "line", "countLine", "cou
                     "bgRange", "productLength")   # güvenlik alarmında kullanılmayan sayım ayarları
 SAFETY_WITH_COUNTING = "Güvenlik alarmı videosunda sayım ayarları kullanılmaz."     # bantvision.video ile aynı metinler
 RULES_WITHOUT_SAFETY = "Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır."
+FIRE_WITH_COUNTING = "Yangın/duman analizi sayım seçenekleriyle birlikte kullanılamaz."
+RULES_WITHOUT_FIRE = "Yangın/duman kuralları yalnız yangın/duman analizinde geçerlidir."
 NO_RULE_ON = "En az bir kural açık olmalı."
 
 
@@ -107,9 +109,27 @@ class SafetyIn(_Strict):
     lying: LyingIn | None = None
 
 
+class FireRuleIn(SafetyRuleIn):
+    """Yangın/duman kuralı (aynı doğrulama; aralıklar live/api.py'deki yangın ayarlarıyla aynı)."""
+
+
+class FireKindIn(FireRuleIn):
+    title, low, high = "Yangın", 2.0, 10.0
+
+
+class SmokeKindIn(FireRuleIn):
+    title, low, high = "Duman", 5.0, 30.0
+
+
+class FireIn(_Strict):
+    fire: FireKindIn | None = None
+    smoke: SmokeKindIn | None = None
+    sensitivity: Literal["low", "normal", "high"] | None = None
+
+
 class OptionsIn(_Strict):
     """Sözleşmedeki `options` ile birebir (bilinmeyen alan reddedilir)."""
-    preset: Literal["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety"] | None = None
+    preset: Literal["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety", "fire"] | None = None
     countMode: Literal["blob", "linescan", "detect"] | None = None
     countAnchor: Literal["center", "bottom"] | None = None
     productLength: float | None = Field(default=None, gt=0, le=2)
@@ -121,10 +141,23 @@ class OptionsIn(_Strict):
     line: float | None = Field(default=None, ge=0, le=1)
     bgRange: list[float] | None = Field(default=None, min_length=2, max_length=2)
     safety: SafetyIn | None = None
+    fire: FireIn | None = None
 
 
 def refuse_mixed_options(opts: OptionsIn) -> None:
-    """Güvenlik alarmı ile sayım ayarları birbirine karışmaz: sessizce yok sayılmaz, iş açılmadan 422 verilir."""
+    """Alarm analizleri (güvenlik, yangın/duman) ile sayım ayarları birbirine karışmaz: sessizce yok sayılmaz, iş açılmadan
+    422 verilir."""
+    if opts.fire is not None and opts.preset != "fire":
+        raise HTTPException(422, RULES_WITHOUT_FIRE)
+    if opts.preset == "fire":
+        if opts.safety is not None:
+            raise HTTPException(422, RULES_WITHOUT_SAFETY)
+        if any(getattr(opts, name) is not None for name in COUNTING_OPTIONS):
+            raise HTTPException(422, FIRE_WITH_COUNTING)
+        fire_rules = (opts.fire.fire, opts.fire.smoke) if opts.fire else ()
+        if len(fire_rules) == 2 and all(r is not None and r.enabled is False for r in fire_rules):
+            raise HTTPException(422, NO_RULE_ON)
+        return
     if opts.preset != "safety":
         if opts.safety is not None:
             raise HTTPException(422, RULES_WITHOUT_SAFETY)

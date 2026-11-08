@@ -919,3 +919,143 @@ def test_alarm_image_outside_result_files_is_not_served(tmp_path: pathlib.Path, 
     assert client.get(f"/api/v1/jobs/{done['id']}/files/alarm-7.jpg").status_code == 404
     assert client.get(f"/api/v1/jobs/{done['id']}/files/alarm-1.jpg").status_code == 200
 
+
+
+# ---------------------------------------------------------------- yangın / duman (preset fire)
+
+FIRE_ALARMS = [
+    {"kind": "fire", "trackId": 0, "startS": 12.4, "atS": 15.4, "endS": 19.0, "image": "alarm-1.jpg"},
+    {"kind": "smoke", "trackId": 1, "startS": 30.0, "atS": 38.0, "endS": 52.0, "image": "alarm-2.jpg"},
+]
+FIRE_SUMMARY = {**SAFETY_SUMMARY, "alarms": FIRE_ALARMS}
+FIRE_OPTIONS = {"preset": "fire", "fire": {"fire": {"seconds": 4}, "smoke": {"enabled": False}, "sensitivity": "high"}}
+
+
+def test_options_accept_fire_preset_and_rules() -> None:
+    from bantvision.analyzer.app import OptionsIn
+    assert OptionsIn.model_validate({"preset": "fire"}).preset == "fire"
+    o = OptionsIn.model_validate(FIRE_OPTIONS)
+    assert o.model_dump(exclude_none=True) == {
+        "preset": "fire", "fire": {"fire": {"seconds": 4.0}, "smoke": {"enabled": False}, "sensitivity": "high"}}
+    assert OptionsIn.model_validate({"preset": "fire", "fire": {}}).model_dump(exclude_none=True) == {
+        "preset": "fire", "fire": {}}
+
+
+@pytest.mark.parametrize("rules", [
+    {"fire": {"seconds": 1.9}}, {"fire": {"seconds": 10.1}}, {"smoke": {"seconds": 4.9}}, {"smoke": {"seconds": 30.1}},
+    {"fire": {"seconds": "4"}}, {"fire": {"seconds": True}}, {"smoke": {"enabled": "false"}},
+    {"sensitivity": "max"}, {"sensitivity": 1}, {"fire": {"seconds": 3, "kind": "x"}}, {"fire": {"seconds": float("nan")}},
+    {"handsUp": {"seconds": 3}},
+], ids=str)
+def test_options_reject_bad_fire_rules(rules: dict[str, Any]) -> None:
+    from bantvision.analyzer.app import OptionsIn
+    with pytest.raises(ValueError):
+        OptionsIn.model_validate({"preset": "fire", "fire": rules})
+
+
+def test_fire_rule_range_error_is_turkish_and_422(client: TestClient) -> None:
+    r = _post(client, {"preset": "fire", "fire": {"fire": {"seconds": 11}}})
+    assert r.status_code == 422 and "Yangın süresi 2–10 sn arasında bir sayı olmalı." in r.json()["detail"]
+    r = _post(client, {"preset": "fire", "fire": {"smoke": {"seconds": 4}}})
+    assert r.status_code == 422 and "Duman süresi 5–30 sn arasında bir sayı olmalı." in r.json()["detail"]
+    assert client.get("/api/v1/jobs").json() == []
+
+
+@pytest.mark.parametrize("extra", [
+    {"countMode": "detect"}, {"truth": 3}, {"direction": "down"}, {"line": 0.5},
+    {"countLine": {"a": {"x": 0.1, "y": 0.1}, "b": {"x": 0.9, "y": 0.9}}},
+    {"roi": {"x": 0, "y": 0, "width": 1, "height": 1}},
+    {"roiPolygon": [{"x": 0.1, "y": 0.1}, {"x": 0.9, "y": 0.1}, {"x": 0.5, "y": 0.9}]}, {"bgRange": [0, 1]},
+    {"productLength": 0.3}, {"countAnchor": "bottom"},
+], ids=lambda e: next(iter(e)))
+def test_counting_option_on_fire_is_422_and_creates_no_job(client: TestClient, extra: dict[str, Any]) -> None:
+    r = _post(client, {"preset": "fire", **extra})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Yangın/duman analizi sayım seçenekleriyle birlikte kullanılamaz."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+@pytest.mark.parametrize("preset", ["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety", None])
+def test_fire_option_on_other_preset_is_422_and_creates_no_job(client: TestClient, preset: str | None) -> None:
+    options: dict[str, Any] = {"fire": {"sensitivity": "low"}}
+    if preset:
+        options["preset"] = preset
+    r = _post(client, options)
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Yangın/duman kuralları yalnız yangın/duman analizinde geçerlidir."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+def test_safety_option_on_fire_preset_is_422(client: TestClient) -> None:
+    r = _post(client, {"preset": "fire", "safety": {"lying": {"seconds": 10}}})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Kural ayarları yalnızca güvenlik alarmı videosunda kullanılır."
+
+
+def test_both_fire_rules_off_is_422(client: TestClient) -> None:
+    r = _post(client, {"preset": "fire", "fire": {"fire": {"enabled": False}, "smoke": {"enabled": False}}})
+    assert r.status_code == 422 and r.json()["detail"] == "En az bir kural açık olmalı."
+    assert client.get("/api/v1/jobs").json() == []
+
+
+def test_fire_job_is_accepted_and_options_kept(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _accept_without_analysis(client, monkeypatch)
+    for options in ({"preset": "fire"}, {"preset": "fire", "fire": {"smoke": {"enabled": False}}}, FIRE_OPTIONS):
+        r = _post(client, options)
+        assert r.status_code == 202, r.text
+        assert r.json()["options"] == options
+
+
+def test_fire_options_reach_video_tool() -> None:
+    from bantvision.analyzer.jobs import options_to_args
+    assert options_to_args(FIRE_OPTIONS) == [
+        "--preset", "fire", "--fire", "4", "--no-smoke", "--sensitivity", "high"]
+    assert options_to_args({"preset": "fire", "fire": {"fire": {"enabled": False}, "smoke": {"seconds": 12.5}}}) == [
+        "--preset", "fire", "--no-fire", "--smoke", "12.5"]
+    assert options_to_args({"preset": "fire"}) == ["--preset", "fire"]
+    assert options_to_args({"preset": "fire", "fire": {"fire": {"enabled": True}}}) == ["--preset", "fire"]
+
+
+def test_worker_fire_result_has_alarms_and_images(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                                  client: TestClient, job_validator: Draft202012Validator) -> None:
+    files = {**SAFETY_FILES, "alarmlar.csv": b"baslangic_sn;alarm_sn;bitis_sn;tur;iz\n"}
+    cmd, done = _run_fake_job(tmp_path, monkeypatch, FIRE_SUMMARY, {}, FIRE_OPTIONS, files)
+    assert cmd[cmd.index("--preset") + 1] == "fire" and "--no-smoke" in cmd
+    assert cmd[cmd.index("--sensitivity") + 1] == "high"
+    assert done["status"] == "done", done.get("error")
+    res = done["result"]
+    assert res["count"] == 2 and res["alarms"] == FIRE_ALARMS
+    assert res["files"] == ["alarms.csv", "profile.json", "alarm-1.jpg", "alarm-2.jpg"]
+    assert_contract(job_validator, done)
+    r = client.get(f"/api/v1/jobs/{done['id']}/files/alarm-1.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+
+
+@pytest.mark.parametrize("options,alarms", [
+    ({"preset": "fire"}, [ALARMS[0]]),                                           # yangın işinde güvenlik türü
+    (SAFETY_OPTIONS, [FIRE_ALARMS[0]]),                                          # güvenlik işinde yangın türü
+], ids=["handsUp-in-fire-job", "fire-in-safety-job"])
+def test_worker_fails_job_whose_alarm_kind_does_not_match_the_preset(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, options: dict[str, Any], alarms: list[Any]) -> None:
+    _, done = _run_fake_job(tmp_path, monkeypatch, {**SAFETY_SUMMARY, "count": 1, "alarms": alarms}, {}, options,
+                            SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+def test_worker_fails_fire_job_whose_summary_has_no_alarm_list(tmp_path: pathlib.Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = {k: v for k, v in SAFETY_SUMMARY.items() if k != "alarms"}
+    _, done = _run_fake_job(tmp_path, monkeypatch, summary, {}, FIRE_OPTIONS, SAFETY_FILES)
+    assert done["status"] == "failed" and done["error"] == "Sonuç hazırlanamadı: alarm listesi bozuk"
+
+
+def test_worker_fire_job_with_missing_model_fails_with_turkish_reason(tmp_path: pathlib.Path) -> None:
+    """Gerçek video süreci, model dosyası yok: iş `failed`, ileti "Yangın/duman modeli kurulu değil."."""
+    store = JobStore(Settings(data_dir=tmp_path))
+    job, path = store.create("a.mp4", 10, {"preset": "fire"}, ".mp4")
+    path.write_bytes(CLIP.read_bytes())
+    Worker(store).process(job["id"])
+    done = store.get(job["id"])
+    assert done is not None
+    assert done["status"] == "failed", done
+    assert done["error"] == "Analiz başarısız: Yangın/duman modeli kurulu değil."

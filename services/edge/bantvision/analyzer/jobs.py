@@ -36,7 +36,7 @@ RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
 FIXED_PUBLIC_FILES = ("annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png")
 ALARM_IMAGE = re.compile(r"alarm-([0-9]{1,2})\.jpg")     # alarm resmi: yalnızca bu ad (sözleşme: ^alarm-[0-9]{1,2}\.jpg$)
 MAX_ALARMS = 500                                          # sonuçtaki alarm listesi (sözleşme `maxItems`)
-ALARM_KINDS = ("handsUp", "lying")
+ALARM_KINDS = {"safety": ("handsUp", "lying"), "fire": ("fire", "smoke")}    # alarm veren ön ayar → izinli `kind`
 ALARMS_BROKEN = "alarm listesi bozuk"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".ts"}
 # JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
@@ -139,13 +139,18 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
     bg = options.get("bgRange")
     if bg:
         args += ["--bg-range", f"{float(bg[0])},{float(bg[1])}"]
-    rules = options.get("safety") or {}                   # güvenlik: kapalı kural --no-…, süresi verilen kural --… SANİYE
-    for key, flag in (("handsUp", "hands-up"), ("lying", "lying")):
-        rule = rules.get(key) or {}
-        if rule.get("enabled") is False:
-            args.append(f"--no-{flag}")
-        elif rule.get("seconds") is not None:
-            args += [f"--{flag}", f"{float(rule['seconds']):g}"]
+    # güvenlik ve yangın/duman: kapalı kural --no-…, süresi verilen kural --… SANİYE
+    for group, rules_for in (("safety", (("handsUp", "hands-up"), ("lying", "lying"))),
+                             ("fire", (("fire", "fire"), ("smoke", "smoke")))):
+        rules = options.get(group) or {}
+        for key, flag in rules_for:
+            rule = rules.get(key) or {}
+            if rule.get("enabled") is False:
+                args.append(f"--no-{flag}")
+            elif rule.get("seconds") is not None:
+                args += [f"--{flag}", f"{float(rule['seconds']):g}"]
+    if (options.get("fire") or {}).get("sensitivity"):
+        args += ["--sensitivity", options["fire"]["sensitivity"]]
     return args
 
 
@@ -319,23 +324,25 @@ def _is_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def _valid_alarm(a: Any) -> bool:
+def _valid_alarm(a: Any, kinds: tuple[str, ...]) -> bool:
     """Özetteki bir alarm sözleşme şeklinde mi (analysis-job.schema.json `result.alarms`): tam altı alan, doğru türler."""
     if not isinstance(a, dict) or set(a) != {"kind", "trackId", "startS", "atS", "endS", "image"}:
         return False
     end, image = a["endS"], a["image"]
-    return (a["kind"] in ALARM_KINDS
+    return (a["kind"] in kinds
             and isinstance(a["trackId"], int) and not isinstance(a["trackId"], bool)
             and all(_is_number(a[k]) and a[k] >= 0 for k in ("startS", "atS"))   # NaN karşılaştırması yanlış çıkar
             and (end is None or (_is_number(end) and end >= 0))
             and (image is None or (isinstance(image, str) and ALARM_IMAGE.fullmatch(image) is not None)))
 
 
-def checked_alarms(raw: Any, count: Any, images: list[str]) -> list[dict[str, Any]]:
+def checked_alarms(raw: Any, count: Any, images: list[str], preset: str | None = None) -> list[dict[str, Any]]:
     """Özetteki alarm listesi, her öğe sözleşme şeklinde ve tutarlıysa kopyası: `count` (gerçek toplam) listeden az olamaz ve
     resmi olan her alarmın resmi gerçekten taşınmış olmalı (`images`). Liste bizim kendi çıktımız: bozukluk bir hatadır,
-    sessizce atlanmaz (`ValueError` → iş "Sonuç hazırlanamadı: alarm listesi bozuk" ile başarısız olur)."""
-    if (not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a) for a in raw)
+    sessizce atlanmaz (`ValueError` → iş "Sonuç hazırlanamadı: alarm listesi bozuk" ile başarısız olur). `kind` ön ayara
+    uygun olmalı (`ALARM_KINDS`: yangın işinde `fire`/`smoke`, ötekinde `handsUp`/`lying`)."""
+    kinds = ALARM_KINDS.get(preset or "", ALARM_KINDS["safety"])
+    if (not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a, kinds) for a in raw)
             or not isinstance(count, int) or isinstance(count, bool) or count < len(raw)
             or any(a["image"] is not None and a["image"] not in images for a in raw)):
         raise ValueError(ALARMS_BROKEN)
@@ -504,8 +511,9 @@ class Worker:
                 files.append(name)
             summary = json.loads((raw / "ozet.json").read_text(encoding="utf-8"))
             if "alarms" in summary:
-                alarms: list[dict[str, Any]] | None = checked_alarms(summary["alarms"], summary.get("count"), images)
-            elif job["options"].get("preset") == "safety":       # güvenlik işinin özeti alarm listesiz olamaz
+                alarms: list[dict[str, Any]] | None = checked_alarms(
+                    summary["alarms"], summary.get("count"), images, job["options"].get("preset"))
+            elif job["options"].get("preset") in ALARM_KINDS:    # güvenlik/yangın işinin özeti alarm listesiz olamaz
                 raise ValueError(ALARMS_BROKEN)
             else:
                 alarms = None
@@ -520,7 +528,7 @@ class Worker:
             "calibration": summary.get("calibration") or {}, "processingFps": summary.get("processingFps"),
             "files": [f for f in FIXED_PUBLIC_FILES if f in files] + images,
         }
-        if alarms is not None:                                   # güvenlik: alarm listesi (count = alarm toplamı)
+        if alarms is not None:                                   # güvenlik/yangın: alarm listesi (count = alarm toplamı)
             result["alarms"] = alarms
         if summary.get("countOut") is not None:                  # iki yönlü sayım (kişi): çıkış
             result["countOut"] = int(summary["countOut"])
