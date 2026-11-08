@@ -43,8 +43,10 @@ class FakeCap:
     (`unblock` ya da 5 sn'ye dek bekler, sonra False); `fail_after`: o kadar kareden sonra `read` hata atar."""
 
     def __init__(self, frames: int = 10_000, fps: float = 25.0, w: int = 40, h: int = 20, opened: bool = True,
-                 stall: bool = False, delay: float = 0.0, fail_after: int | None = None) -> None:
+                 stall: bool = False, delay: float = 0.0, fail_after: int | None = None,
+                 on_end: Callable[[], None] | None = None) -> None:
         self.left, self.fps, self.w, self.h, self.opened = frames, fps, w, h, opened
+        self.on_end = on_end                # akış sonunda (False dönmeden önce): ör. sahte saati ilerletir
         self.stall, self.delay, self.fail_after = stall, delay, fail_after
         self.unblock = threading.Event()
         self.released = False
@@ -68,6 +70,9 @@ class FakeCap:
         if self.fail_after is not None and self.read_count >= self.fail_after:
             raise cv2.error("okuma hatası")
         if self.left <= 0:
+            if self.on_end is not None:
+                self.on_end()
+                self.on_end = None
             return False, None
         self.left -= 1
         self.read_count += 1
@@ -94,6 +99,8 @@ class FakeArchive(ArchiveClient):
         self.max_active = 0
         self._lock = threading.Lock()
         self.export_chunks = [b"\x00\x00\x00\x18ftypmp42", b"rest"]
+        self.export_error: BaseException | None = None
+        self.keep_gate: threading.Event | None = None
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:
@@ -113,6 +120,8 @@ class FakeArchive(ArchiveClient):
     def keep_alive(self, stream_url: str) -> None:
         with self._lock:
             self.calls.append(("keep", stream_url))
+        if self.keep_gate is not None:
+            self.keep_gate.wait(5)
 
     def _busy(self) -> None:
         with self._lock:
@@ -137,6 +146,8 @@ class FakeArchive(ArchiveClient):
     def export(self, channel: RecorderChannel, start: float, end: float) -> ExportStream:
         if not self.can_export:
             raise RecorderError.unsupported()
+        if self.export_error is not None:
+            raise self.export_error
         chunks = list(self.export_chunks)
 
         def rest() -> Iterator[bytes]:
@@ -277,6 +288,8 @@ def test_pause_keeps_last_frame_and_at_then_resume_reopens(players: list[Archive
     assert urls[1][1] == pytest.approx(v1.at)              # sürdürme duraklanan konumdan, yeni adresle
     assert urls[1][5] != old
     assert arch.calls.index(("stop", old)) < arch.calls.index(urls[1])
+    p.close()
+    assert sorted(arch.stops()) == sorted(u[5] for u in arch.urls())   # her adres tam bir kez durur
 
 
 def test_seek_reopens_at_new_start(players: list[ArchivePlayer]) -> None:
@@ -405,9 +418,8 @@ def test_close_releases_capture_and_stops_url() -> None:
     p = make_player(arch, [cap])
     wait_for(lambda: p.view().state == "playing")
     p.close()
-    assert cap.released
-    assert arch.urls()[0][5] in arch.stops()
-    assert p.view().state == "ended" or p.closed
+    assert cap.released and p.closed and not p._thread.is_alive()
+    assert arch.stops() == [arch.urls()[0][5]]             # adres başına tam bir kez
 
 
 def test_keep_alive_every_5s(players: list[ArchivePlayer]) -> None:
@@ -441,6 +453,123 @@ def test_file_source_seeks_and_paces_in_real_time(players: list[ArchivePlayer]) 
 
 
 # MARK: - Yönetici
+
+
+def test_network_read_false_right_after_frame_is_ended(players: list[ArchivePlayer]) -> None:
+    clock = Clock()
+    p = make_player(FakeArchive(), [FakeCap(frames=5, on_end=lambda: setattr(clock, "t", clock.t + 1))], clock=clock)
+    players.append(p)
+    wait_for(lambda: p.view().state == "ended")
+
+
+def test_network_read_false_long_after_frame_is_device_error(players: list[ArchivePlayer]) -> None:
+    """Susan cihaz: FFmpeg okuma zaman aşımıyla (~10 sn) False döner; bu "Kayıt bitti" değil hatadır."""
+    clock = Clock()
+    p = make_player(FakeArchive(), [FakeCap(frames=5, on_end=lambda: setattr(clock, "t", clock.t + 8)),
+                                    FakeCap(delay=0.002)], clock=clock)
+    players.append(p)
+    wait_for(lambda: p.view().state == "error")
+    assert p.view().message == "Kayıt cihazından görüntü gelmedi."
+    assert p.frame()[0] == 5                               # son kare kalır
+    p.resume()
+    wait_for(lambda: p.view().state == "playing")
+
+
+def test_file_read_false_late_is_still_ended(players: list[ArchivePlayer]) -> None:
+    clock = Clock()
+
+    def factory(s: float, sp: int, sub: bool) -> Callable[[], str]:
+        return lambda: "C:/videolar/test.mp4"
+
+    cap = FakeCap(frames=3, fps=100.0, on_end=lambda: setattr(clock, "t", clock.t + 8))
+    p = make_player(FakeArchive(), [cap], clock=clock, url_fn_factory=factory)
+    players.append(p)
+    wait_for(lambda: p.view().state == "ended")
+
+
+def test_resume_is_noop_while_playing_or_connecting(players: list[ArchivePlayer]) -> None:
+    arch = FakeArchive()
+    p = make_player(arch, [FakeCap(delay=0.002), FakeCap(delay=0.002)])
+    players.append(p)
+    p.resume()                                             # bağlanırken
+    wait_for(lambda: p.view().state == "playing")
+    p.resume()                                             # oynarken
+    time.sleep(0.05)
+    assert len(arch.urls()) == 1 and arch.stops() == []
+    assert p.view().state == "playing"
+
+
+def test_keep_alive_skips_while_ping_in_flight(players: list[ArchivePlayer]) -> None:
+    clock = Clock()
+    arch = FakeArchive(speeds=(1, 2, 4, 8, 16))
+    arch.keep_gate = threading.Event()                     # ilk ping cihazda takılı kalır
+    p = make_player(arch, [FakeCap(delay=0.002)], clock=clock)
+    players.append(p)
+    wait_for(lambda: p.view().state == "playing")
+
+    def keeps() -> int:
+        return len([c for c in arch.calls if c[0] == "keep"])
+
+    clock.t += 6
+    wait_for(lambda: keeps() == 1)
+    for _ in range(3):
+        clock.t += 6
+        time.sleep(0.03)
+    assert keeps() == 1
+    arch.keep_gate.set()
+    time.sleep(0.02)
+    clock.t += 6
+    wait_for(lambda: keeps() == 2)
+
+
+class GatedOpen:
+    """Açılışı `gate` açılana dek bekleten sahte açıcı (bağlanırken kumanda)."""
+
+    def __init__(self, caps: list[FakeCap]) -> None:
+        self.caps, self.gate, self.entered = caps, threading.Event(), threading.Event()
+        self.opened: list[FakeCap] = []
+
+    def __call__(self, url: str) -> FakeCap:
+        self.entered.set()
+        self.gate.wait(5)
+        cap = self.caps.pop(0)
+        self.opened.append(cap)
+        return cap
+
+
+def _gated_player(arch: FakeArchive, opener: GatedOpen) -> ArchivePlayer:
+    def factory(s: float, sp: int, sub: bool) -> Callable[[], str]:
+        return lambda: arch.stream_url(CH, s, None, sub, sp)
+
+    return ArchivePlayer("p1", arch, CH.id, factory, opener, "NVR · Kapı", START, 1, True, source_id="src1")
+
+
+def test_close_while_connecting_releases_and_stops_once() -> None:
+    arch = FakeArchive()
+    opener = GatedOpen([FakeCap(delay=0.002)])
+    p = _gated_player(arch, opener)
+    assert opener.entered.wait(3)
+    p.close(wait=0)
+    opener.gate.set()
+    wait_for(lambda: bool(opener.opened) and opener.opened[0].released)
+    wait_for(lambda: not p._thread.is_alive())
+    assert opener.opened[0].read_count == 0                # kapanmış oynatıcı okumaz
+    assert arch.stops() == [arch.urls()[0][5]]
+
+
+def test_seek_while_connecting_reopens_at_new_position(players: list[ArchivePlayer]) -> None:
+    arch = FakeArchive()
+    opener = GatedOpen([FakeCap(delay=0.002), FakeCap(delay=0.002)])
+    p = _gated_player(arch, opener)
+    players.append(p)
+    assert opener.entered.wait(3)
+    p.seek(9_000.0)
+    opener.gate.set()
+    wait_for(lambda: p.view().state == "playing")
+    assert [u[1] for u in arch.urls()] == [START, 9_000.0]
+    assert opener.opened[0].released and opener.opened[0].read_count == 0
+    assert arch.stops() == [arch.urls()[0][5]]
+    assert p.view().at >= 9_000.0
 
 
 class FakeStore:
@@ -490,7 +619,14 @@ class Rig:
             self.brands.append(str(brand))
             return self.archive
 
-        self.manager = ArchiveManager(FakeStore(sources or dict(SOURCES)), lambda src: self.client, open_capture,
+        self.hosts: list[str] = []
+
+        def recorder_factory(src: dict[str, Any]) -> FakeClient:
+            self.hosts.append(str(src.get("host")))
+            return self.client
+
+        self.sources = {k: dict(v) for k, v in (sources or SOURCES).items()}
+        self.manager = ArchiveManager(FakeStore(self.sources), recorder_factory, open_capture,
                                       clock=self.clock, archive_factory=archive_factory)
 
 
@@ -504,14 +640,14 @@ def rig() -> Iterator[Rig]:
 def test_open_returns_view_and_plays(rig: Rig) -> None:
     v = rig.manager.open("nvr", "guid-1", START, 2, True)
     assert v.source_id == "nvr" and v.channel_id == "guid-1"
-    assert v.name == "NVR · guid-1"                          # açılış ağa çıkmaz: kanal adı henüz bilinmiyor
+    assert v.name in ("NVR · guid-1", "NVR · Kapı")          # kanal adı oynatıcının ilk bağlanışında öğrenilir
     assert v.speed == 2 and v.can_export is True and v.state == "connecting"
     p = rig.manager.get(v.id)
     assert p is not None
     wait_for(lambda: p.view().state == "playing")
     assert p.view().name == "NVR · Kapı"                    # kanal listesi ilk bağlanışta alındı
     assert rig.archive.urls()[0][1:5] == (START, None, True, 2)
-    assert rig.brands == ["trassir"]
+    assert set(rig.brands) == {"trassir"}                   # açılışta ve her bağlanışta güncel kayıttan
 
 
 def test_trassir_url_has_no_credentials_hikvision_does_but_stop_gets_bare_url() -> None:
@@ -528,6 +664,37 @@ def test_trassir_url_has_no_credentials_hikvision_does_but_stop_gets_bare_url() 
         assert r.archive.stops() and all("s3cr3t" not in s for s in r.archive.stops())
     finally:
         r.manager.stop()
+
+
+def test_reopen_uses_current_source_record(rig: Rig) -> None:
+    """Kaynak düzenlenirse (adres/parola) sonraki yeniden açılış güncel kayıtla kurulan istemciyi kullanır."""
+    v = rig.manager.open("nvr", "guid-1", START, 1, True)
+    p = rig.manager.get(v.id)
+    assert p is not None
+    wait_for(lambda: p.view().state == "playing")
+    assert rig.hosts[-1] == "10.0.0.1"
+    rig.sources["nvr"]["host"] = "10.0.0.9"
+    p.seek(START + 30)
+    wait_for(lambda: len(rig.archive.urls()) == 2)
+    assert rig.hosts[-1] == "10.0.0.9"
+
+
+def test_export_error_after_lock_releases_lock(rig: Rig) -> None:
+    rig.archive.export_error = RecorderError.unreachable("zaman aşımı")
+    with pytest.raises(RecorderError):
+        rig.manager.export("nvr", "guid-1", 0.0, 60.0)
+    rig.archive.export_error = None
+    _, s = rig.manager.export("nvr", "guid-1", 0.0, 60.0)    # ExportBusy değil
+    s.close()
+
+
+def test_expired_cache_dropped_on_lookup(rig: Rig) -> None:
+    rig.manager.calendar("nvr", "guid-1", 2026, 11)
+    rig.manager.timeline("nvr", "guid-1", 0.0)
+    assert len(rig.manager._cache) == 2
+    rig.clock.t += ap.CACHE_S + 1
+    rig.manager.calendar("nvr", "guid-1", 2026, 10)          # temizlik beklenmeden eskiler atılır
+    assert list(rig.manager._cache) == [("cal", "nvr", "guid-1", 2026, 10)]
 
 
 def test_third_player_rejected_and_closed_player_frees_slot(rig: Rig) -> None:

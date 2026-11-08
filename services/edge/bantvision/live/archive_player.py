@@ -49,6 +49,7 @@ from bantvision.live.recorders import (
     with_credentials,
 )
 from bantvision.live.viewer import MAX_WIDTH, _readonly, downscale
+from bantvision.live.viewer import _detail as _viewer_detail
 
 __all__ = [
     "ArchiveManager",
@@ -68,6 +69,7 @@ NO_FRAME_S = 20.0
 CACHE_S = 60.0
 REAP_EVERY_S = 10.0
 KEEP_ALIVE_S = 5.0
+DEAD_READ_S = 5.0           # ağ akışında `read` False son kareden bu kadar sonra geldiyse cihaz sustu (error), önce ise bitti
 CLOSE_WAIT_S = 3.0
 SWEEP_WAIT_S = 0.5
 DEFAULT_FPS = 25.0
@@ -127,7 +129,9 @@ class PlayerView:
 
 
 def _detail(e: BaseException) -> str:
-    return str(getattr(e, "detail", None) or e) if not isinstance(e, RecorderError) else str(e)
+    """`viewer._detail`'den tek farkı: `RecorderError`'da ham İngilizce `detail` ("invalid sid") yerine kullanıcıya
+    gösterilecek Türkçe metin (`str(e)`) kullanılır; diğer istisnalar aynı yoldan geçer."""
+    return str(e) if isinstance(e, RecorderError) else _viewer_detail(e)
 
 
 def _bare(url: str) -> str:
@@ -138,8 +142,12 @@ def _bare(url: str) -> str:
     return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
 
 
-def _overrides(archive: ArchiveClient, method: str) -> bool:
-    return getattr(type(archive), method) is not getattr(ArchiveClient, method)
+def _needs_keep_alive(archive: ArchiveClient) -> bool:
+    """Bağdaştırıcı canlı tutma istiyor mu (yönlendirici `needs_keep_alive` verir; yoksa yöntem geçersiz kılınmış mı)."""
+    wants = getattr(archive, "needs_keep_alive", None)
+    if wants is not None:
+        return bool(wants)
+    return type(archive).keep_alive is not ArchiveClient.keep_alive
 
 
 # MARK: - Oynatıcı
@@ -172,6 +180,7 @@ class ArchivePlayer:
         self._fps = 0.0
         self._since = clock()               # kare bekleme ölçütü: son açılış isteği ya da son kare
         self.last_used = clock()
+        self._pinging = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"arsiv-{player_id[:8]}", daemon=True)
         self._thread.start()
 
@@ -223,8 +232,9 @@ class ArchivePlayer:
             self._cond.notify_all()
 
     def resume(self) -> None:
+        """Duraklatılmış, bitmiş ya da hatalı oynatmayı `at`tan yeniden açar; oynarken/bağlanırken bir şey yapmaz."""
         with self._cond:
-            if not self._closed:
+            if not self._closed and self._state not in _ACTIVE:
                 self._restart(self._at)
 
     def seek(self, at: float) -> None:
@@ -331,18 +341,23 @@ class ArchivePlayer:
         with self._cond:
             if self._current(gen):
                 self._fps = fps
-        ping = _overrides(self._archive, "keep_alive")
+        ping = _needs_keep_alive(self._archive)
         bare = _bare(url)
         n, began, last_ping = 0, time.monotonic(), self._clock()
+        last_frame = self._clock()
         while self._current(gen):
             ok, frame = cap.read()
             if not ok:
-                self._set(gen, "ended")
+                # Kayıt sonu hemen gelir; susan cihazda FFmpeg okuma zaman aşımıyla (READ_TIMEOUT_MS) False döner
+                if not is_file and self._clock() - last_frame >= DEAD_READ_S:
+                    self._set(gen, "error", NO_FRAME_MSG)
+                else:
+                    self._set(gen, "ended")
                 return
             n += 1
             at = start + (n / fps * speed if paced else n / fps)
             small = _readonly(downscale(frame, MAX_WIDTH["sub"])) if n % skip == 0 else None
-            now = self._clock()
+            now = last_frame = self._clock()
             with self._cond:
                 if not self._current(gen):
                     return
@@ -356,13 +371,17 @@ class ArchivePlayer:
                 if lag > 0:
                     with self._cond:
                         self._cond.wait_for(lambda: not self._current(gen), lag)
-            if ping and now - last_ping >= KEEP_ALIVE_S:
+            if ping and now - last_ping >= KEEP_ALIVE_S and not self._pinging.is_set():
                 last_ping = now
+                self._pinging.set()                         # uçuşta ping varken yenisi atılmaz
                 threading.Thread(target=self._ping, args=(bare,), daemon=True).start()
 
     def _ping(self, url: str) -> None:
-        with contextlib.suppress(Exception):
-            self._archive.keep_alive(url)
+        try:
+            with contextlib.suppress(Exception):
+                self._archive.keep_alive(url)
+        finally:
+            self._pinging.clear()
 
     def _stop_urls(self, urls: list[str]) -> None:
         for url in urls:
@@ -429,6 +448,45 @@ def _ascii(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-") or "kayit"
 
 
+class _Routed(ArchiveClient):
+    """Oynatıcının arşivi. Her açılış kaynağın güncel istemcisiyle kurulan bağdaştırıcıdan adres alır
+    (`ArchiveManager._url_factory`); `stop`/`keep_alive` o adresi veren bağdaştırıcıya yönlenir. Hızlar ve dışa
+    aktarma yeteneği oynatıcı açılırkenki bağdaştırıcıdandır."""
+
+    def __init__(self, first: ArchiveClient) -> None:
+        self._first = first
+        self.speeds = first.speeds
+        self.can_export = first.can_export
+        self.tz = first.tz
+        self.needs_keep_alive = _needs_keep_alive(first)
+        self._by_url: dict[str, ArchiveClient] = {}
+        self._lock = threading.Lock()
+
+    def remember(self, url: str, archive: ArchiveClient) -> None:
+        with self._lock:
+            self._by_url[url] = archive
+
+    def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
+                   speed: int) -> str:
+        return self._first.stream_url(channel, start, end, substream, speed)
+
+    def stop(self, stream_url: str) -> None:
+        with self._lock:
+            archive = self._by_url.pop(stream_url, self._first)
+        archive.stop(stream_url)
+
+    def keep_alive(self, stream_url: str) -> None:
+        with self._lock:
+            archive = self._by_url.get(stream_url, self._first)
+        archive.keep_alive(stream_url)
+
+    def calendar(self, channel: RecorderChannel, year: int, month: int) -> set[int]:
+        return self._first.calendar(channel, year, month)
+
+    def timeline(self, channel: RecorderChannel, day: float) -> list[tuple[float, float]]:
+        return self._first.timeline(channel, day)
+
+
 @dataclass(frozen=True)
 class _Target:
     archive: ArchiveClient
@@ -476,7 +534,9 @@ class ArchiveManager:
         path = file_source_path(src)
         if path is not None:
             with self._lock:
-                archive = self._files.setdefault(path, FileArchive(path))
+                archive = self._files.get(path)
+                if archive is None:
+                    archive = self._files[path] = FileArchive(path)
             return _Target(archive, None, None)
         if src.get("kind") != "recorder":
             raise ValueError("Bu kaynakta kayıt arşivi yok.")
@@ -515,7 +575,9 @@ class ArchiveManager:
         name = str(src.get("name") or "").strip() or "Kamera"
         if not channel_id:
             return name
-        for c in self._channels.get(source_id, []):
+        with self._lock:
+            chans = list(self._channels.get(source_id, []))
+        for c in chans:
             if c.id == channel_id:
                 return f"{name} · {c.title.strip()}"
         return f"{name} · {channel_id}"
@@ -539,11 +601,17 @@ class ArchiveManager:
             return value
 
     def _cache_get(self, key: tuple[Any, ...]) -> Any:
+        """Önbellek kaydı ya da None; süresi dolan kayıtlar burada da atılır (temizliği beklemeden)."""
+        now = self._clock()
         with self._lock:
+            self._prune_cache(now)
             hit = self._cache.get(key)
-            if hit is not None and hit[0] > self._clock():
-                return hit[1]
-        return None
+        return None if hit is None else hit[1]
+
+    def _prune_cache(self, now: float) -> None:
+        """Kilit altında çağrılır."""
+        for key in [k for k, (exp, _) in self._cache.items() if exp <= now]:
+            del self._cache[key]
 
     def calendar(self, source_id: str, channel_id: str | None, year: int, month: int) -> set[int]:
         days = self._cached(("cal", source_id, channel_id, year, month), source_id, channel_id,
@@ -557,12 +625,16 @@ class ArchiveManager:
 
     # -- oynatıcılar ---------------------------------------------------------------------------------------------
 
-    def _url_factory(self, source_id: str, channel_id: str | None, target: _Target) -> UrlFnFactory:
+    def _url_factory(self, source_id: str, channel_id: str | None, routed: _Routed) -> UrlFnFactory:
+        """Her açılışta kaynağın güncel kaydı okunur ve istemci ondan kurulur (adres/parola değişimi yeni açılışta
+        etkili); adresi veren bağdaştırıcı `routed`'a yazılır (stop/keep_alive ona gider)."""
         def factory(start: float, speed: int, substream: bool) -> Callable[[], str]:
             def url_fn() -> str:
                 src = self._source(source_id)
+                target = self._target(src)
                 channel = self._channel(source_id, target, channel_id)
                 url = target.archive.stream_url(channel, start, None, substream, speed)
+                routed.remember(url, target.archive)
                 username = str(src.get("username") or "")
                 if target.brand not in (None, RecorderBrand.TRASSIR) and username:
                     url = with_credentials(url, username, self._store.password(source_id))
@@ -586,7 +658,8 @@ class ArchiveManager:
             if len(self._players) >= self.MAX_PLAYERS:
                 raise TooManyPlayers()
             pid = uuid.uuid4().hex
-            player = ArchivePlayer(pid, target.archive, channel_id, self._url_factory(source_id, channel_id, target),
+            routed = _Routed(target.archive)
+            player = ArchivePlayer(pid, routed, channel_id, self._url_factory(source_id, channel_id, routed),
                                    self._open_capture, lambda: self.name(source_id, channel_id), float(at), speed,
                                    substream, clock=self._clock, source_id=source_id, no_frame_s=self.NO_FRAME_S)
             self._players[pid] = player
@@ -612,8 +685,7 @@ class ArchiveManager:
             idle = [pid for pid, p in self._players.items() if now - p.last_used > self.IDLE_S]
             gone = [self._players.pop(pid) for pid in idle]
             alive = list(self._players.values())
-            for key in [k for k, (exp, _) in self._cache.items() if exp <= now]:
-                del self._cache[key]
+            self._prune_cache(now)
         for p in gone:
             p.close(SWEEP_WAIT_S)
         for p in alive:
@@ -654,14 +726,18 @@ class ArchiveManager:
         target = self._target(self._source(source_id))
         if not target.archive.can_export:
             raise RecorderError.unsupported()
+        channel = self._channel(source_id, target, channel_id)     # kanal adı dosya adına girer
+        stamp = datetime.fromtimestamp(start, target.archive.tz).strftime("%Y%m%d-%H%M")
+        filename = f"{_ascii(self.name(source_id, channel_id))}-{stamp}.mp4"      # kilitten önce: sızıntı olmasın
         if not self._export_lock.acquire(blocking=False):
             raise ExportBusy()
+        stream: Iterator[bytes] | None = None
         try:
-            channel = self._channel(source_id, target, channel_id)
             stream = target.archive.export(channel, start, end)
+            return filename, _LockedStream(stream, self._export_lock.release)
         except BaseException:
+            if stream is not None:
+                with contextlib.suppress(Exception):
+                    getattr(stream, "close", lambda: None)()
             self._export_lock.release()
             raise
-        stamp = datetime.fromtimestamp(start, target.archive.tz).strftime("%Y%m%d-%H%M")
-        return f"{_ascii(self.name(source_id, channel_id))}-{stamp}.mp4", _LockedStream(stream,
-                                                                                         self._export_lock.release)
