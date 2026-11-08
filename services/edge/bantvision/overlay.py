@@ -1,4 +1,5 @@
-"""Tanıma tabanlı sayım (§4.10) için video bindirmesi: Giriş · Çıkış paneli, giriş oku, kişi kutuları.
+"""Tanıma tabanlı sayım (§4.10) için video bindirmesi: Giriş · Çıkış paneli, giriş oku, kişi kutuları; poz güvenlik
+iskeletleri ve yangın/duman kutuları.
 
 Türkçe karakterler (ı, ş, ç, ğ, İ) OpenCV yazısında çıkmaz; Pillow ve sistem yazı tipiyle çizilir. Pillow ya da
 yazı tipi yoksa ASCII'ye çevrilip OpenCV ile yazılır (çıktı yine okunur).
@@ -9,12 +10,15 @@ import functools
 import math
 import os
 import pathlib
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import cv2
 import numpy as np
 
 from .core.detect_count import DetectResult, side_function
+from .core.fire import FireResult
+from .core.fire_rules import KINDS, TRACK_IDS, Box
 from .core.pose_rules import KP_CONF
 from .core.profile import Profile
 from .core.safety import SafetyResult
@@ -23,6 +27,7 @@ from .core.safety import SafetyResult
 GREEN, RED, ORANGE, WHITE, DARK = (80, 200, 60), (60, 60, 230), (0, 140, 255), (255, 255, 255), (30, 30, 30)
 GRAY = (170, 170, 170)
 CYAN = (255, 255, 0)                            # poz güvenlik: iskelet çizgileri
+SMOKE = (200, 200, 200)                         # yangın/duman: duman kutusu (alev kutusu ORANGE)
 
 _FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -165,4 +170,40 @@ def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> 
         cv2.rectangle(frame, (x1, y1), (x2, y2), RED, th * 2, cv2.LINE_AA)
         put_text(frame, " / ".join(_SAFETY_LABELS[k] for k in kinds), (x1, max(0, y1 - int(26 * s))),
                  int(20 * s), RED)
+    return frame
+
+
+FireBox = tuple[str, Box, bool]                 # (tür "fire"|"smoke", normalize kutu, alarmlı mı)
+_FIRE_STYLE = {"fire": (ORANGE, "YANGIN"), "smoke": (SMOKE, "DUMAN")}
+_KIND_OF_TRACK = {tid: kind for kind, tid in TRACK_IDS.items()}
+
+
+def fire_boxes(r: FireResult | None) -> list[FireBox]:
+    """Çizilecek yangın/duman kutuları: bu karede hareketi geçen tespitler (ince) ve alarm vermiş açık bölümlerin kutusu
+    (kalın; iz 0 alev, 1 duman). Hareketsiz tespit (sabit alev resmi, lamba) çizilmez."""
+    if r is None:
+        return []
+    out: list[FireBox] = [(kind, box, False) for kind, box, _score, moved in r.detections if moved]
+    for tid, box in sorted(r.boxes.items()):
+        kind = _KIND_OF_TRACK.get(tid)
+        if kind is not None:
+            out.append((kind, box, True))
+    return out
+
+
+def draw_fire(frame: np.ndarray, boxes: Iterable[tuple[str, Sequence[float], bool]]) -> np.ndarray:
+    """Yangın/duman: alev turuncu "YANGIN", duman gri "DUMAN"; alarmlı kutu 3 px, diğerleri 1 px. Kutular normalize
+    (0–1): önizleme, alarm resmi ve olay kaydı hangi boyutta olursa olsun yerinde çizilir. Önce ince, sonra kalın kutular
+    (alarm kutusu üstte kalır)."""
+    h, w = frame.shape[:2]
+    s = max(0.6, w / 960)
+    for kind, box, alarmed in sorted(boxes, key=lambda b: (b[2], KINDS.index(b[0]) if b[0] in KINDS else 9)):
+        style = _FIRE_STYLE.get(kind)
+        if style is None:
+            continue
+        color, label = style
+        x1, y1, x2, y2 = (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if alarmed else 1, cv2.LINE_8)
+        size = int((20 if alarmed else 16) * s)
+        put_text(frame, label, (x1, max(0, y1 - size - int(6 * s))), size, color)
     return frame

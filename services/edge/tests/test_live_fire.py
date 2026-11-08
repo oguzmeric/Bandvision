@@ -593,3 +593,64 @@ def test_alarm_threads_register_fire_cooldown_atomically(client: TestClient) -> 
     assert s.source_id == "src"
     states = [a["notify"] for a in mgr.alarms.list()]
     assert len(states) == 6 and sum(1 for n in states if n != "suppressed") == 1
+
+
+# ---------------------------------------------------------------------- önizleme, alarm resmi ve klip işareti (R8)
+
+WIDE = (FLAME[0] - 20, FLAME[1] - 20, FLAME[2] + 20, FLAME[3] + 20)    # kutu gürültünün dışında: kenarı gri zeminde
+
+
+def _orange(img: np.ndarray, box: tuple[float, float, float, float], src_w: int = W) -> int:
+    """`box` (kaynak piksel) üst kenarı boyunca turuncumsu piksel sayısı (JPEG'e dayanıklı: R ≫ G ≫ B)."""
+    k = img.shape[1] / src_w
+    y, x1, x2 = round(box[1] * k), round(box[0] * k), round(box[2] * k)
+    band = img[max(0, y - 4): y + 5, x1 + 5: x2 - 5].astype(int)
+    b, g, r = band[..., 0], band[..., 1], band[..., 2]
+    return int(((r - g > 50) & (g - b > 40)).sum())
+
+
+def test_fire_preview_draws_the_latest_result_also_on_skipped_frames() -> None:
+    from bantvision.core.fire import FireResult
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("t", lambda: "yok.mp4", Profile.fire_watch(), fire=ConstFire())
+    try:
+        frame = np.full((H, W, 3), 110, np.uint8)
+        box = tuple(v / d for v, d in zip(WIDE, (W, H, W, H), strict=True))
+        r = SimpleNamespace(fire=FireResult(boxes={0: box}))
+        assert _orange(s._render(frame.copy(), s.profile, r), WIDE) > 50              # alarm resmi de bu yoldan
+        assert np.array_equal(s._render(frame.copy(), s.profile, None), cv2.resize(frame, (720, 540)))
+        s._fire_last = r.fire                                                          # atlanan kare: son sonuç
+        assert _orange(s._render(frame.copy(), s.profile, None), WIDE) > 50
+    finally:
+        s.stop()
+
+
+def test_fire_session_publishes_clip_overlays_only_for_analysed_frames() -> None:
+    from bantvision.live.session import LiveSession
+
+    det = ConstFire(box=WIDE)
+    s = LiveSession("t", lambda: "yok.mp4", Profile.fire_watch(), fire=det, clip_sink=lambda _j: None)
+    rng = np.random.default_rng(2)
+    try:
+        for i in range(12):                                   # 2,4 sn, 5 kare/sn analiz + arada atlanan kareler
+            for ts in (100.0 + i * 0.2, 100.0 + i * 0.2 + 0.05):
+                seq = _inject(s, ts, _scene(rng))
+                s.jpeg(after=seq, timeout=5.0)
+                time.sleep(0.09)
+        assert s._clips is not None
+        ovs = [ov for _t, ov in s._clips._overlays]
+        assert len(ovs) == det.calls == 12 and all(ov.kind == "fire" for ov in ovs)
+        assert not ovs[-1].empty and ovs[0].empty                     # ilk karede hareket kıyası yok: kutu oy vermez
+        assert _orange(cv2.imdecode(np.frombuffer(s.jpeg()[1] or b"", np.uint8), cv2.IMREAD_COLOR), WIDE) > 20
+    finally:
+        s.stop()
+
+
+def test_fire_alarm_image_has_the_alarm_box(client: TestClient, monkeypatch: pytest.MonkeyPatch,
+                                            video: pathlib.Path) -> None:
+    mgr = client.app.state.live
+    _sess, _sid = _fire_session(client, monkeypatch, video, det=ConstFire(box=WIDE))
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    img = cv2.imdecode(np.frombuffer(mgr.alarms.image_bytes(a["id"]) or b"", np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None and _orange(img, WIDE) > 50

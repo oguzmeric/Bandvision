@@ -690,3 +690,87 @@ def test_frame_after_the_person_left_gets_no_old_skeleton() -> None:
     by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
     assert by_t[1.0] is person and by_t[1.1] is person           # kişi varken iskelet
     assert by_t[1.3] is None and by_t[1.4] is None and by_t[1.6] is None   # kişi çıktı: eski iskelet çizilmez
+
+
+# ---------------------------------------------------------------------- yangın/duman kutuları (R8)
+
+FIRE_BGR, SMOKE_BGR = (0, 140, 255), (200, 200, 200)
+
+
+def _fire_overlay(alarmed: bool = True, moving: bool = True) -> clips.ClipOverlay:
+    """320×240 kayıt karesinde: hareketli alev kutusu (ince), hareketsiz duman kutusu (çizilmez) ve alarmlı alev kutusu
+    (kalın)."""
+    from bantvision.core import Profile
+    from bantvision.core.fire import FireResult
+
+    r = FireResult(detections=[("fire", (0.25, 0.25, 0.5, 0.5), 0.9, moving),
+                               ("smoke", (0.55, 0.3, 0.9, 0.6), 0.8, False)],
+                   boxes={0: (0.125, 0.5, 0.375, 0.875)} if alarmed else {})
+    return clips.ClipOverlay.from_fire(r, (240, 320, 3), Profile.fire_watch())
+
+
+def test_fire_overlay_keeps_moving_detections_thin_and_alarm_boxes_thick() -> None:
+    from bantvision.core import Profile
+    from bantvision.core.fire import FireResult
+
+    ov = _fire_overlay()
+    assert ov.kind == "fire" and not ov.empty and ov.size == (320, 240)
+    got = [(k, tuple(float(v) for v in b), a) for k, b, a in ov.fire_boxes]
+    assert got == [("fire", (0.25, 0.25, 0.5, 0.5), False), ("fire", (0.125, 0.5, 0.375, 0.875), True)]
+    smoke = clips.ClipOverlay.from_fire(FireResult(boxes={1: (0.1, 0.1, 0.2, 0.2)}), (240, 320, 3),
+                                        Profile.fire_watch())
+    assert [(k, a) for k, _b, a in smoke.fire_boxes] == [("smoke", True)]          # iz 1 = duman
+    assert _fire_overlay(alarmed=False, moving=False).empty                        # hareketsiz kutu çizilmez
+    assert clips.ClipOverlay.from_fire(FireResult(), (240, 320, 3), Profile.fire_watch()).empty
+    assert _overlay().kind == "safety" and _overlay().fire_boxes == ()             # güvenlik işareti değişmedi
+
+
+def test_draw_fire_paints_orange_fire_and_gray_smoke_thin_or_thick() -> None:
+    from bantvision.overlay import draw_fire
+
+    img = np.zeros((240, 320, 3), np.uint8)
+    out = draw_fire(img, [("fire", (0.25, 0.25, 0.5, 0.5), False), ("smoke", (0.5, 0.5, 0.75, 0.75), True)])
+    assert out is img
+    assert tuple(img[90, 80]) == FIRE_BGR and tuple(img[90, 82]) == (0, 0, 0)        # ince (1 px) sol kenar x = 80
+    assert tuple(img[150, 160]) == SMOKE_BGR and tuple(img[150, 161]) == SMOKE_BGR   # kalın (3 px) sol kenar x = 160
+    assert tuple(img[150, 159]) == SMOKE_BGR and tuple(img[150, 163]) == (0, 0, 0)
+    label = img[30:60, 80:160]                                                       # "YANGIN" kutunun üstünde
+    assert (np.abs(label.astype(int) - FIRE_BGR).sum(axis=2) < 60).sum() > 20
+
+
+def test_fire_clip_frames_are_drawn_with_fire_boxes(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    from bantvision.overlay import draw_fire
+
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    ov = _fire_overlay()
+    buf.publish_overlay(ov, 1.0)
+    _feed(buf, 0.0, 2.5, src_fps=10.0)
+    assert buf.capture(["a" * 32], 2.5, post_s=0)
+    frames = jobs[0].frames
+    assert sum(f[3] is ov for f in frames) >= 13                                     # aynı 0,7 sn eşleme kuralı
+    got = _written(monkeypatch, tmp_path, jobs[0])
+    for img, f in zip(got, frames, strict=True):
+        raw = clips._decode(f[2])
+        if f[3] is None:
+            assert np.array_equal(img, raw)
+        else:
+            assert np.array_equal(img, draw_fire(raw.copy(), ov.fire_boxes))
+            assert tuple(img[150, 40]) == FIRE_BGR and tuple(img[150, 41]) == FIRE_BGR   # alarmlı kutu kalın
+            assert tuple(img[90, 80]) == FIRE_BGR                                        # hareketli kutu ince
+
+
+def test_empty_fire_result_clears_the_old_box() -> None:
+    from bantvision.core import Profile
+    from bantvision.core.fire import FireResult
+
+    jobs: list[ClipJob] = []
+    buf = ClipBuffer(jobs.append)
+    flame = _fire_overlay()
+    buf.publish_overlay(flame, 1.0)
+    buf.publish_overlay(clips.ClipOverlay.from_fire(FireResult(), (240, 320, 3), Profile.fire_watch()), 1.3)
+    _feed(buf, 0.0, 2.0, src_fps=10.0)
+    assert buf.capture(["a" * 32], 2.0, post_s=0)
+    by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
+    assert by_t[1.0] is flame and by_t[1.1] is flame
+    assert by_t[1.3] is None and by_t[1.4] is None and by_t[1.6] is None            # alev söndü: eski kutu çizilmez

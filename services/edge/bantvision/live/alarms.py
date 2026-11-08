@@ -1,12 +1,16 @@
 """Poz güvenlik alarm günlüğü: <data>/live/alarms.json, alarm-images/<id>.jpg ve olay kaydı alarm-clips/<id>.webm
 (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
 
-Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"test"), startedAt, firedAt, endedAt, acked,
+Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
 falseAlarm}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
 yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: kayıt alınamadı (görüntü yok, kuyruk dolu,
 kodlayıcı/disk hatası ya da yazılırken sunucu kapandı); `falseAlarm`: kullanıcı "Yanlış alarm" dedi (kayıt onaylanmış
-da sayılır). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
+da sayılır; geri alınabilir). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
+
+Zor örnek: yanlış alarm işaretlenen `fire`/`smoke` alarmının resmi ve kaydı `hard-negatives/<id>/` altına kopyalanır
+(`hard_negatives.HardNegatives`; işaret geri alınınca silinir, kayıt sonradan yazılırsa o an kopyalanır). Kopyalar alarm
+kaydının 7 günlük saklamasından bağımsızdır (eğitim için); hataları alarm işlemini bozmaz.
 
 Saklama: 7 günden eski kayıt resmi ve kaydıyla birlikte silinir; kaydı olmayan eski resim/kayıt dosyaları ve yarım
 kalmış geçici kayıt dosyaları da temizlenir; kayıt dosyası sayısı `MAX_CLIPS`'i aşarsa en eskiler silinir.
@@ -28,6 +32,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from .hard_negatives import HardNegatives
 from .jsonfile import quarantine, read_json, write_json_atomic
 
 _LOG = logging.getLogger(__name__)
@@ -60,6 +65,7 @@ class AlarmStore:
         self.images.mkdir(parents=True, exist_ok=True)
         self.clips = self.root / "alarm-clips"
         self.clips.mkdir(parents=True, exist_ok=True)
+        self.hard_negatives = HardNegatives(self.root / "hard-negatives")
         self._lock = threading.RLock()
         self._file = self.root / "alarms.json"
         self._items: list[dict[str, Any]] = []
@@ -155,8 +161,15 @@ class AlarmStore:
 
     def set_clip(self, alarm_id: str, started_at: float) -> bool:
         """Olay kaydı yazıldı: `clip: true`, `clipStartedAt` (ilk karenin duvar saati), bekleme biter. Kayıt yoksa
-        False."""
-        return self._update(alarm_id, clip=True, clipStartedAt=started_at, clipPending=False, clipFailed=False)
+        False. Kayıt zaten yanlış alarm işaretli bir yangın/duman alarmıysa kayıt zor örneğe de kopyalanır (kilit
+        dışında)."""
+        if not self._update(alarm_id, clip=True, clipStartedAt=started_at, clipPending=False, clipFailed=False):
+            return False
+        rec = self.get(alarm_id)
+        clip = self.clip_file(alarm_id)
+        if rec is not None and rec["falseAlarm"] and clip is not None:
+            self.hard_negatives.add_clip(alarm_id, clip)
+        return True
 
     def clip_failed(self, alarm_ids: Sequence[str]) -> None:
         """Olay kaydı alınamadı: bekleyen (`clipPending`) kayıtlar `clipPending: false`, `clipFailed: true` (tek kayıt).
@@ -228,7 +241,24 @@ class AlarmStore:
 
     def mark_false_alarm(self, alarm_id: str) -> bool:
         """Kullanıcı "Yanlış alarm" dedi: `falseAlarm` ve `acked` (alarm kapanır). Kayıt yoksa False."""
-        return self._update(alarm_id, falseAlarm=True, acked=True)
+        return self.set_false_alarm(alarm_id, True)
+
+    def set_false_alarm(self, alarm_id: str, value: bool) -> bool:
+        """"Yanlış alarm" işareti: `True` → `falseAlarm` ve `acked`; yangın/duman alarmında resim ve kayıt zor örneğe
+        kopyalanır. `False` → işaret kalkar (onay kalır), zor örnek silinir. Dosya işleri kilit dışında; hataları
+        günlüğe yazılır, işareti bozmaz. Kayıt yoksa False."""
+        fields: dict[str, Any] = {"falseAlarm": True, "acked": True} if value else {"falseAlarm": False}
+        if not self._update(alarm_id, **fields):
+            return False
+        rec = self.get(alarm_id)
+        if rec is None:                                     # bu arada silindi (7 gün temizliği)
+            return True
+        if value:
+            image = self.images / f"{alarm_id}.jpg" if rec["image"] else None
+            self.hard_negatives.add(rec, image, self.clip_file(alarm_id))
+        else:
+            self.hard_negatives.remove(alarm_id)
+        return True
 
     def get(self, alarm_id: str) -> dict[str, Any] | None:
         with self._lock:

@@ -108,6 +108,10 @@ class TestAlarmIn(_Strict):
     sessionId: str | None = None
 
 
+class FalseAlarmIn(_Strict):
+    falseAlarm: bool = True                 # False: "Yanlış alarm" işareti geri alınır
+
+
 class DeviceChoicesIn(_Strict):
     """Cihaz seçimleri: her biri "auto" | "cpu" | kart kimliği (`devices.valid_choice`); üçü de zorunlu."""
     detector: str
@@ -1711,9 +1715,12 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         return manager.alarms.get(alarm_id) or {}
 
     @r.post("/alarms/{alarm_id}/false-alarm")
-    def false_alarm(alarm_id: str) -> dict[str, Any]:
-        """"Yanlış alarm": kayıt `falseAlarm` ve onaylanmış olur (şeritten kalkar); kayıt ve resim saklanmaya devam eder."""
-        if not manager.alarms.mark_false_alarm(alarm_id):
+    def false_alarm(alarm_id: str, body: FalseAlarmIn | None = None) -> dict[str, Any]:
+        """"Yanlış alarm": kayıt `falseAlarm` ve onaylanmış olur (şeritten kalkar); kayıt ve resim saklanmaya devam eder.
+        Yangın/duman alarmının resmi ve kaydı zor örnek olarak bu bilgisayarda saklanır. Gövde `{"falseAlarm": false}`
+        işareti geri alır (onay kalır, zor örnek silinir); gövdesiz istek işaretler."""
+        value = True if body is None else body.falseAlarm
+        if not manager.alarms.set_false_alarm(alarm_id, value):
             raise HTTPException(404, "Alarm bulunamadı.")
         return manager.alarms.get(alarm_id) or {}
 

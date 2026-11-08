@@ -14,7 +14,8 @@ işlenir; tarayıcıya yerel ağdan işaretli kare gider, hiçbir yere kaydedilm
 
 Yangın/duman oturumu (`countMode = "fire"`) güvenlikle aynı alarm yolunu kullanır (ön kayıt, alarm alıcısı, olay kaydı,
 izleme sağlığı); kareler en çok `fire_rules.MAX_FPS` (5) /sn analiz edilir — arada gelenler analiz edilmez ama önizleme
-ve ön kayıt her kareyle sürer.
+ve ön kayıt her kareyle sürer. Analiz edilen her karenin yangın/duman kutuları (`ClipOverlay.from_fire`) güvenlikteki
+gibi ön kayda bırakılır; önizleme ve alarm resmi son analiz sonucunun kutularını çizer (`overlay.draw_fire`).
 """
 from __future__ import annotations
 
@@ -34,11 +35,12 @@ import cv2
 import numpy as np
 
 from ..core import Pipeline, Profile
+from ..core.fire import FireResult
 from ..core.fire_model import FireModelMissing
 from ..core.fire_rules import MAX_FPS as FIRE_MAX_FPS
 from ..core.pipeline import FrameResult
 from ..core.staff_color import teach_bgr
-from ..overlay import draw_detect, draw_safety
+from ..overlay import draw_detect, draw_fire, draw_safety, fire_boxes
 from ..video import draw, number_label, split_numbers
 from . import open_gate
 from .clips import ClipBuffer, ClipJob, ClipOverlay
@@ -201,6 +203,7 @@ class LiveSession:
         self._model_check_at = 0.0
         self._fire_last_ts: float | None = None             # son analiz edilen yangın karesinin zamanı (MAX_FPS)
         self._fire_missing: str | None = None               # dedektör "model kurulu değil" dedi (ortak model dışı yol)
+        self._fire_last: FireResult | None = None           # son analiz edilen yangın karesinin FireResult'u (önizleme)
         if detector is not None:
             self._pipe.detect._detector = detector
         if profile.countMode == "safety":
@@ -315,6 +318,7 @@ class LiveSession:
         self._pipe.fire = FireAnalyzer(detector=self._fire)
         self._fire_last_ts = None
         self._fire_missing = None
+        self._fire_last = None
         self._watch_start = time.monotonic()                # yangına geçiş: izleme yeniden kanıtlanmalı
         self._last_healthy = None
         if self._clip_sink is not None and self._clips is None:
@@ -682,7 +686,7 @@ class LiveSession:
 
     def _work(self) -> None:
         """İşleyici döngüsü. Yangın modunda `MAX_FPS`'i aşan kareler analiz edilmez (`_fire_due`); önizleme onlarla da
-        güncellenir (yangın önizlemesi çizimsizdir), ön kayıt okuyucuda zaten her kareyle sürer."""
+        güncellenir (son analiz sonucunun kutularıyla), ön kayıt okuyucuda zaten her kareyle sürer."""
         done = 0
         last_render = 0.0
         shape: tuple[int, ...] | None = None
@@ -712,9 +716,11 @@ class LiveSession:
                     r = self._pipe.process(frame, ts)
                 except FireModelMissing as e:                # model kurulu değil: sağlık "kurulu değil" (işleme hatası
                     self._fire_missing = str(e)             # değil); sonraki karelerde yeniden denenir, oturum düşmez
+                    self._fire_last = None                  # önizlemede eski kutu kalmasın
                     last_render = self._preview(frame, profile, None, last_render)
                     continue
                 except Exception as e:                       # noqa: BLE001 — tek karelik hata oturumu düşürmesin
+                    self._fire_last = None
                     self.status.message = f"{_PROCESSING}{e}"
                     self.status.processing_error = str(e) or type(e).__name__
                     key, mono = type(e).__name__, time.monotonic()
@@ -736,6 +742,10 @@ class LiveSession:
                         clips.publish_overlay(ClipOverlay.from_result(r.safety, frame.shape, profile), captured)
                 elif profile.countMode == "fire":
                     self._after_fire_frame()
+                    self._fire_last = r.fire
+                    clips = self._clips
+                    if clips is not None and r.fire is not None:        # olay kaydının kutuları (yalnızca sayılar)
+                        clips.publish_overlay(ClipOverlay.from_fire(r.fire, frame.shape, profile), captured)
             self._notify_alarms(r, frame, profile)
             now = time.monotonic()
             stamps = [s for s in stamps if now - s < 2.0] + [now]
@@ -745,8 +755,8 @@ class LiveSession:
             last_render = self._preview(frame, profile, r, last_render)
 
     def _preview(self, frame: np.ndarray, profile: Profile, r: FrameResult | None, last_render: float) -> float:
-        """İşaretli önizleme karesi (en çok ~12/sn); son çizim anını döndürür. `r` None: analiz edilmeyen kare (yalnızca
-        yangın modunda; yangın önizlemesi çizimsizdir)."""
+        """İşaretli önizleme karesi (en çok ~12/sn); son çizim anını döndürür. `r` None: analiz edilmeyen kare (yangın
+        modunda son analiz sonucunun kutuları çizilir)."""
         now = time.monotonic()
         if now - last_render < 1 / 12:
             return last_render
@@ -871,13 +881,16 @@ class LiveSession:
             labels = dict(self._labels)
             flash, flash_in = self._flash, self._flash_in
             total, total_out = self._pipe.total, self._pipe.total_out
+            fire_last = self._fire_last
         scale = np.ones(3)                                    # poz eklemleri piksel: büyütmeyle birlikte ölçeklenir
         if frame.shape[1] < 720:                              # alt akış (352–640 px): çizim tarayıcıda net görünsün
             h0, w0 = frame.shape[:2]
             frame = cv2.resize(frame, (720, round(h0 * 720 / w0)), interpolation=cv2.INTER_LINEAR)
             scale = np.array([frame.shape[1] / w0, frame.shape[0] / h0, 1.0])
-        if profile.countMode == "fire" or r is None:
-            img = frame                                       # yangın/duman: önizleme çizimsiz (sayım çizgisi yok)
+        if profile.countMode == "fire":                       # yangın/duman: analiz edilmeyen karede son sonuç
+            img = draw_fire(frame, fire_boxes(r.fire if r is not None else fire_last))
+        elif r is None:
+            img = frame
         elif profile.countMode == "safety":
             sr = r.safety
             if sr is not None and not np.all(scale == 1.0):

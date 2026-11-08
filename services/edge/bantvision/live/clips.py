@@ -1,12 +1,13 @@
-"""Poz güvenlik alarmının olay kaydı (video klip): ihlal anının görüntüsü panelde oynatılır.
+"""Alarmın olay kaydı (video klip; poz güvenlik ve yangın/duman): ihlal anının görüntüsü panelde oynatılır.
 
-- **Ön kayıt** (`ClipBuffer`, yalnızca güvenlik oturumunda): okuyucu iş parçacığı kameradan okuduğu HER kareyi verir
+- **Ön kayıt** (`ClipBuffer`, yalnızca alarm veren oturumda: güvenlik, yangın/duman): okuyucu iş parçacığı kameradan okuduğu HER kareyi verir
   (analizden bağımsız, daha akıcı); en çok `CLIP_FPS` (10) kare/sn tutulur, ham (işaretsiz), en çok 1280 px genişlikte,
   JPEG (kalite 80) olarak bellekte. Son `PRE_S` (8) sn kalır, eskiler zamana göre düşer (bellek sınırlı). Canlı
   oturumda JPEG'e çevirme tek yuvalı ayrı bir iş parçacığında yapılır: okuyucu yalnızca kare başvurusunu bırakır;
   çevirici meşgulse yuvadaki kare en yenisiyle değiştirilir (sıra ve zaman sınırı korunur).
-- **İşaret (iskelet) yan kanalı:** işleyici her güvenlik karesinden sonra çizilecek sonucu (`ClipOverlay`: iz kutuları,
-  kaynak kare pikselinde 17×3 eklemler, etkin bölümler, alarmlı izlerin son kutusu — yalnızca sayılar, kare değil)
+- **İşaret (iskelet) yan kanalı:** işleyici her analiz edilen karesinden sonra çizilecek sonucu (`ClipOverlay`;
+  güvenlikte iz kutuları, kaynak kare pikselinde 17×3 eklemler, etkin bölümler, alarmlı izlerin son kutusu; yangında
+  `kind="fire"` ve normalize yangın/duman kutuları — yalnızca sayılar, kare değil)
   `publish_overlay` ile, o karenin **yakalama** saatiyle bırakır (son `PRE_S + POST_S + 1` sn tutulur; boş sonuç da
   — "bu anda çizilecek kişi yok"). Yakalama yazıcıya verilirken her kare, yakalama zamanına en yakın (en çok
   `OVERLAY_MAX_AGE_S` = 0,7 sn uzak) sonuçla eşlenir; en yakın sonuç boşsa ya da yoksa kare işaretsiz kalır. Analiz
@@ -17,8 +18,8 @@
   yazılır.
 - **Yazım** (`ClipWriter`): tek arka plan iş parçacığı, sınırlı kuyruk — okuyucu ve işleyici hiç beklemez. Kareler sabit
   `CLIP_FPS` ile (videodaki zaman duvar saatine eşit; boşluk önceki kareyle dolar) OpenCV `VideoWriter` + VP8 ile
-  `<data>/live/alarm-clips/<alarmId>.webm` olarak (işaretli karelere `overlay.draw_safety` ile iskelet ve alarmlı kutu
-  çizilir; eklemler kayıt karesinin boyutuna ölçeklenir) geçici adla yazılır, sonra atomik olarak yeniden adlandırılır. Başarıda
+  `<data>/live/alarm-clips/<alarmId>.webm` olarak (işaretli karelere `overlay.draw_safety` ile iskelet ve alarmlı kutu,
+  yangında `overlay.draw_fire` ile alev/duman kutuları çizilir; eklemler kayıt karesinin boyutuna ölçeklenir) geçici adla yazılır, sonra atomik olarak yeniden adlandırılır. Başarıda
   kayıt `clip: true` ve `clipStartedAt` (ilk karenin duvar saati) alır. Her hata Türkçe günlüğe yazılır, kayıt
   `clip: false` kalır; hiçbir hata oturuma ulaşmaz. Kayıt durumu kayda yansır: yakalama planlanınca `clipPending`,
   yazılınca `clip`, alınamazsa (görüntü yok, kuyruk dolu, kodlayıcı/disk hatası) `clipFailed`.
@@ -43,9 +44,10 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from ..core.fire import FireResult
 from ..core.people_track import MotTrack
 from ..core.safety import SafetyResult
-from ..overlay import draw_safety
+from ..overlay import draw_fire, draw_safety, fire_boxes
 
 if TYPE_CHECKING:
     from ..core.profile import Profile
@@ -65,14 +67,17 @@ OVERLAY_MAX_AGE_S = 0.7         # kareyle eşlenen işaretin (iskelet) yakalama 
 
 @dataclass(frozen=True)
 class ClipOverlay:
-    """Bir güvenlik karesinin çizilecek sonucu (yalnızca sayılar; dizi kopyaları — işleyicinin dizileri sonradan
-    değişse de bozulmaz). `size`: eklemlerin ait olduğu kaynak karenin (genişlik, yükseklik); kutular normalize (0–1)."""
+    """Bir analiz karesinin çizilecek sonucu (yalnızca sayılar; dizi kopyaları — işleyicinin dizileri sonradan
+    değişse de bozulmaz). `size`: eklemlerin ait olduğu kaynak karenin (genişlik, yükseklik); kutular normalize (0–1).
+    `kind`: "safety" (iskelet, `from_result`) ya da "fire" (yangın/duman kutuları, `from_fire`)."""
     size: tuple[int, int]
     profile: Profile
     tracks: tuple[tuple[int, np.ndarray], ...] = ()                 # (iz, kutu) — bu karede gözlenen izler
     poses: tuple[tuple[int, np.ndarray], ...] = ()                  # (iz, 17×3 eklem, kaynak piksel)
     active: tuple[tuple[int, str, float, bool], ...] = ()           # (iz, tür, süre sn, alarm verdi mi)
     boxes: tuple[tuple[int, np.ndarray], ...] = ()                  # alarm vermiş izlerin son bilinen kutusu
+    kind: str = "safety"
+    fire_boxes: tuple[tuple[str, np.ndarray, bool], ...] = ()       # yangın: (tür, normalize kutu, alarmlı mı)
 
     @classmethod
     def from_result(cls, r: SafetyResult, shape: Sequence[int], profile: Profile) -> ClipOverlay:
@@ -83,9 +88,18 @@ class ClipOverlay:
                    tuple((int(i), str(k), float(sec), bool(f)) for i, k, sec, f in r.active),
                    tuple((int(i), np.array(b, np.float64)) for i, b in r.boxes.items()))
 
+    @classmethod
+    def from_fire(cls, r: FireResult, shape: Sequence[int], profile: Profile) -> ClipOverlay:
+        """Yangın/duman sonucu: hareketi geçen tespitler (ince) ve alarm vermiş bölümlerin kutusu (kalın;
+        `overlay.fire_boxes`). `shape`: işlenen karenin `frame.shape`."""
+        return cls((int(shape[1]), int(shape[0])), profile, kind="fire",
+                   fire_boxes=tuple((str(k), np.array(b, np.float64), bool(a)) for k, b, a in fire_boxes(r)))
+
     @property
     def empty(self) -> bool:
-        """Çizilecek bir şey yok (gözlenen iz yok, alarmlı kutu yok)."""
+        """Çizilecek bir şey yok (güvenlikte gözlenen iz ve alarmlı kutu yok; yangında kutu yok)."""
+        if self.kind == "fire":
+            return not self.fire_boxes
         return not self.tracks and not self.boxes
 
     def result(self, w: int, h: int) -> SafetyResult:
@@ -337,12 +351,14 @@ _draw_warned = False                    # çizim hatası ilk kez uyarı olarak g
 
 
 def annotate(img: np.ndarray, overlay: ClipOverlay | None) -> np.ndarray:
-    """Kayıt karesine iskeleti ve alarmlı kutuyu çizer (`draw_safety`; eklemler karenin boyutuna ölçeklenir). Çizim
-    hatası kaydı düşürmez: kare işaretsiz kalır."""
+    """Kayıt karesine iskeleti ve alarmlı kutuyu (`draw_safety`; eklemler karenin boyutuna ölçeklenir) ya da yangın/
+    duman kutularını (`draw_fire`; normalize) çizer. Çizim hatası kaydı düşürmez: kare işaretsiz kalır."""
     if overlay is None:
         return img
     h, w = img.shape[:2]
     try:
+        if overlay.kind == "fire":
+            return draw_fire(img, overlay.fire_boxes)
         return draw_safety(img, overlay.profile, overlay.result(w, h))
     except Exception:  # noqa: BLE001
         global _draw_warned
