@@ -364,19 +364,20 @@ Kullanıcı isteği (yol haritası 2026-11-06): bir alarm ya da sayım olayında
 |---|---|---|
 | `GET` | `/archive/calendar?source=&channel=&year=&month=` | `{days: [1, 3, …]}` ayın kayıt olan günleri |
 | `GET` | `/archive/timeline?source=&channel=&day=<yerel gün başı, epoch sn>` | `{ranges: [[başlangıç, bitiş], …]}`; örtüşen ya da ≤ 2 sn aralıklı kayıtlar birleşir |
-| `POST` | `/archive/players` `{sourceId, channelId, at, speed?, substream?}` | `201` oynatıcı görünümü; üçüncü oynatıcı `429` |
+| `POST` | `/archive/players` `{sourceId, channelId?, at, speed?, substream?}` | `201` oynatıcı görünümü; üçüncü oynatıcı `429`. `channelId` kayıt cihazında zorunlu (yoksa `422` "Kayıt cihazından bir kamera seçin."); dosya kaynağında yok sayılır |
 | `GET` | `/archive/players/{id}` | `{id, sourceId, channelId, name, state, message, at, speed, speeds, fps, canExport}`; `state`: `connecting` \| `playing` \| `paused` \| `ended` \| `error` (adres, şifre ve jeton yoktur) |
 | `GET` | `/archive/players/{id}/stream` | MJPEG (canlıdaki akış biçimi) |
 | `POST` | `/archive/players/{id}/actions` `{action: pause \| resume \| seek \| speed, at?, speed?}` | Güncel görünüm |
 | `DELETE` | `/archive/players/{id}` | `204` |
-| `POST` | `/archive/export` `{sourceId, channelId, start, end}` | `video/mp4` akışı, `Content-Disposition: attachment` (ASCII ad + UTF-8 `filename*`); `start < end`, `end − start ≤ 1800` |
+| `POST` | `/archive/export` `{sourceId, channelId?, start, end}` | `video/mp4` akışı, `Content-Disposition: attachment` (ASCII ad + UTF-8 `filename*`); `start < end`, `end − start ≤ 1800`; `channelId` kayıt cihazında zorunlu (yoksa `422` "Kayıt cihazından bir kamera seçin.") |
 
 Takvim ve çizelge sonuçları 60 sn önbellekte tutulur (hata önbelleğe girmez). Hata eşlemesi (iletiler Türkçe; adres ve şifre içermez):
 
 | Kod | Ne zaman | İleti |
 |---|---|---|
 | `404` | Kaynak yok / kanal cihazın listesinde yok / oynatıcı yok | "Kaynak bulunamadı." / "Kamera kayıt cihazında bulunamadı." / "Kayıt oynatıcısı bulunamadı." |
-| `422` | Kayıt cihazında kanal seçilmemiş / kaynak kayıt cihazı değil / desteklenmeyen hız / eksik ya da geçersiz alan | "Kayıt cihazından bir kamera seçin." / "Bu kaynakta kayıt arşivi yok." / "Hız desteklenmiyor." / "Sarılacak konum belirtilmedi." / "Bitiş, başlangıçtan sonra olmalı." / "En çok 30 dakika dışa aktarılabilir." |
+| `422` | Kayıt cihazında kanal seçilmemiş / kaynak kayıt cihazı değil / desteklenmeyen hız / eksik ya da geçersiz alan | "Kayıt cihazından bir kamera seçin." / "Bu kaynakta kayıt arşivi yok." / "Hız desteklenmiyor." / "Sarılacak konum belirtilmedi." / "Hız belirtilmedi." (`speed` eylemi hızsız) / "Bitiş, başlangıçtan sonra olmalı." / "En çok 30 dakika dışa aktarılabilir." |
+| `400` | Kayıt cihazı kaynağının adresi boş (canlı kaynak denetiminden geçer) | "Kayıt cihazının adresi boş." |
 | `429` | Üçüncü oynatıcı | "En çok 2 kayıt aynı anda izlenebilir." |
 | `409` | Bir dışa aktarma sürerken ikincisi | "Bir dışa aktarma sürüyor." |
 | `501` | Dışa aktarma TRASSIR dışında | "Bu kayıt cihazında dışa aktarma henüz desteklenmiyor." |
@@ -390,7 +391,7 @@ Takvim ve çizelge sonuçları 60 sn önbellekte tutulur (hata önbelleğe girme
   - Cihaz bir isteği reddederse panel Türkçe hatayı gösterir. Uniview ve genel ONVIF Profile G bu sürümde yok (oynatma adresi belgesiz / OpenCV `Range` başlığı veremiyor).
 - **Saat dilimi varsayımı:** API UTC epoch saniye konuşur; Hikvision'a UTC gider, **TRASSIR ve Dahua'ya bu bilgisayarın yerel saati** gider (cihazın bu bilgisayarla aynı saat diliminde olduğu varsayılır; değilse oynatma ve çizelge kayar; ileride kaynak ayarı). Gün sınırları yerel saattedir (yaz saati gününde 23/25 saat).
 - **KVKK / gizlilik:** arşiv kareleri yalnız açık panel oturumuna MJPEG olarak gider; dışa aktarılan dosya yalnız tarayıcıya iner, başka yere gönderilmez; analiz sunucusu ne kareyi ne dosyayı saklar (akıtılır); **Telegram'a hiçbir şey gitmez**. Kayıt cihazının şifresi ve jetonu hiçbir yanıtta, hata iletisinde ya da günlükte görünmez.
-- **Test kancası (yalnız test):** analiz sunucusu dosya kaynaklarına izin verilerek başlatıldığında (yalnız Playwright yapılandırması) bir video dosyası kaynağı arşiv gibi davranır: zaman ekseni dosyanın saniyesidir (`at` ∈ [0, süre]), takvim 1970 Ocak = {1}, çizelge `day=0` için tek aralık `[0, süre]`, hızlar 1/2/4×, dışa aktarma `501`. Kamera seçici onu listelemez (kayıt cihazı değil); gerçek yığın testi oynatıcıyı derin bağlantıyla açar (dosya kaynağında kanal yok sayılır) ve gün başı 0 olsun diye tarayıcıyı UTC saat diliminde çalıştırır.
+- **Test kancası (yalnız test):** analiz sunucusu dosya kaynaklarına izin verilerek başlatıldığında (yalnız Playwright yapılandırması) bir video dosyası kaynağı arşiv gibi davranır: zaman ekseni dosyanın saniyesidir (`at` ∈ [0, süre]), takvim 1970 Ocak = {1}, çizelge `day=0` için tek aralık `[0, süre]`, hızlar 1/2/4×, dışa aktarma `501`. Kamera seçici onu listelemez (kayıt cihazı değil); gerçek yığın testi oynatıcıyı derin bağlantıyla açar (dosya kaynağında kanal yok sayılır) ve gün başı 0 olsun diye tarayıcıyı UTC saat diliminde çalıştırır. Pratik sonuç: UTC dışı saat dilimindeki tarayıcıda dosya kaynağının çizelgesi boş gelir (yerel gün başı negatif epoch olur, `timeline` `422` verir); kanca yalnız test içindir.
 - **Testler:** edge birim testleri `test_archive.py` (üç markanın adres/zaman biçimleri, ayrıştırıcılar, aralık birleştirme), `test_archive_player.py` (konum, hız, sınırlar, boşta kapanma, duraklat/sürdür/sar yeniden açılışı, 20 sn kare yok, cihaz hatasında iş parçacığının sürmesi, iki oynatıcı sınırı), `test_archive_api.py` (uçlar, hata eşlemesi, dosya kaynağıyla gerçek akış, alarm kaydında kaynak/kanal), `test_recorders.py` (sahte NVR'ın arşiv uçlarıyla tümleşik); panel birim testleri `archive.test.mjs`, `archiveKeys.test.mjs`; Playwright `e2e/archive-ui.spec.ts` (sahte API: seçici, takvim, çizelge, durumlar, 429/501/409 iletileri, klavye, derin bağlantı, çıkışta `DELETE`, dışa aktarma), `e2e/archive.spec.ts` (gerçek yığın, dosya kaynağı: kare gelir, "Oynatılıyor", saat ilerler, 10 sn ileri ve çizelge tıklaması konumu değiştirir, duraklamada konum 1 sn sabit ve son kare durur, 2×, dışa aktarma pasif ve `501`, sayfadan çıkınca oynatıcı `404`), `e2e/safety-ui.spec.ts` ("Kayıt cihazında izle" düğmesi var/yok).
 
 ## Telefondan erişim (ofis ağı)
