@@ -476,3 +476,23 @@ def test_clip_failed_leaves_records_that_never_waited_for_a_clip(tmp_path: pathl
     st.clip_failed([plain["id"]])
     got = st.get(plain["id"])
     assert (got["clipPending"], got["clipFailed"]) == (False, False)          # "Bu alarmın kaydı yok", hata değil
+
+
+# ---------------------------------------------------------------- kayıttan izleme: alarmın kaynağı ve kanalı (R11)
+
+
+def test_add_stores_source_and_channel(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = st.add("s1", "Tezgah", "hands_up", 1.0, 1.0, None, "disabled", source_id="nvr", channel_id="guid-1")
+    b = st.add("s2", "Depo", "lying", 2.0, 2.0, None, "disabled")
+    assert (a["sourceId"], a["channelId"]) == ("nvr", "guid-1")
+    assert (b["sourceId"], b["channelId"]) == (None, None)
+    got = {x["id"]: x for x in AlarmStore(tmp_path).list()}
+    assert (got[a["id"]]["sourceId"], got[a["id"]]["channelId"]) == ("nvr", "guid-1")
+    assert (got[b["id"]]["sourceId"], got[b["id"]]["channelId"]) == (None, None)
+
+
+def test_old_records_get_none_source_and_channel(tmp_path: pathlib.Path) -> None:
+    _write(tmp_path, [_rec("e" * 32)])
+    a = AlarmStore(tmp_path).list()[0]
+    assert a["sourceId"] is None and a["channelId"] is None

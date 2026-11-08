@@ -30,6 +30,7 @@ from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import open_gate
 from . import recorders as rec
 from .alarms import AlarmStore
+from .archive_player import ArchiveManager
 from .clips import ClipWriter
 from .devices_store import DeviceSettings, DeviceSettingsBusy
 from .drafts import DraftsFull, DraftStore
@@ -178,6 +179,12 @@ class _ClosingStream(StreamingResponse):
             aclose = getattr(self.body_iterator, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+
+def _part(jpeg: bytes) -> bytes:
+    """MJPEG akışının bir parçası (`multipart/x-mixed-replace; boundary=frame`)."""
+    return (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpeg)).encode()
+            + b"\r\n\r\n" + jpeg + b"\r\n")
 
 
 def _load_detector(choice: str) -> Any:
@@ -431,7 +438,9 @@ def _err(e: Exception) -> HTTPException:
     """Kayıt cihazı / kamera hatası → her zaman 502 (iletisi Türkçe, şifresiz). Cihazın şifre reddi (`unauthorized`,
     "Kullanıcı adı ya da şifre hatalı.") de 502'dir, 401 değil: analiz sunucusunun tek 401'i kendi erişim anahtarı
     denetimi (analyzer/app.py `auth`), 403'leri yalnızca anahtarsız kipin Host ve başka site denetimidir
-    (analyzer/hostcheck.py)."""
+    (analyzer/hostcheck.py). Tek istisna: cihazın desteklemediği iş (`unsupported`, ör. dışa aktarma) 501."""
+    if isinstance(e, rec.RecorderError) and e.kind == "unsupported":
+        return HTTPException(501, str(e))
     if isinstance(e, rec.RecorderError):
         return HTTPException(502, str(e))
     return HTTPException(502, f"Kaynağa ulaşılamadı: {e}")
@@ -472,6 +481,8 @@ class LiveManager:
         self.viewers = ViewHub(self._view_opener, self._session_for)
         self.drafts = DraftStore()                         # kaydedilmemiş şablonlar: yalnızca bellekte
         self.mosaics = MosaicHub(lambda vid: self.drafts.get(vid) or self.views.get(vid), self.viewers)
+        # Kayıttan izleme: analyzer/app.py kurar (kaynak istemcisi `recorder` önbelleğinden), lifespan kapanışta durdurur
+        self.archive: ArchiveManager | None = None
         self._drafts_stop = threading.Event()
         self._drafts_reaper: threading.Thread | None = None
         self.clips = ClipWriter(self.alarms)               # olay kayıtları arka planda yazılır (oturumlar beklemez)
@@ -553,7 +564,9 @@ class LiveManager:
                     last = self._last_sent.get((cam_key, a.kind))
                     notify = "suppressed" if last is not None and mono - last < COOLDOWN_S else "queued"
                 rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify,
-                                       clip_pending=clip_pending and in_safety)
+                                       clip_pending=clip_pending and in_safety,
+                                       source_id=getattr(s, "source_id", None) or None,
+                                       channel_id=getattr(s, "channel_id", None) or None)
                 new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
@@ -1161,6 +1174,11 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     r = APIRouter(prefix="/api/v1/live", dependencies=[auth])
     store = manager.store
 
+    # archive_api bu modülün yardımcılarını kullanır; burada (modül yüklendikten sonra) alınır, döngü olmaz
+    from .archive_api import add_archive_routes
+
+    add_archive_routes(r, manager)
+
     # ---------------------------------------------------------------- katalog ve profiller
 
     @r.get("/catalog")
@@ -1384,10 +1402,6 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def _mjpeg(parts: Iterator[bytes]) -> StreamingResponse:
         return StreamingResponse(parts, media_type="multipart/x-mixed-replace; boundary=frame",
                                  headers={"Cache-Control": "no-store"})
-
-    def _part(jpeg: bytes) -> bytes:
-        return (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpeg)).encode()
-                + b"\r\n\r\n" + jpeg + b"\r\n")
 
     @r.get("/views/{view_id}/stream")
     def view_stream(view_id: str, w: int = Query(1280, ge=16, le=7680), h: int = Query(720, ge=16, le=4320),
@@ -1622,7 +1636,9 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         now = time.time()
         notify = "queued" if manager.notifier.configured() else "disabled"
         rec_ = manager.alarms.add(s.id if s else None, camera, "test", now, now, jpeg, notify,
-                                  clip_pending=bool(s is not None and safety and s.records_clips))
+                                  clip_pending=bool(s is not None and safety and s.records_clips),
+                                  source_id=getattr(s, "source_id", None) or None,
+                                  channel_id=getattr(s, "channel_id", None) or None)
         if s is not None and safety:
             s.capture_clip([rec_["id"]], post_s=0.0, raw=True)  # yalnızca ön kayıt, iskeletsiz; yazım arka planda
         if notify == "queued":

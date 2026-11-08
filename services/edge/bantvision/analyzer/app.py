@@ -216,6 +216,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 — temizlik hatası açılışı durdurmaz
             _LOG.exception("Açılışta alarm günlüğü temizlenemedi")
         worker.start()
+        live.archive = make_archive_manager()                # taze yönetici (yeniden girilen lifespan: eskisi durduruldu)
         live.notifier.start()                                # Telegram çevrimdışı kuyruğu
         live.restore_watched()                               # güvenlik kameraları yeniden izlemede (hata fırlatmaz)
         t = threading.Thread(target=cleanup_loop, name="analiz-temizlik", daemon=True)
@@ -233,6 +234,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             step("temizlik döngüsü", stop_cleanup.set)
             step("arka plan", live.stop_background)              # kilitli watch.json denemesi kapanıştan sonra oturum açmasın
+            if live.archive is not None:                         # kayıttan izleme oynatıcıları ve temizliği
+                step("kayıttan izleme", live.archive.stop)
             step("birleşik izleme", live.mosaics.stop)           # birleşik izleme akışları (okuyuculardan önce)
             step("izleme okuyucuları", live.viewers.stop)        # izleme okuyucuları (kameralar bırakılır)
             step("video işçisi", worker.stop)
@@ -287,9 +290,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Canlı sayım (web paneli): ağ kamerası / kayıt cihazı → sayım (bantvision/live)
     from ..live.api import LiveManager, make_router
+    from ..live.archive_player import ArchiveManager
+    from ..live.session import open_capture
     from ..live.store import LiveStore
 
     live = LiveManager(LiveStore(settings.data_dir), settings.data_dir)
+
+    def make_archive_manager() -> ArchiveManager:
+        # Kayıttan izleme: kaynağın canlı istemcisi `live.recorder`'ın önbelleğinden (TRASSIR her sarmada yeniden
+        # oturum açmaz); kapanışta lifespan durdurur
+        return ArchiveManager(live.store, live.recorder, open_capture)
+
+    live.archive = make_archive_manager()
     app.state.live = live
     app.include_router(make_router(live, Auth))
 
