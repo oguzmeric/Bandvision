@@ -33,8 +33,36 @@ Kaynak: resmi SDK dokümanı — [Getting video and audio streams](https://stora
 2. Dahili script ortamının Python sürümü; harici paket (numpy, OpenCV) kurulabiliyor mu?
 3. Script'ten ham kare (gri/BGR) erişimi var mı, hangi çözünürlük ve fps'te?
 4. Dış sistemden TRASSIR'a olay/alarm yazmak için resmi API/SDK hangisi? Olaya görsel eklenebiliyor mu?
-5. Olay zaman damgasından ilgili kanal arşivine bağlantı (deep link) üretilebiliyor mu?
+5. ~~Olay zaman damgasından ilgili kanal arşivine bağlantı (deep link) üretilebiliyor mu?~~
+   **Panel tarafında yanıtlandı (2026-11-08, kayıttan izleme paketi):** TRASSIR istemcisine bağlantı yerine BandVision panelinin kendi
+   arşiv oynatıcısı kullanılır: `/archive?source=<kaynak>&channel=<kanal>&t=<epoch sn>`. Alarm penceresindeki "Kayıt cihazında izle" bu
+   bağlantıyı alarm anından 10 sn önceye açar (`13-web-platform.md` "Kayıttan izleme"). TRASSIR'ın kendi istemcisinde olaya bağlantı
+   (seçenek C) ayrı konu olarak açık kalır (soru 4 ile birlikte).
 6. Lisanslama: modül TRASSIR tarafında ayrı lisans gerektirir mi, dağıtım modeli ne olur?
+
+## Kayıttan izleme: arşiv SDK uçları (2026-11-08)
+Panelin "Kayıttan izleme" sayfası (`13-web-platform.md` "Kayıttan izleme") TRASSIR arşivini SDK üzerinden oynatır. Uçlar resmi SDK
+belgesinden alındı; sahte NVR'da (testler) çalışıyor, **ofis NVR'ında doğrulama BEKLİYOR**. Tüm istekler canlıdaki gibi kullanıcı
+oturumunun `sid`'iyle gider; oturum hatasında bir kez yeniden giriş yapılır. Zaman biçimi bu bilgisayarın yerel saatidir (cihazın aynı
+saat diliminde olduğu varsayılır).
+
+| İş | Uç | Not |
+|---|---|---|
+| Arşiv jetonu | `/get_video?channel=<guid>&container=rtsp&stream=archive_main\|archive_sub&sid=` | Canlıdaki `token` gibi; akış `rtsp://sunucu:555/<token>`, açıkken `?ping` ile canlı tutulur |
+| Oynat | `/archive_command?command=play&start=YYYYMMDDTHHMMSS&stop=…&speed=<1\|2\|4\|8\|16>&token=&sid=` | Hız cihazda (atlar); duraklat, sürdür, sar ve hız değişimi = `stop` + yeni jetonla yeni `play` |
+| Durdur | `/archive_command?command=stop&token=&sid=` | Tek istek, yinelenmez (ölü jeton paylaşılan oturumu bozmasın) |
+| Takvim | `/archive_status?type=calendar&sid=` | `play` ile açılan jetonun yanıtı; `calendar` listesindeki `YYYY-MM-DD` dizgileri. Yanıt **jetonsuz** (oturumun tüm arşiv oynatmalarını döndürebilir): öğe `token` taşıyorsa bizimkine süzülür, çağrılar kaynak başına sıralanır |
+| Çizelge | `/archive_status?type=timeline&sid=` | Gün başından gün sonuna `play` → `archive_status` (boşsa 0,5 sn arayla en çok 3 deneme) → `stop`. Yanıt `[{token, day_start: "YYYY-MM-DD", timeline: [{begin, end}]}]`, `begin`/`end` `day_start` gününün gece yarısından saniye; `day_start` istenen gün değilse boş liste + günlük uyarısı |
+| Dışa aktarma | `POST /jit-export-create-task?sid=` `{resource_guid, start_ts, end_ts (µs), is_hardware: 0, prefer_substream: 0}` → `task_id`; `GET /jit-export-download?sid=&task_id=` | Cihaz hazırlarken MP4 dışı yanıt verirse 1 sn arayla en çok 20 deneme; dosya panelden tarayıcıya akıtılır, diske yazılmaz; en çok 30 dk, aynı anda tek görev |
+
+**Ofis NVR'ında doğrulanacaklar** (salt okunur; sonuçlar `12-durum.md` §5l'ye):
+- `archive_status` takvim ve çizelge yanıtının gerçek biçimi (alan adları, `day_start` davranışı: istenen günü mü yoksa oynatma konumunun gününü mü verir, gün sınırında ne olur), boş yanıt süresi.
+- `play` sonrası ilk karenin gelme süresi; sarmada "3 sn içinde o andan sürer" hedefi.
+- `speed` (2, 4, 8, 16) gerçekten cihazda atlıyor mu; konum hesabının (okunan kare / kare hızı × hız) cihazla uyumu.
+- `stop` sonrası jetonun ve RTSP bağlantısının kapanması; duraklamada jetonun ölmesi ve sürdürmede yeni jetonla açılış.
+- Arşiv jetonunun ömrü (`?ping` ile canlı kalıyor mu).
+- `archive_status`'ün jetonsuz olması: aynı oturumda iki oynatma varken yanıt kimin? (`token` alanı geliyor mu).
+- `jit-export` akışı: görevin hazırlanma süresi, hazır değilken yanıt, 2 dakikalık aralığın `.mp4` olarak inmesi, dosya adı/biçimi.
 
 ## Kabul kriteri (taslak)
 - TRASSIR'a bağlı bir kamerada edge servisi sayım yapıyor; her NOK, TRASSIR'da ilgili kamera üzerinde olay olarak görünüyor ve tıklayınca kayda gidiyor.

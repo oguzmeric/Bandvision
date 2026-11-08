@@ -281,6 +281,30 @@ Ofis TRASSIR'ında 16 kanalın 8'i panelde "Görüntü yok" idi; 7'sinde alt ak�
 - **Doğrulama durumu:** birim testleri (izleme, oturum, küçük resim, `subDead`, 600 sn) ve sahte API'li Playwright testi; ofis NVR'ında (2026-11-06) kanal 4'ün küçük resmi ana akıştan JPEG geldi (~6 sn) ve kanal işaretlendi; izleme okuyucusu aynı kanalda alt akışı 18 sn bekleyip ana akışla görüntü verdi (704×576, ~22 sn); "RTSP 3" ikisinde de "Görüntü yok" kaldı.
 - **Ölçüm BEKLİYOR:** panelde 16 kanallı izleme duvarında 15 kanalın görüntü vermesi (işlemci yükü dahil).
 
+## 5l. Kayıttan izleme: kayıt cihazı arşivi (web, 2026-11-08)
+
+Panelde seçilen kayıt cihazı kanalının **arşivi** oynatılır (ayrıntı: `13-web-platform.md` "Kayıttan izleme (`/archive`)"; TRASSIR uçları `08-trassir-integration.md` "Kayıttan izleme: arşiv SDK uçları").
+
+- **Ne var:** menüde İzleme → **Kayıttan izleme**: kayıt cihazı kanalı seçici, ay takvimi (kayıtlı günler), 24 saatlik çizelge (tıklayınca o ana), MJPEG oynatıcı (durum satırı, saat), duraklat/sürdür, ±10 sn, ±1 dk, hız (TRASSIR 1–16×; Hikvision/Dahua 1/2/4×), klavye kısayolları ve "?" listesi; TRASSIR'da ≤ 30 dk **dışa aktarma** (.mp4 tarayıcıya iner). Aynı anda en çok 2 oynatıcı, 60 sn boşta kapanma, 20 sn kare yoksa hata. Derin bağlantı `/archive?source=&channel=&t=`; alarm penceresinde **Kayıt cihazında izle** (alarm kaydı artık kaynak ve kanalı taşır; alarm anından 10 sn önceye açar; eski kayıtta ve tek IP kamerada düğme yok). Görüntü yalnız panel oturumuna gider, hiçbir şey saklanmaz, Telegram'a gitmez.
+- **Doğrulama durumu:** edge birim ve API testleri (üç markanın adres/zaman biçimleri, ayrıştırıcılar, oynatıcı ve yönetici, hata eşlemesi), sahte NVR'ın arşiv uçlarıyla tümleşik testler; panel birim testleri; Playwright sahte API'li arayüz testi ve **gerçek yığın** testi (dosya kaynağı arşiv gibi: akış, sarma, duraklat, 2×, dışa aktarma pasif, çıkışta kapanma); alarm düğmesi var/yok testi. Yerelde tüm edge testleri, ruff, tsc, eslint, panel birim testleri, derleme ve ilgili Playwright testleri yeşil; CI dalda koşacak. **Gerçek cihazda henüz denenmedi**: TRASSIR ofis NVR'ında doğrulama bekliyor (ağa erişim olunca); Hikvision ve Dahua uçları **cihazda doğrulanmadı** (cihaz bulununca). Başarım iddiası yok.
+- **Donanım doğrulama listesi** (salt okunur; sonuçlar buraya):
+  - **TRASSIR (ofis NVR'ı):**
+    - [ ] Takvim (`archive_status type=calendar`) ve çizelge (`type=timeline`) yanıt biçimi; `day_start` davranışı (istenen gün mü, oynatma konumunun günü mü).
+    - [ ] `archive_status`'ün jetonsuz olması: aynı oturumda iki oynatma varken yanıt kime ait (`token` alanı geliyor mu).
+    - [ ] `play` sonrası ilk karenin süresi; çizelgeye tıklayınca 3 sn içinde o andan sürmesi (kabul ölçütü 1).
+    - [ ] `speed` 2/4/8/16 cihazda atlıyor mu; panel saatinin kayıt saatiyle uyumu (4× dahil).
+    - [ ] `stop`: jeton ve RTSP bağlantısı kapanıyor mu; duraklat/sürdür yeni jetonla açılıyor mu.
+    - [ ] Arşiv jetonunun ömrü (`?ping` ile canlı kalması), uzun oynatmada kopma.
+    - [ ] Dışa aktarma (`jit-export-create-task` → `jit-export-download`): hazırlanma süresi, hazır değilken yanıt, 2 dakikalık aralığın .mp4 inmesi (kabul ölçütü 1).
+    - [ ] Dünkü kaydın panelden oynaması; alarm penceresinden "Kayıt cihazında izle"nin alarm anından 10 sn önceye açması (kabul ölçütü 2).
+    - [ ] Arşiv oynarken canlı izleme ve analiz oturumlarının kare hızı belirgin düşmüyor (kabul ölçütü 4).
+  - **Hikvision / Dahua (cihaz bulununca):**
+    - [ ] Oynatma adresi (Hikvision `/Streaming/tracks/<iz>?starttime=…Z`, Dahua `/cam/playback?channel=&subtype=&starttime=`), zaman biçimi ve saat dilimi (Hikvision UTC, Dahua yerel).
+    - [ ] Hikvision ISAPI `ContentMgmt/search` (sayfalama, `MORE`) ve `record/tracks/<iz>/dailyDistribution`.
+    - [ ] Dahua `mediaFileFind.cgi` (`factory.create` → `findFile` → `findNextFile` → `close`/`destroy`); kanal numarasının **1 tabanlı** olduğu.
+    - [ ] Panel tarafı hız (kare atlama) 2× ve 4×'te akıcı mı, konum doğru mu; cihaz reddinin Türkçe gösterilmesi.
+  - Dosya kaynağının arşiv gibi davranması **yalnız test kancasıdır** (dosya kaynaklarına izin veren test ayarıyla); sahada kullanılmaz.
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -310,3 +334,4 @@ Ofis TRASSIR'ında 16 kanalın 8'i panelde "Görüntü yok" idi; 7'sinde alt ak�
 5. **Poz güvenlik ölçümü** (§5f): ofis bullet/dome kameralarından, kamera başına etiketli kayıtlar (toplam ≥ 20 eller yukarı, ≥ 20 yerde yatma; her kamera için ≥ 1 saat normal hareket) → `tools/eval_pose.py --manifest`; ayrıca kare hızı denetimi (hedef ≥ 5 kare/sn).
 6. **Çoklu izleme ölçümü** (§5g, plan Görev 9): ofis NVR'ında 4'lü, 9'lu ve (kanal varsa) 16'lı şablon; işlemci kullanımı, kutu fps'leri, aynı anda çalışan sayım oturumunun fps'i; telefonla ofis Wi-Fi'ında QR ve şifreyle bağlanıp 9'lu şablonu izleme; güvenlik oturumunda deneme alarmıyla kırmızı kutu. Sonra iPhone ekranı (alt proje B, ayrı tasarım).
 7. **Sade arayüz ölçümü** (§5h, plan Görev 9; kullanıcıyla): ofis NVR'ında 16, 32 ve 64 kutuluk şablonda analiz sunucusunun işlemci yükü ve kutu başına kare hızı. Bilgisayar yol haritasının 2. projesi (ekran kartı desteği ve Cihaz ayarları) §5i'de; sıradaki: lisans ve demo.
+8. **Kayıttan izleme donanım doğrulaması** (§5l): ofis TRASSIR NVR'ında takvim/çizelge biçimi, ilk kare süresi, hız, `stop`, jeton ömrü, dışa aktarma; Hikvision/Dahua cihaz bulununca aynı liste.
