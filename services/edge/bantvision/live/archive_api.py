@@ -59,14 +59,14 @@ class PlayerIn(_Strict):
     sourceId: str = Field(pattern=_REF, max_length=120)
     channelId: str | None = Field(default=None, pattern=_REF, max_length=120)
     at: float = Field(ge=0, le=_EPOCH_MAX, allow_inf_nan=False)
-    speed: int = Field(default=1, ge=1, le=64)
+    speed: int = Field(default=1, ge=1, le=16)
     substream: bool = True
 
 
 class PlayerActionIn(_Strict):
     action: Literal["pause", "resume", "seek", "speed"]
     at: float | None = Field(default=None, ge=0, le=_EPOCH_MAX, allow_inf_nan=False)
-    speed: int | None = Field(default=None, ge=1, le=64)
+    speed: int | None = Field(default=None, ge=1, le=16)
 
 
 class ExportIn(_Strict):

@@ -6,8 +6,11 @@ Bağdaştırıcılar `archive.py`'dedir; burası oynatma iş parçacığı, sın
   ile; TRASSIR'da `archive_command stop`), yeni konum/hızla yeniden açar (yeni `stream_url`, yeni jeton). Duraklamada
   son kare ve `at` sabit kalır. Durumlar: `connecting | playing | paused | ended | error`.
 - Konum (R2): `at = start + okunan / fps × hız`, `fps = CAP_PROP_FPS` (0 ya da > 120 ise 25). Hızı cihazda olmayan
-  bağdaştırıcıda (`16 not in speeds`: Hikvision/Dahua/dosya) her kare çözülür, `hız`. karede bir yayımlanır; konum
-  çözülen kareden (`okunan / fps`, yani yayımlanan / fps × hız). TRASSIR'da (`device_paced`) her kare yayımlanır.
+  bağdaştırıcıda (`16 not in speeds`; bugün yalnız dosya kaynağı 2×/4× verir) her kare çözülür, `hız`. karede bir
+  yayımlanır; konum çözülen kareden (`okunan / fps`, yani yayımlanan / fps × hız). TRASSIR'da (`device_paced`) her kare
+  yayımlanır. Hikvision/Dahua yalnız 1×: gerçek kayıt cihazının oynatma RTSP'si gerçek zamanlı akar, istemcide kare
+  atlamak hızlandırmaz; hız için cihaz tarafı `Scale` gerekir (doğrulanınca kare atlama yolu ileride de kullanılır).
+- Bitmiş kayıtta "Sürdür" (R1): `at - RESUME_REWIND_S`'den (≥ 0) açılır; yoksa sonda açılıp hemen yine biterdi.
 - Sınırlar (R3): en çok MAX_PLAYERS oynatıcı (`TooManyPlayers`); IDLE_S boyunca sorulmayan oynatıcı kapanır (temizlik
   iş parçacığı REAP_EVERY_S'de bir, ilk açılışta başlar); NO_FRAME_S kare gelmezse `error` (kendiliğinden yeniden
   bağlanmaz, `resume()` yeniden dener); aynı anda tek dışa aktarma (`ExportBusy`).
@@ -76,6 +79,7 @@ REAP_EVERY_S = 10.0
 KEEP_ALIVE_S = 5.0
 DEAD_READ_S = 5.0           # ağ akışında `read` False son kareden bu kadar sonra geldiyse cihaz sustu (error), önce ise bitti
 CLOSE_WAIT_S = 3.0
+RESUME_REWIND_S = 5.0       # bitmiş kayıtta "Sürdür" bu kadar geriden açar (sonda açılıp hemen yine bitmesin)
 SWEEP_WAIT_S = 0.5
 DEFAULT_FPS = 25.0
 MAX_FPS = 120.0
@@ -149,6 +153,8 @@ class ManagerStopped(RuntimeError):
 
 class _Store(Protocol):
     def source(self, source_id: str) -> dict[str, Any] | None: ...
+
+    def source_records(self) -> list[dict[str, Any]]: ...
 
     def password(self, source_id: str) -> str: ...
 
@@ -282,11 +288,14 @@ class ArchivePlayer:
             self._cond.notify_all()
 
     def resume(self) -> None:
-        """Duraklatılmış, bitmiş ya da hatalı oynatmayı `at`tan yeniden açar; oynarken/bağlanırken bir şey yapmaz."""
+        """Duraklatılmış ya da hatalı oynatmayı `at`tan, bitmişi `at - RESUME_REWIND_S`'den (≥ 0) yeniden açar;
+        oynarken/bağlanırken bir şey yapmaz."""
         self.touch()
         with self._cond:
-            if not self._closed and self._state not in _ACTIVE:
-                self._restart(self._at)
+            if self._closed or self._state in _ACTIVE:
+                return
+            at = max(0.0, self._at - RESUME_REWIND_S) if self._state == "ended" else self._at
+            self._restart(at)
 
     def seek(self, at: float) -> None:
         """Yeni konumdan oynatır (duraklatılmışsa da)."""
@@ -495,6 +504,10 @@ def file_source_path(src: dict[str, Any]) -> str | None:
     return None
 
 
+def _source_name(src: dict[str, Any]) -> str:
+    return str(src.get("name") or "").strip() or "Kamera"
+
+
 def _ascii(text: str) -> str:
     text = text.replace("ı", "i").replace("İ", "I")
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
@@ -631,11 +644,15 @@ class ArchiveManager:
             return self._source_locks.setdefault(source_id, threading.Lock())
 
     def name(self, source_id: str, channel_id: str | None) -> str:
-        """Kaynak adı (+ kanal adı). Ağa çıkmaz: kanal adı önbellekte yoksa kanal kimliği yazılır."""
-        src = self._store.source(source_id)
+        """Kaynak adı (+ kanal adı). Ağa çıkmaz, şifre dosyasını okumaz (`source_records`): kanal adı önbellekte yoksa
+        kanal kimliği yazılır."""
+        src = next((s for s in self._store.source_records() if s.get("id") == source_id), None)
         if src is None:
             return "Silinmiş kamera"
-        name = str(src.get("name") or "").strip() or "Kamera"
+        return self._label(source_id, _source_name(src), channel_id)
+
+    def _label(self, source_id: str, name: str, channel_id: str | None) -> str:
+        """Kaynak adı + önbellekteki kanal adı (dosya okumaz; oynatıcı görünümü saniyede bir sorar)."""
         if not channel_id:
             return name
         with self._lock:
@@ -710,10 +727,14 @@ class ArchiveManager:
         `MissingChannel`, `NoArchive`, `UnsupportedSpeed`, `ManagerStopped`."""
         if self._stop.is_set():
             raise ManagerStopped()
-        target = self._target(self._source(source_id))
+        src = self._source(source_id)
+        target = self._target(src)
         _require_channel(target, channel_id)
         if speed not in target.archive.speeds:
             raise UnsupportedSpeed()
+        # Ad açılışta alınır: görünüm (saniyede bir) dosya okumaz. Kaynak düzenlenince/silinince `forget` oynatıcıyı
+        # kapatır, bu yüzden ad bayatlamaz; kanal adı ilk bağlanışta öğrenilir (`_label` önbellekten okur).
+        base = _source_name(src)
         with self._lock:
             if self._stop.is_set():
                 raise ManagerStopped()
@@ -722,7 +743,7 @@ class ArchiveManager:
             pid = uuid.uuid4().hex
             routed = _Routed(target.archive)
             player = ArchivePlayer(pid, routed, channel_id, self._url_factory(source_id, channel_id, routed),
-                                   self._open_capture, lambda: self.name(source_id, channel_id), float(at), speed,
+                                   self._open_capture, lambda: self._label(source_id, base, channel_id), float(at), speed,
                                    substream, clock=self._clock, source_id=source_id, no_frame_s=self.NO_FRAME_S)
             self._players[pid] = player
             self._ensure_reaper()
@@ -739,6 +760,22 @@ class ArchiveManager:
             return False
         player.close()
         return True
+
+    def forget(self, source_id: str) -> None:
+        """Kaynak düzenlendi/silindi (`LiveManager.forget`): oynatıcıları kapanır, kanal listesi ve takvim/çizelge
+        önbelleği atılır, kaynak kilidi (tutulmuyorsa) silinir. Yeni istek güncel kayıtla yeniden kurar."""
+        with self._lock:
+            gone = [self._players.pop(pid) for pid, p in list(self._players.items()) if p.source_id == source_id]
+            self._channels.pop(source_id, None)
+            for key in [k for k in self._cache if k[1] == source_id]:
+                del self._cache[key]
+            lock = self._source_locks.get(source_id)
+            if lock is not None and not lock.locked():
+                del self._source_locks[source_id]
+        for p in gone:
+            p.close(0)
+        for p in gone:
+            p.close(SWEEP_WAIT_S)
 
     def sweep(self) -> int:
         """Boşta kalan oynatıcıları kapatır, diğerlerinde kare bekleme süresini denetler, süresi dolan önbelleği siler."""

@@ -158,10 +158,18 @@ class FakeStore:
     def __init__(self, sources: dict[str, dict[str, Any]]) -> None:
         self._sources = sources
 
+        self.calls: list[str] = []          # hangi okuma yapıldı (görünüm dosya okumamalı)
+
     def source(self, source_id: str) -> dict[str, Any] | None:
+        self.calls.append("source")
         return self._sources.get(source_id)
 
+    def source_records(self) -> list[dict[str, Any]]:
+        self.calls.append("source_records")
+        return list(self._sources.values())
+
     def password(self, source_id: str) -> str:
+        self.calls.append("password")
         return "s3cr3t"
 
 
