@@ -6,6 +6,7 @@ import {
   createPlayer, deletePlayer, getPlayer, playerAction, type ArchiveCamera, type PlayerAction, type PlayerView,
 } from "@/lib/archive";
 import { POLL_MS } from "@/lib/archiveTime.mjs";
+import { STREAM_RETRY_MS } from "@/lib/views";
 
 /** Yoklama 404 aldı: oynatıcı sunucuda yok (analiz sunucusu yeniden başladı ya da boşta kaldığı için kapandı) */
 export const VANISHED_NOTICE = "Oynatıcı kapanmış (analiz sunucusu yeniden başlamış olabilir); sonraki işlemde yeniden açılır.";
@@ -30,8 +31,12 @@ export interface ArchivePlayerApi {
   notice: string | null;
   /** Oynatıcı açılıyor (POST yanıtı bekleniyor) */
   opening: boolean;
-  /** Akış `<img>`'inin anahtarı: yalnız oynatıcı değişince ya da hatadan sonra sürdürülünce artar */
+  /** Akış `<img>`'inin anahtarı: oynatıcı değişince, hatadan sonra sürdürülünce, sekme yeniden görünür olunca ya da
+   * `<img>` hata verince (`onStreamError`, STREAM_RETRY_MS sonra) artar */
   streamKey: number;
+  /** Sekme görünür mü. Gizliyken `<img>` çizilmez, yoklama durur, oynatma duraklatılır (görünür olunca sürmez) */
+  visible: boolean;
+  onStreamError: () => void;
   /** Seçili hız (oynatıcı yokken yeni oynatıcının hızı) */
   speed: number;
   toggle: (cam: ArchiveCamera, at: number) => void;
@@ -55,6 +60,8 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const [streamKey, setStreamKey] = useState(0);
   const [speed, setSpeedState] = useState(1);
   const [offline, setOffline] = useState(false);
+  // İlk çizim görünür kabul edilir; gerçek durum ilk etkide okunur (useStreamKey ile aynı)
+  const [visible, setVisible] = useState(true);
 
   const idRef = useRef<string | null>(null);
   const viewRef = useRef<PlayerView | null>(null);
@@ -69,6 +76,11 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const pendingRef = useRef<number | null>(null);
   /** Ardışık başarısız (404 dışı) yoklama sayısı */
   const failsRef = useRef(0);
+  /** Sekme gizli: açılış bu sırada biterse oynatıcı hemen duraklatılır */
+  const hiddenRef = useRef(false);
+  /** Son kumandanın kamerası (gizlenince duraklatma için) */
+  const camRef = useRef<ArchiveCamera | null>(null);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const show = useCallback((v: PlayerView | null) => {
     viewRef.current = v;
     idRef.current = v?.id ?? null;
@@ -82,6 +94,7 @@ export function useArchivePlayer(): ArchivePlayerApi {
 
   const open = useCallback((cam: ArchiveCamera, at: number, reopened: boolean) => {
     if (openingRef.current) return;
+    camRef.current = cam;
     const token = {};
     openingRef.current = token;
     const epoch = epochRef.current;
@@ -102,15 +115,19 @@ export function useArchivePlayer(): ArchivePlayerApi {
         if (openingRef.current !== token) return;
         openingRef.current = null;
         setOpening(false);
-        // açılış sürerken başka ana tıklandıysa (çizelge, kısayol) şimdi oraya sarılır
+        // açılış sürerken başka ana tıklandıysa (çizelge, kısayol) şimdi oraya sarılır; sekme bu arada gizlendiyse
+        // oynatıcı arka planda oynamasın diye duraklatılır (sekmeye dönünce kullanıcı Sürdür'e basar)
         const next = pendingRef.current;
         pendingRef.current = null;
-        if (next !== null && epoch === epochRef.current && idRef.current && next !== at) seekRef.current(cam, next);
+        if (epoch !== epochRef.current || !idRef.current) return;
+        if (hiddenRef.current) pauseRef.current();
+        else if (next !== null && next !== at) seekRef.current(cam, next);
       });
   }, [show]);
 
   /** Kumanda; oynatıcı sunucuda yoksa (404) duraklatma dışındaki işler `at`tan yeni oynatıcıyla sürer */
   const act = useCallback((cam: ArchiveCamera, body: PlayerAction, at: number) => {
+    camRef.current = cam;
     const id = idRef.current;
     if (!id) { if (body.action !== "pause") open(cam, at, false); return; }
     const epoch = epochRef.current;
@@ -155,7 +172,47 @@ export function useArchivePlayer(): ArchivePlayerApi {
   const seekRef = useRef(seek);
   seekRef.current = seek;
 
+  /** Sekme gizlenince: oynuyor/bağlanıyorsa duraklat (404 ise not kalır, sonraki işlemde yeniden açılır) */
+  const pauseIfActive = useCallback(() => {
+    const v = viewRef.current;
+    const cam = camRef.current;
+    if (v && cam && isActive(v)) act(cam, { action: "pause" }, v.at);
+  }, [act]);
+  const pauseRef = useRef(pauseIfActive);
+  pauseRef.current = pauseIfActive;
+
+  // Sekme görünürlüğü (useStreamKey kalıbı): gizliyken akış `<img>`'i çizilmez, yoklama durur ve oynatma duraklatılır;
+  // arka plandaki sekme oynatıcıyı sunucuda sonsuza dek canlı tutmaz. Yoklama durduğu için sunucunun boşta temizliği
+  // (60 sn) oynatıcıyı kapatabilir: sonraki işlem 404 alır ve "oynatıcı yeniden açılır" yolundan sürer. Görünür olunca
+  // yoklama ve akış yeniden başlar; oynatma kendiliğinden sürmez (kullanıcı Sürdür'e basar).
+  useEffect(() => {
+    const read = () => document.visibilityState === "hidden";
+    hiddenRef.current = read();
+    setVisible(!hiddenRef.current);
+    if (hiddenRef.current) pauseRef.current();
+    const onVisibility = () => {
+      const hidden = read();
+      if (hidden === hiddenRef.current) return;
+      hiddenRef.current = hidden;
+      setVisible(!hidden);
+      if (hidden) pauseRef.current();
+      else setStreamKey((k) => k + 1);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      clearTimeout(retryRef.current);
+    };
+  }, []);
+
+  /** Akış `<img>`'i hata verdi (bağlantı koptu): STREAM_RETRY_MS sonra yeni anahtarla yeniden açılır */
+  const onStreamError = useCallback(() => {
+    clearTimeout(retryRef.current);
+    retryRef.current = setTimeout(() => setStreamKey((k) => k + 1), STREAM_RETRY_MS);
+  }, []);
+
   const setSpeed = useCallback((cam: ArchiveCamera, s: number, at: number) => {
+    camRef.current = cam;
     speedRef.current = s;
     setSpeedState(s);
     if (idRef.current) act(cam, { action: "speed", speed: s }, at);
@@ -175,13 +232,13 @@ export function useArchivePlayer(): ArchivePlayerApi {
     setSeeking(false);
   }, [show]);
 
-  // Durum yoklaması (1 sn): oynatıcı varken. 404 → oynatıcı kayboldu; başka hata iki kez üst üste → "ulaşılamıyor" notu
+  // Durum yoklaması (1 sn): oynatıcı varken ve sekme görünürken. 404 → oynatıcı kayboldu; başka hata iki kez üst üste → "ulaşılamıyor" notu
   // (ilk başarılı yoklamada kalkar; başarılı yoklama son işlemin hatasını da siler)
   const id = view?.id ?? null;
   useEffect(() => {
     failsRef.current = 0;
     setOffline(false);
-    if (!id) return;
+    if (!id || !visible) return;
     let busy = false;
     const timer = setInterval(() => {
       if (busy) return;
@@ -212,7 +269,7 @@ export function useArchivePlayer(): ArchivePlayerApi {
         .finally(() => { busy = false; });
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [id, show]);
+  }, [id, show, visible]);
 
   // Sayfadan çıkış: sekme kapanır/başka siteye gidilir (`pagehide`) ya da panelde başka sayfaya geçilir (bileşen kalkar).
   // Hook tamamen sıfırlanır: uçuştaki açılış geçersiz (yanıtı gelince oynatıcı silinir), açılış kilidi ve bekleyen konum
@@ -235,5 +292,8 @@ export function useArchivePlayer(): ArchivePlayerApi {
     };
   }, [show]);
 
-  return { view, seeking, error, notice: offline ? OFFLINE_NOTICE : notice, opening, streamKey, speed, toggle, seek, setSpeed, close };
+  return {
+    view, seeking, error, notice: offline ? OFFLINE_NOTICE : notice, opening, streamKey, visible, onStreamError, speed,
+    toggle, seek, setSpeed, close,
+  };
 }

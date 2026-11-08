@@ -29,6 +29,9 @@ const CHANNELS: Record<string, object[]> = {
   e: [{ id: "7", name: "Rampa", number: 7, title: "Rampa", hasSubstream: true }],
 };
 
+/** Markaya göre hızlar (sunucuyla aynı): TRASSIR cihazda 1–16×, Hikvision/Dahua gerçek zamanlı RTSP'de yalnız 1× */
+const SPEEDS: Record<string, number[]> = { b: [1, 2, 4, 8, 16], e: [1] };
+
 type State = "connecting" | "playing" | "paused" | "ended" | "error";
 interface View {
   id: string; sourceId: string; channelId: string | null; name: string; state: State; message: string; at: number;
@@ -53,6 +56,9 @@ async function mockArchive(page: Page) {
     createHold: null as Promise<void> | null,
     /** Yalnız kumanda 404 (yoklamadan önce işlem kaybolan oynatıcıya çarpar) */
     actionMissing: false,
+    /** MJPEG akış istekleri; `streamError` verilirse akış bu kodla düşer (`<img>` hata verir) */
+    streams: 0,
+    streamError: null as number | null,
     /** Dışa aktarma yanıtı: hata ya da (null) dosya; `hold` verilirse yanıt o söz bitene kadar bekler */
     exportError: null as { status: number; detail: string } | null,
     hold: null as Promise<void> | null,
@@ -88,7 +94,8 @@ async function mockArchive(page: Page) {
     fake.gone = false;
     fake.actionMissing = false;
     fake.view = { id: `p${++fake.n}`, sourceId: b.sourceId, channelId: b.channelId, name: "Ofis NVR · Kasa", state: "connecting",
-                  message: "", at: b.at, speed: b.speed, speeds: [1, 2, 4], fps: 25, canExport: fake.canExport };
+                  message: "", at: b.at, speed: b.speed, speeds: SPEEDS[b.sourceId] ?? [1], fps: 25,
+                  canExport: fake.canExport };
     return r.fulfill({ status: 201, json: fake.view });
   });
   const missing = (r: Route) => r.fulfill({ status: 404, json: { detail: "Kayıt oynatıcısı bulunamadı." } });
@@ -113,7 +120,11 @@ async function mockArchive(page: Page) {
     v.message = "";
     return r.fulfill({ json: v });
   });
-  await page.route("**/api/live/archive/players/*/stream", (r) => r.fulfill({ body: JPEG, contentType: "image/jpeg" }));
+  await page.route(/\/api\/live\/archive\/players\/[^/]+\/stream(\?|$)/, (r) => {   // `?k=` anahtarlı
+    fake.streams += 1;
+    if (fake.streamError) return r.fulfill({ status: fake.streamError, body: "" });
+    return r.fulfill({ body: JPEG, contentType: "image/jpeg" });
+  });
   await page.route("**/api/live/archive/export", async (r) => {
     log(r);
     if (fake.hold) await fake.hold;
@@ -214,7 +225,7 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
     .toEqual([{ sourceId: "b", channelId: "2", at: DAY7 + H, speed: 1 }]);
   await expect(status(page)).toHaveText("Bağlanıyor…");
   const img = page.getByTestId("player-stream");
-  await expect(img).toHaveAttribute("src", "/api/live/archive/players/p1/stream");
+  await expect(img).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p1\/stream\?k=\d+$/);
   await img.evaluate((el) => el.setAttribute("data-mark", "1"));       // aynı öğe mi (yeniden açılmadı mı)
 
   m.fake.view!.state = "playing";
@@ -228,6 +239,23 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
   await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "pause" });
   await expect(playButton(page)).toHaveText("Sürdür");
 
+  // "Kayıt bitti": ana düğme "Sonraki kayda git" olur (Sürdür sonda açıp hemen yine bitirirdi)
+  m.fake.view!.state = "ended";
+  m.fake.view!.at = DAY7 + 11 * H;                                     // günün son kaydının sonu: sonraki kayıt yok
+  await expect(status(page)).toHaveText("Kayıt bitti");
+  await expect(playButton(page)).toHaveText("Sürdür");
+  await expect(playButton(page)).toBeDisabled();
+  await expect(playButton(page)).toHaveAttribute("title", "Bu günde sonraki kayıt yok.");
+  const acts = m.of("POST", /actions$/).length;
+  await page.getByTestId("timeline").focus();
+  await page.keyboard.press(" ");                                       // Boşluk da sürdürmez
+  await page.waitForTimeout(300);
+  expect(m.of("POST", /actions$/).length).toBe(acts);
+  m.fake.view!.at = DAY7 + 2 * H;
+  await expect(page.getByRole("group", { name: "Oynatma kumandası" }).getByRole("button", { name: "Sonraki kayda git" })).toBeVisible();
+  await expect(playButton(page)).toHaveCount(0);
+  await page.keyboard.press(" ");                                       // Boşluk = Sonraki kayda git
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "seek", at: DAY7 + 10 * H });
   m.fake.view!.state = "ended";
   m.fake.view!.at = DAY7 + 2 * H;
   await expect(status(page)).toHaveText("Kayıt bitti");
@@ -240,11 +268,15 @@ test("kayıttan izleme: oynatıcı durumları connecting → playing → paused 
   m.fake.view!.state = "error";
   m.fake.view!.message = "Kayıt cihazından görüntü gelmedi.";
   await expect(status(page)).toHaveText("Kayıt cihazından görüntü gelmedi.");
+  const src = await img.getAttribute("src");
+  const streams = m.fake.streams;
   await playButton(page).click();                                       // Sürdür: hatadan sonra akış baştan açılır
   await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "resume" });
   await expect(status(page)).toHaveText("Bağlanıyor…");
   await expect(img).not.toHaveAttribute("data-mark", "1");
-  await expect(img).toHaveAttribute("src", "/api/live/archive/players/p1/stream");
+  await expect(img).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p1\/stream\?k=\d+$/);
+  await expect(img).not.toHaveAttribute("src", src!);                  // yeni anahtar: tarayıcı bağlantıyı yeniden açar
+  await expect.poll(() => m.fake.streams).toBeGreaterThan(streams);
   // yoklama saniyede bir
   const polls = m.of("GET", /^archive\/players\/p1$/).length;
   await expect.poll(() => m.of("GET", /^archive\/players\/p1$/).length, { timeout: 5000 }).toBeGreaterThan(polls + 1);
@@ -271,7 +303,7 @@ test("kayıttan izleme: çizelge tıklaması (açar, sonra seek), hız seçimi, 
 
   // hız
   const speed = page.getByLabel("Hız");
-  await expect(speed.locator("option")).toHaveText(["1×", "2×", "4×"]);
+  await expect(speed.locator("option")).toHaveText(["1×", "2×", "4×", "8×", "16×"]);   // TRASSIR'da cihazda
   await speed.selectOption("2");
   await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "speed", speed: 2 });
   await expect(status(page)).toHaveText("Sarılıyor…");
@@ -342,7 +374,7 @@ test("kayıttan izleme: 429 sınır iletisi; kaybolan oynatıcı (404) sonraki i
   await expect.poll(() => m.of("POST", /^archive\/players$/).at(-1)?.body).toEqual({ sourceId: "b", channelId: "2", at: DAY7 + H + 310, speed: 1 });
   const creates = m.of("POST", /^archive\/players$/);
   await expect(status(page)).toContainText("Oynatıcı yeniden açıldı.");
-  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", "/api/live/archive/players/p2/stream");
+  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p2\/stream\?k=\d+$/);
 
   // işlem sırasında kaybolursa (seek 404) aynı konumdan hemen yeniden açılır
   m.fake.actionMissing = true;
@@ -350,7 +382,7 @@ test("kayıttan izleme: 429 sınır iletisi; kaybolan oynatıcı (404) sonraki i
   await expect.poll(() => m.of("POST", /^archive\/players$/).length).toBe(creates.length + 1);
   expect(m.of("POST", /^archive\/players$/).at(-1)!.body!.at).toBe(DAY7 + H + 370);
   await expect(status(page)).toContainText("Oynatıcı yeniden açıldı.");
-  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", "/api/live/archive/players/p3/stream");
+  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p3\/stream\?k=\d+$/);
 });
 
 test("kayıttan izleme: Dışa aktar — desteklenmiyorsa pasif; 30 dk sınırı; 501/409 iletileri; indirme dosya adı", async ({ page }) => {
@@ -425,7 +457,7 @@ test("kayıttan izleme: derin bağlantı kamerayı ve günü seçip t'den oynat�
   await expect.poll(() => m.of("POST", /^archive\/players$/).length).toBe(2);
   expect(m.of("POST", /^archive\/players$/).at(-1)!.body).toEqual({ sourceId: "b", channelId: "2", at: t, speed: 1 });
   await expect(status(page)).toHaveText("Bağlanıyor…");
-  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", "/api/live/archive/players/p2/stream");
+  await expect(page.getByTestId("player-stream")).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p2\/stream\?k=\d+$/);
 
   // gün değişince oynatıcı kapanır
   await dayButton(page, /^7 Kasım 2026/).click();
@@ -469,4 +501,72 @@ test("kayıttan izleme: yoklama iki kez düşerse 'ulaşılamıyor' notu, düzel
   await expect(status(page)).toContainText("Analiz sunucusuna ulaşılamıyor; yeniden deneniyor…");
   m.fake.pollError = null;
   await expect(status(page)).toHaveText("Oynatılıyor");
+});
+
+/** Sekmeyi gizli/görünür yapar (tarayıcı sekme değişimini taklit eder; watch-ui ile aynı) */
+async function setHidden(page: Page, hidden: boolean) {
+  await page.evaluate((h) => {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+}
+
+test("kayıttan izleme: gizli sekmede duraklatılır, akış ve yoklama durur; dönünce yoklama ve akış sürer, oynatma sürmez", async ({ page }) => {
+  const m = await mockArchive(page);
+  await login(page);
+  await pickKasa(page);
+  await playButton(page).click();
+  m.fake.view!.state = "playing";
+  await expect(status(page)).toHaveText("Oynatılıyor");
+  const img = page.getByTestId("player-stream");
+  await expect(img).toHaveCount(1);
+  const polls = () => m.of("GET", /^archive\/players\/p1$/).length;
+
+  await setHidden(page, true);
+  await expect.poll(() => m.of("POST", /actions$/).at(-1)?.body).toEqual({ action: "pause" });
+  await expect(img).toHaveCount(0);                                     // akış bırakıldı
+  await page.waitForTimeout(300);
+  const hiddenPolls = polls();
+  await page.waitForTimeout(2500);
+  expect(polls()).toBe(hiddenPolls);                                    // gizliyken yoklama yok
+  expect(m.fake.view!.state).toBe("paused");
+
+  const streams = m.fake.streams;
+  await setHidden(page, false);
+  await expect(img).toHaveCount(1);
+  await expect.poll(() => m.fake.streams).toBeGreaterThan(streams);     // akış yeniden açıldı
+  await expect.poll(polls, { timeout: 5000 }).toBeGreaterThan(hiddenPolls + 1);
+  await expect(status(page)).toHaveText("Duraklatıldı");
+  await expect(playButton(page)).toHaveText("Sürdür");
+  expect(m.of("POST", /actions$/).map((c) => c.body?.action)).toEqual(["pause"]);   // kendiliğinden sürmedi
+
+  // gizliyken sunucu oynatıcıyı boşta temizlediyse: dönünce 404 → not; Sürdür yenisini açar
+  await setHidden(page, true);
+  m.fake.gone = true;
+  await page.waitForTimeout(300);
+  await setHidden(page, false);
+  await expect(status(page)).toContainText("Oynatıcı kapanmış");
+  await playButton(page).click();
+  await expect.poll(() => m.of("POST", /^archive\/players$/).length).toBe(2);
+  await expect(status(page)).toContainText("Oynatıcı yeniden açıldı.");
+
+  // akış hata verirse (bağlantı koptu) kısa süre sonra yeniden açılır
+  m.fake.view!.state = "playing";
+  await expect(img).toHaveAttribute("src", /^\/api\/live\/archive\/players\/p2\/stream\?k=\d+$/);
+  m.fake.streamError = 500;
+  const before = m.fake.streams;
+  await img.evaluate((el) => { (el as HTMLImageElement).dispatchEvent(new Event("error")); });
+  m.fake.streamError = null;
+  await expect.poll(() => m.fake.streams, { timeout: 5000 }).toBeGreaterThan(before);
+});
+
+test("kayıttan izleme: Hikvision kaydında yalnız 1× (gerçek zamanlı RTSP)", async ({ page }) => {
+  const m = await mockArchive(page);
+  await login(page);
+  await camera(page, "Depo NVR · Rampa").click();
+  await expect(page.getByTestId("timeline-range")).toHaveCount(2);
+  await playButton(page).click();
+  await expect.poll(() => m.of("POST", /^archive\/players$/).at(-1)?.body?.sourceId).toBe("e");
+  await expect(page.getByLabel("Hız").locator("option")).toHaveText(["1×"]);
 });

@@ -62,8 +62,10 @@ export function deletePlayer(id: string): void {
     .catch(() => undefined);
 }
 
-export function streamUrl(id: string): string {
-  return `/api/live/archive/players/${encodeURIComponent(id)}/stream`;
+/** MJPEG akış adresi. `key` (yeniden bağlanma anahtarı) adrese eklenir: aynı adresli `<img>` yeniden çizilince
+ * tarayıcı görüntüyü bellekten verip bağlantıyı yeniden açmayabilir (canlı izlemedeki `k` ile aynı). */
+export function streamUrl(id: string, key = 0): string {
+  return `/api/live/archive/players/${encodeURIComponent(id)}/stream?k=${key}`;
 }
 
 /** Dışa aktarma: `video/mp4` yanıtı Blob'a alınır; ad `Content-Disposition`'dan. Hata iletisi sunucunun `detail`'i. */

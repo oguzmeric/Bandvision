@@ -6,6 +6,7 @@ import { isActive } from "./useArchivePlayer";
 
 export const EXPORT_UNSUPPORTED = "Bu kayıt cihazında dışa aktarma henüz desteklenmiyor.";
 const EXPORT_NEEDS_PLAYER = "Dışa aktarmak için önce kaydı oynatın.";
+const NO_NEXT = "Bu günde sonraki kayıt yok.";
 
 /** Durum satırının metni (öncelik: istek reddi → kamera yok → oynatıcı yok → oynatıcı durumu) */
 function statusText({ error, hasCamera, view, opening, seeking }: {
@@ -26,12 +27,13 @@ function statusText({ error, hasCamera, view, opening, seeking }: {
 /**
  * Oynatıcı: üstte durum satırı (`aria-live="polite"`) ve sağda saat/tarih, ortada MJPEG `<img>`, altta kumanda.
  * `<img>` duraklatma, sürdürme ve sarmada yerinde kalır (sunucu bağlantıyı açık tutar); yalnız `streamKey` değişince
- * (yeni oynatıcı, hatadan sonra sürdürme) yeniden açılır.
+ * (yeni oynatıcı, hatadan sonra sürdürme, sekmeye dönüş, `<img>` hatası) yeniden açılır. Sekme gizliyken (`visible`
+ * false) `<img>` hiç çizilmez. "Kayıt bitti"de ana düğme "Sonraki kayda git"tir (sonraki kayıt yoksa pasif "Sürdür").
  */
-export default function Player({ name, hasCamera, view, opening, seeking, error, notice, streamKey, at, speed, nextAt,
-  onToggle, onStep, onSpeed, onNext, onExport }: {
+export default function Player({ name, hasCamera, view, opening, seeking, error, notice, streamKey, visible, onStreamError,
+  at, speed, nextAt, onToggle, onStep, onSpeed, onNext, onExport }: {
   name: string; hasCamera: boolean; view: PlayerView | null; opening: boolean; seeking: boolean; error: string | null;
-  notice: string | null; streamKey: number; at: number; speed: number;
+  notice: string | null; streamKey: number; visible: boolean; onStreamError: () => void; at: number; speed: number;
   /** "Kayıt bitti"nde sonraki kaydın başı (yoksa null) */
   nextAt: number | null;
   onToggle: () => void; onStep: (seconds: number) => void; onSpeed: (speed: number) => void; onNext: () => void;
@@ -42,6 +44,7 @@ export default function Player({ name, hasCamera, view, opening, seeking, error,
   const speeds = view?.speeds.length ? view.speeds : [speed];
   const exportTitle = !view ? EXPORT_NEEDS_PLAYER : view.canExport ? undefined : EXPORT_UNSUPPORTED;
   const off = !hasCamera;
+  const ended = view?.state === "ended";
 
   return (
     <section className="pl-section mb-0 min-w-0" aria-label="Oynatıcı">
@@ -56,18 +59,12 @@ export default function Player({ name, hasCamera, view, opening, seeking, error,
           <p className={status.bad ? "font-semibold text-nok-ink" : "font-semibold"}>{status.text}</p>
           {notice && <p className="text-pl-muted">{notice}</p>}
         </div>
-        {view?.state === "ended" && !error && (
-          <button type="button" onClick={onNext} disabled={nextAt === null} className="pl-btn pl-btn-primary h-7"
-                  title={nextAt === null ? "Bu günde sonraki kayıt yok." : undefined}>
-            Sonraki kayda git
-          </button>
-        )}
       </div>
       <div className="relative aspect-video w-full overflow-hidden bg-black">
-        {view && (
+        {view && visible && (
           // eslint-disable-next-line @next/next/no-img-element -- MJPEG akışı, Next görüntü iyileştirmesi uygun değil
-          <img key={`${view.id}-${streamKey}`} src={streamUrl(view.id)} alt={`${name} kaydı`} data-testid="player-stream"
-               className="absolute inset-0 h-full w-full object-contain" />
+          <img key={`${view.id}-${streamKey}`} src={streamUrl(view.id, streamKey)} alt={`${name} kaydı`} data-testid="player-stream"
+               onError={onStreamError} className="absolute inset-0 h-full w-full object-contain" />
         )}
         {!view && (
           <p className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] text-white/80">
@@ -78,9 +75,16 @@ export default function Player({ name, hasCamera, view, opening, seeking, error,
       <div className="mt-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Oynatma kumandası">
         <button type="button" disabled={off} onClick={() => onStep(-60)} aria-label="1 dakika geri" className="pl-btn h-8">⏮ 1 dk</button>
         <button type="button" disabled={off} onClick={() => onStep(-10)} aria-label="10 saniye geri" className="pl-btn h-8">◀ 10 sn</button>
-        <button type="button" disabled={off || opening} onClick={onToggle} className="pl-btn pl-btn-primary h-8 min-w-20 justify-center">
-          {!view ? "Oynat" : active ? "Duraklat" : "Sürdür"}
-        </button>
+        {ended && nextAt !== null ? (
+          <button type="button" disabled={off} onClick={onNext} className="pl-btn pl-btn-primary h-8 min-w-20 justify-center">
+            Sonraki kayda git
+          </button>
+        ) : (
+          <button type="button" disabled={off || opening || ended} onClick={onToggle} title={ended ? NO_NEXT : undefined}
+                  className="pl-btn pl-btn-primary h-8 min-w-20 justify-center">
+            {!view ? "Oynat" : active ? "Duraklat" : "Sürdür"}
+          </button>
+        )}
         <button type="button" disabled={off} onClick={() => onStep(10)} aria-label="10 saniye ileri" className="pl-btn h-8">10 sn ▶</button>
         <button type="button" disabled={off} onClick={() => onStep(60)} aria-label="1 dakika ileri" className="pl-btn h-8">1 dk ⏭</button>
         <label className="flex items-center gap-1">
