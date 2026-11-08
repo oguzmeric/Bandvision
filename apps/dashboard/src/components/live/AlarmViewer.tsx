@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ALARM_TITLES, CLIP_PENDING_MAX_S, CLIP_PENDING_S, NOTIFY_LABELS, alarmClipUrl, alarmImageUrl, type Alarm } from "@/lib/live";
+import {
+  ALARM_TITLES, ARCHIVE_LEAD_S, CLIP_PENDING_MAX_S, CLIP_PENDING_S, NOTIFY_LABELS, alarmClipUrl, alarmImageUrl, api, type Alarm, type Source,
+} from "@/lib/live";
 
 /** "active": onaylanmamış alarmlar (alarm penceresi, Küçült); "browse": geçmiş alarmlar (Alarmlar sayfası, Son alarmlar) */
 export type ViewerMode = "active" | "browse";
@@ -31,7 +33,7 @@ function clock(sec: number): string {
 /**
  * Alarm penceresi: büyük kırmızı başlık (tür, kamera, tarih-saat, sürüyor/süre), ihlal anının kaydı (video; hazır
  * değilse olay resmi), kayıt içinde durumun başladığı ve alarmın verildiği an (tıklayınca oraya atlar), Gördüm /
- * Kamerayı aç / Yanlış alarm / Küçült. Birden çok alarmda "1 / 3" ve ‹ › ile gezinilir.
+ * Kamerayı aç / Kayıt cihazında izle (kayıt cihazı kanalında; alarm anından 10 sn önceden) / Yanlış alarm / Küçült. Birden çok alarmda "1 / 3" ve ‹ › ile gezinilir.
  * Yerel `<dialog>` + `showModal()`: tarayıcının üst katmanında açılır — açık başka bir modal pencerenin (ör. "Canlı sayımı
  * başlat", geometri) de üstünde; sayfanın geri kalanı etkisizdir. Erişilebilirlik: `role="alertdialog"`, açılınca odak
  * pencereye (Gördüm) gelir ve içinde kalır (Tab döner); Esc (`cancel`) küçültür, asla onaylamaz.
@@ -47,6 +49,17 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
   const [playFailed, setPlayFailed] = useState<string | null>(null);   // oynatılamayan kayıt (ör. 404)
   const [duration, setDuration] = useState<{ id: string; sec: number } | null>(null);
   const [, setTick] = useState(0);
+  /** Kayıt cihazı kaynaklarının kimlikleri ("Kayıt cihazında izle" yalnız onlarda); kaynaklı alarm görülünce bir kez istenir */
+  const [recorders, setRecorders] = useState<Set<string> | null>(null);
+  const needSources = alarms.some((x) => x.sourceId);
+  useEffect(() => {
+    if (!needSources || recorders) return;
+    let live = true;
+    api<Source[]>("sources")
+      .then((list) => { if (live) setRecorders(new Set(list.filter((s) => s.kind === "recorder").map((s) => s.id))); })
+      .catch(() => undefined);                 // kaynaklar alınamazsa düğme görünmez
+    return () => { live = false; };
+  }, [needSources, recorders]);
 
   // açılınca üst katmanda modal; odak pencereye (Gördüm varsa ona); kapanınca önceki öğeye geri
   const alive = useRef(true);
@@ -122,6 +135,10 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     v.currentTime = Math.max(0, t);
     void v.play().catch(() => undefined);
   };
+  // alarm anından 10 sn önceden kayıt cihazında izle (yalnız kayıt cihazı kanalındaki alarm)
+  const archiveHref = a.sourceId && a.channelId && recorders?.has(a.sourceId)
+    ? `/archive?source=${encodeURIComponent(a.sourceId)}&channel=${encodeURIComponent(a.channelId)}&t=${Math.max(0, Math.floor(a.firedAt - ARCHIVE_LEAD_S))}`
+    : null;
   const withImage = a.image ? "; olay resmi gösteriliyor." : ".";
   const caption = pending ? "Kayıt hazırlanıyor…"
     : playFailed === a.id ? "Kayıt oynatılamadı; olay resmi gösteriliyor."
@@ -234,6 +251,12 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
               <Link href={`/live?s=${a.sessionId}`} onClick={() => { if (mode === "active") onClose(); }}
                     className="pl-btn h-10 px-4 font-semibold">
                 Kamerayı aç
+              </Link>
+            )}
+            {archiveHref && (
+              <Link href={archiveHref} onClick={() => { if (mode === "active") onClose(); }}
+                    className="pl-btn h-10 px-4 font-semibold">
+                Kayıt cihazında izle
               </Link>
             )}
             {!a.falseAlarm && (

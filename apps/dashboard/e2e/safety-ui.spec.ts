@@ -131,6 +131,7 @@ interface FakeAlarm {
   id: string; sessionId: string | null; camera: string; type: string; startedAt: number; firedAt: number;
   endedAt: number | null; acked: boolean; notify: string; image: boolean;
   clip?: boolean; clipStartedAt?: number | null; falseAlarm?: boolean; clipPending?: boolean; clipFailed?: boolean;
+  sourceId?: string | null; channelId?: string | null;
 }
 
 /** Alarm penceresi (yeni onaylanmamış alarmda açılır) */
@@ -593,6 +594,52 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
 });
 
+test("alarm penceresi (sahte API): kayıt cihazı kanalındaki alarmda \"Kayıt cihazında izle\" alarm anından 10 sn önceye açar; eski kayıtta ve kamerada yok", async ({ page }) => {
+  await login(page);
+  const now = Math.floor(Date.now() / 1000);
+  let sourceAsks = 0;
+  await page.route(/\/api\/live\/sources$/, (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    sourceAsks += 1;
+    return route.fulfill({ json: [
+      { id: "cam", kind: "camera", name: "Kapı", brand: "custom", hasPassword: false },
+      { id: "nvr", kind: "recorder", name: "Ofis NVR", recorderBrand: "trassir", hasPassword: true },
+    ] });
+  });
+  const list: FakeAlarm[] = [];
+  const calls = await fakeFeed(page, list);
+  await page.goto("/notifications");
+  await expect.poll(() => calls.polls).toBeGreaterThan(0);
+  const base = { type: "hands_up", endedAt: null, acked: false, notify: "disabled", image: false, clip: false } as const;
+  list.push(
+    { ...base, id: "r1", sessionId: "s1", camera: "Ofis NVR · Kasa", startedAt: now - 33, firedAt: now - 30.4,
+      sourceId: "nvr", channelId: "kanal 3" },
+    { ...base, id: "o1", sessionId: "s2", camera: "Eski kayıt", startedAt: now - 63, firedAt: now - 60 },   // alan yok (eski sunucu)
+    { ...base, id: "c1", sessionId: "s3", camera: "Kapı", startedAt: now - 93, firedAt: now - 90, sourceId: "cam", channelId: null },
+  );
+  const modal = modalOf(page);
+  const watch = modal.getByRole("link", { name: "Kayıt cihazında izle" });
+  await expect(modal.getByTestId("alarm-counter")).toHaveText("1 / 3");
+  const t = Math.floor(now - 30.4 - 10);
+  await expect(watch).toHaveAttribute("href", `/archive?source=nvr&channel=kanal%203&t=${t}`);
+  // eski kayıt (sourceId yok) ve kamera kaynağı: düğme yok
+  await modal.getByRole("button", { name: "Sonraki alarm" }).click();
+  await expect(modal).toContainText("Eski kayıt");
+  await expect(watch).toHaveCount(0);
+  await modal.getByRole("button", { name: "Sonraki alarm" }).click();
+  await expect(modal).toContainText("Kapı");
+  await expect(watch).toHaveCount(0);
+  expect(sourceAsks).toBe(1);                                                  // kaynaklar bir kez istenir
+  // tıklayınca aynı sekmede kayıttan izleme açılır; etkin pencere küçülür (alarm şeritte kalır)
+  await modal.getByRole("button", { name: "Önceki alarm" }).click();
+  await modal.getByRole("button", { name: "Önceki alarm" }).click();
+  await watch.click();
+  await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(`/archive?source=nvr&channel=kanal%203&t=${t}`);
+  await expect(page.getByRole("heading", { name: "Kayıttan izleme" })).toBeVisible();
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toBeVisible();
+});
+
 test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üstünde açılır, tıklanır; Esc onaylamaz, alttakini kapatmaz", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;
@@ -806,7 +853,7 @@ test("Bu tarayıcıda: güvensiz adreste (başka bilgisayardan http) masaüstü 
   expect((await page.context().cookies()).some((c) => c.name === "bv_alarm_desktop")).toBe(false);
 });
 
-test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı izleme'den sonra; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
+test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı izleme ve Kayıttan izleme'den sonra; süzgeçler, sayılar, satırdan kayıt penceresi", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;
   const mk = (id: string, type: string, camera: string, firedAt: number, over: Partial<FakeAlarm> = {}): FakeAlarm => ({
@@ -838,11 +885,12 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
 
   await page.goto("/notifications");
   opened = true;
-  // kenar çubuğu: "Alarmlar", İzleme grubunda "Canlı izleme"den hemen sonra
+  // kenar çubuğu: İzleme grubunda "Canlı izleme", "Kayıttan izleme", "Alarmlar"
   const nav = page.getByRole("navigation", { name: "Ana menü" });
   const labels = await nav.locator("a, button[data-soon]").evaluateAll((els) => els.map((e) => e.textContent?.trim()));
-  expect(labels.indexOf("Alarmlar") - labels.indexOf("Canlı izleme")).toBe(1);
   expect(labels.indexOf("Canlı izleme")).toBe(0);
+  expect(labels.indexOf("Kayıttan izleme")).toBe(1);
+  expect(labels.indexOf("Alarmlar")).toBe(2);
   // onaylanmamış l1 alarm penceresini açar (her sayfada): küçültülür
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();
   await nav.getByRole("link", { name: "Alarmlar" }).click();
