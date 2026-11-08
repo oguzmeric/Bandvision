@@ -70,7 +70,7 @@
           "properties": { "enabled": { "type": "boolean" }, "seconds": { "type": "number", "minimum": 5, "maximum": 30 } } },
         "sensitivity": { "enum": ["low", "normal", "high"], "description": "Tanıma eşiği: low en az yanlış alarm, high en erken uyarı" },
         "ignoreZones": {
-          "description": "Hariç bölgeler (ocak, kaynak, sabit lamba): en çok 8 çokgen, her biri 3–12 köşe, koordinatlar 0–1. Bölge içindeki alev/duman alarm üretmez.",
+          "description": "Hariç bölgeler (ocak, kaynak, sabit lamba): en çok 8 çokgen, her biri 3–12 köşe, koordinatlar 0–1. Kutusunun merkezi bölge içinde kalan alev/duman alarm üretmez (bölge dışına taşıp merkezi dışarıda kalan alarm üretir).",
           "type": "array", "maxItems": 8,
           "items": {
             "type": "array", "minItems": 3, "maxItems": 12,

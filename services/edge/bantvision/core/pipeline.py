@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .detect_count import DetectCounter, DetectResult
+from .fire import FireAnalyzer, FireResult
 from .lineframe import LineFrame
 from .linescan import LineScanCounter
 from .people_track import anchor
@@ -39,6 +40,7 @@ class FrameResult:
     detect: DetectResult | None = field(default=None, repr=False)   # detect: izler, tespitler, çizgi (çizim)
     staff_events: list[tuple[int, int]] = field(default_factory=list)   # detect: personel (iz, +1 giriş/−1 çıkış)
     safety: Any = field(default=None, repr=False)   # safety: SafetyResult (iskeletler, etkin/yeni/biten alarmlar)
+    fire: FireResult | None = field(default=None, repr=False)   # fire: tespitler, etkin/yeni/biten alarmlar
 
 
 class Pipeline:
@@ -50,6 +52,7 @@ class Pipeline:
         self.linescan = LineScanCounter()       # §4.9 (countMode = "linescan")
         self.detect = DetectCounter()           # §4.10 (countMode = "detect"); model ilk karede yüklenir
         self.safety: Any = None                 # poz güvenlik (countMode = "safety"): SafetyAnalyzer, tembel oluşur
+        self.fire: FireAnalyzer | None = None   # yangın/duman (countMode = "fire"): tembel oluşur
         self.total_out = 0                      # detect: ters yönde geçenler (çıkış)
         self.total_staff_in = 0                 # detect §4.10 eki: personel geçişleri (giriş/çıkışa eklenmez)
         self.total_staff_out = 0
@@ -74,6 +77,8 @@ class Pipeline:
         self.linescan.reset()
         if self.safety is not None:
             self.safety.reset()
+        if self.fire is not None:
+            self.fire.reset()
         if reset_background:
             self.segmenter.reset()
 
@@ -103,6 +108,8 @@ class Pipeline:
         self.detect.reset()
         if self.safety is not None:
             self.safety.reset()
+        if self.fire is not None:
+            self.fire.reset()
 
     def finish(self, ts: float) -> list[CountEvent]:
         """Video sonu (§4.9): şerit taramada çizgiye yarım binmiş son ürünler merkezlerine göre sayılır."""
@@ -152,6 +159,8 @@ class Pipeline:
             frame = cv2.rotate(frame, _ROT[p.rotation])
         if p.countMode == "safety":
             return self._process_safety(frame, ts)
+        if p.countMode == "fire":
+            return self._process_fire(frame, ts)
         if p.countMode == "detect":
             return self._process_detect(frame, ts)
         full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
@@ -331,4 +340,21 @@ class Pipeline:
         r = self.safety.process(bgr, p, fps, ts)
         res = FrameResult(ts, [], [], [], [], calib, None, fps, 0, (bgr.shape[1], bgr.shape[0]), None)
         res.safety = r
+        return res
+
+    def _process_fire(self, frame: np.ndarray, ts: float) -> FrameResult:
+        """Yangın/duman erken uyarısı (countMode = "fire"): sayım yok; alarmlar FrameResult.fire'da. Analiz hızı sınırı
+        (fire_rules.MAX_FPS) canlı oturumda uygulanır."""
+        p = self.profile
+        bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        fps = self._update_fps(ts)
+        calib: list[tuple[str, Any]] = []
+        if self._calib is not None:                    # boş bant/örnek öğrenme gerekmez: hemen biter
+            calib.append((f"{self._calib}_done", p.diffThreshold if self._calib == "background" else 0.0))
+            self._calib = None
+        if self.fire is None:
+            self.fire = FireAnalyzer()
+        r = self.fire.process(bgr, ts, p)
+        res = FrameResult(ts, [], [], [], [], calib, None, fps, 0, (bgr.shape[1], bgr.shape[0]), None)
+        res.fire = r
         return res
