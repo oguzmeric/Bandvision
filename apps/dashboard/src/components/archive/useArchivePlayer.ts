@@ -193,9 +193,10 @@ export function useArchivePlayer(): ArchivePlayerApi {
           if (epoch !== epochRef.current || idRef.current !== id) return;
           failsRef.current = 0;
           setOffline(false);
-          setError(null);
+          // bayat yoklama (bir işlemden önce gönderilmiş) yeni işlemin hatasını silmez, durumu da ezmez
           if (seq < appliedRef.current) return;
           appliedRef.current = seq;
+          setError(null);
           show(v);
         })
         .catch((e: unknown) => {
