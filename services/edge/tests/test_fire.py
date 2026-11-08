@@ -343,6 +343,51 @@ def test_detector_errors_propagate() -> None:
         an.process(np.zeros((H, W, 3), np.uint8), 0.0, Profile.fire_watch())
 
 
+def test_detector_error_after_reset_keeps_pending_ended() -> None:
+    """reset() ile kesilen alarmlı bölüm, dedektör bir kez hata verse de kaybolmaz: sonraki başarılı `process` ya da
+    `end_all` bildirir (alarm günlüğü sonsuza dek açık kalmaz)."""
+    class Flaky(FakeFireDetector):
+        fail = False
+
+        def detect(self, bgr: np.ndarray, conf: dict[str, float]) -> list:  # type: ignore[override]
+            if self.fail:
+                self.fail = False
+                raise FireModelMissing("Yangın/duman modeli kurulu değil.")
+            return super().detect(bgr, conf)
+
+    for finish in ("process", "end_all"):
+        det = Flaky(flame_from(1.0))
+        an, p = FireAnalyzer(detector=det), Profile.fire_watch()
+        assert fired(run(an, det, p, 5.0, 0.0, 6.0))                   # alarm doğdu
+        an.reset()
+        det.fail = True
+        with pytest.raises(FireModelMissing):
+            run(an, det, p, 5.0, 6.0, 6.2)
+        if finish == "process":
+            res = run(an, det, p, 5.0, 6.2, 6.6)
+            assert res[0][1].ended == [(0, "fire", True)] and res[1][1].ended == []
+            assert an.end_all() == []
+        else:
+            assert an.end_all() == [(0, "fire", True)] and an.end_all() == []
+
+
+def test_detector_error_after_time_went_backwards_keeps_pending_ended() -> None:
+    det = type("Once", (FakeFireDetector,), {})(flame_from(1.0))
+    an, p = FireAnalyzer(detector=det), Profile.fire_watch()
+    run(an, det, p, 5.0, 0.0, 6.0)
+    orig = det.detect
+
+    def boom(_bgr: np.ndarray, _conf: dict[str, float]) -> list:
+        det.detect = orig  # type: ignore[method-assign]
+        raise FireModelMissing("Yangın/duman modeli kurulu değil.")
+
+    det.detect = boom  # type: ignore[method-assign]
+    with pytest.raises(FireModelMissing):
+        run(an, det, p, 5.0, 0.0, 0.2)                                  # video başa sardı, tanıma hata verdi
+    res = run(an, det, p, 5.0, 0.2, 0.6)
+    assert res[0][1].ended == [(0, "fire", True)]
+
+
 def test_profile_without_fire_block_uses_defaults() -> None:
     p = Profile.fire_watch()
     p.fire = None  # type: ignore[assignment]

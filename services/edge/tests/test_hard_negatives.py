@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import pathlib
 from typing import Any
 
@@ -18,13 +19,14 @@ from bantvision.live.alarms import AlarmStore
 from bantvision.live.hard_negatives import MAX_HARD_NEGATIVES, HardNegatives
 
 JPEG = b"\xff\xd8resim\xff\xd9"
+RAW = b"\xff\xd8cizimsiz-kare\xff\xd9"
 CLIP = b"webm-kaydi"
 
 
 def _alarm(st: AlarmStore, kind: str = "fire", fired: float = 2000.0, clip: bool = True,
-           pending: bool = False) -> dict[str, Any]:
+           pending: bool = False, raw: bytes | None = None) -> dict[str, Any]:
     a = st.add("s1", "Depo", kind, fired - 3.0, fired, JPEG, "disabled", clip_pending=pending, source_id="src1",
-               channel_id="2")
+               channel_id="2", raw_jpeg=raw)
     if clip:
         _write_clip(st, a["id"])
     return a
@@ -183,6 +185,67 @@ def test_missing_image_still_makes_a_sample_with_what_exists(tmp_path: pathlib.P
     a = st.add("s1", "Depo", "fire", 1.0, 2.0, None, "disabled")
     assert st.mark_false_alarm(a["id"])
     assert sorted(p.name for p in _folder(st, a["id"]).iterdir()) == ["meta.json"]
+
+
+def test_raw_frame_is_copied_as_frame_jpg_beside_the_drawn_image_and_undo_removes_it(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = _alarm(st, raw=RAW)
+    assert (st.images / f"{a['id']}.raw.jpg").read_bytes() == RAW
+    assert set(st.get(a["id"]) or {}) == set(_alarm(st)) and not any("raw" in k.lower() for k in a)  # alan yok
+    assert st.mark_false_alarm(a["id"])
+    d = _folder(st, a["id"])
+    assert sorted(p.name for p in d.iterdir()) == ["clip.webm", "frame.jpg", "image.jpg", "meta.json"]
+    assert (d / "frame.jpg").read_bytes() == RAW and (d / "frame.jpg").read_bytes() != (d / "image.jpg").read_bytes()
+    assert st.set_false_alarm(a["id"], False) and not d.exists()
+
+
+def test_failed_recopy_keeps_an_earlier_complete_sample(tmp_path: pathlib.Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    st = AlarmStore(tmp_path)
+    a = _alarm(st, raw=RAW)
+    assert st.mark_false_alarm(a["id"])
+    d = _folder(st, a["id"])
+    before = sorted(p.name for p in d.iterdir())
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise OSError("kilitli")
+
+    monkeypatch.setattr(hard_negatives.shutil, "copyfile", boom)
+    assert st.mark_false_alarm(a["id"])                           # yeniden işaretleme; kopyalama hata verir
+    assert sorted(p.name for p in d.iterdir()) == before and (d / "frame.jpg").read_bytes() == RAW
+
+
+def test_raw_frame_expires_with_the_record_and_orphans_are_matched_to_their_alarm(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    old = _alarm(st, fired=1000.0, raw=RAW)
+    new = _alarm(st, fired=1000.0 + 7 * 86400, raw=RAW)
+    orphan = st.images / f"{'c' * 32}.raw.jpg"
+    orphan.write_bytes(RAW)
+    for f in (orphan, st.images / f"{new['id']}.raw.jpg"):         # eski dosya zamanı: yalnız kayıt korur
+        os.utime(f, (500.0, 500.0))
+    assert st.expire(1000.0 + 8 * 86400) == 1
+    assert not (st.images / f"{old['id']}.raw.jpg").exists() and not (st.images / f"{old['id']}.jpg").exists()
+    assert (st.images / f"{new['id']}.raw.jpg").read_bytes() == RAW                # kaydı var: silinmez
+    assert not orphan.exists()
+
+
+def test_raw_frame_write_failure_only_warns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                            caplog: pytest.LogCaptureFixture) -> None:
+    st = AlarmStore(tmp_path)
+    real = pathlib.Path.write_bytes
+
+    def flaky(self: pathlib.Path, data: bytes) -> int:
+        if self.name.endswith(".raw.jpg"):
+            raise OSError("disk dolu")
+        return real(self, data)
+
+    monkeypatch.setattr(pathlib.Path, "write_bytes", flaky)
+    with caplog.at_level(logging.WARNING, logger="bantvision.live.alarms"):
+        a = st.add("s1", "Depo", "fire", 1.0, 2.0, JPEG, "disabled", raw_jpeg=RAW)
+    monkeypatch.undo()
+    assert a["image"] is True and st.get(a["id"]) is not None
+    assert not (st.images / f"{a['id']}.raw.jpg").exists()
+    assert any("çizimsiz" in r.getMessage() for r in caplog.records)
 
 
 def test_expired_alarm_keeps_its_hard_negative(tmp_path: pathlib.Path) -> None:

@@ -138,9 +138,16 @@ export function newZone(i) {
   return [[x, y], [x + 0.2, y], [x + 0.2, y + 0.2], [x, y + 0.2]].map(clampPt);
 }
 
-/** Yeni bölge ekler; sınırdaysa (8) değişmez */
+/** Yeni bölge ekler; sınırdaysa (8) değişmez. Yeri mevcut bir bölgeyle aynı olmayan ilk boş yuva (bölge silinince
+ * sıradaki yuva dolu kalabilir: yeni bölge onun tam üstüne binmesin); hepsi doluysa sıradaki yuva. */
 export function addZone(zones) {
-  return zones.length >= MAX_ZONES ? zones : [...zones, newZone(zones.length)];
+  if (zones.length >= MAX_ZONES) return zones;
+  const taken = new Set(zones.map((z) => JSON.stringify(z)));
+  for (let i = 0; i < MAX_ZONES; i++) {
+    const zone = newZone(i);
+    if (!taken.has(JSON.stringify(zone))) return [...zones, zone];
+  }
+  return [...zones, newZone(zones.length)];
 }
 
 export function removeZone(zones, z) {

@@ -135,7 +135,7 @@ interface FakeAlarm {
 }
 
 /** Alarm penceresi (yeni onaylanmamış alarmda açılır) */
-const modalOf = (page: Page) => page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+const modalOf = (page: Page) => page.getByRole("alertdialog", { name: "Alarm", exact: true });
 
 test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, tarih, Gördüm hatası", async ({ page }) => {
   await login(page);
@@ -191,7 +191,7 @@ test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, 
   await expect(warning.getByRole("link", { name: "Giriş yap" })).toHaveAttribute("href", "/login?next=%2Fnotifications");
   expect(warnedBeforePoll.slice(0, 3)).toEqual([false, false, false]);
   expect(polls).toBeGreaterThanOrEqual(3);
-  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toHaveCount(0);
+  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toHaveCount(0);
 
   // analiz sunucusu yok (502): ileti değişir
   feed = "502";
@@ -201,7 +201,7 @@ test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, 
   // akış düzelir: uyarı kalkar; 5 alarmdan 3'ü + "+2 alarm daha"; üç günlük alarmda tarih de görünür
   feed = "ok";
   await nextPoll();
-  const banner = page.getByRole("alert", { name: "Güvenlik alarmı" });
+  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
   await expect(banner).toBeVisible();
   await expect(warning).toHaveCount(0);
   // yeni alarmlar alarm penceresini açar; küçültülünce şerit kalır
@@ -280,7 +280,7 @@ test("izlenmeyen güvenlik kamerası (sahte API): 60 sn sonra şeritte uyarı; �
   await expect(page.getByText("Güvenlik kamerası izlenmiyor: Tezgah kamerası")).toBeVisible();
   await expect(page.getByTestId("alarm-banner")).toContainText("Kamera bağlantısı yok");
   // uyarı sarı (alarm kırmızısı değil) ve alarm şeridi rolü yok
-  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toHaveCount(0);
+  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toHaveCount(0);
   await expect(warnings.first()).toHaveClass(/bg-warn-50/);
 
   // şerit yapışkan: kısa pencerede sayfanın en altına inilince de görünür
@@ -309,7 +309,7 @@ test("alarm şeridi yapışkan: canlı sayfada aşağı kaydırınca alarm gör�
     id: "z1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 3, firedAt: now,
     endedAt: null, acked: false, notify: "disabled", image: false }] }));
   await page.goto("/live?s=abc123");
-  const banner = page.getByRole("alert", { name: "Güvenlik alarmı" });
+  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Eller yukarı — Tezgah kamerası");
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();                 // pencere küçültülür, şerit kalır
   await expect(modalOf(page)).toHaveCount(0);
@@ -453,7 +453,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   // Esc = Küçült (asla Gördüm değil): pencere kapanır, şerit kalır, onay isteği yok
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
-  const banner = page.getByRole("alert", { name: "Güvenlik alarmı" });
+  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Eller yukarı — Tezgah kamerası");
   expect(calls.acks).toEqual([]);
   // aynı alarmlar sonraki yoklamalarda pencereyi yeniden açmaz (bu sekmede gösterildi; sayfa yenilense de)
@@ -637,7 +637,7 @@ test("alarm penceresi (sahte API): kayıt cihazı kanalındaki alarmda \"Kayıt 
   await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(`/archive?source=nvr&channel=kanal%203&t=${t}`);
   await expect(page.getByRole("heading", { name: "Kayıttan izleme" })).toBeVisible();
   await expect(modal).toHaveCount(0);
-  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toBeVisible();
+  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toBeVisible();
 });
 
 test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üstünde açılır, tıklanır; Esc onaylamaz, alttakini kapatmaz", async ({ page }) => {

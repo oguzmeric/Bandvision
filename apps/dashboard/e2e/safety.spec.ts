@@ -22,10 +22,10 @@ test("güvenlik: deneme alarmı şeritte görünür ve Gördüm ile kapanır; ay
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
 
   await page.getByRole("button", { name: "Deneme alarmı" }).click();
-  const banner = page.getByRole("alert", { name: "Güvenlik alarmı" });
+  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Deneme alarmı", { timeout: 10_000 });
   // alarm penceresi açılır (kamerasız deneme alarmı: kayıt ve resim yok); Gördüm ile pencere ve şerit kapanır
-  const modal = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toBeHidden();
@@ -53,7 +53,7 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await page.waitForTimeout(3000);                                     // ön kayıt dolsun (okuyucu, 10 kare/sn)
   const panel = page.getByRole("region", { name: "Güvenlik", exact: true });
   await panel.getByRole("button", { name: "Deneme alarmı", exact: true }).click();
-  const modal = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI", { timeout: 10_000 });
   await expect(modal).toContainText("Tezgah kamerası");
   const video = modal.getByTestId("alarm-video");
@@ -81,7 +81,7 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await expect(modal.getByTestId("alarm-timeline").getByRole("button", { name: /^Alarm anı · 0:0\d$/ })).toBeVisible();
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toBeHidden();
-  await expect(page.getByRole("alert", { name: "Güvenlik alarmı" })).toBeHidden();
+  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toBeHidden();
   await page.getByRole("button", { name: "Ayarla", exact: true }).click();
   await expect(page.getByRole("group", { name: "Güvenlik kuralları" })).toBeVisible();
   await expect(page.getByLabel("Eller yukarı süresi")).toHaveValue("3");

@@ -39,8 +39,8 @@ Testler: `tools/tests/test_fire_train.py` (PyTorch gerektirmez; numpy/OpenCV ist
    python tools/fire_train/prepare_data.py --dfire <D-Fire kökü> --firenet <FireNet kökü> --out <veri kökü>
    ```
 
-   Kullanıcı izniyle toplanmış zor örneklerin ham kareleri varsa `--negatives <klasör>` eklenir
-   (`docs/14-yangin-duman.md` §8). Özet tabloda bölüm başına görüntü, negatif ve kutu sayıları ile atılan `PublicDataset` sayısı yazar. Sınıf düzenini
+   Kullanıcı izniyle toplanmış zor örnekler varsa `--negatives <veri>/live/hard-negatives` eklenir: her örneğin çizimsiz
+   `frame.jpg`'si negatif görüntü olur, kutuları çizili `image.jpg` atlanır (`docs/14-yangin-duman.md` §8). Özet tabloda bölüm başına görüntü, negatif ve kutu sayıları ile atılan `PublicDataset` sayısı yazar. Sınıf düzenini
    bir kez doğrulamak için `--include-public` ile ayrı bir klasöre hazırlayıp toplam kutu sayılarını D-Fire README'siyle
    (fire 14.692, smoke 11.865) karşılaştırın; sayılar yer değiştirmişse `DFIRE_CLASSES` ters demektir.
 4. **Eğitim** (YOLOX kaynak klasöründe; `FIRE_DATA_DIR=<veri kökü>`):
@@ -49,7 +49,9 @@ Testler: `tools/tests/test_fire_train.py` (PyTorch gerektirmez; numpy/OpenCV ist
    python tools/train.py -f <depo>/tools/fire_train/exps/fire_yolox_s.py -d 1 -b 16 --fp16 -o -c yolox_s.pth
    ```
 
-   6 GB ekran kartında `-b 8` gerekebilir. Çıktı `YOLOX_outputs/fire_yolox_s/best_ckpt.pth`.
+   6 GB ekran kartında `-b 8` gerekebilir. Çıktı `YOLOX_outputs/fire_yolox_s/best_ckpt.pth`. Kabul için eğitilecek
+   modelde `FIRE_EVAL_TEST=1` kullanılmaz: en iyi ağırlık test bölümüne göre seçilir ve kabuldeki test mAP50'si
+   olduğundan iyi çıkar.
 5. **ONNX** (eğitim ortamında):
 
    ```
@@ -76,4 +78,6 @@ Testler: `tools/tests/test_fire_train.py` (PyTorch gerektirmez; numpy/OpenCV ist
 - FIRESENSE pozitif videolarının **≥ %80**'inde Normal hassasiyette **15 sn** içinde alarm.
 - Negatif videolarda Normal hassasiyette **0** yanlış alarm.
 
-`eval_fire.py` bu üç kapıyı yazar; çıkış kodu 0 yalnız hepsi geçince (1 kaldı, 2 girdi hatası).
+`eval_fire.py` bu üç kapıyı yazar; çıkış kodu 0 yalnız iki bölüm de (`--coco` ve `--manifest`) ölçülüp hepsi geçince
+(1 kaldı, 2 girdi hatası). Yalnız biri verilirse sonuç "KISMİ — … ölçülmedi" olur ve çıkış kodu 2'dir: kısmi ölçüm
+kabul sayılmaz.

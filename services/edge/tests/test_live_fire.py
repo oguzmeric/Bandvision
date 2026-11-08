@@ -240,6 +240,34 @@ def test_shared_fire_reports_missing_model_in_turkish_without_download() -> None
     assert fire.error == MISSING and fire.status() == {"state": "error", "device": None, "note": MISSING}
 
 
+def test_missing_fire_model_logs_warning_once_then_debug_and_other_errors_stay_error(
+        caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from bantvision.live.api import SharedFire, SharedPose
+
+    now, errors = [1000.0], [FireModelMissing(MISSING), FireModelMissing(MISSING), RuntimeError("bozuk dosya")]
+
+    def loader(_choice: str) -> Any:
+        raise errors.pop(0)
+
+    fire = SharedFire(loader=loader, clock=lambda: now[0])
+    pose = SharedPose(loader=lambda _c: (_ for _ in ()).throw(RuntimeError("bozuk")), clock=lambda: now[0])
+    frame = np.zeros((8, 8, 3), np.uint8)
+    with caplog.at_level(logging.DEBUG, logger="bantvision.live.api"):
+        for _ in range(3):
+            fire.detect(frame, {"fire": 0.5})
+            wait_for(lambda: fire.state == "error" and not fire._loading, timeout=10)
+            now[0] += 61.0                                       # yeniden deneme süresi geçti
+        assert pose.estimate(frame) is None
+        wait_for(lambda: pose.state == "error" and not pose._loading, timeout=10)
+    levels = [(r.levelno, r.getMessage().split(" [")[0]) for r in caplog.records if r.name == "bantvision.live.api"
+              and ("Yangın/duman" in r.getMessage() or "Poz modeli" in r.getMessage())]
+    assert fire.error.startswith("Yangın/duman modeli yüklenemedi: ")
+    assert levels == [(logging.WARNING, MISSING), (logging.DEBUG, MISSING), (logging.ERROR, fire.error),
+                      (logging.ERROR, pose.error)]                # başka hata ve diğer modeller ERROR kalır
+
+
 def test_missing_model_session_runs_unhealthy_then_starts_when_model_appears(
         client: TestClient, monkeypatch: pytest.MonkeyPatch, video: pathlib.Path) -> None:
     """Model yokken oturum canlı ama sağlıksız ("kurulu değil"); model sonradan kurulunca (ortak model yeniden denenip
@@ -535,6 +563,14 @@ def test_profile_rejects_malformed_fire_block(client: TestClient, fire: Any) -> 
     assert r.status_code == 422 and r.json()["detail"].startswith("Yangın/duman ayarı geçersiz: "), r.text
 
 
+def test_fire_seconds_message_names_the_rule_like_panel_and_video(client: TestClient) -> None:
+    body = client.post("/api/v1/live/profiles", json={"preset": "fire"}).json()
+    for block, msg in (({"fire": {"seconds": 1}}, "Yangın süresi 2–10 sn arasında bir sayı olmalı."),
+                       ({"smoke": {"seconds": 31}}, "Duman süresi 5–30 sn arasında bir sayı olmalı.")):
+        r = client.post("/api/v1/live/profiles", json={**body, "fire": block})
+        assert r.status_code == 422 and r.json()["detail"] == f"Yangın/duman ayarı geçersiz: {msg}", r.text
+
+
 @pytest.mark.parametrize("seconds", ["NaN", "Infinity", "1e999"])
 def test_profile_rejects_non_finite_fire_values(client: TestClient, seconds: str) -> None:
     body = client.post("/api/v1/live/profiles", json={"preset": "fire"}).json()
@@ -654,3 +690,47 @@ def test_fire_alarm_image_has_the_alarm_box(client: TestClient, monkeypatch: pyt
     a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
     img = cv2.imdecode(np.frombuffer(mgr.alarms.image_bytes(a["id"]) or b"", np.uint8), cv2.IMREAD_COLOR)
     assert img is not None and _orange(img, WIDE) > 50
+
+
+def test_fire_alarm_keeps_an_undrawn_frame_beside_the_image_and_expire_removes_it(
+        client: TestClient, monkeypatch: pytest.MonkeyPatch, video: pathlib.Path) -> None:
+    mgr = client.app.state.live
+    sess, _sid = _fire_session(client, monkeypatch, video, det=ConstFire(box=WIDE))
+    a = wait_for(lambda: client.get("/api/v1/live/alarms?active=1").json(), timeout=30)[0]
+    sess.stop()
+    raw_path = mgr.alarms.images / f"{a['id']}.raw.jpg"
+    raw = cv2.imdecode(np.frombuffer(raw_path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+    drawn = cv2.imdecode(np.frombuffer(mgr.alarms.image_bytes(a["id"]) or b"", np.uint8), cv2.IMREAD_COLOR)
+    assert raw.shape[:2] == (H, W)                                     # kaynak çözünürlüğü, ölçeklenmemiş
+    assert _orange(drawn, WIDE) > 50 and _orange(raw, WIDE) == 0       # resim çizili, kare çizimsiz
+    assert "raw" not in json.dumps(mgr.alarms.get(a["id"]))            # kayıtta yeni alan yok
+    assert mgr.alarms.mark_false_alarm(a["id"])
+    sample = mgr.alarms.root / "hard-negatives" / a["id"]
+    assert (sample / "frame.jpg").read_bytes() == raw_path.read_bytes()
+    assert mgr.alarms.expire(a["firedAt"] + 8 * 86400) == 1
+    assert not raw_path.exists() and mgr.alarms.image_bytes(a["id"]) is None
+    assert (sample / "frame.jpg").is_file()                             # zor örnek saklamadan bağımsız
+
+
+def test_safety_alarm_sink_is_called_without_raw_frame() -> None:
+    """Poz güvenlik yolu değişmez: alıcı eski 4 argümanla çağrılır; çizimsiz kareyi yalnız yangın/duman verir."""
+    from bantvision.core.fire import FireResult
+    from bantvision.core.safety import SafetyResult
+    from bantvision.live.session import LiveSession
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    s = LiveSession("t", lambda: "yok.mp4", Profile.fire_watch(),
+                    alarm_sink=lambda *a, **k: calls.append((a, k)) or [])
+    frame = np.zeros((H, W, 3), np.uint8)
+    try:
+        s._render = lambda f, _p, _r: f                                 # type: ignore[method-assign]
+        safety = SimpleNamespace(safety=SafetyResult(fired=[SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)]),
+                                 fire=None)
+        fire = SimpleNamespace(safety=None, fire=FireResult(fired=[FireAlarm("fire", 0, (0, 0, 1, 1), 0.0, 3.0)]))
+        s._notify_alarms(safety, frame, s.profile)                      # type: ignore[arg-type]
+        s._notify_alarms(fire, frame, s.profile)                        # type: ignore[arg-type]
+    finally:
+        s.stop()
+    (sa, sk), (fa, fk) = calls
+    assert len(sa) == 4 and sk == {}                                    # güvenlik: eski çağrı biçimi aynen
+    assert len(fa) == 4 and set(fk) == {"raw_jpeg"} and fk["raw_jpeg"][:2] == b"\xff\xd8"

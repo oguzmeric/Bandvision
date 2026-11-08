@@ -117,18 +117,21 @@ sürümü bu listeyle birlikte arşivlenir.
 
 ## 8. Zor örnekler: yanlış alarmların eğitime katılması
 
-- Bir yangın/duman alarmı "Yanlış alarm" işaretlenince alarm resmi ve olay kaydı bu bilgisayarda analiz sunucusunun veri
-  klasöründe `live/hard-negatives/<alarm kimliği>/` altına kopyalanır: `image.jpg`, `clip.webm` (yazılmışsa) ve
+- Yangın/duman alarmı doğduğunda alarm resminin (kutular çizili) yanında o karenin **çizimsiz** hâli de bu bilgisayarda
+  saklanır (alarm resmiyle birlikte 7 gün; alarm kaydında ayrı alanı yoktur, panelde gösterilmez).
+- Bir yangın/duman alarmı "Yanlış alarm" işaretlenince bu bilgisayarda analiz sunucusunun veri klasöründe
+  `live/hard-negatives/<alarm kimliği>/` altına kopyalanır: `frame.jpg` (çizimsiz alarm karesi; **eğitimde kullanılan**),
+  `image.jpg` (kutuları çizili alarm resmi; insan içindir), `clip.webm` (olay kaydı, yazılmışsa; kutuları çizili) ve
   `meta.json` (`id`, `type`, `camera`, `firedAt`, `sourceId`, `channelId`). İşaret geri alınırsa klasör silinir; en çok
   500 alarm tutulur (en eskiler silinir). Hiçbir yere gönderilmez; panelde ayrı ekranı yoktur.
-- **Dikkat:** alarm resmi ve olay kaydı **kutuları çizili** hâlidir. Eğitime doğrudan katılmaz (`prepare_data.py`
-  zor örnek klasöründeki `image.jpg`'yi atlar). Eğitim için **ham kare** gerekir:
-  1. `meta.json`'daki kaynak, kanal ve `firedAt` ile o anın ham görüntüsü kayıt cihazından alınır (panelde Kayıttan
-     izleme; TRASSIR'da dışa aktarma) ya da aynı sahne yeniden kaydedilir.
-  2. Alarmın olduğu birkaç saniyeden birkaç kare (aynı sahneden çok sayıda neredeyse aynı kare değil) JPEG olarak bir
-     klasöre çıkarılır.
-  3. `prepare_data.py --negatives <klasör>` bu kareleri kutusuz (negatif) görüntü olarak eğitim havuzuna katar
-     (`sources.csv`'de "Zor örnek").
+- **Eğitime katma:** zor örnek klasörü doğrudan verilir:
+
+  ```
+  python tools/fire_train/prepare_data.py ... --negatives <veri>/live/hard-negatives
+  ```
+
+  `prepare_data.py` her örnekten çizimsiz `frame.jpg`'yi kutusuz (negatif) görüntü olarak eğitim havuzuna katar
+  (`sources.csv`'de "Zor örnek"); kutuları çizili `image.jpg`'yi atlar ve sayısını yazar.
 - Müşteri kamerası görüntüsü **yalnızca müşterinin açık izniyle** eğitime alınır ve elle taşınır; eğitim ortamı dışında
   saklanmaz, model ya da veriyle birlikte dağıtılmaz.
 - Zor örneklerle yeni sürüm (v2) ayrı bir iştir: aynı kabul hedefleri ve ölçüm, ayrıca toplanan zor örneklerin

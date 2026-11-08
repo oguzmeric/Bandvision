@@ -51,7 +51,7 @@ export default function AlarmBanner() {
         </p>
       ))}
       {alarms.length > 0 && (
-        <div role="alert" aria-label="Güvenlik alarmı" className="grid gap-2">
+        <div role="alert" aria-label="Alarm" className="grid gap-2">
           {alarms.slice(0, SHOWN).map((a) => {
             const label = ALARM_LABELS[a.type];
             return (

@@ -128,12 +128,15 @@ def test_negatives_skip_drawn_alarm_images(tmp_path: pathlib.Path) -> None:
     png(root / "buhar/kare1.png", 320, 240)
     jpeg(root / "0123/image.jpg", 640, 360)                       # uygulamanın zor örnek klasörü: kutular çizili
     (root / "0123/meta.json").write_text("{}")
-    jpeg(root / "0123/kare_ham.jpg", 640, 360)
+    jpeg(root / "0123/frame.jpg", 1280, 720)                      # çizimsiz alarm karesi (eğitim karesi)
+    (root / "0123/clip.webm").write_bytes(b"webm")
+    jpeg(root / "0456/image.jpg", 640, 360)                       # eski örnek: yalnız çizili resim
+    (root / "0456/meta.json").write_text("{}")
     st = prep.Stats()
     items = prep.read_negatives(root, st)
-    assert [(i.path.name, i.boxes, i.source) for i in items] == [("kare_ham.jpg", [], "negatives"),
-                                                                 ("kare1.png", [], "negatives")]
-    assert st.drawn_skipped == 1
+    assert [(i.path.parent.name, i.path.name, (i.width, i.height), i.boxes, i.source) for i in items] == [
+        ("0123", "frame.jpg", (1280, 720), [], "negatives"), ("buhar", "kare1.png", (320, 240), [], "negatives")]
+    assert st.drawn_skipped == 2
     with pytest.raises(prep.InputError):
         prep.read_negatives(tmp_path / "yok", st)
 
@@ -282,6 +285,36 @@ def test_gates_and_markdown() -> None:
     assert "| **Ortalama (mAP50)** | **0,600** | |" in md
     assert "Yangın: Düşük 0,50, Normal 0,35, Yüksek 0,25" in md
     assert md.rstrip().endswith("Sonuç: GEÇTİ")
+
+
+def test_partial_measurement_is_never_a_pass() -> None:
+    good = ev.aggregate([ev.video_outcome("fire", 0.0, [(4.0, "fire")]) for _ in range(4)]
+                        + [ev.video_outcome("smoke", 0.0, [])] + [ev.video_outcome("none", 0.0, [])])
+    img_ok, img_bad = {"fire": 0.7, "smoke": 0.5, "mean": 0.6}, {"fire": 0.5, "smoke": 0.4, "mean": 0.45}
+    assert ev.verdict(img_ok, good) == ("Sonuç: GEÇTİ", 0)
+    assert ev.verdict(img_bad, good) == ("Sonuç: KALDI", 1)
+    assert ev.verdict(img_ok, None) == ("Sonuç: KISMİ — olay düzeyi (videolar) ölçülmedi", 2)
+    assert ev.verdict(None, good) == ("Sonuç: KISMİ — görüntü düzeyi (mAP50) ölçülmedi", 2)
+    assert ev.verdict(img_bad, None) == (
+        "Sonuç: KISMİ — olay düzeyi (videolar) ölçülmedi; ölçülen kapılardan en az biri KALDI", 2)
+    md = ev.markdown("m.onnx", "ab" * 32, (img_ok, "11 nokta", {"fire": 3, "smoke": 2}), None, None)
+    assert "- GEÇTİ — mAP50" in md and md.rstrip().endswith("Sonuç: KISMİ — olay düzeyi (videolar) ölçülmedi")
+
+
+def test_main_partial_run_returns_2(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+                                    capsys: pytest.CaptureFixture[str]) -> None:
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"onnx")
+    coco = tmp_path / "instances_test.json"
+    coco.write_text(json.dumps({"images": [], "annotations": [], "categories": []}), encoding="utf-8")
+    fake = types.ModuleType("bantvision.core.fire_model")
+    fake.FireDetector = lambda **_k: object()                                    # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "bantvision.core.fire_model", fake)
+    monkeypatch.setattr(ev, "read_coco", lambda _p: {"images": [], "annotations": []})
+    monkeypatch.setattr(ev, "predict_images", lambda *_a: [])
+    monkeypatch.setattr(ev, "ap50", lambda *_a: ({"fire": 0.9, "smoke": 0.9, "mean": 0.9}, "11 nokta"))
+    assert ev.main(["--model", str(model), "--coco", str(coco)]) == 2              # olay bölümü yok: kabul değil
+    assert capsys.readouterr().out.rstrip().endswith("Sonuç: KISMİ — olay düzeyi (videolar) ölçülmedi")
 
 
 def test_suggest_threshold() -> None:

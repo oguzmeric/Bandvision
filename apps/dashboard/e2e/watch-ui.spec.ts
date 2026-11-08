@@ -139,12 +139,12 @@ test("izleme: alarmlı kutuya tıklayınca alarm penceresi açılır", async ({ 
   await page.route("**/api/live/alarms?active=1", (r) => r.fulfill({ json: [ALARM] }));
   await login(page);
   // yeni alarm penceresi kendiliğinden açılır: küçült, sonra kutuya tıklayıp yeniden aç
-  const dlg = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const dlg = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(dlg).toBeVisible();
   await dlg.getByRole("button", { name: "Küçült" }).click();
   await expect(dlg).toBeHidden();
   await page.getByTestId("watch-tile").nth(1).click();
-  await expect(page.getByRole("alertdialog", { name: "Güvenlik alarmı" })).toBeVisible();
+  await expect(page.getByRole("alertdialog", { name: "Alarm", exact: true })).toBeVisible();
   // alarm etiketi gerçek bir düğmedir: klavyeyle de alarm penceresi açılır
   await dlg.getByRole("button", { name: "Küçült" }).click();
   await expect(dlg).toBeHidden();
@@ -359,7 +359,7 @@ test("izleme: tek kamerada Esc üstteki alarm penceresini kapatır, tek kameray�
     clipFailed: false, clipStartedAt: null };
   await page.route("**/api/live/alarms?active=1", (r) => r.fulfill({ json: [ALARM] }));
   await login(page);
-  const dlg = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const dlg = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(dlg).toBeVisible();
   await dlg.getByRole("button", { name: "Küçült" }).click();
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");

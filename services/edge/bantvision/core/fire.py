@@ -118,10 +118,8 @@ class FireAnalyzer:
         cfg: FireConfig = getattr(profile, "fire", None) or FireConfig()
         bgr = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         h, w = bgr.shape[:2]
-        res = FireResult(ended=self._reset_ended)
-        self._reset_ended = []
         if self._last_ts is not None and ts < self._last_ts:      # zaman geri gitti (video başa sardı): baştan
-            res.ended += self._close(only_fired=False)
+            self._reset_ended += self._close(only_fired=False)
             self._clear()
         self._last_ts = ts
 
@@ -129,8 +127,13 @@ class FireAnalyzer:
         ref = self.history.push(ts, small)
         voting = ref is not None and changed_ratio(small, ref) <= GLOBAL_CHANGE_MAX
         conf = class_conf(cfg)
+        dets = self.detector.detect(bgr, conf) if conf else []    # iki kural kapalı: model hiç çalışmaz
+        # Bekleyen bitişler (reset / zaman geri gitti) ancak tanıma başarılı olunca sonuca taşınır: dedektör hata
+        # verirse analizörde kalır, sonraki başarılı `process` ya da `end_all` bildirir (alarm açık kalmaz).
+        res = FireResult(ended=self._reset_ended)
+        self._reset_ended = []
         pos: dict[str, list[Box]] = {k: [] for k in conf}
-        for d in self.detector.detect(bgr, conf) if conf else []:   # iki kural kapalı: model hiç çalışmaz
+        for d in dets:
             if d.cls not in conf or d.score < conf[d.cls]:
                 continue
             px = (float(d.x1), float(d.y1), float(d.x2), float(d.y2))

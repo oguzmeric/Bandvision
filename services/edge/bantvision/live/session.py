@@ -165,13 +165,13 @@ class LiveSession:
     def __init__(self, name: str, open_url: Callable[[], str], profile: Profile,
                  keep_alive: Callable[[str], None] | None = None, realtime_file: bool = True,
                  detector: Any | None = None, pose: Any | None = None, fire: Any | None = None,
-                 alarm_sink: Callable[[LiveSession, list[Any], list[tuple[int, str, bool]], bytes | None],
-                                      list[str] | None] | None = None,
+                 alarm_sink: Callable[..., list[str] | None] | None = None,
                  clip_sink: Callable[[ClipJob], None] | None = None,
                  clip_state: Callable[[Sequence[str], str], None] | None = None) -> None:
         """`detector`: kişi tanıma modeli, `pose`: poz modeli, `fire`: yangın/duman modeli (hepsi birden çok kamerada
-        ortak; yoksa ilk karede yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi)`: poz güvenlik
-        ve yangın/duman alarmları (çalışma iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının
+        ortak; yoksa ilk karede yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi[, raw_jpeg=])`:
+        poz güvenlik ve yangın/duman alarmları; yalnız yangın/duman alarmında `raw_jpeg` (çizimsiz kare, zor örnek için)
+        verilir, güvenlik hiç vermez (çalışma iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının
         kimliklerini döndürür; çalışma döngüsü biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı
         yazıcısı (engellemez); verilirse güvenlik/yangın oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım
         oturumunda tampon yok, ek iş yok).
@@ -668,6 +668,7 @@ class LiveSession:
         if sr is None or not (sr.fired or sr.ended) or self._alarm_sink is None:
             return
         jpeg: bytes | None = None
+        raw: bytes | None = None
         if sr.fired:
             with self._lock:
                 self._last_alarm_at = time.time()
@@ -676,9 +677,18 @@ class LiveSession:
                 jpeg = buf.tobytes() if ok else None
             except Exception:  # noqa: BLE001
                 _LOG.exception("Alarm resmi hazırlanamadı (oturum %s)", self.id[:8])
+            if sr is r.fire:                                # yangın/duman: çizimsiz kare (yanlış alarmda zor örnek)
+                try:
+                    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                    raw = buf.tobytes() if ok else None
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("Alarm karesi (çizimsiz) hazırlanamadı (oturum %s)", self.id[:8])
         ids: list[str] | None = None
         try:
-            ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg)
+            if raw is not None:
+                ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg, raw_jpeg=raw)
+            else:                                           # güvenlik (ve resimsiz yangın): eski çağrı biçimi aynen
+                ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg)
         except Exception:  # noqa: BLE001
             _LOG.exception("Alarm alıcısı hata verdi (oturum %s)", self.id[:8])
         if sr.fired and ids:                                # aynı karedeki alarmlar tek kaydı paylaşır

@@ -98,6 +98,19 @@ test("addZone: 0,2'lik kare, üst üste binmeden; en çok 8", () => {
   assert.equal(new Set(boxes.map(String)).size, MAX_ZONES);                 // her bölge ayrı yerde
 });
 
+test("addZone: silinen bölgenin yuvası yeniden kullanılır, kalan bölgenin üstüne binmez", () => {
+  const z0 = newZone(0), z1 = newZone(1);
+  const after = addZone(removeZone([z0, z1], 0));
+  assert.equal(after.length, 2);
+  assert.deepEqual(after[0], z1);
+  assert.notDeepEqual(after[1], z1);
+  assert.deepEqual(after[1], z0);                                            // ilk boş yuva
+  const moved = [newZone(0), newZone(2)];                                    // ortada boş yuva
+  assert.deepEqual(addZone(moved)[2], newZone(1));
+  const custom = Array.from({ length: 7 }, (_, i) => newZone(i));            // dolu yuvalar dışında köşesi taşınmış bölge
+  assert.deepEqual(addZone(custom)[7], newZone(7));
+});
+
 test("removeZone / moveVertex: kırpılır ve yalnız o köşe değişir", () => {
   const zones = [newZone(0), newZone(1)];
   assert.deepEqual(removeZone(zones, 0), [zones[1]]);

@@ -15,9 +15,10 @@ Girdi düzeni:
   tabidir: `--include-public` verilmezse atılır, sayısı raporlanır.
 - FireNet: altındaki her `*.xml` (VOC; `size/width`, `size/height`, `object/name` = "fire", `bndbox`); görüntü xml'deki
   `filename` adıyla xml'in klasöründe ya da kardeş `images` klasöründe, yoksa xml ile aynı adla aranır.
-- `--negatives`: kutusuz (negatif) eğitim görüntüleri, ör. yanlış alarmlardan elde edilen ham kareler (zor örnek; bkz.
-  docs/14-yangin-duman.md). Klasör altındaki her JPEG/PNG kutusuz görüntü olur. Uygulamanın zor örnek klasöründeki
-  `image.jpg` (yanında `meta.json`) alarm resmidir ve üstünde kutular çizilidir: eğitimi bozacağı için atlanır, sayılır.
+- `--negatives`: kutusuz (negatif) eğitim görüntüleri, ör. uygulamanın zor örnek klasörü `<veri>/live/hard-negatives`
+  (bkz. docs/14-yangin-duman.md). Klasör altındaki her JPEG/PNG kutusuz görüntü olur. Zor örnek klasöründe (yanında
+  `meta.json`) eğitim karesi çizimsiz `frame.jpg`'dir; `image.jpg` alarm resmidir ve üstünde kutular çizilidir: eğitimi
+  bozacağı için atlanır, sayılır.
 
 Bölümleme: D-Fire `test` → `test`; D-Fire `train`, FireNet'in ve `--negatives`'in tamamı eğitim havuzudur, havuzdan tohumlu `--val` oranı
 (varsayılan %10) → `val`, kalanı `train`. Çıktı: `ÇIKIŞ/annotations/instances_{train,val,test}.json`, `ÇIKIŞ/sources.csv`
@@ -223,8 +224,8 @@ def read_firenet(root: pathlib.Path, stats: Stats) -> list[Item]:
 
 
 def read_negatives(root: pathlib.Path, stats: Stats) -> list[Item]:
-    """Klasör altındaki her JPEG/PNG kutusuz görüntü. Uygulamanın zor örnek klasöründeki alarm resmi (`image.jpg`,
-    yanında `meta.json`) kutuları çizili olduğundan atlanır ve sayılır."""
+    """Klasör altındaki her JPEG/PNG kutusuz görüntü. Uygulamanın zor örnek klasöründe (`meta.json` olan klasör) çizimsiz
+    alarm karesi `frame.jpg` kullanılır; alarm resmi `image.jpg` kutuları çizili olduğundan atlanır ve sayılır."""
     if not root.is_dir():
         raise InputError("Negatif görüntü klasörü bulunamadı")
     items: list[Item] = []
@@ -301,7 +302,7 @@ def report(summary: dict[str, dict[str, Any]], stats: Stats, include_public: boo
     if stats.bad_lines or stats.bad_boxes:
         print(f"Bozuk etiket satırı/dosyası: {stats.bad_lines}, alanı sıfır kutu: {stats.bad_boxes}")
     if stats.drawn_skipped:
-        print(f"Kutuları çizili alarm resmi atlandı (zor örnek; ham kare kullanın): {stats.drawn_skipped}")
+        print(f"Kutuları çizili alarm resmi atlandı (zor örnek; eğitimde çizimsiz frame.jpg kullanılır): {stats.drawn_skipped}")
     for name, n in sorted(stats.unknown_names.items()):
         print(f"Bilinmeyen VOC sınıfı atlandı: {name!r} × {n}")
 

@@ -29,7 +29,8 @@ başladığı an. Pozitif videoda olay türündeki ilk alarm `start ≤ t ≤ st
 videodaki her alarm yanlış alarmdır.
 
 Kabul (v1): mAP50 (iki sınıf ortalaması) ≥ 0,60; Normal hassasiyette pozitif videoların ≥ %80'i 15 sn içinde alarm;
-Normal hassasiyette negatif videolarda 0 yanlış alarm. Çıkış kodu: 0 geçti, 1 kaldı, 2 girdi hatası. Çıktı Türkçe
+Normal hassasiyette negatif videolarda 0 yanlış alarm. Çıkış kodu: 0 geçti (iki bölüm de ölçüldü, üç kapı geçti), 1 kaldı,
+2 girdi hatası ya da kısmi ölçüm (`--coco` ya da `--manifest` verilmedi: "Sonuç: KISMİ"). Çıktı Türkçe
 Markdown (ekrana ve `--out`). Veriler ve ölçüm dosyaları depoya konmaz.
 """
 from __future__ import annotations
@@ -411,6 +412,19 @@ def gates(image: dict[str, Any] | None, normal: dict[str, Any] | None) -> list[t
     return g
 
 
+def verdict(image: dict[str, Any] | None, normal: dict[str, Any] | None) -> tuple[str, int]:
+    """Sonuç satırı ve çıkış kodu. Bir bölüm ölçülmediyse kabul verilemez: "KISMİ — … ölçülmedi", 2 (ölçülen kapılardan
+    biri kaldıysa satırda belirtilir). İki bölüm de ölçüldüyse "GEÇTİ"/0 ya da "KALDI"/1."""
+    g = gates(image, normal)
+    passed = bool(g) and all(ok for _t, ok in g)
+    missing = [name for name, part in (("görüntü düzeyi (mAP50)", image), ("olay düzeyi (videolar)", normal))
+               if part is None]
+    if missing:
+        note = "" if passed or not g else "; ölçülen kapılardan en az biri KALDI"
+        return f"Sonuç: KISMİ — {' ve '.join(missing)} ölçülmedi{note}", 2
+    return ("Sonuç: GEÇTİ", 0) if passed else ("Sonuç: KALDI", 1)
+
+
 def markdown(model: str, sha: str, image: tuple[dict[str, Any], str, dict[str, int]] | None,
              events: dict[str, dict[str, Any]] | None, sweeps: dict[str, dict[float, dict[str, Any]]] | None) -> str:
     lines = ["# Yangın/duman modeli ölçümü", "", f"Model: `{model}` — SHA-256 `{sha}`", ""]
@@ -447,9 +461,9 @@ def markdown(model: str, sha: str, image: tuple[dict[str, Any], str, dict[str, i
                                               f"Düşük {num(sg['low'], 2)}, Normal {num(sg['normal'], 2)}, "
                                               f"Yüksek {num(sg['high'], 2)}"))
         lines.append("")
-    g = gates(image[0] if image is not None else None, events["normal"] if events is not None else None)
-    lines += ["## Kabul (v1)", ""] + [f"- {'GEÇTİ' if ok else 'KALDI'} — {text}" for text, ok in g]
-    lines += ["", "Sonuç: " + ("GEÇTİ" if g and all(ok for _t, ok in g) else "KALDI")]
+    parts = (image[0] if image is not None else None, events["normal"] if events is not None else None)
+    lines += ["## Kabul (v1)", ""] + [f"- {'GEÇTİ' if ok else 'KALDI'} — {text}" for text, ok in gates(*parts)]
+    lines += ["", verdict(*parts)[0]]
     return "\n".join(lines) + "\n"
 
 
@@ -508,8 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     print(text)
     if a.out:
         pathlib.Path(a.out).write_text(text, encoding="utf-8")
-    g = gates(image[0] if image else None, events["normal"] if events else None)
-    return 0 if g and all(ok for _t, ok in g) else 1
+    return verdict(image[0] if image else None, events["normal"] if events else None)[1]
 
 
 if __name__ == "__main__":

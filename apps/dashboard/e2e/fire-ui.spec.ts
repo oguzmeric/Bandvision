@@ -29,7 +29,7 @@ function fireSession(f: FireState) {
     profile: {
       id: "pf", name: "Mutfak yangın", roi: { x: 0, y: 0, width: 1, height: 1 }, linePosition: 0.5, direction: "down",
       diffThreshold: 30, expectedArea: 0, splitTouching: false, countMode: "fire", processingWidth: 640,
-      fire: { fire: { enabled: true, seconds: 3 }, smoke: { enabled: true, seconds: 8 }, sensitivity: "normal", ignoreZones: [], sendImage: false },
+      fire: { fire: { enabled: true, seconds: 2.5 }, smoke: { enabled: true, seconds: 8 }, sensitivity: "normal", ignoreZones: [], sendImage: false },
     },
   };
 }
@@ -84,7 +84,8 @@ test("yangın/duman oturumu (sahte API): izleme nedeni ve uyarı; Ayarla'da mode
   await expect(settings.getByTestId("fire-model")).toHaveText("Yangın/duman modeli: hazır");
   await expect(page.getByTestId("watch-warning")).toHaveCount(0, { timeout: 15_000 });
 
-  // kurallar: yangın 5 sn, duman kapalı; hassasiyet Yüksek; alarm resmi açık
+  // kurallar: kayıtlı küsuratlı süre Türkçe yazılır; yangın 5 sn, duman kapalı; hassasiyet Yüksek; alarm resmi açık
+  await expect(settings.getByText("Yangın süresi: 2,5 sn")).toBeVisible();
   await settings.getByLabel("Yangın süresi").fill("5");
   await expect(settings.getByText("Yangın süresi: 5 sn")).toBeVisible();
   await settings.getByRole("checkbox", { name: "Duman", exact: true }).uncheck();
@@ -212,7 +213,7 @@ test("Alarmlar sayfası (sahte API): Yangın/Duman etiketleri, sayaçlar tür li
 
   // yanlış alarm olarak işaretli yangın alarmı: pencerede "Yangın" (büyük harfle çizilir), işaret geri alınır
   await rows.nth(0).click();
-  const modal = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("Yangın");
   await expect(modal.getByTestId("alarm-title")).toHaveCSS("text-transform", "uppercase");
   await expect(modal.getByTestId("alarm-state")).toContainText("Yanlış alarm");
@@ -242,7 +243,7 @@ test("alarm penceresi ve şerit (sahte API): onaylanmamış duman alarmı 'Duman
   await page.route("**/api/live/alarms/*/ack", (route) => route.fulfill({ json: {} }));
   await page.goto("/notifications");
   all.push(mk("d1", "smoke", "Depo kamerası", now - 5, { acked: false, endedAt: null, sessionId: "f9" }));
-  const modal = page.getByRole("alertdialog", { name: "Güvenlik alarmı" });
+  const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("Duman");
   await expect(modal.getByTestId("alarm-status")).toContainText("devam ediyor");
   await modal.getByRole("button", { name: "Küçült" }).click();

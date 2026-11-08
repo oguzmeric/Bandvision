@@ -1,14 +1,16 @@
 """Yanlış alarm → zor örnek: kullanıcının "Yanlış alarm" dediği yangın/duman alarmlarının resmi ve olay kaydı, ileride
 modeli yeniden eğitmek için bu bilgisayarda saklanır (hiçbir yere gönderilmez).
 
-Klasör: `<data>/live/hard-negatives/<id>/` — `image.jpg` (alarm resmi, varsa), `clip.webm` (olay kaydı, yazılmışsa) ve
-`meta.json` `{id, type, camera, firedAt, sourceId, channelId}`. `meta.json` en son yazılır: varlığı örneğin tamam olduğunu
+Klasör: `<data>/live/hard-negatives/<id>/` — `frame.jpg` (çizimsiz alarm karesi, eğitimde kullanılan; varsa),
+`image.jpg` (kutular çizili alarm resmi, insan içindir; varsa), `clip.webm` (olay kaydı, yazılmışsa) ve `meta.json`
+`{id, type, camera, firedAt, sourceId, channelId}`. `meta.json` en son yazılır: varlığı örneğin tamam olduğunu
 gösterir. İşaret geri alınınca klasör silinir. Kayıt işaretten sonra yazılırsa (`clipPending`) yazıldığında kopyalanır
 (`add_clip`; klasör yoksa — işaret geri alınmış — hiçbir şey yapılmaz). En çok `MAX_HARD_NEGATIVES` alarm; aşınca en eski
 alarmlar (meta'daki `firedAt`) silinir, yeni eklenen hiç silinmez. Yalnızca `fire`/`smoke` türleri.
 
 Hiçbir hata çağırana ulaşmaz: dosya hatası uyarı olarak günlüğe yazılır (alarm işlemi bozulmaz); ilk kopyalama
-yarıda kalırsa yarım örnek bırakılmaz. Tüm işlemler tek kilit altında (işaret ve geç kayıt yarışmaz).
+yarıda kalırsa yarım örnek bırakılmaz, daha önce tamamlanmış bir örnek (yeniden işaretleme) ise silinmez. Tüm işlemler
+tek kilit altında (işaret ve geç kayıt yarışmaz).
 """
 from __future__ import annotations
 
@@ -39,24 +41,26 @@ class HardNegatives:
     def _folder(self, alarm_id: str) -> Path | None:
         return self.root / alarm_id if _ID.fullmatch(alarm_id) else None
 
-    def add(self, record: dict[str, Any], image: Path | None, clip: Path | None) -> bool:
-        """Yanlış alarm işaretlendi: resim ve (yazılmışsa) kayıt kopyalanır, `meta.json` yazılır, sınır uygulanır.
-        Tür `fire`/`smoke` değilse hiçbir şey yapılmaz. Başarıda True; hata günlüğe yazılır, False (yarım klasör
-        silinir)."""
+    def add(self, record: dict[str, Any], image: Path | None, clip: Path | None, raw: Path | None = None) -> bool:
+        """Yanlış alarm işaretlendi: çizimsiz kare (`raw` → `frame.jpg`), resim ve (yazılmışsa) kayıt kopyalanır,
+        `meta.json` yazılır, sınır uygulanır. Tür `fire`/`smoke` değilse hiçbir şey yapılmaz. Başarıda True; hata günlüğe
+        yazılır, False (yeni klasör yarım kaldıysa silinir; önceden tamamlanmış örnek — `meta.json` vardı — korunur)."""
         aid = str(record.get("id", ""))
         folder = self._folder(aid)
         if record.get("type") not in KINDS or folder is None:
             return False
         with self._lock:
+            complete_before = (folder / "meta.json").is_file()
             try:
                 folder.mkdir(parents=True, exist_ok=True)
-                for src, name in ((image, "image.jpg"), (clip, "clip.webm")):
+                for src, name in ((raw, "frame.jpg"), (image, "image.jpg"), (clip, "clip.webm")):
                     if src is not None and src.is_file():
                         _copy(src, folder / name)
                 write_json_atomic(folder / "meta.json", {k: record.get(k) for k in _META_KEYS})
             except (OSError, ValueError, TypeError) as e:
                 _LOG.warning("Zor örnek kaydedilemedi (%s): %s", aid, e)
-                shutil.rmtree(folder, ignore_errors=True)
+                if not complete_before:                     # önceki tam örnek (yeniden işaretleme) silinmez
+                    shutil.rmtree(folder, ignore_errors=True)
                 return False
             self._enforce_cap(keep=aid)
         return True

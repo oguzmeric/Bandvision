@@ -1,5 +1,6 @@
 """Güvenlik (poz) ve yangın/duman alarm günlüğü: <data>/live/alarms.json, alarm-images/<id>.jpg ve olay kaydı
-alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
+alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`). Yangın/duman alarmında ayrıca
+çizimsiz alarm karesi alarm-images/<id>.raw.jpg (kayıtta alan yok; resimle birlikte silinir, yalnız zor örnek için).
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
@@ -8,9 +9,9 @@ yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: k
 kodlayıcı/disk hatası ya da yazılırken sunucu kapandı); `falseAlarm`: kullanıcı "Yanlış alarm" dedi (kayıt onaylanmış
 da sayılır; geri alınabilir). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
 
-Zor örnek: yanlış alarm işaretlenen `fire`/`smoke` alarmının resmi ve kaydı `hard-negatives/<id>/` altına kopyalanır
-(`hard_negatives.HardNegatives`; işaret geri alınınca silinir, kayıt sonradan yazılırsa o an kopyalanır). Kopyalar alarm
-kaydının 7 günlük saklamasından bağımsızdır (eğitim için); hataları alarm işlemini bozmaz.
+Zor örnek: yanlış alarm işaretlenen `fire`/`smoke` alarmının çizimsiz karesi, resmi ve kaydı `hard-negatives/<id>/`
+altına kopyalanır (`hard_negatives.HardNegatives`; işaret geri alınınca silinir, kayıt sonradan yazılırsa o an
+kopyalanır). Kopyalar alarm kaydının 7 günlük saklamasından bağımsızdır (eğitim için); hataları alarm işlemini bozmaz.
 
 Saklama: 7 günden eski kayıt resmi ve kaydıyla birlikte silinir; kaydı olmayan eski resim/kayıt dosyaları ve yarım
 kalmış geçici kayıt dosyaları da temizlenir; kayıt dosyası sayısı `MAX_CLIPS`'i aşarsa en eskiler silinir.
@@ -44,6 +45,7 @@ _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "start
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
+_RAW = ".raw.jpg"                   # çizimsiz alarm karesi: alarm-images/<id>.raw.jpg (zor örneğin eğitim karesi)
 
 
 def _record(item: Any) -> dict[str, Any] | None:
@@ -113,10 +115,11 @@ class AlarmStore:
 
     def add(self, session_id: str | None, camera: str, kind: str, started_at: float, fired_at: float,
             jpeg: bytes | None, notify: str, clip_pending: bool = False, source_id: str | None = None,
-            channel_id: str | None = None) -> dict[str, Any]:
+            channel_id: str | None = None, raw_jpeg: bytes | None = None) -> dict[str, Any]:
         """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der).
         `source_id` / `channel_id`: alarmın kamerası (kayıttan izlemeye geçiş; eski kayıtlarda ve oturumsuz deneme
-        alarmında None)."""
+        alarmında None). `raw_jpeg`: çizimsiz alarm karesi (yalnız yangın/duman) `<id>.raw.jpg` olarak yazılır; kayıtta
+        alanı yoktur, yazılamazsa yalnız uyarı."""
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
              "image": jpeg is not None, "clip": False, "clipStartedAt": None,
@@ -129,6 +132,11 @@ class AlarmStore:
                 except OSError as e:
                     _LOG.warning("Olay resmi yazılamadı (%s): %s", a["id"], e)
                     a["image"] = False
+            if raw_jpeg is not None:
+                try:
+                    (self.images / f"{a['id']}{_RAW}").write_bytes(raw_jpeg)
+                except OSError as e:
+                    _LOG.warning("Alarm karesi (çizimsiz) yazılamadı (%s): %s", a["id"], e)
             self._items.append(a)
             self._save()
         return dict(a)
@@ -255,7 +263,7 @@ class AlarmStore:
             return True
         if value:
             image = self.images / f"{alarm_id}.jpg" if rec["image"] else None
-            self.hard_negatives.add(rec, image, self.clip_file(alarm_id))
+            self.hard_negatives.add(rec, image, self.clip_file(alarm_id), self.images / f"{alarm_id}{_RAW}")
         else:
             self.hard_negatives.remove(alarm_id)
         return True
@@ -288,10 +296,10 @@ class AlarmStore:
                 return None
 
     def expire(self, now: float, days: float = 7) -> int:
-        """`days`'ten eski kayıtlar (zamanı sonlu olmayan bozuk kayıtlar da) resim ve olay kaydıyla birlikte silinir;
-        dosyası silinemeyen kayıt sonraki temizliğe kalır. Kaydı olmayan eski resim ve kayıt dosyaları, `now`'dan
-        `TEMP_CLIP_MAX_AGE_S` önceden kalan yarım geçici kayıt dosyaları da silinir; sonra `MAX_CLIPS` sınırı uygulanır.
-        Silinen kayıt sayısı döner."""
+        """`days`'ten eski kayıtlar (zamanı sonlu olmayan bozuk kayıtlar da) resim, çizimsiz kare ve olay kaydıyla
+        birlikte silinir; dosyası silinemeyen kayıt sonraki temizliğe kalır. Kaydı olmayan eski resim ve kayıt
+        dosyaları, `now`'dan `TEMP_CLIP_MAX_AGE_S` önceden kalan yarım geçici kayıt dosyaları da silinir; sonra
+        `MAX_CLIPS` sınırı uygulanır. Silinen kayıt sayısı döner."""
         cutoff = now - days * 86400
         with self._lock:
             removed: set[str] = set()
@@ -301,6 +309,7 @@ class AlarmStore:
                     continue
                 try:
                     (self.images / f"{a['id']}.jpg").unlink(missing_ok=True)
+                    (self.images / f"{a['id']}{_RAW}").unlink(missing_ok=True)
                     (self.clips / f"{a['id']}.webm").unlink(missing_ok=True)
                 except OSError as e:
                     _LOG.warning("Olay resmi/kaydı silinemedi (%s): %s", a["id"], e)
@@ -324,13 +333,16 @@ class AlarmStore:
 
     @staticmethod
     def _remove_orphans(folder: Path, suffix: str, known: set[str], cutoff: float) -> None:
-        """Kaydı olmayan (ve `cutoff`'tan eski: yazılmakta olan yeni dosyaya dokunulmaz) `<id><suffix>` dosyaları."""
+        """Kaydı olmayan (ve `cutoff`'tan eski: yazılmakta olan yeni dosyaya dokunulmaz) `<id><suffix>` dosyaları.
+        `<id>.raw.jpg` (çizimsiz kare) `<id>`'ye aittir: kaydı varken silinmez."""
         if not folder.exists():
             return
         for f in folder.iterdir():
             try:
-                if (f.is_file() and f.name.endswith(suffix) and not f.name.endswith(_TEMP_CLIP)
-                        and f.name[: -len(suffix)] not in known and f.stat().st_mtime < cutoff):
+                if not (f.is_file() and f.name.endswith(suffix) and not f.name.endswith(_TEMP_CLIP)):
+                    continue
+                owner = f.name[: -len(_RAW)] if f.name.endswith(_RAW) else f.name[: -len(suffix)]
+                if owner not in known and f.stat().st_mtime < cutoff:
                     f.unlink()
             except OSError:
                 pass

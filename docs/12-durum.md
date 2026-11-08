@@ -314,7 +314,7 @@ Kamerada alev ve dumanı görüp güvenlik alarmıyla aynı yoldan haber verir. 
 
 - **Ne var:**
   - Analiz sunucusu: `fire` yöntemi (YOLOX-S tabanlı iki sınıflı model + karar katmanı: hassasiyet eşiği, en küçük kutu, hariç bölgeler, kutu içi hareket denetimi, ışık patlaması süzgeci, 8×6 hücre oyu, bölüm başına tek alarm), en çok 5 kare/sn analiz; alarm günlüğü, olay resmi, olay kaydı (kutulu), Telegram ("🔥 YANGIN" / "💨 DUMAN", "Görüntüyü hemen kontrol edin."), izleme sağlığı, `watch.json` ile yeniden başlatmada geri yükleme; Cihaz ayarlarında "Yangın/duman modeli" satırı.
-  - Yanlış alarm → zor örnek: resim, kayıt ve `meta.json` yalnız bu bilgisayarda `live/hard-negatives/<id>/` (en çok 500).
+  - Yanlış alarm → zor örnek: çizimsiz kare (`frame.jpg`), resim, kayıt ve `meta.json` yalnız bu bilgisayarda `live/hard-negatives/<id>/` (en çok 500).
   - Video ile test: "Yangın / duman" ön ayarı (`--preset fire`), alarm tablosu ve `alarms.csv`.
   - Panel: Analizler → Yangın / duman (`/live?tur=yangin`), ayar paneli (kurallar, hassasiyet, alarm resmi, hariç bölge düzenleyici, model satırı, sabit uyarı), alarm etiketleri ve sayaçları.
   - iPhone: profili okur ve korur, analiz etmez ("Yangın / duman (yalnızca bilgisayar)").
@@ -334,7 +334,7 @@ Kamerada alev ve dumanı görüp güvenlik alarmıyla aynı yoldan haber verir. 
   3. **Negatif süre:** aynı kamerada en az 8 saat normal çalışma (ışık açma/kapama, gece IR geçişi, insan ve araç hareketi dahil) ve monitörde FIRESENSE negatif videoları.
   4. **Kayıt:** her sistemin alarm listesi (zaman, tür) dışa alınır; BantVision için Alarmlar sayfası ya da `GET /alarms?since=&until=&sessionId=`.
   5. **Tablo:** deneme başına "TRASSIR alarm (sn) / BantVision alarm (sn) / ikisi de kaçırdı"; negatif süre için sistem başına yanlış alarm sayısı; özet: yakalama oranı, ortanca gecikme, 8 saatte yanlış alarm. Sonuç buraya yazılır; kayıtlar kullanıcınındır, public repoya konmaz.
-- **Bilinen sınırlar:** `14-yangin-duman.md` §5 (5 kare/sn analiz, yavaş akış, %40 ani değişim, buhar/sis/far/gün batımı/kaynak ışığı, küçük uzak duman). Zor örneklerin resmi ve kaydı kutuları çizili olduğundan eğitime doğrudan katılamaz; ham kare kayıt cihazından alınır (`14-yangin-duman.md` §8).
+- **Bilinen sınırlar:** `14-yangin-duman.md` §5 (5 kare/sn analiz, yavaş akış, %40 ani değişim, buhar/sis/far/gün batımı/kaynak ışığı, küçük uzak duman). Zor örneklerin resmi ve kaydı kutuları çizilidir; eğitime çizimsiz `frame.jpg` katılır (`prepare_data.py --negatives`, `14-yangin-duman.md` §8).
 
 ## 6. Araştırma ve tasarım notları
 

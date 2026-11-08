@@ -161,7 +161,7 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     : "Bu alarmın kaydı yok.";
 
   return (
-    <dialog ref={dialog} role="alertdialog" aria-modal="true" aria-label="Güvenlik alarmı" onKeyDown={trap}
+    <dialog ref={dialog} role="alertdialog" aria-modal="true" aria-label="Alarm" onKeyDown={trap}
             onCancel={(e) => { e.preventDefault(); onClose(); }}         // Esc: Küçült / Kapat (onay değil)
             // tarayıcı kendisi kapattıysa durum eşlensin; geliştirmede (StrictMode) ilk kapanışın geç gelen olayı, yeniden
             // açılmış pencereyi kapatmasın

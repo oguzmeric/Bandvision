@@ -349,6 +349,11 @@ class SharedModel:
         """Yükleme hatasının kullanıcıya gösterilecek Türkçe iletisi."""
         return f"{self.LABEL} yüklenemedi: {failure_reason(e)}"
 
+    def _log_level(self, e: BaseException) -> int:
+        """Yükleme hatasının günlük düzeyi (yükleme iş parçacığından çağrılır). Varsayılan ERROR; beklenen durumlar
+        (ör. yangın/duman modeli kurulu değil) alt sınıfta daha düşük olabilir."""
+        return logging.ERROR
+
     def _load(self) -> None:
         """Yükleme iş parçacığı. Beklenmedik bir çıkışta (ör. `BaseException`) `_loading` takılı kalmaz: hata günlüğe
         yazılır ve yükleme hatası gibi işlenir (RETRY_S sonra yeniden denenir)."""
@@ -356,7 +361,7 @@ class SharedModel:
             self._load_loop()
         except BaseException as e:  # noqa: BLE001 — iş parçacığının sonu: durum tutarlı kalsın, ayrıntı günlükte
             msg = self._failure(e)
-            _LOG.error("%s [%s: %s]", msg, type(e).__name__, e, exc_info=True)
+            _LOG.log(self._log_level(e), "%s [%s: %s]", msg, type(e).__name__, e, exc_info=True)
             with self._lock:
                 self._loading, self._failed_at = False, self._clock()
                 if self._inner is None:
@@ -378,7 +383,8 @@ class SharedModel:
                 inner = self._loader(choice)
             except Exception as e:  # noqa: BLE001 — indirme/ONNX hatası: günlüğe yazılır, RETRY_S sonra yeniden denenir
                 msg = self._failure(e)
-                _LOG.error("%s [%s: %s]", msg, type(e).__name__, e)   # önce günlük, sonra durum: "error" görenin günlüğü de vardır
+                # önce günlük, sonra durum: "error" görenin günlüğü de vardır
+                _LOG.log(self._log_level(e), "%s [%s: %s]", msg, type(e).__name__, e)
                 with self._lock:
                     if self._choice == choice:
                         self._failed_at, self._loading = self._clock(), False
@@ -447,11 +453,22 @@ class SharedFire(SharedModel):
     def __init__(self, loader: Callable[[str], Any] | None = None, clock: Callable[[], float] = time.monotonic,
                  choice: str = "cpu") -> None:
         super().__init__(loader or _load_fire_detector, clock, choice)
+        self._missing_logged: str | None = None         # son WARNING'lenen "kurulu değil" iletisi (tekrarı DEBUG)
 
     def _failure(self, e: BaseException) -> str:
         if isinstance(e, FireModelMissing):
             return str(e)
         return super()._failure(e)
+
+    def _log_level(self, e: BaseException) -> int:
+        """Model dosyası kurulu değil beklenen bir durumdur (kullanıcı henüz kurmadı): ilk kez WARNING, aynı iletiyle
+        tekrarları (dakikada bir yeniden deneme) DEBUG. Diğer hatalar ERROR."""
+        if isinstance(e, FireModelMissing):
+            first = self._missing_logged != str(e)
+            self._missing_logged = str(e)
+            return logging.WARNING if first else logging.DEBUG
+        self._missing_logged = None
+        return logging.ERROR
 
     def detect(self, *args: Any, **kwargs: Any) -> Any:
         if self._ready() is None:
@@ -578,7 +595,7 @@ class LiveManager:
         return bool(block is not None and getattr(block, "sendImage", False))
 
     def on_alarm(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]],
-                 jpeg: bytes | None) -> list[str]:
+                 jpeg: bytes | None, raw_jpeg: bytes | None = None) -> list[str]:
         """Oturumdan (poz güvenlik ya da yangın/duman): biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim);
         yeni alarm kayıtlarının kimlikleri
         döner (oturum bunlar için olay kaydı yakalar; aynı karedekiler tek kaydı paylaşır). Biten önce işlenir: aynı karede
@@ -587,7 +604,9 @@ class LiveManager:
         `COOLDOWN_S`, tekdüze saatle) denetim-ve-işaretleme tek kilit altında: eşzamanlı oturumlar çift bildirmez.
         Oturum bu sırada alarmı üreten yöntemden çıkmışsa (uçuştaki alarm) kayıt tutulur ve hemen kapatılır; açık
         kalmaz. Olay resmi HER ZAMAN bu bilgisayarda saklanır (7 gün); Telegram'a resim yalnızca kamerada ilgili bloğun
-        (`safety` ya da `fire`) `sendImage`'ı açıksa gider (kuyruk kaydının resim bayrağı alarm anındakine eşittir)."""
+        (`safety` ya da `fire`) `sendImage`'ı açıksa gider (kuyruk kaydının resim bayrağı alarm anındakine eşittir).
+        `raw_jpeg`: çizimsiz alarm karesi (yalnız yangın/duman verir); yalnızca bu bilgisayarda saklanır, yanlış alarmda zor
+        örneğe eğitim karesi olarak kopyalanır; hiçbir yere gönderilmez."""
         now = time.time()                                   # alarm zamanları duvar saati
         mono = time.monotonic()                             # yalnız tekrar önleme süresi
         camera = getattr(s, "name", "Kamera")
@@ -595,7 +614,7 @@ class LiveManager:
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
         new_ids: list[str] = []
         try:
-            self._register(s, fired, ended, jpeg, now, mono, camera, clip_pending, cam_key, new_ids)
+            self._register(s, fired, ended, jpeg, now, mono, camera, clip_pending, cam_key, new_ids, raw_jpeg)
         except BaseException:
             # kayıt eklendikten sonra hata: oturum kimlikleri alamaz, kaydı yakalayamaz — "yazılıyor" asılı kalmasın
             if new_ids:
@@ -606,7 +625,8 @@ class LiveManager:
     on_safety = on_alarm                                    # eski ad (poz güvenlik)
 
     def _register(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None, now: float,
-                  mono: float, camera: str, clip_pending: bool, cam_key: str, new_ids: list[str]) -> None:
+                  mono: float, camera: str, clip_pending: bool, cam_key: str, new_ids: list[str],
+                  raw_jpeg: bytes | None = None) -> None:
         """`on_alarm`'ın kilitli gövdesi; eklenen alarm kimlikleri `new_ids`'e yazılır (hata olsa da)."""
         with self._alarm_lock:
             mode = getattr(s.profile, "countMode", "safety")
@@ -623,7 +643,8 @@ class LiveManager:
                 rec_ = self.alarms.add(s.id, camera, a.kind, now - (a.ts - a.started), now, jpeg, notify,
                                        clip_pending=clip_pending and in_mode,
                                        source_id=getattr(s, "source_id", None) or None,
-                                       channel_id=getattr(s, "channel_id", None) or None)
+                                       channel_id=getattr(s, "channel_id", None) or None,
+                                       raw_jpeg=raw_jpeg)
                 new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
@@ -1833,7 +1854,7 @@ def _check_safety(sf: Any) -> None:
         raise bad("olay resmi gönderimi doğru ya da yanlış olmalı.")
 
 
-_FIRE_RULES = {"fire": ("Alev", 2.0, 10.0), "smoke": ("Duman", 5.0, 30.0)}   # ad, en az, en çok (sn)
+_FIRE_RULES = {"fire": ("Yangın", 2.0, 10.0), "smoke": ("Duman", 5.0, 30.0)}   # ad, en az, en çok (sn)
 _FIRE_SENSITIVITY = ("low", "normal", "high")
 _FIRE_MAX_ZONES, _FIRE_ZONE_POINTS = 8, (3, 12)
 

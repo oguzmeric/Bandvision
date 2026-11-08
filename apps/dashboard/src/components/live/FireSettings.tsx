@@ -39,7 +39,7 @@ export function FireSettings({ value, status, onChange }: {
                  onChange={(e) => onChange({ ...v, [k]: { ...v[k], enabled: e.target.checked } })} />
           {title}
         </label>
-        <label className="text-[13px]">{title} süresi: <b>{v[k].seconds} sn</b>
+        <label className="text-[13px]">{title} süresi: <b>{v[k].seconds.toLocaleString("tr-TR")} sn</b>
           <input type="range" aria-label={`${title} süresi`} min={min} max={max} step={1} value={v[k].seconds} disabled={!v[k].enabled}
                  className="mt-1 w-full accent-pl-accent" onChange={(e) => onChange({ ...v, [k]: { ...v[k], seconds: Number(e.target.value) } })} />
         </label>
