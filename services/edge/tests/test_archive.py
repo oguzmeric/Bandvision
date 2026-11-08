@@ -567,9 +567,7 @@ class FakeTrassir:
 
 def trassir(fake: FakeTrassir) -> TrassirArchive:
     client = TrassirClient(fake_http(fake, https=True, port=8080), HOST, 555, "u", "p")
-    a = TrassirArchive(client)
-    a._sleep = lambda s: None
-    return a
+    return TrassirArchive(client, sleep=lambda s: None)
 
 
 def test_trassir_stream_url_plays_archive_token() -> None:

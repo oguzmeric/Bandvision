@@ -328,11 +328,24 @@ def test_paused_player_with_open_stream_is_swept_after_idle(client: TestClient, 
     pid = _paused_player(client, rig)
     p = rig.manager.get(pid)
     assert p is not None
+    touches, polls = [0], [0]
+    real_touch, real_frame = p.touch, p.frame
+
+    def touch() -> None:
+        touches[0] += 1
+        real_touch()
+
+    def frame(touch: bool = True) -> Any:
+        polls[0] += 1
+        return real_frame(touch)
+
+    p.touch, p.frame = touch, frame                      # type: ignore[method-assign]
     t, out = _stream_in_thread(client, pid, limit=5)
-    wait_for(lambda: out or time.sleep(0.1) or p.last_used == rig.clock.t)
-    time.sleep(0.3)                                      # akış son kareyi verdi, şimdi yalnız yokluyor
-    rig.clock.t += 40.0
-    time.sleep(0.4)                                      # yoklamalar sürüyor ama dokunmuyor
+    wait_for(lambda: touches[0] >= 1)                    # akış ilk (ve tek) kareyi gönderdi
+    sent_touches, rig.clock.t = touches[0], rig.clock.t + 40.0
+    seen = polls[0]
+    wait_for(lambda: polls[0] >= seen + 5)               # yoklamalar sürüyor ...
+    assert touches[0] == sent_touches                    # ... ama dokunmuyor
     assert t.is_alive() and rig.manager.sweep() == 0
     rig.clock.t += 25.0                                  # son dokunuştan 65 sn > IDLE_S
     assert rig.manager.sweep() == 1
