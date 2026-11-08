@@ -224,7 +224,7 @@ final class FrameProcessor: @unchecked Sendable {
 
     /// ts: kaynağın sunum zamanı (sn). Kamera ve video aynı yoldan gelir.
     func process(_ pixelBuffer: CVPixelBuffer, ts: Double) {
-        if profile.mode == .safety {                   // güvenlik alarmı yalnızca bilgisayarda (web analiz sunucusu)
+        if profile.isPcOnly {                          // güvenlik/yangın alarmı yalnızca bilgisayarda (web analiz sunucusu)
             displaySafetyFrame(pixelBuffer)
             return
         }

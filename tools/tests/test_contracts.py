@@ -97,6 +97,7 @@ PROFILE = ("profile-egg.json", "product-profile.schema.json")
 POLY = ("profile-box-polygon.json", "product-profile.schema.json")
 JOB = ("analysis-job-done.json", "analysis-job.schema.json")
 SAFETY_JOB = ("analysis-job-safety-done.json", "analysis-job.schema.json")
+FIRE_JOB = ("analysis-job-fire-done.json", "analysis-job.schema.json")
 EVENT = ("event-state.json", "event.schema.json")
 BATCH = ("batch.json", "batch.schema.json")
 PAIR = ("device-pair-request.json", "device.schema.json#/$defs/pairRequest")
@@ -131,8 +132,17 @@ NEGATIVE_CASES = [
      ["result", "files", 0]),
     ("iş alarm resmi uzantısı bozuk (files)", *SAFETY_JOB, _set(["result", "files"], ["alarm-1.jpg.exe"]), "pattern",
      ["result", "files", 0]),
-    ("iş alarm türü geçersiz", *SAFETY_JOB, _set(["result", "alarms", 0, "kind"], "fire"), "enum",
+    ("iş alarm türü geçersiz", *SAFETY_JOB, _set(["result", "alarms", 0, "kind"], "ses"), "enum",
      ["result", "alarms", 0, "kind"]),
+    ("yangın işi alarm türü geçersiz", *FIRE_JOB, _set(["result", "alarms", 0, "kind"], "handsUp2"), "enum",
+     ["result", "alarms", 0, "kind"]),
+    ("yangın işi alev süresi 10'dan uzun", *FIRE_JOB, _set(["options", "fire", "fire", "seconds"], 11), "maximum",
+     ["options", "fire", "fire", "seconds"]),
+    ("yangın işi duman süresi 5'ten kısa", *FIRE_JOB, _set(["options", "fire", "smoke", "seconds"], 4), "minimum",
+     ["options", "fire", "smoke", "seconds"]),
+    ("yangın işi hassasiyeti geçersiz", *FIRE_JOB, _set(["options", "fire", "sensitivity"], "extreme"), "enum",
+     ["options", "fire", "sensitivity"]),
+    ("alarm listesi sayım ön ayarında olamaz", *FIRE_JOB, _set(["options", "preset"], "egg"), "not", ["result"]),
     ("iş alarmında resim yolu dışarı kaçıyor", *SAFETY_JOB, _set(["result", "alarms", 0, "image"], "../x.jpg"),
      "pattern", ["result", "alarms", 0, "image"]),
     ("iş alarmında bitiş eksik", *SAFETY_JOB, _del(["result", "alarms", 0, "endS"]), "required",

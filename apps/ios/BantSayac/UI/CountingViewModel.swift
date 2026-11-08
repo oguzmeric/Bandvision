@@ -246,6 +246,8 @@ final class CountingViewModel: ObservableObject {
             calibrationMessage = "Sarı alanı ve turuncu çizgiyi ayarla, sonra boş bandı öğret."
         case .safety:
             calibrationMessage = "Bu yöntem (güvenlik alarmı) bu cihazda desteklenmiyor; bilgisayardaki web panelinde çalışır."
+        case .fire:
+            calibrationMessage = "Bu yöntem (yangın / duman) bu cihazda desteklenmiyor; bilgisayardaki web panelinde çalışır."
         }
         processor.setShowMask(profile.mode == .blob)
     }

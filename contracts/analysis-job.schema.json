@@ -26,7 +26,7 @@
     "options": {
       "type": "object", "additionalProperties": false,
       "properties": {
-        "preset": { "enum": ["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety"], "description": "people / vehicle / animal: iki yönlü giriş/çıkış sayımı (countMode detect); safety: poz güvenlik alarmı (sayım yok; countMode, truth, direction, line, countLine, roi, roiPolygon, bgRange, productLength, countAnchor verilmez)" },
+        "preset": { "enum": ["generic", "egg", "flour", "box", "people", "vehicle", "animal", "safety", "fire"], "description": "people / vehicle / animal: iki yönlü giriş/çıkış sayımı (countMode detect); safety: poz güvenlik alarmı, fire: yangın/duman erken uyarısı (ikisinde de sayım yok; countMode, truth, direction, line, countLine, roi, roiPolygon, bgRange, productLength, countAnchor verilmez)" },
         "countMode": { "enum": ["blob", "linescan", "detect"], "description": "Sayım yöntemi; verilmezse hazır profilden (un, koli: linescan; kişi: detect)" },
         "countAnchor": { "enum": ["center", "bottom"], "description": "detect: kamera tepeden (center) ya da yandan/eğik (bottom, çizgi zeminde)" },
         "productLength": { "type": "number", "exclusiveMinimum": 0, "maximum": 2, "description": "linescan: tek ürün boyu (ROI akış uzunluğuna oranla); verilmezse öğrenilir" },
@@ -67,6 +67,27 @@
               }
             }
           }
+        },
+        "fire": {
+          "type": "object", "additionalProperties": false,
+          "description": "Yalnızca preset fire: kurallar; verilmeyen kural varsayılanla çalışır (alev açık 3 sn, duman açık 8 sn, hassasiyet normal). En az biri açık olmalı",
+          "properties": {
+            "fire": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "seconds": { "type": "number", "minimum": 2, "maximum": 10 }
+              }
+            },
+            "smoke": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "seconds": { "type": "number", "minimum": 5, "maximum": 30 }
+              }
+            },
+            "sensitivity": { "enum": ["low", "normal", "high"] }
+          }
         }
       }
     },
@@ -75,7 +96,7 @@
     "result": {
       "type": "object", "required": ["count", "files"], "additionalProperties": false,
       "properties": {
-        "count": { "type": "integer", "minimum": 0, "description": "Sayılan adet; iki yönlü sayımda giriş; safety işinde alarm sayısı" },
+        "count": { "type": "integer", "minimum": 0, "description": "Sayılan adet; iki yönlü sayımda giriş; safety ve fire işinde alarm sayısı" },
         "countOut": { "type": "integer", "minimum": 0, "description": "İki yönlü sayımda (detect) çıkış" },
         "truth": { "type": ["integer", "null"] },
         "errorPct": { "type": ["number", "null"] },
@@ -94,11 +115,11 @@
         },
         "alarms": {
           "type": "array", "maxItems": 500,
-          "description": "Yalnızca safety işlerinde: alarm listesi (en çok 500; count gerçek toplamdır). Resim yalnızca ilk 50 alarmda vardır",
+          "description": "Yalnızca safety ve fire işlerinde: alarm listesi (en çok 500; count gerçek toplamdır). Resim yalnızca ilk 50 alarmda vardır",
           "items": {
             "type": "object", "required": ["kind", "trackId", "startS", "atS", "endS", "image"], "additionalProperties": false,
             "properties": {
-              "kind": { "enum": ["handsUp", "lying"] },
+              "kind": { "enum": ["handsUp", "lying", "fire", "smoke"] },
               "trackId": { "type": "integer" },
               "startS": { "type": "number", "minimum": 0, "description": "Pozun başladığı video saniyesi" },
               "atS": { "type": "number", "minimum": 0, "description": "Alarmın çaldığı video saniyesi" },
@@ -125,7 +146,7 @@
     { "if": { "properties": { "status": { "const": "done" } } }, "then": { "required": ["result"] } },
     { "if": { "properties": { "status": { "const": "failed" } } }, "then": { "required": ["error"] } },
     {
-      "if": { "required": ["options"], "properties": { "options": { "required": ["preset"], "properties": { "preset": { "const": "safety" } } } } },
+      "if": { "required": ["options"], "properties": { "options": { "required": ["preset"], "properties": { "preset": { "enum": ["safety", "fire"] } } } } },
       "else": { "properties": { "result": { "not": { "required": ["alarms"] } } } }
     }
   ]

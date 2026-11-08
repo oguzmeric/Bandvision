@@ -1,0 +1,42 @@
+{
+  "schema": "bantvision.analysis-job.v1",
+  "id": "8b4e1f26-7a3c-4d95-b1e0-2c6f9a0d3e47",
+  "status": "done",
+  "createdAt": "2026-11-08T09:10:00Z",
+  "updatedAt": "2026-11-08T09:11:10Z",
+  "expiresAt": "2026-11-15T09:10:00Z",
+  "video": {
+    "name": "depo_kamera.mp4",
+    "sizeBytes": 20971520,
+    "seconds": 60.0,
+    "fps": 25.0,
+    "width": 1280,
+    "height": 720
+  },
+  "options": {
+    "preset": "fire",
+    "fire": {
+      "fire": { "enabled": true, "seconds": 3 },
+      "smoke": { "enabled": true, "seconds": 8 },
+      "sensitivity": "normal"
+    }
+  },
+  "progress": 1.0,
+  "result": {
+    "count": 2,
+    "calibration": {},
+    "processingFps": 11.2,
+    "device": { "kind": "gpu", "name": "NVIDIA GeForce RTX 3050 Laptop GPU", "note": null },
+    "alarms": [
+      { "kind": "smoke", "trackId": 1, "startS": 14.0, "atS": 22.0, "endS": 41.5, "image": "alarm-1.jpg" },
+      { "kind": "fire", "trackId": 0, "startS": 30.2, "atS": 33.2, "endS": 60.0, "image": "alarm-2.jpg" }
+    ],
+    "files": [
+      "annotated.mp4",
+      "alarms.csv",
+      "profile.json",
+      "alarm-1.jpg",
+      "alarm-2.jpg"
+    ]
+  }
+}

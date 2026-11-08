@@ -49,7 +49,7 @@ def test_store_seeds_profiles_like_phone_catalog(tmp_path: pathlib.Path) -> None
     people = next(p for p in store.profiles() if p["name"] == "Mağaza girişi")
     assert people["countMode"] == "detect"
     presets = {k["key"] for c in CATALOG for k in c["presets"]}
-    assert presets == {"egg", "flour", "box", "generic", "people", "jeweler"}   # jeweler: tohumlanmaz, "+ ekle" ile
+    assert presets == {"egg", "flour", "box", "generic", "people", "jeweler", "fire"}   # jeweler, fire: tohumlanmaz, "+ ekle" ile
 
 
 def test_store_keeps_password_out_of_sources(tmp_path: pathlib.Path) -> None:

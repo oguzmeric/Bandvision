@@ -70,8 +70,8 @@ struct ContentView: View {
                     .background(Color.orange.opacity(0.85))
                     .clipShape(Capsule())
             }
-            if vm.profile.mode == .safety {
-                // Güvenlik alarmı bu cihazda çalışmaz: 0 sayacı "izleniyor" sanılmasın
+            if vm.profile.isPcOnly {
+                // Güvenlik/yangın alarmı bu cihazda çalışmaz: 0 sayacı "izleniyor" sanılmasın
                 Text("Bu cihazda desteklenmiyor")
                     .font(.caption2.bold())
                     .lineLimit(1)
@@ -102,6 +102,7 @@ struct ContentView: View {
         switch vm.profile.mode {
         case .detect: return "person.2"
         case .safety: return "exclamationmark.shield"
+        case .fire: return "flame"
         case .blob, .linescan: return "shippingbox"
         }
     }

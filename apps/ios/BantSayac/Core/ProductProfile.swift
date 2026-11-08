@@ -101,6 +101,9 @@ struct ProductProfile: Codable, Identifiable, Equatable {
     /// Güvenlik (poz alarmı, `countMode == .safety`): yalnızca bilgisayardaki analiz sunucusunda çalışır. iPhone alanı
     /// yalnızca taşır (kaydedilince kaybolmasın); bu cihazda işlenmez.
     var safety: SafetyConfig? = nil
+    /// Yangın/duman (`countMode == .fire`): yalnızca bilgisayardaki analiz sunucusunda çalışır. iPhone alanı yalnızca
+    /// taşır (kaydedilince kaybolmasın); bu cihazda işlenmez.
+    var fire: FireConfig? = nil
 }
 
 /// Poz güvenlik alarmı ayarları (sözleşme `safety`; yalnızca bilgisayardaki analiz sunucusunda çalışır)
@@ -128,6 +131,36 @@ extension SafetyConfig {
     }
 }
 
+/// Yangın/duman erken uyarısı ayarları (sözleşme `fire`; yalnızca bilgisayarda çalışır). `ignoreZones` iPhone'da yalnızca
+/// okunur/korunur: her bölge `[x, y]` noktalarının dizisidir.
+struct FireConfig: Codable, Equatable, Sendable {
+    typealias Rule = SafetyConfig.Rule
+    var fire: Rule
+    var smoke: Rule
+    var sensitivity: String
+    var ignoreZones: [[[Double]]]
+    var sendImage: Bool
+
+    enum CodingKeys: String, CodingKey { case fire, smoke, sensitivity, ignoreZones, sendImage }
+}
+
+extension FireConfig {
+    /// Sözleşme varsayılanları: şemada `fire` alanları zorunlu değil (`{}` geçerli), Python eksikleri bunlarla doldurur
+    static let defaultFire = Rule(enabled: true, seconds: 3)
+    static let defaultSmoke = Rule(enabled: true, seconds: 8)
+
+    /// Eksik alan varsayılanla dolar; `Rule` katı kalır (`enabled` ve `seconds` birlikte gelir). Uzantıda: eşlenik
+    /// başlatıcı korunur.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fire = try c.decodeIfPresent(Rule.self, forKey: .fire) ?? Self.defaultFire
+        smoke = try c.decodeIfPresent(Rule.self, forKey: .smoke) ?? Self.defaultSmoke
+        sensitivity = try c.decodeIfPresent(String.self, forKey: .sensitivity) ?? "normal"
+        ignoreZones = try c.decodeIfPresent([[[Double]]].self, forKey: .ignoreZones) ?? []
+        sendImage = try c.decodeIfPresent(Bool.self, forKey: .sendImage) ?? false
+    }
+}
+
 /// Sayım yöntemi (sözleşme `countMode`).
 enum CountMode: String, Codable, CaseIterable, Identifiable {
     /// Arka plan farkı + izleme: ayrık ürünler (yumurta, meyve...)
@@ -138,6 +171,8 @@ enum CountMode: String, Codable, CaseIterable, Identifiable {
     case detect
     /// Poz güvenlik alarmı (eller yukarı, yerde yatan kişi): yalnızca bilgisayarda; iPhone yalnızca görüntüler
     case safety
+    /// Yangın/duman erken uyarısı (alev, duman): yalnızca bilgisayarda; iPhone yalnızca görüntüler
+    case fire
 
     var id: String { rawValue }
     var title: String {
@@ -146,6 +181,7 @@ enum CountMode: String, Codable, CaseIterable, Identifiable {
         case .linescan: return "Bitişik / hacimli"
         case .detect: return "Kişi (giriş/çıkış)"
         case .safety: return "Güvenlik (yalnızca bilgisayar)"
+        case .fire: return "Yangın / duman (yalnızca bilgisayar)"
         }
     }
 
@@ -157,6 +193,8 @@ extension ProductProfile {
     static let maxPolygonPoints = 12
 
     var mode: CountMode { countMode ?? .blob }
+    /// Yalnızca bilgisayarda çalışan yöntem mi (güvenlik, yangın/duman): iPhone görüntüler ama işlemez
+    var isPcOnly: Bool { mode == .safety || mode == .fire }
     /// Tanıma: çizgiye göre konum noktası
     var anchor: CountAnchor { countAnchor ?? .center }
     /// İki yönlü sayım mı (giriş/çıkış)

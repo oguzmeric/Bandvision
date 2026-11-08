@@ -70,6 +70,50 @@ class SafetyConfig:
 
 
 @dataclass
+class FireConfig:
+    """Yangın/duman erken uyarısı (countMode = "fire"): alev 2–10 sn, duman 5–30 sn, hassasiyet, hariç bölgeler
+    (en çok 8 çokgen, 3–12 nokta, 0–1), olay resmi gönderimi."""
+    fire: SafetyRule = field(default_factory=lambda: SafetyRule(True, 3.0))
+    smoke: SafetyRule = field(default_factory=lambda: SafetyRule(True, 8.0))
+    sensitivity: str = "normal"      # "low" | "normal" | "high"
+    ignoreZones: list[list[tuple[float, float]]] = field(default_factory=list)
+    sendImage: bool = False
+
+    @classmethod
+    def from_dict(cls, d: Any) -> FireConfig:
+        """Bozuk/eksik alan varsayılan olur; aralık dışı sayılar kırpılmaz (canlı doğrulama reddeder)."""
+        c = cls()
+        if not isinstance(d, dict):
+            return c
+        for name in ("fire", "smoke"):
+            r = d.get(name)
+            if isinstance(r, dict):
+                dflt = getattr(c, name)
+                try:
+                    secs = float(r.get("seconds", dflt.seconds))
+                except (TypeError, ValueError):
+                    secs = dflt.seconds
+                setattr(c, name, SafetyRule(bool(r.get("enabled", dflt.enabled)), secs))
+        if d.get("sensitivity") in ("low", "normal", "high"):
+            c.sensitivity = d["sensitivity"]
+        zones = d.get("ignoreZones")
+        if isinstance(zones, list):
+            for z in zones:
+                try:
+                    pts = [(float(x), float(y)) for x, y in z]
+                except (TypeError, ValueError):
+                    continue
+                if 3 <= len(pts) <= 12:
+                    c.ignoreZones.append(pts)
+        c.sendImage = bool(d.get("sendImage", False))
+        return c
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"fire": asdict(self.fire), "smoke": asdict(self.smoke), "sensitivity": self.sensitivity,
+                "ignoreZones": [[[x, y] for x, y in z] for z in self.ignoreZones], "sendImage": self.sendImage}
+
+
+@dataclass
 class Profile:
     name: str = "Genel ürün"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -105,6 +149,8 @@ class Profile:
     staffColors: list[tuple[float, float, float]] = field(default_factory=list)
     # safety: poz güvenlik alarmı ayarları (yalnızca countMode = "safety" iken yazılır)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    # fire: yangın/duman erken uyarısı ayarları (yalnızca countMode = "fire" iken yazılır)
+    fire: FireConfig = field(default_factory=FireConfig)
     rotation: int = 0            # source.rotation (saat yönünde derece)
     referenceFps: float = 60.0   # source.referenceFps
     mmPerPixel: float | None = None  # scale.mmPerPixel (tam çözünürlük)
@@ -147,6 +193,8 @@ class Profile:
                 SafetyRule(bool(sf.get("lying", {}).get("enabled", True)),
                            float(sf.get("lying", {}).get("seconds", 10.0))),
                 bool(sf.get("sendImage", False)))
+        if "fire" in d:
+            p.fire = FireConfig.from_dict(d["fire"])
         if d.get("countLine"):
             cl = d["countLine"]
             p.countLine = ((float(cl["a"]["x"]), float(cl["a"]["y"])), (float(cl["b"]["x"]), float(cl["b"]["y"])))
@@ -191,6 +239,8 @@ class Profile:
             d["staffColors"] = [{"L": L, "a": a, "b": b} for L, a, b in self.staffColors]
         if self.countMode == "safety":
             d["safety"] = asdict(self.safety)
+        if self.countMode == "fire":
+            d["fire"] = self.fire.to_dict()
         if self.roiPolygon:
             d["roiPolygon"] = [{"x": x, "y": y} for x, y in self.roiPolygon]
         if self.countLine:
@@ -275,6 +325,12 @@ class Profile:
         """Kuyumcu güvenliği: eller yukarı (3 sn) ve yerde yatan kişi (10 sn) alarmı; eğik bullet/dome kamera."""
         return cls(name="Kuyumcu güvenliği", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="safety", detectClasses=["person"],
                    detectConfidence=0.35, countAnchor="bottom", minHits=3, processingWidth=640)
+
+    @classmethod
+    def fire_watch(cls) -> Profile:
+        """Yangın / duman erken uyarısı: alev (3 sn) ve duman (8 sn) kuralı; sabit kamera, tüm kare."""
+        return cls(name="Yangın / duman", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="fire", processingWidth=640,
+                   fire=FireConfig())
 
     @classmethod
     def vehicles(cls) -> Profile:

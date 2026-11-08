@@ -69,7 +69,7 @@ final class SafetyProfileTests: XCTestCase {
 
     /// Sabit liste denetimi (sözleşmedeki `countMode` sıralaması elle yazılmıştır); şema dosyasını okumaz.
     func testCountModeRawValues() {
-        XCTAssertEqual(CountMode.allCases.map(\.rawValue), ["blob", "linescan", "detect", "safety"])
+        XCTAssertEqual(CountMode.allCases.map(\.rawValue), ["blob", "linescan", "detect", "safety", "fire"])
         XCTAssertEqual(CountMode.safety.title, "Güvenlik (yalnızca bilgisayar)")
     }
 }

@@ -8,8 +8,8 @@ struct CalibrationPanel: View {
             HStack {
                 Text(headerTitle).font(.headline)
                 Spacer()
-                if vm.profile.mode == .safety {
-                    EmptyView()             // güvenlik alarmı bu cihazda yok: akış yönü/çizgi denetimi gösterilmez
+                if vm.profile.isPcOnly {
+                    EmptyView()             // güvenlik/yangın alarmı bu cihazda yok: akış yönü/çizgi denetimi gösterilmez
                 } else if vm.profile.isTwoWay {
                     Button { vm.flipEntryDirection() } label: {
                         Label("Girişi çevir", systemImage: "arrow.up.arrow.down")
@@ -40,8 +40,8 @@ struct CalibrationPanel: View {
                 .fixedSize(horizontal: false, vertical: true)      // dar ekranda kırpılmasın, alt satıra geçsin
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if vm.profile.mode == .safety {
-                EmptyView()                 // güvenlik alarmı bu cihazda yok: ayar gösterilmez, açıklama yukarıdaki mesajda
+            if vm.profile.isPcOnly {
+                EmptyView()                 // güvenlik/yangın alarmı bu cihazda yok: ayar gösterilmez, açıklama yukarıdaki mesajda
             } else if vm.profile.isTwoWay {
                 cameraPicker
                 areaShapePicker
@@ -73,6 +73,7 @@ struct CalibrationPanel: View {
     private var headerTitle: String {
         switch vm.profile.mode {
         case .safety: return "Güvenlik alarmı"
+        case .fire: return "Yangın / duman"
         case .detect: return "Ayarlar"
         case .blob, .linescan: return "Kalibrasyon"
         }
