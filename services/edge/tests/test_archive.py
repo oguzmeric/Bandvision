@@ -372,10 +372,13 @@ def test_hikvision_stream_url_is_utc_track_url() -> None:
     start = utc(2026, 11, 7, 8)
     assert a.stream_url(CH1, start, start + 600, False, 1) == (
         f"rtsp://{HOST}:554/Streaming/tracks/101?starttime=20261107T080000Z&endtime=20261107T081000Z")
-    assert a.stream_url(CH1, start, None, True, 4) == (
+    assert a.stream_url(CH1, start, None, True, 1) == (
         f"rtsp://{HOST}:554/Streaming/tracks/102?starttime=20261107T080000Z&endtime=20261108T080000Z")
     assert "/tracks/201?" in a.stream_url(CH2_NOSUB, start, None, True, 1)
-    assert a.speeds == (1, 2, 4) and not a.can_export
+    # gerçek zamanlı RTSP: cihaz tarafı hız (Scale) doğrulanana dek yalnız 1×
+    assert a.speeds == (1,) and not a.can_export
+    with pytest.raises(ValueError):
+        a.stream_url(CH1, start, None, True, 4)
     with pytest.raises(RecorderError) as e:
         a.export(CH1, start, start + 60)
     assert e.value.kind == "unsupported"
@@ -444,13 +447,15 @@ def test_hikvision_calendar() -> None:
 def test_dahua_stream_url_is_local_time() -> None:
     a = DahuaArchive(DahuaClient(fake_http(lambda r: httpx.Response(500)), HOST, 554))
     start = local(2026, 11, 7, 8)
-    assert a.stream_url(CH1, start, start + 600, True, 2) == (
+    assert a.stream_url(CH1, start, start + 600, True, 1) == (
         f"rtsp://{HOST}:554/cam/playback?channel=1&subtype=1"
         "&starttime=2026_11_07_08_00_00&endtime=2026_11_07_08_10_00")
     assert a.stream_url(CH1, start, None, False, 1).endswith(
         f"subtype=0&starttime=2026_11_07_08_00_00&endtime={dahua_time(start + 86400, '_')}")
     assert "subtype=0" in a.stream_url(CH2_NOSUB, start, None, True, 1)
-    assert a.speeds == (1, 2, 4) and not a.can_export
+    assert a.speeds == (1,) and not a.can_export             # gerçek zamanlı RTSP: yalnız 1×
+    with pytest.raises(ValueError):
+        a.stream_url(CH1, start, None, True, 2)
 
 
 class FakeDahua:
