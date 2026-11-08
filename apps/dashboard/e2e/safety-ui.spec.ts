@@ -615,14 +615,14 @@ test("alarm penceresi (sahte API): kayıt cihazı kanalındaki alarmda \"Kayıt 
     { ...base, id: "r1", sessionId: "s1", camera: "Ofis NVR · Kasa", startedAt: now - 33, firedAt: now - 30.4,
       sourceId: "nvr", channelId: "kanal 3" },
     { ...base, id: "o1", sessionId: "s2", camera: "Eski kayıt", startedAt: now - 63, firedAt: now - 60 },   // alan yok (eski sunucu)
-    { ...base, id: "c1", sessionId: "s3", camera: "Kapı", startedAt: now - 93, firedAt: now - 90, sourceId: "cam", channelId: null },
+    { ...base, id: "c1", sessionId: "s3", camera: "Kapı", startedAt: now - 93, firedAt: now - 90, sourceId: "cam", channelId: "1" },   // kanallı ama kamera
   );
   const modal = modalOf(page);
   const watch = modal.getByRole("link", { name: "Kayıt cihazında izle" });
   await expect(modal.getByTestId("alarm-counter")).toHaveText("1 / 3");
   const t = Math.floor(now - 30.4 - 10);
   await expect(watch).toHaveAttribute("href", `/archive?source=nvr&channel=kanal%203&t=${t}`);
-  // eski kayıt (sourceId yok) ve kamera kaynağı: düğme yok
+  // eski kayıt (sourceId yok) ve kamera kaynağı (kanal dolu olsa da kind "camera"): düğme yok
   await modal.getByRole("button", { name: "Sonraki alarm" }).click();
   await expect(modal).toContainText("Eski kayıt");
   await expect(watch).toHaveCount(0);

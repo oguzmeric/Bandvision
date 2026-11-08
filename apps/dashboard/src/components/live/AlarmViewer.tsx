@@ -22,6 +22,9 @@ interface Props {
   onFalseAlarm: (a: Alarm) => Promise<boolean>;
 }
 
+/** Kaynak listesi alınamazsa ikinci (son) denemeye kadar beklenen süre */
+const SOURCES_RETRY_MS = 5000;
+
 const FOCUSABLE = 'a[href], button:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
 /** 0:05 biçimi (kayıt içi saniye) */
@@ -55,10 +58,15 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
   useEffect(() => {
     if (!needSources || recorders) return;
     let live = true;
-    api<Source[]>("sources")
-      .then((list) => { if (live) setRecorders(new Set(list.filter((s) => s.kind === "recorder").map((s) => s.id))); })
-      .catch(() => undefined);                 // kaynaklar alınamazsa düğme görünmez
-    return () => { live = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // kaynaklar alınamazsa pencere açıkken 5 sn sonra bir kez daha denenir; yine olmazsa düğme görünmez
+    const load = (retry: boolean) => {
+      api<Source[]>("sources")
+        .then((list) => { if (live) setRecorders(new Set(list.filter((s) => s.kind === "recorder").map((s) => s.id))); })
+        .catch(() => { if (live && retry) timer = setTimeout(() => load(false), SOURCES_RETRY_MS); });
+    };
+    load(true);
+    return () => { live = false; clearTimeout(timer); };
   }, [needSources, recorders]);
 
   // açılınca üst katmanda modal; odak pencereye (Gördüm varsa ona); kapanınca önceki öğeye geri
