@@ -385,7 +385,7 @@ class ArchiveClient(ABC):
     NVR'ında doğrulanacak). `ArchiveManager` (Task 2) bu çağrıları kaynak başına bir kilitle sıralar.
     `tz`: Dahua/TRASSIR yerel saat çevrimi (None = bu bilgisayarın saat dilimi)."""
 
-    speeds: tuple[int, ...] = (1, 2, 4)
+    speeds: tuple[int, ...] = (1,)        # gerçek zamanlı akışta yalnız 1×; hız cihazda olan bağdaştırıcı genişletir
     can_export: bool = False
     tz: tzinfo | None = None
 
@@ -595,7 +595,12 @@ def _raise_if_auth(data: bytes) -> None:
 
 
 class HikvisionArchive(ArchiveClient):
-    """Hikvision ISAPI arşivi (cihazda doğrulanmadı). Hız istemci tarafında kare atlamayla. Saatler UTC."""
+    """Hikvision ISAPI arşivi (cihazda doğrulanmadı). Saatler UTC.
+
+    Yalnız 1×: oynatma RTSP'si gerçek zamanlı akar; istemcide kare atlamak görüntüyü hızlandırmaz, yalnız kare
+    düşürür. Hız için cihaz tarafı (RTSP `Scale` başlığı) cihazda doğrulanınca `speeds` genişler."""
+
+    speeds = (1,)
 
     def __init__(self, client: HikvisionClient, tz: tzinfo | None = None) -> None:
         self._live = client
@@ -647,7 +652,11 @@ class HikvisionArchive(ArchiveClient):
 
 
 class DahuaArchive(ArchiveClient):
-    """Dahua CGI arşivi (cihazda doğrulanmadı; kanal numarası 1 tabanlı varsayılır). Hız istemci tarafında."""
+    """Dahua CGI arşivi (cihazda doğrulanmadı; kanal numarası 1 tabanlı varsayılır).
+
+    Yalnız 1× (Hikvision'daki gerekçe: gerçek zamanlı RTSP; cihaz tarafı `Scale` doğrulanınca genişler)."""
+
+    speeds = (1,)
 
     def __init__(self, client: DahuaClient, tz: tzinfo | None = None) -> None:
         self._live = client
@@ -717,7 +726,10 @@ class DahuaArchive(ArchiveClient):
 
 class FileArchive(ArchiveClient):
     """Test kancası: video dosyası (yalnız `ANALYZER_ALLOW_FILE_SOURCES=1`). Zaman ekseni dosya saniyesidir;
-    oynatıcı dosyayı açıp başlangıca kendisi sarar."""
+    oynatıcı dosyayı açıp başlangıca kendisi sarar. Hızlar (1, 2, 4): dosya istendiği hızda okunabildiği için istemci
+    tarafı kare atlama burada gerçekten hızlandırır."""
+
+    speeds = (1, 2, 4)
 
     def __init__(self, path: str) -> None:
         self.path = path
