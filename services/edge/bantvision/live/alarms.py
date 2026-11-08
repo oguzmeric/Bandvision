@@ -35,7 +35,7 @@ _ID = re.compile(r"[0-9a-f]{32}")
 _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "startedAt": 0.0, "endedAt": None,
                              "acked": False, "notify": "disabled", "image": False, "clip": False,
                              "clipStartedAt": None, "clipPending": False, "clipFailed": False,
-                             "falseAlarm": False}
+                             "falseAlarm": False, "sourceId": None, "channelId": None}
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
@@ -106,12 +106,16 @@ class AlarmStore:
         return True
 
     def add(self, session_id: str | None, camera: str, kind: str, started_at: float, fired_at: float,
-            jpeg: bytes | None, notify: str, clip_pending: bool = False) -> dict[str, Any]:
-        """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der)."""
+            jpeg: bytes | None, notify: str, clip_pending: bool = False, source_id: str | None = None,
+            channel_id: str | None = None) -> dict[str, Any]:
+        """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der).
+        `source_id` / `channel_id`: alarmın kamerası (kayıttan izlemeye geçiş; eski kayıtlarda ve oturumsuz deneme
+        alarmında None)."""
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
              "image": jpeg is not None, "clip": False, "clipStartedAt": None,
-             "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False}
+             "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False,
+             "sourceId": source_id, "channelId": channel_id}
         with self._lock:
             if jpeg is not None:
                 try:
