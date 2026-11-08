@@ -174,7 +174,12 @@ export interface Alarm {
   clipFailed?: boolean;
   /** Kullanıcı "Yanlış alarm" dedi (onaylanmış sayılır) */
   falseAlarm?: boolean;
+  /** Alarmı veren oturumun kaynağı ve kanalı (kayıt cihazı kanalıysa "Kayıt cihazında izle"); eski kayıtlarda yok */
+  sourceId?: string | null;
+  channelId?: string | null;
 }
+/** Alarm anından bu kadar saniye önceden kayıt cihazında izlenir */
+export const ARCHIVE_LEAD_S = 10;
 /** Alarm penceresinin büyük başlığı */
 export const ALARM_TITLES: Record<AlarmType, string> = { hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", test: "DENEME ALARMI" };
 /** clipPending göndermeyen eski sunucuda: kameralı alarmdan sonra bu kadar saniye "Kayıt hazırlanıyor…" */
