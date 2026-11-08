@@ -252,8 +252,11 @@ class ArchivePlayer:
             return PlayerView(self.id, self.source_id, self.channel_id, name, self._state, self._message, self._at,
                               self._speed, tuple(self._archive.speeds), self._fps, self._archive.can_export)
 
-    def frame(self) -> tuple[int, np.ndarray | None]:
-        self.touch()
+    def frame(self, touch: bool = True) -> tuple[int, np.ndarray | None]:
+        """Son kare. `touch=False`: yalnız bakar (akış ucunun yoklaması); kare gerçekten gönderilince çağıran `touch()` eder,
+        böylece terk edilmiş bir bağlantı duraklatılmış oynatıcıyı canlı tutmaz."""
+        if touch:
+            self.touch()
         self.check()
         with self._cond:
             return self._seq, self._frame
@@ -269,6 +272,7 @@ class ArchivePlayer:
             self._cond.notify_all()
 
     def pause(self) -> None:
+        self.touch()
         with self._cond:
             if self._closed or self._state not in _ACTIVE:
                 return
@@ -279,12 +283,14 @@ class ArchivePlayer:
 
     def resume(self) -> None:
         """Duraklatılmış, bitmiş ya da hatalı oynatmayı `at`tan yeniden açar; oynarken/bağlanırken bir şey yapmaz."""
+        self.touch()
         with self._cond:
             if not self._closed and self._state not in _ACTIVE:
                 self._restart(self._at)
 
     def seek(self, at: float) -> None:
         """Yeni konumdan oynatır (duraklatılmışsa da)."""
+        self.touch()
         with self._cond:
             if not self._closed:
                 self._restart(max(0.0, float(at)))
@@ -293,6 +299,7 @@ class ArchivePlayer:
         """Oynuyorsa aynı konumdan yeni hızla yeniden açar; duraklatılmış/bitmişse yalnız hızı kaydeder."""
         if speed not in self._archive.speeds:
             raise UnsupportedSpeed()
+        self.touch()
         with self._cond:
             if self._closed or speed == self._speed:
                 return
