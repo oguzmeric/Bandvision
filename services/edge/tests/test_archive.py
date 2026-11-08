@@ -125,8 +125,9 @@ class Berlin(tzinfo):
     def utcoffset(self, dt: datetime | None) -> timedelta:
         assert dt is not None
         naive = dt.replace(tzinfo=None, fold=0)
-        begin = datetime(dt.year, 3, _last_sunday(dt.year, 3), 2)
-        end = datetime(dt.year, 10, _last_sunday(dt.year, 10), 3)
+        # Duvar saati karşılaştırması: sınırlar saat dilimli kurulup dilimsizleştirilir (ruff DTZ001 ve RUF100 her sürümde sessiz)
+        begin = datetime(dt.year, 3, _last_sunday(dt.year, 3), 2, tzinfo=UTC).replace(tzinfo=None)
+        end = datetime(dt.year, 10, _last_sunday(dt.year, 10), 3, tzinfo=UTC).replace(tzinfo=None)
         summer = begin <= naive < end and not (dt.fold and naive >= end - timedelta(hours=1))
         return timedelta(hours=2 if summer else 1)
 
