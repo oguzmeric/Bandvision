@@ -34,7 +34,7 @@ test("kayıttan izleme (gerçek yığın, dosya kaynağı): akış, saat, çizel
 
     // MJPEG <img> panel vekilinden kare alır; durum "Oynatılıyor"
     const img = page.getByTestId("player-stream");
-    await expect(img).toHaveAttribute("src", /^\/api\/live\/archive\/players\/[^/]+\/stream$/);
+    await expect(img).toHaveAttribute("src", /^\/api\/live\/archive\/players\/[^/]+\/stream\?k=\d+$/);
     const id = (await img.getAttribute("src"))!.split("/").at(-2)!;
     const view = async (): Promise<View> => (await page.request.get(`/api/live/archive/players/${id}`)).json() as Promise<View>;
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 20_000 }).toBeGreaterThan(0);

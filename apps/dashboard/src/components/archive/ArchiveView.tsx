@@ -196,8 +196,13 @@ function ArchiveBody() {
     setCursor(target);
     player.seek(cam, target);
   };
-  const toggle = () => { if (cam) player.toggle(cam, at); };
   const nextAt = ranges ? nextRangeStart(ranges, at) : null;
+  /** Ana düğme ve Boşluk: "Kayıt bitti"de sonraki kayda gider (yoksa bir şey yapmaz), aksi hâlde duraklat/sürdür */
+  const toggle = () => {
+    if (!cam) return;
+    if (player.view?.state === "ended") { if (nextAt !== null) moveTo(nextAt); }
+    else player.toggle(cam, at);
+  };
 
   // Oynatıcı/çizelge bölgesinin kısayolları (←/→, Shift+←/→, Boşluk); "?"yi sayfa işler
   const onRegionKey = (e: React.KeyboardEvent) => {
@@ -217,7 +222,8 @@ function ArchiveBody() {
         <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_300px]">
           <div className="grid min-w-0 gap-2" onKeyDown={onRegionKey} data-testid="archive-region">
             <Player name={name} hasCamera={cam !== null} view={player.view} opening={player.opening} seeking={player.seeking}
-                    error={player.error} notice={player.notice} streamKey={player.streamKey} at={at} speed={player.speed}
+                    error={player.error} notice={player.notice} streamKey={player.streamKey} visible={player.visible}
+                    onStreamError={player.onStreamError} at={at} speed={player.speed}
                     nextAt={nextAt} onToggle={toggle} onStep={(s) => moveTo(at + s)}
                     onSpeed={(s) => { if (cam) player.setSpeed(cam, s, at); }}
                     onNext={() => { if (nextAt !== null) moveTo(nextAt); }}
