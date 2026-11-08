@@ -64,8 +64,9 @@ Hikvision/Dahua cihazı olup olmadığı sorulacak.
   küçültür, son kareyi tutar (`seq`, durum: `connecting|playing|paused|ended|error`, `message`, `at` epoch sn, `fps`).
   - **Konum:** `at = start + okunan_kare / kare_hızı × hız` (kare hızı `CAP_PROP_FPS`, 0 ise 25). TRASSIR durum sorgusu
     kullanılmaz (biçimi doğrulanmadı).
-  - **Hız:** TRASSIR'da komutun `speed`'i (cihaz atlar); Hikvision/Dahua'da her `hız`. kare gösterilir (çözme sürer, yalnız
-    çıktı seyrelir; bu yüzden 4× üstü yok).
+  - **Hız:** TRASSIR'da komutun `speed`'i (cihaz atlar). Hikvision/Dahua oynatma akışını gerçek zamanlı gönderir; istemci tarafı
+    kare atlama hızlandırmaz, bu yüzden cihaz tarafı hız (RTSP `Scale`) doğrulanana dek yalnız 1× (son inceleme kararı). Dosya
+    kaynağında (test) 1/2/4× istemci tarafı.
   - **Duraklat / sürdür / sar / hız değiştir = tek yol:** okuma durur, yakalama kapanır (TRASSIR'da `archive_command stop`),
     yeni konumdan yeniden açılır. Duraklamada son kare kalır ve `at` sabit. Yeniden açılış 1–3 sn sürer; panel "Sarılıyor…"
     gösterir. (Tek kod yolu: üç markada da aynı davranış, jeton tazelenir.)
