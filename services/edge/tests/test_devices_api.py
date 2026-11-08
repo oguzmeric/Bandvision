@@ -22,7 +22,7 @@ from bantvision.live import api, jsonfile
 from bantvision.live.api import SharedDetector, SharedPose
 from bantvision.live.devices_store import DeviceSettings
 
-DEFAULTS = {"detector": "auto", "pose": "auto", "video": "auto"}
+DEFAULTS = {"detector": "auto", "pose": "auto", "video": "auto", "fire": "auto"}
 NVIDIA = Gpu("gpu-10de-28a1", "NVIDIA Laptop GPU", 5920, 0, "0x00000000_0x0000a1b2")
 INTEL = Gpu("gpu-8086-a7a0", "Intel Graphics", 128, 1, "0x00000000_0x0000c3d4")
 N4 = "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); işlemci kullanılıyor."
@@ -69,8 +69,8 @@ def test_store_missing_file_gives_defaults(tmp_path: pathlib.Path) -> None:
 
 
 def test_store_round_trip(tmp_path: pathlib.Path) -> None:
-    saved = DeviceSettings(tmp_path).save({"detector": "gpu-10de-28a1", "pose": "cpu", "video": "auto"})
-    assert saved == {"detector": "gpu-10de-28a1", "pose": "cpu", "video": "auto"}
+    saved = DeviceSettings(tmp_path).save({"detector": "gpu-10de-28a1", "pose": "cpu", "video": "auto", "fire": "cpu"})
+    assert saved == {"detector": "gpu-10de-28a1", "pose": "cpu", "video": "auto", "fire": "cpu"}
     assert json.loads((tmp_path / "devices.json").read_text(encoding="utf-8")) == {"choices": saved}
     assert DeviceSettings(tmp_path).choices() == saved
     assert not list(tmp_path.glob("*.tmp"))                             # atomik yazma: geçici dosya kalmaz
@@ -109,7 +109,7 @@ def test_store_unknown_key_ignored_and_bad_value_defaults(tmp_path: pathlib.Path
         {"choices": {"detector": "cpu", "pose": "cuda:0", "kamera": "cpu"}, "eski": 1}), encoding="utf-8")
     with caplog.at_level(logging.WARNING):
         s = DeviceSettings(tmp_path)
-    assert s.choices() == {"detector": "cpu", "pose": "auto", "video": "auto"}
+    assert s.choices() == {"detector": "cpu", "pose": "auto", "video": "auto", "fire": "auto"}
     assert (tmp_path / "devices.json").exists()                         # bozuk sayılmaz, kenara alınmaz
     assert any("pose" in r.getMessage() for r in caplog.records)
 
@@ -133,7 +133,7 @@ def test_store_locked_read_gives_defaults_and_leaves_file(tmp_path: pathlib.Path
     assert s.choices() == DEFAULTS
     assert real_read(f, encoding="utf-8") == original and not (tmp_path / "devices.json.corrupt").exists()
     assert any(r.levelno == logging.ERROR and "okunamadı" in r.getMessage() for r in caplog.records)
-    new = {"detector": "gpu-10de-28a1", "pose": "auto", "video": "cpu"}
+    new = {"detector": "gpu-10de-28a1", "pose": "auto", "video": "cpu", "fire": "gpu-10de-28a1"}
     assert s.save(new) == new                                           # kullanıcı az önce seçti: yazılır
     assert json.loads(real_read(f, encoding="utf-8")) == {"choices": new}
 
@@ -151,7 +151,7 @@ def test_store_write_failure_raises_and_keeps_memory(tmp_path: pathlib.Path, mon
     assert s.choices() == DEFAULTS
 
 
-SAVED = {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1"}
+SAVED = {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1", "fire": "cpu"}
 
 
 def lock_first_reads(monkeypatch: pytest.MonkeyPatch, n: int) -> list[tuple[float, ...] | None]:
@@ -565,7 +565,7 @@ def test_get_devices_shape(client: TestClient) -> None:
 def test_manager_applies_saved_choices_at_start(tmp_path: pathlib.Path, windows_gpus: None,
                                                 loads: list[tuple[str, str]]) -> None:
     (tmp_path / "devices.json").write_text(json.dumps(
-        {"choices": {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1"}}), encoding="utf-8")
+        {"choices": {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1", "fire": "cpu"}}), encoding="utf-8")
     with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         live = c.app.state.live                                         # type: ignore[attr-defined]
         assert live.detector.choice == "gpu-8086-a7a0" and live.pose.choice == "cpu"
@@ -582,7 +582,7 @@ def test_put_devices_saves_and_switches_live_models(client: TestClient, tmp_path
     live.detector.warm()
     wait_for(lambda: live.detector.status()["state"] == "ready")
     assert loads == [("detector", "auto")]
-    body = {"choices": {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1"}}
+    body = {"choices": {"detector": "gpu-8086-a7a0", "pose": "cpu", "video": "gpu-10de-28a1", "fire": "cpu"}}
     r = client.put("/api/v1/live/devices", json=body)
     assert r.status_code == 200
     assert r.json()["choices"] == body["choices"]
@@ -593,7 +593,7 @@ def test_put_devices_saves_and_switches_live_models(client: TestClient, tmp_path
     assert live.detector.detect("bgr", ["person"]) == ["gpu-8086-a7a0"]
     assert ("pose", "cpu") not in loads                                 # hiç yüklenmemiş poz modeli yalnız seçimi tutar
     assert client.app.state.worker._device_arg() == "gpu-10de-28a1"    # type: ignore[attr-defined]
-    auto = {"choices": {"detector": "auto", "pose": "auto", "video": "auto"}}
+    auto = {"choices": {"detector": "auto", "pose": "auto", "video": "auto", "fire": "auto"}}
     assert client.put("/api/v1/live/devices", json=auto).status_code == 200
     assert live.detector.choice == "auto"                               # çözülmeden saklanır: donanımı izler
 
@@ -649,7 +649,7 @@ def test_put_devices_body_wins_over_a_file_locked_at_start(
         loads: list[tuple[str, str]]) -> None:
     (tmp_path / "devices.json").write_text(json.dumps({"choices": SAVED}), encoding="utf-8")
     lock_first_reads(monkeypatch, 1)
-    body = {"detector": "cpu", "pose": "gpu-10de-28a1", "video": "auto"}
+    body = {"detector": "cpu", "pose": "gpu-10de-28a1", "video": "auto", "fire": "gpu-8086-a7a0"}
     with local_client(create_app(Settings(data_dir=tmp_path))) as c:
         live = c.app.state.live                                         # type: ignore[attr-defined]
         r = c.put("/api/v1/live/devices", json={"choices": body})
@@ -675,8 +675,8 @@ def test_overlapping_puts_leave_file_and_models_in_agreement(client: TestClient,
         real_set(choice)
 
     monkeypatch.setattr(live.detector, "set_choice", slow_set)
-    a = {"detector": "gpu-8086-a7a0", "pose": "gpu-8086-a7a0", "video": "gpu-8086-a7a0"}
-    b = {"detector": "cpu", "pose": "cpu", "video": "cpu"}
+    a = {"detector": "gpu-8086-a7a0", "pose": "gpu-8086-a7a0", "video": "gpu-8086-a7a0", "fire": "gpu-8086-a7a0"}
+    b = {"detector": "cpu", "pose": "cpu", "video": "cpu", "fire": "cpu"}
     out: dict[str, int] = {}
     ta = threading.Thread(target=lambda: out.update(a=client.put("/api/v1/live/devices",
                                                                  json={"choices": a}).status_code))
@@ -825,3 +825,23 @@ def test_devices_routes_require_the_access_key(tmp_path: pathlib.Path, windows_g
         assert c.post("/api/v1/live/devices/benchmark", json={"device": "cpu"}).status_code == 401
         ok = c.get("/api/v1/live/devices", headers={"Authorization": "Bearer gizli"})
         assert ok.status_code == 200
+
+
+def test_store_fire_choice_is_optional_on_save_and_kept(tmp_path: pathlib.Path) -> None:
+    s = DeviceSettings(tmp_path)
+    s.save({"detector": "cpu", "pose": "cpu", "video": "cpu", "fire": "cpu"})
+    old_client = s.save({"detector": "auto", "pose": "auto", "video": "auto"})       # eski istemci: fire yok
+    assert old_client == {"detector": "auto", "pose": "auto", "video": "auto", "fire": "cpu"}
+    assert DeviceSettings(tmp_path).choices()["fire"] == "cpu"
+    with pytest.raises(ValueError):
+        s.save({"detector": "cpu", "pose": "cpu", "video": "cpu", "fire": "cuda"})
+
+
+def test_put_devices_fire_is_saved_kept_and_validated(client: TestClient) -> None:
+    base = {"detector": "cpu", "pose": "cpu", "video": "cpu"}
+    r = client.put("/api/v1/live/devices", json={"choices": {**base, "fire": "cpu"}})
+    assert r.status_code == 200 and r.json()["choices"]["fire"] == "cpu"
+    r = client.put("/api/v1/live/devices", json={"choices": base})
+    assert r.status_code == 200 and r.json()["choices"]["fire"] == "cpu"
+    assert client.put("/api/v1/live/devices", json={"choices": {**base, "fire": "cuda"}}).status_code == 422
+    assert client.put("/api/v1/live/devices", json={"choices": {**base, "fire": None}}).status_code == 200

@@ -11,16 +11,15 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any
 
-import cv2
 import numpy as np
 
-from . import devices
+from . import devices, yolox
 from .model_download import download_verified
 
 MODEL_NAME = "yolox_s.onnx"
 MODEL_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
 MODEL_SHA256 = "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
-INPUT = 640
+INPUT = yolox.INPUT
 
 # COCO sınıf kimlikleri (YOLOX çıktısındaki sıra); yalnızca sayımda desteklenenler
 CLASS_IDS = {
@@ -67,7 +66,6 @@ class ObjectDetector:
 
         choice = device if device is not None else devices.default_choice()
         self.session = devices.open_session(path or ensure_model(), configure, choice)
-        self._grid, self._stride = _grids(INPUT)
 
     @property
     def used(self) -> devices.Used:
@@ -82,46 +80,9 @@ class ObjectDetector:
     def detect(self, bgr: np.ndarray, classes: list[str], conf: float = 0.35, iou: float = 0.45) -> list[Detection]:
         """Görüntü koordinatında (piksel) kutular; yalnızca istenen sınıflar."""
         h, w = bgr.shape[:2]
-        r = min(INPUT / h, INPUT / w)
-        img = np.full((INPUT, INPUT, 3), 114, np.uint8)               # YOLOX: sağ/alt gri dolgu, BGR, 0–255
-        img[: round(h * r), : round(w * r)] = cv2.resize(bgr, (round(w * r), round(h * r)),
-                                                          interpolation=cv2.INTER_LINEAR)
-        x = img.transpose(2, 0, 1)[None].astype(np.float32)
+        x, r = yolox.letterbox(bgr, INPUT)
         out = self.session.run(None, {self.session.get_inputs()[0].name: x})[0][0]
-        xy = (out[:, :2] + self._grid) * self._stride
-        wh = np.exp(out[:, 2:4]) * self._stride
-        ids = [CLASS_IDS[c] for c in classes if c in CLASS_IDS]
-        if not ids:
-            return []
-        cls_scores = out[:, 5:][:, ids] * out[:, 4:5]
-        best = cls_scores.argmax(1)
-        score = cls_scores[np.arange(len(best)), best]
-        keep = score >= conf
-        if not keep.any():
-            return []
-        xy, wh, score, best = xy[keep], wh[keep], score[keep], best[keep]
-        boxes = np.concatenate([xy - wh / 2, xy + wh / 2], 1) / r
-        boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, w)
-        boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, h)
-        out_dets: list[Detection] = []
-        for c in np.unique(best):
-            m = best == c
-            idx = cv2.dnn.NMSBoxes(
-                [[float(b[0]), float(b[1]), float(b[2] - b[0]), float(b[3] - b[1])] for b in boxes[m]],
-                [float(s) for s in score[m]], conf, iou)
-            name = classes[[CLASS_IDS[k] for k in classes].index(ids[int(c)])]
-            for i in np.array(idx).reshape(-1):
-                b = boxes[m][int(i)]
-                out_dets.append(Detection(float(b[0]), float(b[1]), float(b[2]), float(b[3]),
-                                          float(score[m][int(i)]), name))
-        return out_dets
-
-
-def _grids(size: int) -> tuple[np.ndarray, np.ndarray]:
-    grids, strides = [], []
-    for s in (8, 16, 32):
-        n = size // s
-        xv, yv = np.meshgrid(np.arange(n), np.arange(n))
-        grids.append(np.stack((xv, yv), 2).reshape(-1, 2))
-        strides.append(np.full((n * n, 1), s))
-    return np.concatenate(grids).astype(np.float32), np.concatenate(strides).astype(np.float32)
+        names = [c for c in classes if c in CLASS_IDS]
+        ids = [CLASS_IDS[c] for c in names]
+        return [Detection(x1, y1, x2, y2, sc, names[c])
+                for x1, y1, x2, y2, sc, c in yolox.decode(out, r, w, h, ids, conf, iou)]

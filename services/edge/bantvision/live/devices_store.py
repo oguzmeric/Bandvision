@@ -1,6 +1,6 @@
 """Cihaz ayarları (<data>/devices.json): canlı modellerin ve "Video ile test" işlerinin hangi cihazda çalışacağı.
 
-Biçim: `{"choices": {"detector": c, "pose": c, "video": c}}`; her seçim "auto" | "cpu" | kart kimliği
+Biçim: `{"choices": {"detector": c, "pose": c, "video": c, "fire": c}}`; her seçim "auto" | "cpu" | kart kimliği
 (`devices.valid_choice`). Eksik dosya ya da anahtar → "auto"; bilinmeyen anahtar yok sayılır.
 
 - Bozuk dosya (JSON çözülemedi ya da biçim yanlış) diğer ayar dosyaları gibi kenara alınır (`devices.json.corrupt`,
@@ -22,7 +22,8 @@ from .jsonfile import JsonRead, quarantine, read_json, write_json_atomic
 
 _LOG = logging.getLogger(__name__)
 
-KEYS = ("detector", "pose", "video")
+KEYS = ("detector", "pose", "video", "fire")
+OPTIONAL_KEYS = ("fire",)           # eski istemciler göndermezse kayıtlı seçim korunur
 DEFAULT_CHOICE = "auto"
 FILE_NAME = "devices.json"
 
@@ -96,12 +97,13 @@ class DeviceSettings:
             return dict(parsed)
 
     def save(self, choices: Mapping[str, str]) -> dict[str, str]:
-        """Üç seçimi birden kaydeder ve döndürür. Eksik/fazla anahtar ya da geçersiz değer `ValueError`; yazma hatası
-        `DeviceSettingsBusy` (bellekteki seçimler değişmez)."""
-        if set(choices) != set(KEYS) or not all(devices.valid_choice(choices[k]) for k in KEYS):
+        """Seçimleri birden kaydeder ve döndürür (`fire` verilmezse kayıtlı değeri korunur). Eksik/fazla anahtar ya da
+        geçersiz değer `ValueError`; yazma hatası `DeviceSettingsBusy` (bellekteki seçimler değişmez)."""
+        required = {k for k in KEYS if k not in OPTIONAL_KEYS}
+        if not required <= set(choices) <= set(KEYS) or not all(devices.valid_choice(v) for v in choices.values()):
             raise ValueError("Geçersiz cihaz seçimi.")
-        new = {k: choices[k] for k in KEYS}
         with self._lock:
+            new = {k: choices.get(k, self._choices[k]) for k in KEYS}
             try:
                 self._root.mkdir(parents=True, exist_ok=True)
                 write_json_atomic(self._file, {"choices": new}, indent=2)

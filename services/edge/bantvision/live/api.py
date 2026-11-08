@@ -112,11 +112,12 @@ class DeviceChoicesIn(_Strict):
     detector: str
     pose: str
     video: str
+    fire: str | None = None                     # verilmezse kayıtlı seçim korunur (eski istemciler)
 
-    @field_validator("detector", "pose", "video")
+    @field_validator("detector", "pose", "video", "fire")
     @classmethod
-    def _valid(cls, v: str) -> str:
-        if not devices.valid_choice(v):
+    def _valid(cls, v: str | None) -> str | None:
+        if v is not None and not devices.valid_choice(v):
             raise ValueError("geçersiz cihaz seçimi")
         return v
 
@@ -1723,7 +1724,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     def put_devices(body: DevicesIn) -> dict[str, Any]:
         """Üç seçimi kaydeder; canlı modeller boşluksuz yeni cihaza geçer (eski model yeni hazır olana dek hizmette)."""
         try:
-            return manager.save_devices(body.choices.model_dump())
+            return manager.save_devices(body.choices.model_dump(exclude_none=True))
         except DeviceSettingsBusy as e:
             raise HTTPException(503, str(e)) from e
 
