@@ -308,6 +308,34 @@ Panelde seçilen kayıt cihazı kanalının **arşivi** oynatılır (ayrıntı: 
   - **Sonraya:** "Net görüntü" (ana akış) seçeneği (API `substream=false` hazır, panelde düğme yok).
   - Dosya kaynağının arşiv gibi davranması **yalnız test kancasıdır** (dosya kaynaklarına izin veren test ayarıyla); sahada kullanılmaz.
 
+## 5m. Yangın / duman erken uyarısı (web + Telegram, 2026-11-08)
+
+Kamerada alev ve dumanı görüp güvenlik alarmıyla aynı yoldan haber verir. **Erken uyarıdır; yangın algılama ve alarm sisteminin yerine geçmez.** Kullanım, ayar önerileri, sınırlar, model kartı ve veri atıfları: `14-yangin-duman.md`; karar katmanı `03-algorithm.md` §4.12; sözleşme `02-contracts.md` (`countMode: "fire"`, `fire`, `preset: fire`); panel ve API `13-web-platform.md` "Yangın / duman"; tasarım `docs/superpowers/specs/2026-11-08-yangin-duman-design.md`.
+
+- **Ne var:**
+  - Analiz sunucusu: `fire` yöntemi (YOLOX-S tabanlı iki sınıflı model + karar katmanı: hassasiyet eşiği, en küçük kutu, hariç bölgeler, kutu içi hareket denetimi, ışık patlaması süzgeci, 8×6 hücre oyu, bölüm başına tek alarm), en çok 5 kare/sn analiz; alarm günlüğü, olay resmi, olay kaydı (kutulu), Telegram ("🔥 YANGIN" / "💨 DUMAN", "Görüntüyü hemen kontrol edin."), izleme sağlığı, `watch.json` ile yeniden başlatmada geri yükleme; Cihaz ayarlarında "Yangın/duman modeli" satırı.
+  - Yanlış alarm → zor örnek: resim, kayıt ve `meta.json` yalnız bu bilgisayarda `live/hard-negatives/<id>/` (en çok 500).
+  - Video ile test: "Yangın / duman" ön ayarı (`--preset fire`), alarm tablosu ve `alarms.csv`.
+  - Panel: Analizler → Yangın / duman (`/live?tur=yangin`), ayar paneli (kurallar, hassasiyet, alarm resmi, hariç bölge düzenleyici, model satırı, sabit uyarı), alarm etiketleri ve sayaçları.
+  - iPhone: profili okur ve korur, analiz etmez ("Yangın / duman (yalnızca bilgisayar)").
+  - Eğitim araçları (`tools/fire_train/`): veri hazırlığı (D-Fire/FireNet → COCO, lisans süzgeci, `sources.csv`), YOLOX deneyi, ONNX dışa aktarma ve biçim denetimi, ölçüm (mAP50, olay düzeyi, eşik kalibrasyonu önerisi).
+- **Doğrulama durumu:** sahte dedektörle çekirdek testleri (eşik, hariç bölge, sabit alev resmi, ışık patlaması, 1 ve 25 kare/sn'de alarm zamanı, tek alarm, bitiş), canlı oturum, video, sözleşme ve panel (birim + Playwright sahte API) testleri; eğitim araçlarının testleri sahte veriyle (eğitim koşmadan). **Model yok:** gerçek görüntüde hiçbir doğruluk ölçülmedi, başarım iddiası yok. Model yokken oturum sağlıksız ve nedenli, video işi Türkçe iletiyle başarısız (testli).
+- **Model eğitimi BEKLİYOR (kullanıcı onayı):** indirme (D-Fire, FireNet, FIRESENSE, YOLOX kaynağı ve COCO ön eğitimli ağırlık), ayrı eğitim ortamı, eğitim, ONNX, ölçüm. Adımlar `tools/fire_train/README.md`. Kabul hedefleri (v1): D-Fire test mAP50 ≥ 0,60; FIRESENSE pozitif videolarının ≥ %80'inde Normal hassasiyette 15 sn içinde alarm; negatif videolarda Normal'de 0 yanlış alarm. Tutmazsa model yayımlanmaz, rapor kullanıcıya sunulur.
+- **Ölçüm listesi** (model gelince; sonuçlar buraya):
+  - [ ] `eval_fire.py` raporu: mAP50 (sınıf başına), hassasiyet başına olay düzeyi tablo, eşik önerisi → `fire_rules.py` `THRESHOLDS` ayrı commit'te.
+  - [ ] D-Fire sınıf düzeninin doğrulanması: `prepare_data.py --include-public` toplam kutu sayıları README'dekilerle (fire 14.692, smoke 11.865) aynı mı.
+  - [ ] `GLOBAL_CHANGE_MAX = 0,40`: hızlı büyüyen alev/duman videolarında oy dışı kalan kare oranı ve alarm gecikmesi; IR geçişi ve ışık açma/kapamada hâlâ yanlış alarm olmadığı. Gerekirse eşik ya da kural (ör. yalnız kutu dışı değişimi saymak) yeniden değerlendirilir.
+  - [ ] Yavaş akış: 1 kare/sn'den yavaş kamerada 2 sn'lik alev kuralı `MIN_HITS = 3`'ü sağlayamaz; sahadaki kayıt cihazı alt akışlarının kare hızı ölçülüp gerekiyorsa panelde en kısa sürenin akış hızına göre sınırlanması.
+  - [ ] Oturum `fps`'inin yangın modunda analiz hızı olduğu (≤ 5) ve çok kamerada (ör. 9 yangın + sayım oturumları) ekran kartı yükü.
+  - [ ] Ofis kameralarında 8 saatlik normal çalışma kaydında yanlış alarm sayısı (kamera başına).
+- **TRASSIR kıyas prosedürü** (ofis ağında, kullanıcıyla; yalnız alarm çıktıları karşılaştırılır, TRASSIR'ın yazılımı ya da modeli alınmaz):
+  1. **Kurulum:** aynı kamera kanalı TRASSIR'ın yangın modülünde ve BantVision yangın oturumunda (Normal hassasiyet, varsayılan süreler, aynı hariç alanlar) aynı anda izlenir. İki sistemin saati aynı NTP kaynağına bağlı olmalı.
+  2. **Pozitif denemeler** (iş güvenliği kurallarına uygun, denetimli): kameranın gördüğü monitörde oynatılan yangın ve duman videoları (FIRESENSE pozitifleri) ve izin verilen yerde küçük denetimli kaynak (ör. mum, duman kalemi). Her deneme için başlangıç anı elle not edilir; en az 10 alev, 10 duman denemesi.
+  3. **Negatif süre:** aynı kamerada en az 8 saat normal çalışma (ışık açma/kapama, gece IR geçişi, insan ve araç hareketi dahil) ve monitörde FIRESENSE negatif videoları.
+  4. **Kayıt:** her sistemin alarm listesi (zaman, tür) dışa alınır; BantVision için Alarmlar sayfası ya da `GET /alarms?since=&until=&sessionId=`.
+  5. **Tablo:** deneme başına "TRASSIR alarm (sn) / BantVision alarm (sn) / ikisi de kaçırdı"; negatif süre için sistem başına yanlış alarm sayısı; özet: yakalama oranı, ortanca gecikme, 8 saatte yanlış alarm. Sonuç buraya yazılır; kayıtlar kullanıcınındır, public repoya konmaz.
+- **Bilinen sınırlar:** `14-yangin-duman.md` §5 (5 kare/sn analiz, yavaş akış, %40 ani değişim, buhar/sis/far/gün batımı/kaynak ışığı, küçük uzak duman). Zor örneklerin resmi ve kaydı kutuları çizili olduğundan eğitime doğrudan katılamaz; ham kare kayıt cihazından alınır (`14-yangin-duman.md` §8).
+
 ## 6. Araştırma ve tasarım notları
 
 - **Enao Vision** (iPhone ile kalite kontrol, rakip): `11-market-notes-enao.md`. Saha ipuçları (montaj, yumurta için yandan ışık, ≥ 10 px kuralı, gölge modu), fiyatlar, ürün fikirleri.
@@ -338,3 +366,4 @@ Panelde seçilen kayıt cihazı kanalının **arşivi** oynatılır (ayrıntı: 
 6. **Çoklu izleme ölçümü** (§5g, plan Görev 9): ofis NVR'ında 4'lü, 9'lu ve (kanal varsa) 16'lı şablon; işlemci kullanımı, kutu fps'leri, aynı anda çalışan sayım oturumunun fps'i; telefonla ofis Wi-Fi'ında QR ve şifreyle bağlanıp 9'lu şablonu izleme; güvenlik oturumunda deneme alarmıyla kırmızı kutu. Sonra iPhone ekranı (alt proje B, ayrı tasarım).
 7. **Sade arayüz ölçümü** (§5h, plan Görev 9; kullanıcıyla): ofis NVR'ında 16, 32 ve 64 kutuluk şablonda analiz sunucusunun işlemci yükü ve kutu başına kare hızı. Bilgisayar yol haritasının 2. projesi (ekran kartı desteği ve Cihaz ayarları) §5i'de; sıradaki: lisans ve demo.
 8. **Kayıttan izleme donanım doğrulaması** (§5l): ofis TRASSIR NVR'ında takvim/çizelge biçimi, ilk kare süresi, hız, `stop`, jeton ömrü, dışa aktarma; Hikvision/Dahua cihaz bulununca aynı liste.
+9. **Yangın / duman** (§5m): kullanıcı onayıyla model eğitimi ve ölçümü (`tools/fire_train/README.md`), hedefler tutarsa model yayımlama ve eşik kalibrasyonu; ölçüm listesi ve ofiste TRASSIR kıyası (yalnız alarm çıktıları).

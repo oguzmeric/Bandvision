@@ -1,5 +1,5 @@
-"""Poz güvenlik alarm günlüğü: <data>/live/alarms.json, alarm-images/<id>.jpg ve olay kaydı alarm-clips/<id>.webm
-(yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
+"""Güvenlik (poz) ve yangın/duman alarm günlüğü: <data>/live/alarms.json, alarm-images/<id>.jpg ve olay kaydı
+alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`).
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,

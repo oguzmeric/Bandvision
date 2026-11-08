@@ -236,6 +236,33 @@ Kuyumcu gibi mağazalarda **sessiz alarm**: soygun sırasında "eller yukarı" d
   - Araç Python/web yolunu ölçer: videoyu her karede (ya da `--every N`) işler, canlıdaki boş sahnede tanıma atlama kullanılmaz, kare hızı zaman damgalarından gelir.
 - **Bilinen risk:** MoveNet ağırlıklı olarak fitness/dans/yoga videolarıyla eğitildi; eğik ve uzak güvenlik kamerasında doğruluk yukarıdaki ölçümle sınanır. Eller yukarı eşikleri (`WRIST_UP`, `ELBOW_DOWN`) tek bir kameranın ölçümüyle gevşetildi ve alan kısıtı kaldırıldı: ikisinin yanlış alarma etkisi ölçülene kadar bilinmiyor. %95'i ya da yanlış alarm sınırını tutmayan senaryoda eşikler (`KP_CONF`, `WRIST_UP`, `ELBOW_DOWN`, `60°`, `grace`, `FIRED_GRACE_S`) yalnızca ölçümle ayarlanır; yetmezse model seçimi yeniden değerlendirilir.
 
+### 4.12 Yangın / duman erken uyarısı (`countMode = "fire"`: alev, duman)
+Kamera görüntüsünde alev ve dumanı görüp **alarm** üretir (güvenlik alarmıyla aynı yol: alarm günlüğü, olay resmi ve kaydı, panel, Telegram; sayım olayı değildir). Yalnızca bilgisayardaki analiz sunucusunda çalışır; iPhone `fire` yöntemini profilde okur ve korur ama işlemez, bu bölümün **Swift karşılığı yoktur**, referans yalnızca Python'dır (`core/fire_model.py`, `core/fire_rules.py`, `core/fire.py`). **Erken uyarıdır; yangın algılama ve alarm sisteminin yerine geçmez.** Kullanım, sınırlar ve model kartı: `14-yangin-duman.md`; tasarım `docs/superpowers/specs/2026-11-08-yangin-duman-design.md` §3.3.
+
+**Model:** YOLOX-S, iki sınıf (`fire` 0, `smoke` 1), 640 giriş, ham ızgara çıktısı `[1, 8400, 7]`; letterbox, ızgara çözme ve sınıf başına NMS (IoU 0,45) kişi tanımayla ortaktır (`core/yolox.py`). Dosya `fire_smoke_v1.onnx`; indirme adresi model yayımlanana kadar boştur: dosya yoksa `FireModelMissing` ("Yangın/duman modeli kurulu değil."), oturum sağlıksız, video işi başarısız.
+
+**Kare akışı** (`FireAnalyzer.process`, her **analiz edilen** karede; zaman = kare zaman damgası):
+1. **Eşik:** kurala açık sınıflar için hassasiyetin eşiği (`THRESHOLDS`): Düşük `fire .60 / smoke .65`, Normal `.45 / .50`, Yüksek `.35 / .40`. Kural kapalı sınıf modele hiç sorulmaz; iki kural kapalıysa model çalışmaz.
+2. **En küçük kutu:** kısa kenarı `MIN_SIDE = 0,015 ×` kare yüksekliğinden küçük kutu atılır.
+3. **Hariç bölge:** kutu merkezi bir `ignoreZones` çokgeninin içinde (kenar dahil) ise atılır. `roi`, `roiPolygon` ve sayım çizgisi bu yöntemde yok sayılır (tam kare).
+4. **Hareket:** `MOTION_W = 160` px genişliğe küçültülmüş gri kare geçmişi; kıyas karesi `MOTION_LAG_S = 1 sn` önceki ya da ondan eski en yakın kare (geçmişte o kadar eski yoksa en eski kare). Kutu içinde gri farkı `> MOTION_PIX = 8` olan piksel oranı `< MOTION_MIN = 0,02` ise kutu **durağandır**, oy vermez (sabit alev resmi, kırmızı lamba). Zaman geri giderse ya da kare boyu değişirse geçmiş silinir.
+5. **Oy dışı kare:** kıyas karesi yoksa (ilk kare) ya da kare genelinde değişen oran `> GLOBAL_CHANGE_MAX = 0,40` ise (ışık patlaması, IR geçişi, kamera sarsıntısı) kare **oy dışıdır**: pencereye girmez, bölüm başlatmaz/uzatmaz, alarm doğurmaz. Bölüm sonu yine de son olumlu kareden saatle sayılır.
+6. **Hücre oyu:** kare `GRID = 8 × 6` hücreye bölünür; hareketi geçen her kutu kapladığı hücreleri işaretler. Sınıf başına, son `seconds` saniyedeki (`[ts − seconds, ts]`, kapalı) oy veren karelerde bir hücrenin **ya da 8 komşusunun** işaretli olduğu karelerin sayısı ve oranı tutulur.
+
+**Bölüm ve alarm** (sınıf başına tek bölüm; iz numarası sabit: `fire` 0, `smoke` 1):
+- Bölüm sınıfın ilk olumlu karesinde başlar. **Alarm:** `ts − başlangıç ≥ seconds` **ve** bir hücrede oran `≥ RATIO = 0,6` **ve** olumlu kare sayısı `≥ MIN_HITS = 3`. Bölüm başına tek alarm; alarm kutusu tetikleyen hücreye değen son karedeki kutuların birleşimidir (normalize) ve alarmdan sonra alevin kutularını izler.
+- **Bitiş:** son olumlu kareden `END_S = 10 sn` sonra bölüm biter (`ended`; alarm verdiyse panelde `endedAt`). Aynı kamera ve türde yeni alarmın Telegram'a gidişi güvenlikteki 60 sn tekrar önlemeye tabidir.
+- `reset()` (ayar değişimi, Sıfırla) geçmişi, oyları ve bölümleri siler; alarm vermiş bölümler bir sonraki `process()` sonucunda `ended` olarak bildirilir. `end_all()` oturum kapanışında açık alarmlı bölümleri kapatır.
+- Kural süreleri: alev 2–10 sn (varsayılan 3), duman 5–30 sn (varsayılan 8).
+
+**Analiz hızı:** canlı oturum yangın modunda en çok `MAX_FPS = 5` kare/sn analiz eder (son analiz edilen kareden `1 / MAX_FPS` sn dolmadan gelen kare analiz edilmez; önizleme ve olay kaydının ön kaydı her kareyle sürer). Video ile test aynı kuralı video zamanıyla uygular; alarm anları işleme hızından bağımsızdır. Olayın başlangıcına göre alarm zamanı kural süresinden erken olmaz ve (akış ≥ 1 kare/sn iken) `seconds + 1 / fps`'ten geç olmaz.
+
+**Sınırlar:** akış 1 kare/sn'den yavaşsa 2 sn'lik alev kuralı `MIN_HITS = 3` koşulunu sağlayamaz; 1 sn içinde karenin %40'ından fazlasını değiştiren alev/duman o karelerde oy vermez. İki sınır ve bütün sabitler model eğitimi sonrası ölçümle (`tools/fire_train/eval_fire.py`) yeniden değerlendirilir.
+
+**Çıktı:** `FrameResult.fire` (`FireResult`): `detections` (tür, normalize kutu, skor, hareket geçti mi), `active` (iz, tür, süre, alarm verdi mi), `fired` (`FireAlarm(kind, track_id, box, started, ts)`), `ended`, `boxes` (alarmlı açık bölümlerin kutusu). Bindirme (`overlay.draw_fire`): alev turuncu "YANGIN", duman gri "DUMAN"; alarmlı kutu kalın.
+
+**Doğrulama:** `test_fire_rules.py`, `test_fire.py` (sahte dedektörle eşik, hariç bölge, hareket, oy oranı, komşuluk, bitiş, tek alarm, ışık patlaması, 1 kare/sn ve 25 kare/sn akışta alarm zamanı, model yok), `test_yolox.py`, `test_fire_model.py`; canlı, video ve panel testleri `13-web-platform.md`'de. Model doğruluğu **ölçülmedi** (model yok); kabul hedefleri `14-yangin-duman.md` §6.
+
 ## 5. Kalibrasyon
 **Boş bant öğrenme** (`backgroundSeconds = 1.0`, `N = round(fps · 1.0)`, en az 15 kare):
 - 0. kare: `bg = gray`. Sonrakiler: `bg += 0.15·(gray − bg)` (koşulsuz).

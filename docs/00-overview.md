@@ -57,6 +57,7 @@ flowchart LR
 | Uyarılar | n8n akışları | `../n8n/README.md` |
 | Pazar notları | Rakip (Enao Vision) incelemesi, saha ipuçları, ürün fikirleri | `11-market-notes-enao.md` |
 | Durum özeti | Yapılanlar, doğrulama, açık konular, sıradaki işler | `12-durum.md` |
+| Yangın / duman | Erken uyarı: kullanım, ayar önerileri, sınırlar, model kartı, veri atıfları | `14-yangin-duman.md` |
 
 ## Temel tasarım kararları
 1. **Önce klasik görüntü işleme, sonra ML.** Sabit kamera + tek yönlü akış arka plan farkı için ideal; model eğitimi gerekmez, sahada 1 dakikada kalibre edilir. ML (YOLO, anomali tespiti) klasik yöntemin zorlandığı yoğun/üst üste senaryolar ve görünüm tabanlı kalite kontrol için eklenir. Klasik hat, ML için **otomatik etiketleyici** olarak da kullanılır.
