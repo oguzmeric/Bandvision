@@ -424,11 +424,12 @@ class TrassirArchive(ArchiveClient):
     speeds = (1, 2, 4, 8, 16)
     can_export = True
 
-    def __init__(self, client: TrassirClient, tz: tzinfo | None = None) -> None:
+    def __init__(self, client: TrassirClient, tz: tzinfo | None = None,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
         self._live = client
         self._http: _DeviceHTTP = client._http
         self.tz = tz
-        self._sleep: Callable[[float], None] = time.sleep
+        self._sleep = sleep
 
     def stream_url(self, channel: RecorderChannel, start: float, end: float | None, substream: bool,
                    speed: int) -> str:

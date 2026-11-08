@@ -253,8 +253,8 @@ class ArchivePlayer:
                               self._speed, tuple(self._archive.speeds), self._fps, self._archive.can_export)
 
     def frame(self, touch: bool = True) -> tuple[int, np.ndarray | None]:
-        """Son kare. `touch=False`: yalnız bakar (akış ucunun yoklaması); kare gerçekten gönderilince çağıran `touch()` eder,
-        böylece terk edilmiş bir bağlantı duraklatılmış oynatıcıyı canlı tutmaz."""
+        """Son kare. `touch=False`: yalnız bakar (akış ucunun yoklaması); kare gerçekten gönderilince çağıran
+        `touch()` eder, böylece terk edilmiş bir bağlantı duraklatılmış oynatıcıyı canlı tutmaz."""
         if touch:
             self.touch()
         self.check()

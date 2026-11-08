@@ -69,7 +69,9 @@ HIKVISION_SEARCH_PAGES = {
     0: ("MORE", [("2026-03-04T12:00:00Z", "2026-03-04T12:30:00Z"), ("2026-03-04T12:30:00Z", "2026-03-04T13:00:00Z")]),
     400: ("OK", [("2026-03-04T14:00:00Z", "2026-03-04T14:10:00Z")]),
 }
-HIKVISION_DAILY = (3, 4, 6)      # kayıtlı günler (ayın geri kalanı kayıtsız)
+# Kayıtlı günler. Yanıt ayın ilk 7 gününü listeler: kayıtsız günler (`record=false`) de gelir ve
+# ayrıştırıcının yalnız `true` olanları aldığı sınanır (ay sonuna kadar uzatmak testi uzatır, bir şey katmaz).
+HIKVISION_DAILY = (3, 4, 6)
 
 DAHUA_PAGE = 100
 # Sayfa 1: 08:00'dan başlayan 100 dokunan dakikalık dosya; sayfa 2: 12:00-12:10 ve 1 sn boşluklu 12:10:01-12:20
@@ -109,6 +111,7 @@ class DigestHandler(Base):
     dahua_lock: ClassVar[threading.Lock] = threading.Lock()
     dahua_next_id: ClassVar[int] = 0
     dahua_pages: ClassVar[dict[str, int]] = {}
+    dahua_actions: ClassVar[list[str]] = []        # görülen `mediaFileFind.cgi` eylemleri (/_mock/stats)
 
     def authorized(self) -> bool:
         header = self.headers.get("Authorization", "")
@@ -166,6 +169,7 @@ class DigestHandler(Base):
         """`mediaFileFind.cgi` beş eylemi; arama durumu nesne kimliğine bağlıdır (sayfa sayacı)."""
         action, obj = q.get("action"), q.get("object", "")
         with self.dahua_lock:
+            DigestHandler.dahua_actions.append(str(action))
             if action == "factory.create":
                 DigestHandler.dahua_next_id += 1
                 DigestHandler.dahua_pages[str(DigestHandler.dahua_next_id)] = 0
@@ -226,6 +230,7 @@ class TrassirHandler(Base):
     archive_log: ClassVar[list[dict[str, str]]] = []      # `archive_command` çağrıları (testler /_mock/archive-log ile okur)
     last_play_day = ARCHIVE_DAY
     export_tasks: ClassVar[dict[str, int]] = {}            # görev → indirme sayısı
+    not_ready_sent = 0                                     # verilen "hazır değil" yanıtları
 
     def json(self, obj: dict) -> None:
         body = json.dumps(obj, ensure_ascii=False, indent=1) + "\n/* Don't forget to logout */\n"
@@ -244,6 +249,11 @@ class TrassirHandler(Base):
             with self.lock:
                 body = json.dumps(self.archive_log).encode()
             self.send(200, body, "application/json")
+            return
+        if url.path == "/_mock/stats":          # testlerin "gerçekten verildi mi" iddiaları için sayaçlar
+            with self.lock, DigestHandler.dahua_lock:
+                stats = {"not_ready": self.not_ready_sent, "dahua_actions": list(DigestHandler.dahua_actions)}
+            self.send(200, json.dumps(stats).encode(), "application/json")
             return
         if q.get("sid") != SID:
             self.json({"success": 0, "error_code": "no session"})
@@ -319,6 +329,8 @@ class TrassirHandler(Base):
         if calls == 0:
             self.json({"success": 0, "error_code": "unknown task"})
         elif calls == 1:                     # dosya hazırlanıyor: bağdaştırıcının yeniden denemesi sınanır
+            with self.lock:
+                TrassirHandler.not_ready_sent += 1
             self.json({"success": 0, "error_code": "not ready"})
         else:
             self.send(200, EXPORT_BYTES, "video/mp4")
