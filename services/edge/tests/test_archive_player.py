@@ -746,6 +746,25 @@ def test_forget_keeps_lock_that_is_held(rig: Rig) -> None:
         assert rig.manager._source_lock("nvr") is lock          # tutulan kilit silinmez (sıralama bozulmasın)
 
 
+def test_forget_during_inflight_channel_read_does_not_recache_stale_result(rig: Rig) -> None:
+    """Takvim isteği kanal listesini ağdan okurken kaynak düzenlenir (`forget`): okuma eski kayıtla başladığı için
+    sonucu (kanal listesi ve takvim) önbelleğe yazılmamalı; sonraki istek güncel kayıtla yeniden okur."""
+    m = rig.manager
+    rig.client.gate = threading.Event()
+    t = threading.Thread(target=lambda: m.calendar("nvr", "guid-1", 2026, 11))
+    t.start()
+    assert rig.client.entered.wait(3)
+    m.forget("nvr")
+    rig.client.gate.set()
+    t.join(5)
+    assert not t.is_alive()
+    assert "nvr" not in m._channels and not any(k[1] == "nvr" for k in m._cache)
+    rig.client.gate = None
+    calls = rig.client.channel_calls
+    m.calendar("nvr", "guid-1", 2026, 11)
+    assert rig.client.channel_calls == calls + 1 and "nvr" in m._channels
+
+
 def test_view_does_not_read_sources_or_secrets(rig: Rig) -> None:
     """Görünüm saniyede bir yoklanır: sources.json ya da secrets.json okunmaz (ad açılışta alınır)."""
     v = rig.manager.open("nvr", "guid-1", START, 1, True)

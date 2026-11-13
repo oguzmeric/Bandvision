@@ -176,9 +176,14 @@ class FakeStore:
 class FakeClient:
     def __init__(self) -> None:
         self.channel_calls = 0
+        self.gate: threading.Event | None = None        # verilirse `channels` açılana kadar bekler (yarış testleri)
+        self.entered = threading.Event()
 
     def channels(self) -> list[RecorderChannel]:
         self.channel_calls += 1
+        self.entered.set()
+        if self.gate is not None:
+            self.gate.wait(5)
         return [CH, RecorderChannel("2", "", 2, True)]
 
 

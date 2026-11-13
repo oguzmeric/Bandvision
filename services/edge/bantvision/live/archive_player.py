@@ -590,6 +590,7 @@ class ArchiveManager:
         self._players: dict[str, ArchivePlayer] = {}
         self._channels: dict[str, list[RecorderChannel]] = {}
         self._source_locks: dict[str, threading.Lock] = {}
+        self._epochs: dict[str, int] = {}   # `forget` artırır: ondan önce başlamış ağ okuması önbelleğe yazmaz
         self._cache: dict[tuple[Any, ...], tuple[float, Any]] = {}
         self._files: dict[str, FileArchive] = {}
         self._export_lock = threading.Lock()
@@ -630,10 +631,12 @@ class ArchiveManager:
         for refresh in (False, True):
             with self._lock:
                 chans = None if refresh else self._channels.get(source_id)
+                epoch = self._epochs.get(source_id, 0)
             if chans is None:
                 chans = target.client.channels()
                 with self._lock:
-                    self._channels[source_id] = chans
+                    if self._epochs.get(source_id, 0) == epoch:     # arada `forget` olduysa eski liste yazılmaz
+                        self._channels[source_id] = chans
             for c in chans:
                 if c.id == channel_id:
                     return c
@@ -673,11 +676,14 @@ class ArchiveManager:
             hit = self._cache_get(key)                      # beklerken başka istek doldurmuş olabilir
             if hit is not None:
                 return hit
+            with self._lock:
+                epoch = self._epochs.get(source_id, 0)
             src = self._source(source_id)
             target = self._target(src)
             value = call(target.archive, self._channel(source_id, target, channel_id))
             with self._lock:
-                self._cache[key] = (self._clock() + self.CACHE_S, value)
+                if self._epochs.get(source_id, 0) == epoch:         # arada `forget` olduysa eski sonuç yazılmaz
+                    self._cache[key] = (self._clock() + self.CACHE_S, value)
             return value
 
     def _cache_get(self, key: tuple[Any, ...]) -> Any:
@@ -763,19 +769,25 @@ class ArchiveManager:
 
     def forget(self, source_id: str) -> None:
         """Kaynak düzenlendi/silindi (`LiveManager.forget`): oynatıcıları kapanır, kanal listesi ve takvim/çizelge
-        önbelleği atılır, kaynak kilidi (tutulmuyorsa) silinir. Yeni istek güncel kayıtla yeniden kurar."""
+        önbelleği atılır, kaynak kilidi (tutulmuyorsa) silinir. Yeni istek güncel kayıtla yeniden kurar.
+
+        Yarış: kapanan oynatıcının iş parçacığı ya da süren bir takvim isteği kanal listesini ağdan okurken `forget`
+        gelirse eski kayıtla okunan sonuç önbelleğe yazılmamalı. Bu yüzden önce dönem (`_epochs`) artar (o andan önce
+        başlamış okumalar yazmaz), oynatıcılar kapanıp beklenir, temizlik ondan SONRA yapılır."""
         with self._lock:
+            self._epochs[source_id] = self._epochs.get(source_id, 0) + 1
             gone = [self._players.pop(pid) for pid, p in list(self._players.items()) if p.source_id == source_id]
+        for p in gone:
+            p.close(0)
+        for p in gone:
+            p.close(SWEEP_WAIT_S)
+        with self._lock:
             self._channels.pop(source_id, None)
             for key in [k for k in self._cache if k[1] == source_id]:
                 del self._cache[key]
             lock = self._source_locks.get(source_id)
             if lock is not None and not lock.locked():
                 del self._source_locks[source_id]
-        for p in gone:
-            p.close(0)
-        for p in gone:
-            p.close(SWEEP_WAIT_S)
 
     def sweep(self) -> int:
         """Boşta kalan oynatıcıları kapatır, diğerlerinde kare bekleme süresini denetler, süresi dolan önbelleği siler."""
