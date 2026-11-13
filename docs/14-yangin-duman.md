@@ -72,10 +72,11 @@ Bölüm başına tek alarm; 10 sn olumlu kare gelmezse bölüm biter. Ayrıntı 
 - **Yavaş akış:** alarm için kural süresi içinde en az 3 olumlu kare gerekir. Saniyede 1 kareden yavaş akışta 2 sn'lik
   alev kuralı bu koşulu sağlayamaz (alarm gecikir ya da hiç gelmez); böyle kamerada alev süresi 3 sn ya da üstü olmalı,
   akış en az 1 kare/sn olmalıdır.
-- **Ani büyük değişim:** kare genelinde 1 sn içinde piksellerin %40'ından fazlası değişirse (ışık patlaması, IR geçişi,
-  kamera sarsıntısı) o kare oy dışı sayılır. Görüntünün %40'ından fazlasını 1 sn içinde kaplayan bir alev ya da duman
-  patlaması da bu yüzden o anlarda oy vermez; yayılma yavaşladığında oylama sürer. Eşik (`GLOBAL_CHANGE_MAX`) model
-  eğitimi sonrası ölçülüp yeniden değerlendirilecek (`12-durum.md` §5m).
+- **Ani büyük değişim:** kare genelinde 1 sn içinde piksellerin %80'inden fazlası belirgin biçimde (gri farkı 15'ten
+  büyük) değişirse (ışık patlaması, IR geçişi, kamera sarsıntısı) o kare oy dışı sayılır. Görüntünün %80'inden fazlasını
+  1 sn içinde kaplayan bir alev ya da duman patlaması da o anlarda oy vermez; yayılma yavaşladığında oylama sürer.
+  Değerler model eğitimi sonrası ölçümle belirlendi: önceki %40 sınırı ve 8'lik gri farkı, sıkıştırma gürültüsü olan ya
+  da yoğun duman dolan videolarda neredeyse her kareyi oy dışı bırakıp gerçek olayları kaçırıyordu.
 - **Bilinen yanlış alarm kaynakları** (bütün görüntü tabanlı yangın tespitlerinde): buhar, sis, toz, araç farları,
   gün batımı ve güneş yansıması, kaynak ışığı, kırmızı/turuncu hareketli nesneler. Hareket denetimi ve hariç bölgeler
   azaltır, sıfırlamaz.

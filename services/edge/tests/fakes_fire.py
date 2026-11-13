@@ -37,8 +37,11 @@ class FakeFireDetector:
                 if c in conf and s >= conf[c]]
 
 
-def scene(items: list[Item], rng: np.random.Generator, flash: int = 0) -> np.ndarray:
+def scene(items: list[Item], rng: np.random.Generator, flash: int = 0, grain: int = 0) -> np.ndarray:
     f = np.full((H, W, 3), BG, np.int16)
+    if grain:                                          # sıkıştırma gürültüsü: 8×8 bloklar her kare ±grain oynar
+        n = (rng.integers(0, 2, (H // 8, W // 8, 1)) * 2 - 1).astype(np.int16) * grain
+        f += np.repeat(np.repeat(n, 8, 0), 8, 1)
     for _c, (x1, y1, x2, y2), _s, moving in items:
         xa, ya, xb, yb = int(x1), int(y1), int(x2), int(y2)
         if moving:
@@ -50,14 +53,14 @@ def scene(items: list[Item], rng: np.random.Generator, flash: int = 0) -> np.nda
 
 
 def run(an: FireAnalyzer, det: FakeFireDetector, profile: Profile, fps: float, t0: float, t1: float,
-        flash: Callable[[float], int] | None = None, seed: int = 0) -> list[tuple[float, FireResult]]:
+        flash: Callable[[float], int] | None = None, seed: int = 0, grain: int = 0) -> list[tuple[float, FireResult]]:
     """[t0, t1) aralığında `fps` hızında kareler; her karede (ts, sonuç)."""
     rng = np.random.default_rng(seed)
     out: list[tuple[float, FireResult]] = []
     for k in range(round(t0 * fps), round(t1 * fps)):
         ts = k / fps
         det.ts = ts
-        frame = scene(det.script(ts), rng, flash(ts) if flash else 0)
+        frame = scene(det.script(ts), rng, flash(ts) if flash else 0, grain)
         out.append((ts, an.process(frame, ts, profile)))
     return out
 

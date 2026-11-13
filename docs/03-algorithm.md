@@ -245,8 +245,8 @@ Kamera görüntüsünde alev ve dumanı görüp **alarm** üretir (güvenlik ala
 1. **Eşik:** kurala açık sınıflar için hassasiyetin eşiği (`THRESHOLDS`): Düşük `fire .60 / smoke .65`, Normal `.45 / .50`, Yüksek `.35 / .40`. Kural kapalı sınıf modele hiç sorulmaz; iki kural kapalıysa model çalışmaz.
 2. **En küçük kutu:** kısa kenarı `MIN_SIDE = 0,015 ×` kare yüksekliğinden küçük kutu atılır.
 3. **Hariç bölge:** kutu merkezi bir `ignoreZones` çokgeninin içinde (kenar dahil) ise atılır. `roi`, `roiPolygon` ve sayım çizgisi bu yöntemde yok sayılır (tam kare).
-4. **Hareket:** `MOTION_W = 160` px genişliğe küçültülmüş gri kare geçmişi; kıyas karesi `MOTION_LAG_S = 1 sn` önceki ya da ondan eski en yakın kare (geçmişte o kadar eski yoksa en eski kare). Kutu içinde gri farkı `> MOTION_PIX = 8` olan piksel oranı `< MOTION_MIN = 0,02` ise kutu **durağandır**, oy vermez (sabit alev resmi, kırmızı lamba). Zaman geri giderse ya da kare boyu değişirse geçmiş silinir.
-5. **Oy dışı kare:** kıyas karesi yoksa (ilk kare) ya da kare genelinde değişen oran `> GLOBAL_CHANGE_MAX = 0,40` ise (ışık patlaması, IR geçişi, kamera sarsıntısı) kare **oy dışıdır**: pencereye girmez, bölüm başlatmaz/uzatmaz, alarm doğurmaz. Bölüm sonu yine de son olumlu kareden saatle sayılır.
+4. **Hareket:** `MOTION_W = 160` px genişliğe küçültülmüş gri kare geçmişi; kıyas karesi `MOTION_LAG_S = 1 sn` önceki ya da ondan eski en yakın kare (geçmişte o kadar eski yoksa en eski kare). Kutu içinde gri farkı `> MOTION_PIX = 15` olan piksel oranı `< MOTION_MIN = 0,02` ise kutu **durağandır**, oy vermez (sabit alev resmi, kırmızı lamba). Zaman geri giderse ya da kare boyu değişirse geçmiş silinir.
+5. **Oy dışı kare:** kıyas karesi yoksa (ilk kare) ya da kare genelinde değişen oran `> GLOBAL_CHANGE_MAX = 0,80` ise (ışık patlaması, IR geçişi, kamera sarsıntısı) kare **oy dışıdır**: pencereye girmez, bölüm başlatmaz/uzatmaz, alarm doğurmaz. Bölüm sonu yine de son olumlu kareden saatle sayılır.
 6. **Hücre oyu:** kare `GRID = 8 × 6` hücreye bölünür; hareketi geçen her kutu kapladığı hücreleri işaretler. Sınıf başına, son `seconds` saniyedeki (`[ts − seconds, ts]`, kapalı) oy veren karelerde bir hücrenin **ya da 8 komşusunun** işaretli olduğu karelerin sayısı ve oranı tutulur.
 
 **Bölüm ve alarm** (sınıf başına tek bölüm; iz numarası sabit: `fire` 0, `smoke` 1):
@@ -257,7 +257,7 @@ Kamera görüntüsünde alev ve dumanı görüp **alarm** üretir (güvenlik ala
 
 **Analiz hızı:** canlı oturum yangın modunda en çok `MAX_FPS = 5` kare/sn analiz eder (son analiz edilen kareden `1 / MAX_FPS` sn dolmadan gelen kare analiz edilmez; önizleme ve olay kaydının ön kaydı her kareyle sürer). Video ile test aynı kuralı video zamanıyla uygular; alarm anları işleme hızından bağımsızdır. Olayın başlangıcına göre alarm zamanı kural süresinden erken olmaz ve (akış ≥ 1 kare/sn iken) `seconds + 1 / fps`'ten geç olmaz.
 
-**Sınırlar:** akış 1 kare/sn'den yavaşsa 2 sn'lik alev kuralı `MIN_HITS = 3` koşulunu sağlayamaz; 1 sn içinde karenin %40'ından fazlasını değiştiren alev/duman o karelerde oy vermez. İki sınır ve bütün sabitler model eğitimi sonrası ölçümle (`tools/fire_train/eval_fire.py`) yeniden değerlendirilir.
+**Sınırlar:** akış 1 kare/sn'den yavaşsa 2 sn'lik alev kuralı `MIN_HITS = 3` koşulunu sağlayamaz; 1 sn içinde karenin %80'inden fazlasını değiştiren alev/duman o karelerde oy vermez. `MOTION_PIX` (8 → 15) ve `GLOBAL_CHANGE_MAX` (0,40 → 0,80) ilk model eğitimi sonrası ölçümle (`tools/fire_train/eval_fire.py`, FIRESENSE) değiştirildi: eski değerler sıkıştırma gürültüsünü ve yoğun dumanı "ani büyük değişim" sayıyordu.
 
 **Çıktı:** `FrameResult.fire` (`FireResult`): `detections` (tür, normalize kutu, skor, hareket geçti mi), `active` (iz, tür, süre, alarm verdi mi), `fired` (`FireAlarm(kind, track_id, box, started, ts)`), `ended`, `boxes` (alarmlı açık bölümlerin kutusu). Bindirme (`overlay.draw_fire`): alev turuncu "YANGIN", duman gri "DUMAN"; alarmlı kutu kalın.
 

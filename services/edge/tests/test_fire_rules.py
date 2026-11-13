@@ -11,9 +11,9 @@ from bantvision.core.profile import FireConfig, SafetyRule
 def test_constants_are_the_ruling_values() -> None:
     assert fr.THRESHOLDS == {"low": {"fire": .60, "smoke": .65}, "normal": {"fire": .45, "smoke": .50},
                              "high": {"fire": .35, "smoke": .40}}
-    assert (fr.MIN_SIDE, fr.MOTION_W, fr.MOTION_LAG_S, fr.MOTION_PIX, fr.MOTION_MIN) == (0.015, 160, 1.0, 8, 0.02)
+    assert (fr.MIN_SIDE, fr.MOTION_W, fr.MOTION_LAG_S, fr.MOTION_PIX, fr.MOTION_MIN) == (0.015, 160, 1.0, 15, 0.02)
     assert (fr.GLOBAL_CHANGE_MAX, fr.GRID, fr.RATIO, fr.MIN_HITS, fr.END_S, fr.MAX_FPS) == (
-        0.40, (8, 6), 0.6, 3, 10.0, 5.0)
+        0.80, (8, 6), 0.6, 3, 10.0, 5.0)
     assert fr.TRACK_IDS == {"fire": 0, "smoke": 1}
 
 
@@ -81,7 +81,7 @@ def test_changed_ratio_whole_frame_and_box() -> None:
     assert fr.changed_ratio(b, a) == pytest.approx(0.5)
     assert fr.changed_ratio(b, a, (0.0, 0.0, 1.0, 0.5)) == pytest.approx(1.0)
     assert fr.changed_ratio(b, a, (0.0, 0.5, 1.0, 1.0)) == pytest.approx(0.0)
-    c = gray(108)                                                       # fark tam MOTION_PIX: değişmiş sayılmaz
+    c = gray(115)                                                       # fark tam MOTION_PIX: değişmiş sayılmaz
     assert fr.changed_ratio(c, a) == 0.0
 
 

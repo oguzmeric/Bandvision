@@ -79,6 +79,28 @@ def test_light_step_is_not_motion() -> None:
     assert fired(res) == [] and all(r.active == [] for _, r in res)
 
 
+def test_sensor_grain_over_whole_frame_does_not_silence_fire() -> None:
+    """Düşük kaliteli kamera/sıkıştırma: 8×8 bloklar her kare ±7 oynar (fark 14). Eski sabitlerle (MOTION_PIX 8,
+    GLOBAL_CHANGE_MAX 0,40) küçük gri karenin ~%49'u "değişti" sayılıp her kare oy dışı kalıyor, alev alarm vermiyordu."""
+    an, det, p = make(flame_from(1.0))
+    res = run(an, det, p, 5.0, 0.0, 8.0, grain=7)
+    assert len(fired(res)) == 1
+
+
+def test_grain_does_not_turn_a_static_flame_picture_into_motion() -> None:
+    an, det, p = make(flame_from(0.0, moving=False, score=0.95))
+    res = run(an, det, p, 5.0, 0.0, 20.0, grain=7)
+    assert fired(res) == [] and all(r.active == [] for _, r in res)
+
+
+def test_dense_smoke_filling_most_of_the_frame_alarms() -> None:
+    """Kamerayı kaplayan yoğun duman (kutu karenin %87'si; eski MOTION_PIX 8 ile kare geneli ~%55 değişmiş, 0,40 sınırını
+    aşıp oy dışı kalıyordu) alarm vermeli."""
+    an, det, p = make(flame_from(0.0, box=(0.0, 0.0, 640.0, 420.0), cls="smoke", score=0.9))
+    res = run(an, det, p, 5.0, 0.0, 12.0)
+    assert [a.kind for _, a in fired(res)] == ["smoke"]
+
+
 def test_flash_frames_are_left_out_of_the_window_not_counted_against_fire() -> None:
     """Gerçek alev sürerken 1 sn ışık patlaması: patlama kareleri ve onlarla kıyaslanan sonraki 1 sn oy dışı (10/16
     kare). Olumsuz sayılsalardı oran 6/16 < 0,6 olur, alarm gecikirdi; pencere dışı oldukları için alarm zamanında."""
