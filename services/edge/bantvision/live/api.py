@@ -1354,6 +1354,8 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
         manager.forget(source_id)
         deleted = store.delete_source(source_id)
         manager.viewers.drop(source_id)                      # silinen kameranın izleme okuyucuları kapanır
+        # forget ile silme arasında başlayıp silinmiş kaydı okuyan istek önbelleğe yazamaz: dönem yeniden artar
+        manager.forget(source_id)
         if not deleted:
             raise HTTPException(404, "Kaynak bulunamadı.")
         return Response(status_code=204)

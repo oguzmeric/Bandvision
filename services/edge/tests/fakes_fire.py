@@ -37,30 +37,38 @@ class FakeFireDetector:
                 if c in conf and s >= conf[c]]
 
 
-def scene(items: list[Item], rng: np.random.Generator, flash: int = 0, grain: int = 0) -> np.ndarray:
+def scene(items: list[Item], rng: np.random.Generator, flash: int = 0, grain: int = 0, flash_rows: float = 1.0,
+          block: int = 1) -> np.ndarray:
+    """`grain`: sıkıştırma titremesi, 8×8 dama deseninde bloklar her karede işaret değiştirir (±grain; kare kare fark
+    2·grain). `flash_rows`: parlamanın uygulandığı üst satır oranı (kısmi ışık/IR). `block`: hareketli kutunun dokusu
+    block×block piksellik rastgele bloklar (1: piksel gürültüsü; küçültmede ortalamaya karışmayan iri doku için 8)."""
     f = np.full((H, W, 3), BG, np.int16)
-    if grain:                                          # sıkıştırma gürültüsü: 8×8 bloklar her kare ±grain oynar
-        n = (rng.integers(0, 2, (H // 8, W // 8, 1)) * 2 - 1).astype(np.int16) * grain
-        f += np.repeat(np.repeat(n, 8, 0), 8, 1)
+    if grain:
+        yy, xx = np.mgrid[0:H, 0:W]
+        f += ((((yy // 8) + (xx // 8)) % 2) * 2 - 1)[..., None].astype(np.int16) * grain
     for _c, (x1, y1, x2, y2), _s, moving in items:
         xa, ya, xb, yb = int(x1), int(y1), int(x2), int(y2)
         if moving:
-            f[ya:yb, xa:xb] = rng.integers(0, 256, (yb - ya, xb - xa, 3))
+            hb, wb = -(-(yb - ya) // block), -(-(xb - xa) // block)
+            tex = np.repeat(np.repeat(rng.integers(0, 256, (hb, wb, 3)), block, 0), block, 1)
+            f[ya:yb, xa:xb] = tex[:yb - ya, :xb - xa]
         else:                                          # mutlak koordinatta sabit dama deseni: her karede aynı
             yy, xx = np.mgrid[ya:yb, xa:xb]
             f[ya:yb, xa:xb] = ((((yy // 8) + (xx // 8)) % 2) * 160 + 40)[..., None]
-    return np.clip(f + flash, 0, 255).astype(np.uint8)
+    f[:round(H * flash_rows)] += flash
+    return np.clip(f, 0, 255).astype(np.uint8)
 
 
 def run(an: FireAnalyzer, det: FakeFireDetector, profile: Profile, fps: float, t0: float, t1: float,
-        flash: Callable[[float], int] | None = None, seed: int = 0, grain: int = 0) -> list[tuple[float, FireResult]]:
-    """[t0, t1) aralığında `fps` hızında kareler; her karede (ts, sonuç)."""
+        flash: Callable[[float], int] | None = None, seed: int = 0, grain: int = 0, flash_rows: float = 1.0,
+        block: int = 1) -> list[tuple[float, FireResult]]:
+    """[t0, t1) aralığında `fps` hızında kareler; her karede (ts, sonuç). `grain` işareti kareden kareye döner."""
     rng = np.random.default_rng(seed)
     out: list[tuple[float, FireResult]] = []
     for k in range(round(t0 * fps), round(t1 * fps)):
         ts = k / fps
         det.ts = ts
-        frame = scene(det.script(ts), rng, flash(ts) if flash else 0, grain)
+        frame = scene(det.script(ts), rng, flash(ts) if flash else 0, grain * (-1) ** k, flash_rows, block)
         out.append((ts, an.process(frame, ts, profile)))
     return out
 

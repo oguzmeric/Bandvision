@@ -623,15 +623,21 @@ class ArchiveManager:
         client = self._recorder_factory(src)
         return _Target(self._archive_factory(client, brand), client, brand)
 
-    def _channel(self, source_id: str, target: _Target, channel_id: str | None) -> RecorderChannel:
-        """Kanal (ağa çıkabilir: liste önbellekte yoksa ya da kanal listede yoksa bir kez yenilenir)."""
+    def _epoch(self, source_id: str) -> int:
+        """Kaynağın dönemi: kaynak kaydı okunmadan ÖNCE alınır; arada `forget` olursa o okumanın sonucu önbelleğe
+        yazılmaz (eski kayıtla kurulmuş istemcinin okuduğu liste/takvim, temizlikten sonra geri gelmesin)."""
+        with self._lock:
+            return self._epochs.get(source_id, 0)
+
+    def _channel(self, source_id: str, target: _Target, channel_id: str | None, epoch: int) -> RecorderChannel:
+        """Kanal (ağa çıkabilir: liste önbellekte yoksa ya da kanal listede yoksa bir kez yenilenir). `epoch`: kaynak
+        kaydı okunmadan önce `_epoch` ile alınan dönem."""
         _require_channel(target, channel_id)
         if target.client is None:
             return _FILE_CHANNEL
         for refresh in (False, True):
             with self._lock:
                 chans = None if refresh else self._channels.get(source_id)
-                epoch = self._epochs.get(source_id, 0)
             if chans is None:
                 chans = target.client.channels()
                 with self._lock:
@@ -676,11 +682,10 @@ class ArchiveManager:
             hit = self._cache_get(key)                      # beklerken başka istek doldurmuş olabilir
             if hit is not None:
                 return hit
-            with self._lock:
-                epoch = self._epochs.get(source_id, 0)
+            epoch = self._epoch(source_id)
             src = self._source(source_id)
             target = self._target(src)
-            value = call(target.archive, self._channel(source_id, target, channel_id))
+            value = call(target.archive, self._channel(source_id, target, channel_id, epoch))
             with self._lock:
                 if self._epochs.get(source_id, 0) == epoch:         # arada `forget` olduysa eski sonuç yazılmaz
                     self._cache[key] = (self._clock() + self.CACHE_S, value)
@@ -716,9 +721,10 @@ class ArchiveManager:
         etkili); adresi veren bağdaştırıcı `routed`'a yazılır (stop/keep_alive ona gider)."""
         def factory(start: float, speed: int, substream: bool) -> Callable[[], str]:
             def url_fn() -> str:
+                epoch = self._epoch(source_id)
                 src = self._source(source_id)
                 target = self._target(src)
-                channel = self._channel(source_id, target, channel_id)
+                channel = self._channel(source_id, target, channel_id, epoch)
                 url = target.archive.stream_url(channel, start, None, substream, speed)
                 routed.remember(url, target.archive)
                 username = str(src.get("username") or "")
@@ -837,11 +843,12 @@ class ArchiveManager:
         TRASSIR/Dahua/dosya: bu bilgisayarın yerel saati). Aralık denetimi API'nindir. Tek görev: sürerken
         `ExportBusy`; akış sonuna dek okununca ya da `close()` ile kilit kalkar. Desteklemeyen cihazda
         `RecorderError.unsupported()`; kanalsız kayıt cihazında `MissingChannel`."""
+        epoch = self._epoch(source_id)
         target = self._target(self._source(source_id))
         _require_channel(target, channel_id)
         if not target.archive.can_export:
             raise RecorderError.unsupported()
-        channel = self._channel(source_id, target, channel_id)     # kanal adı dosya adına girer
+        channel = self._channel(source_id, target, channel_id, epoch)     # kanal adı dosya adına girer
         stamp = datetime.fromtimestamp(start, target.archive.tz).strftime("%Y%m%d-%H%M")
         name = self.name(source_id, channel_id)                     # kilitten önce: sızıntı olmasın
         filename = f"{_ascii(name)}-{stamp}.mp4"

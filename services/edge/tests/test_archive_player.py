@@ -751,18 +751,65 @@ def test_forget_during_inflight_channel_read_does_not_recache_stale_result(rig: 
     sonucu (kanal listesi ve takvim) önbelleğe yazılmamalı; sonraki istek güncel kayıtla yeniden okur."""
     m = rig.manager
     rig.client.gate = threading.Event()
-    t = threading.Thread(target=lambda: m.calendar("nvr", "guid-1", 2026, 11))
+    out: list[object] = []
+
+    def ask() -> None:
+        try:
+            out.append(m.calendar("nvr", "guid-1", 2026, 11))
+        except BaseException as e:  # noqa: BLE001 — iş parçacığındaki hata teste taşınır
+            out.append(e)
+
+    t = threading.Thread(target=ask)
     t.start()
     assert rig.client.entered.wait(3)
     m.forget("nvr")
     rig.client.gate.set()
     t.join(5)
-    assert not t.is_alive()
+    assert not t.is_alive() and len(out) == 1 and isinstance(out[0], set)   # istek yine yanıt verir
     assert "nvr" not in m._channels and not any(k[1] == "nvr" for k in m._cache)
     rig.client.gate = None
     calls = rig.client.channel_calls
     m.calendar("nvr", "guid-1", 2026, 11)
     assert rig.client.channel_calls == calls + 1 and "nvr" in m._channels
+
+
+def test_forget_between_source_read_and_channel_read_does_not_cache_stale_list(rig: Rig) -> None:
+    """Kaynak kaydı (eski ayar) okunduktan hemen sonra, kanal listesi okunmadan önce `forget` gelir (kaynak düzenlendi):
+    eski kayıtla kurulan istemcinin okuduğu liste önbelleğe yazılmamalı (dönem kayıt okunmadan ÖNCE alınır)."""
+    m = rig.manager
+    store = m._store
+    store.after_source = threading.Event()                      # type: ignore[attr-defined]
+    out: list[object] = []
+
+    def ask() -> None:
+        try:
+            out.append(m.calendar("nvr", "guid-1", 2026, 11))
+        except BaseException as e:  # noqa: BLE001 — iş parçacığındaki hata teste taşınır
+            out.append(e)
+
+    t = threading.Thread(target=ask)
+    t.start()
+    assert store.source_read.wait(3)                            # type: ignore[attr-defined]
+    m.forget("nvr")
+    store.after_source.set()                                    # type: ignore[attr-defined]
+    t.join(5)
+    assert not t.is_alive() and len(out) == 1 and isinstance(out[0], set)
+    assert "nvr" not in m._channels and not any(k[1] == "nvr" for k in m._cache)
+
+
+def test_forget_while_player_reads_channels_does_not_recache_stale_list(rig: Rig) -> None:
+    """Oynatıcının iş parçacığı bağlanırken kanal listesini cihazdan okur; o sırada `forget` gelir ve oynatıcıyı kapatır
+    (bekleme süresi dolar, iş parçacığı hâlâ ağda). Okuma bitince eski liste önbelleğe yazılmamalı."""
+    m = rig.manager
+    rig.client.gate = threading.Event()
+    v = m.open("nvr", "guid-1", START, 1, True)
+    p = m.get(v.id)
+    assert p is not None and rig.client.entered.wait(3)
+    m.forget("nvr")
+    assert p.closed and "nvr" not in m._channels
+    rig.client.gate.set()
+    wait_for(lambda: not p._thread.is_alive())
+    assert "nvr" not in m._channels
 
 
 def test_view_does_not_read_sources_or_secrets(rig: Rig) -> None:

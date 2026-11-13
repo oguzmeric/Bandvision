@@ -159,10 +159,16 @@ class FakeStore:
         self._sources = sources
 
         self.calls: list[str] = []          # hangi okuma yapıldı (görünüm dosya okumamalı)
+        self.after_source: threading.Event | None = None    # verilirse kayıt okunduktan SONRA bekler (yarış testi)
+        self.source_read = threading.Event()
 
     def source(self, source_id: str) -> dict[str, Any] | None:
         self.calls.append("source")
-        return self._sources.get(source_id)
+        rec = self._sources.get(source_id)
+        if self.after_source is not None:
+            self.source_read.set()
+            self.after_source.wait(5)
+        return rec
 
     def source_records(self) -> list[dict[str, Any]]:
         self.calls.append("source_records")

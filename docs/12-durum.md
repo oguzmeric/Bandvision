@@ -334,7 +334,7 @@ Kamerada alev ve dumanı görüp güvenlik alarmıyla aynı yoldan haber verir. 
   3. **Negatif süre:** aynı kamerada en az 8 saat normal çalışma (ışık açma/kapama, gece IR geçişi, insan ve araç hareketi dahil) ve monitörde FIRESENSE negatif videoları.
   4. **Kayıt:** her sistemin alarm listesi (zaman, tür) dışa alınır; BantVision için Alarmlar sayfası ya da `GET /alarms?since=&until=&sessionId=`.
   5. **Tablo:** deneme başına "TRASSIR alarm (sn) / BantVision alarm (sn) / ikisi de kaçırdı"; negatif süre için sistem başına yanlış alarm sayısı; özet: yakalama oranı, ortanca gecikme, 8 saatte yanlış alarm. Sonuç buraya yazılır; kayıtlar kullanıcınındır, public repoya konmaz.
-- **Bilinen sınırlar:** `14-yangin-duman.md` §5 (5 kare/sn analiz, yavaş akış, %40 ani değişim, buhar/sis/far/gün batımı/kaynak ışığı, küçük uzak duman). Zor örneklerin resmi ve kaydı kutuları çizilidir; eğitime çizimsiz `frame.jpg` katılır (`prepare_data.py --negatives`, `14-yangin-duman.md` §8).
+- **Bilinen sınırlar:** `14-yangin-duman.md` §5 (5 kare/sn analiz, yavaş akış, %80 ani değişim, buhar/sis/far/gün batımı/kaynak ışığı, küçük uzak duman). Zor örneklerin resmi ve kaydı kutuları çizilidir; eğitime çizimsiz `frame.jpg` katılır (`prepare_data.py --negatives`, `14-yangin-duman.md` §8).
 
 ## 6. Araştırma ve tasarım notları
 

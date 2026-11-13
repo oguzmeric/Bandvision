@@ -80,8 +80,9 @@ def test_light_step_is_not_motion() -> None:
 
 
 def test_sensor_grain_over_whole_frame_does_not_silence_fire() -> None:
-    """Düşük kaliteli kamera/sıkıştırma: 8×8 bloklar her kare ±7 oynar (fark 14). Eski sabitlerle (MOTION_PIX 8,
-    GLOBAL_CHANGE_MAX 0,40) küçük gri karenin ~%49'u "değişti" sayılıp her kare oy dışı kalıyor, alev alarm vermiyordu."""
+    """Sıkıştırma titremesi: bloklar her kare ±7 oynar, 1 sn önceki kareyle fark her yerde 14. MOTION_PIX 15 bunu
+    değişim saymaz; 8 olsaydı karenin tamamı "değişti" sayılır (GLOBAL_CHANGE_MAX ne olursa olsun) ve alev hiç alarm
+    vermezdi. MOTION_PIX'i sabitler."""
     an, det, p = make(flame_from(1.0))
     res = run(an, det, p, 5.0, 0.0, 8.0, grain=7)
     assert len(fired(res)) == 1
@@ -94,11 +95,28 @@ def test_grain_does_not_turn_a_static_flame_picture_into_motion() -> None:
 
 
 def test_dense_smoke_filling_most_of_the_frame_alarms() -> None:
-    """Kamerayı kaplayan yoğun duman (kutu karenin %87'si; eski MOTION_PIX 8 ile kare geneli ~%55 değişmiş, 0,40 sınırını
-    aşıp oy dışı kalıyordu) alarm vermeli."""
-    an, det, p = make(flame_from(0.0, box=(0.0, 0.0, 640.0, 420.0), cls="smoke", score=0.9))
-    res = run(an, det, p, 5.0, 0.0, 12.0)
+    """Karenin %75'ini kaplayan iri dokulu yoğun duman: kare geneli ~%66 değişiyor (0,40 ile 0,80 arası). GLOBAL_CHANGE_MAX
+    0,40 olsaydı her kare oy dışı kalır, duman hiç alarm vermezdi. GLOBAL_CHANGE_MAX'ın alt yanını sabitler."""
+    an, det, p = make(flame_from(0.0, box=(0.0, 0.0, 640.0, 360.0), cls="smoke", score=0.9))
+    res = run(an, det, p, 5.0, 0.0, 12.0, block=8)
     assert [a.kind for _, a in fired(res)] == ["smoke"]
+
+
+def test_partial_ir_flicker_over_85_percent_of_the_frame_does_not_vote() -> None:
+    """Karenin üst %85'i her kare parlayıp sönüyor (kısmi IR geçişi): oy dışı; durağan alev resmi alarm vermez.
+    GLOBAL_CHANGE_MAX'ın üst yanını sabitler (0,85'in üstünde olsaydı titreme kutuyu "hareketli" yapıp alarm verirdi)."""
+    an, det, p = make(flame_from(0.0, moving=False, score=0.95))
+    res = run(an, det, p, 5.0, 0.0, 20.0, flash=lambda ts: 70 if round(ts * 5) % 2 else 0, flash_rows=0.85)
+    assert fired(res) == [] and all(r.active == [] for _, r in res)
+
+
+def test_partial_light_step_over_70_percent_votes_but_cannot_alarm_alone() -> None:
+    """Karenin üst %70'i bir kez aydınlanıyor: kareler oy verir (sınırın altında), durağan alev resmi kutusu ~1 sn
+    "hareketli" görünür ama pencerenin %60'ını dolduramaz; tek ışık basamağı alarm doğurmaz."""
+    an, det, p = make(flame_from(0.0, moving=False, score=0.95))
+    res = run(an, det, p, 5.0, 0.0, 20.0, flash=lambda ts: 70 if ts >= 5.0 else 0, flash_rows=0.7)
+    assert fired(res) == []
+    assert any(d[3] for _, r in res for d in r.detections)       # gerçekten oy verdi: basamakta kutu "hareketli"
 
 
 def test_flash_frames_are_left_out_of_the_window_not_counted_against_fire() -> None:

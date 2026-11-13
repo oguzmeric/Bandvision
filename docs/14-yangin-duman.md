@@ -76,7 +76,10 @@ Bölüm başına tek alarm; 10 sn olumlu kare gelmezse bölüm biter. Ayrıntı 
   büyük) değişirse (ışık patlaması, IR geçişi, kamera sarsıntısı) o kare oy dışı sayılır. Görüntünün %80'inden fazlasını
   1 sn içinde kaplayan bir alev ya da duman patlaması da o anlarda oy vermez; yayılma yavaşladığında oylama sürer.
   Değerler model eğitimi sonrası ölçümle belirlendi: önceki %40 sınırı ve 8'lik gri farkı, sıkıştırma gürültüsü olan ya
-  da yoğun duman dolan videolarda neredeyse her kareyi oy dışı bırakıp gerçek olayları kaçırıyordu.
+  da yoğun duman dolan videolarda neredeyse her kareyi oy dışı bırakıp gerçek olayları kaçırıyordu. Bedeli: görüntünün
+  %80'inden azını kaplayan ve sürekli tekrarlayan bir ışık titremesi (ör. yarım kareyi aydınlatan yanıp sönen
+  projektör) kırmızı lamba gibi durağan bir nesneyi "hareketli" gösterebilir; böyle bir ışık kaynağının gördüğü alan
+  hariç bölgeyle dışarıda bırakılmalıdır. Tek seferlik ışık açma/kapama tek başına alarm doğurmaz.
 - **Bilinen yanlış alarm kaynakları** (bütün görüntü tabanlı yangın tespitlerinde): buhar, sis, toz, araç farları,
   gün batımı ve güneş yansıması, kaynak ışığı, kırmızı/turuncu hareketli nesneler. Hareket denetimi ve hariç bölgeler
   azaltır, sıfırlamaz.
