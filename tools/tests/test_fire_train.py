@@ -246,7 +246,8 @@ def test_alarms_from_frames_limits_to_max_fps_like_live() -> None:
 
 def test_video_outcome_positive_negative_and_before() -> None:
     o = ev.video_outcome("fire", 5.0, [(2.0, "smoke"), (9.0, "smoke"), (12.5, "fire")])
-    assert o == {"label": "fire", "first": 7.5, "caught": True, "false": 0, "before": 1}   # duman yanlış sayılmaz
+    assert o == {"label": "fire", "first": 7.5, "caught": True, "false": 0, "before": 1,
+                 "miss": None}                                     # duman yanlış sayılmaz
     late = ev.video_outcome("smoke", 0.0, [(15.5, "smoke")])
     assert late["caught"] is False and late["first"] == 15.5
     edge = ev.video_outcome("smoke", 0.0, [(15.0, "smoke")])
@@ -254,6 +255,35 @@ def test_video_outcome_positive_negative_and_before() -> None:
     neg = ev.video_outcome("none", 0.0, [(3.0, "fire"), (40.0, "smoke")])
     assert neg["false"] == 2 and neg["caught"] is False
     assert ev.video_outcome("fire", 0.0, [])["first"] is None
+    assert ev.video_outcome("fire", 0.0, [])["miss"] is None       # sayım verilmedi: neden bilinmez
+
+
+def test_miss_reason_separates_model_motion_and_rule() -> None:
+    assert ev.video_outcome("smoke", 0.0, [], seen=(0, 0))["miss"] == "unseen"
+    assert ev.video_outcome("smoke", 0.0, [], seen=(12, 0))["miss"] == "static"
+    assert ev.video_outcome("smoke", 0.0, [(20.0, "smoke")], seen=(12, 3))["miss"] == "rule"   # geç alarm
+    assert ev.video_outcome("smoke", 0.0, [(5.0, "smoke")], seen=(12, 3))["miss"] is None       # yakalandı
+    assert ev.video_outcome("none", 0.0, [], seen=(0, 0))["miss"] is None
+    outs = [ev.video_outcome("fire", 0.0, [], seen=(0, 0)), ev.video_outcome("fire", 0.0, [], seen=(4, 0)),
+            ev.video_outcome("smoke", 0.0, [], seen=(4, 0)), ev.video_outcome("smoke", 0.0, [], seen=(9, 2)),
+            ev.video_outcome("smoke", 0.0, []), ev.video_outcome("fire", 0.0, [(1.0, "fire")], seen=(5, 5))]
+    assert ev.aggregate(outs)["misses"] == {"unseen": 1, "static": 2, "rule": 1}
+
+
+def test_alarms_from_frames_counts_seen_and_moving_frames_per_kind() -> None:
+    class Det:
+        def __init__(self, per_ts: dict[float, list[tuple[str, bool]]]) -> None:
+            self.per_ts = per_ts
+
+        def process(self, frame: Any, ts: float, profile: Any) -> Any:
+            dets = [(k, (0, 0, 1, 1), 0.9, m) for k, m in self.per_ts.get(ts, [])]
+            return types.SimpleNamespace(fired=[], detections=dets)
+
+    an = Det({0.0: [("fire", False), ("fire", True)], 1.0: [("smoke", False)], 2.0: [("fire", False)],
+              3.0: [("smoke", True), ("smoke", True)]})
+    seen: dict[str, list[int]] = {}
+    ev.alarms_from_frames([(float(i), None) for i in range(5)], an, None, seen=seen)
+    assert seen == {"fire": [2, 1], "smoke": [2, 1]}               # kare başına bir kez sayılır
 
 
 def test_aggregate_rates_and_first_alarm() -> None:
@@ -282,6 +312,8 @@ def test_gates_and_markdown() -> None:
     md = ev.markdown("m.onnx", "ab" * 32, ({"fire": 0.7, "smoke": 0.5, "mean": 0.6}, "11 nokta", {"fire": 3, "smoke": 2}),
                      events, sweeps)
     assert "| Normal | 5 | %80,0 (4) | 4/4 | 0/1 |" in md
+    assert "Kaçan: model görmedi / hareketsiz / kural-süre |" in md
+    assert md.count("| 0 / 0 / 0 |") == 3                          # sayımsız kaçan (smoke) nedene yazılmaz
     assert "| **Ortalama (mAP50)** | **0,600** | |" in md
     assert "Yangın: Düşük 0,50, Normal 0,35, Yüksek 0,25" in md
     assert md.rstrip().endswith("Sonuç: GEÇTİ")
@@ -474,6 +506,15 @@ def test_play_with_real_analyzer() -> None:
     pos = ev.play([{"video": pathlib.Path("p"), "label": "fire", "start": 0.0}], ev.DetectionCache(Model()),
                   ev.fire_profile("normal"), frames=frames)
     assert pos[0]["caught"] is True and 3.0 <= pos[0]["first"] <= 3.0 + 1 / ev.MAX_FPS + 1e-6
+    assert pos[0]["miss"] is None
     neg = ev.play([{"video": pathlib.Path("n"), "label": "none", "start": 0.0}], ev.DetectionCache(Empty()),
                   ev.fire_profile("high"), frames=frames)
     assert neg[0]["false"] == 0
+
+    static = [(i / 25, np.full((120, 160, 3), 90, np.uint8)) for i in range(25 * 8)]   # kutu var, hiç değişim yok
+    st = ev.play([{"video": pathlib.Path("s"), "label": "fire", "start": 0.0}], ev.DetectionCache(Model()),
+                 ev.fire_profile("normal"), frames=lambda _p: static)
+    assert st[0]["caught"] is False and st[0]["miss"] == "static"
+    un = ev.play([{"video": pathlib.Path("u"), "label": "smoke", "start": 0.0}], ev.DetectionCache(Model()),
+                 ev.fire_profile("normal"), frames=frames)        # yalnız alev kutusu: duman hiç görülmedi
+    assert un[0]["caught"] is False and un[0]["miss"] == "unseen"

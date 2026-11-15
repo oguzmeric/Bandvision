@@ -28,6 +28,11 @@ başladığı an. Pozitif videoda olay türündeki ilk alarm `start ≤ t ≤ st
 (alevli videoda duman) yanlış sayılmaz; `start`'tan önceki her alarm "olaydan önce" diye ayrıca sayılır. Negatif
 videodaki her alarm yanlış alarmdır.
 
+Kaçan pozitifler nedenine göre ayrılır (analiz edilen karelerde, olay türünde, eşik/boyut/yok sayma süzgecinden geçen
+tespitlere göre): **model görmedi** (hiç tespit yok), **hareketsiz** (tespit var ama hiçbiri hareket kapısından
+geçmedi: kutu içi değişim ya da kare geneli ani değişim), **kural/süre** (hareketli tespit var, alarm 15 sn içinde
+doğmadı). Model iyileştirmesi ile kural ayarını ayırmak içindir; kabul kapısı değildir.
+
 Kabul (v1): mAP50 (iki sınıf ortalaması) ≥ 0,60; Normal hassasiyette pozitif videoların ≥ %80'i 15 sn içinde alarm;
 Normal hassasiyette negatif videolarda 0 yanlış alarm. Çıkış kodu: 0 geçti (iki bölüm de ölçüldü, üç kapı geçti), 1 kaldı,
 2 girdi hatası ya da kısmi ölçüm (`--coco` ya da `--manifest` verilmedi: "Sonuç: KISMİ"). Çıktı Türkçe
@@ -64,6 +69,7 @@ SWEEP = tuple(round(0.25 + 0.05 * i, 2) for i in range(12))      # 0,25 … 0,80
 CACHE_FLOOR = SWEEP[0]                          # olay düzeyi tespit saklama eşiği (en düşük önayar eşiğinin altında)
 LOW_STEP, HIGH_STEP = 0.15, 0.10                # bugünkü THRESHOLDS aralığı: düşük = normal + 0,15, yüksek = normal − 0,10
 EPS = 1e-9
+MISS_REASONS = ("unseen", "static", "rule")    # kaçan pozitif: model görmedi / hareketsiz / kural-süre
 MANIFEST_FORMAT = '[{"video": "yol", "label": "fire"|"smoke"|"none", "start": saniye (isteğe bağlı)}]'
 
 
@@ -238,10 +244,11 @@ def read_manifest(path: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def alarms_from_frames(frames: Iterable[tuple[float, Any]], analyzer: Any, profile: Any,
-                       max_fps: float = MAX_FPS) -> list[tuple[float, str]]:
+                       max_fps: float = MAX_FPS, seen: dict[str, list[int]] | None = None) -> list[tuple[float, str]]:
     """Kareleri (video zamanı, kare) canlı oturumdaki gibi en çok `max_fps` hızla analizöre verir: son analiz edilen
     kareden `1 / max_fps` sn dolmadan gelen kare atlanır (live/session.py `_fire_due`, video.py ile aynı kural). Döner:
-    doğan alarmlar (zaman, tür)."""
+    doğan alarmlar (zaman, tür). `seen` verilirse tür başına [tespitli kare, hareketli tespitli kare] sayıları eklenir
+    (analizör sonucundaki `detections`: (tür, kutu, skor, hareket))."""
     alarms: list[tuple[float, str]] = []
     last: float | None = None
     for t, frame in frames:
@@ -250,6 +257,12 @@ def alarms_from_frames(frames: Iterable[tuple[float, Any]], analyzer: Any, profi
         last = t
         r = analyzer.process(frame, t, profile)
         alarms += [(float(a.ts), str(a.kind)) for a in r.fired]
+        if seen is not None:
+            dets = getattr(r, "detections", ())
+            for k in KINDS:
+                c = seen.setdefault(k, [0, 0])
+                c[0] += any(d[0] == k for d in dets)
+                c[1] += any(d[0] == k and d[3] for d in dets)
     return alarms
 
 
@@ -276,21 +289,32 @@ def video_frames(path: pathlib.Path) -> Iterator[tuple[float, Any]]:
         cap.release()
 
 
+def miss_reason(caught: bool, seen: tuple[int, int] | None) -> str | None:
+    """Kaçan pozitifin nedeni: `unseen` (olay türünde tespitli kare yok), `static` (tespit var, hiçbiri hareketli değil),
+    `rule` (hareketli tespit var, alarm süresinde doğmadı). Yakalandıysa ya da sayım yoksa None."""
+    if caught or seen is None:
+        return None
+    return "unseen" if seen[0] == 0 else "static" if seen[1] == 0 else "rule"
+
+
 def video_outcome(label: str, start: float, alarms: list[tuple[float, str]],
-                  limit: float = ALARM_LIMIT_S) -> dict[str, Any]:
+                  limit: float = ALARM_LIMIT_S, seen: tuple[int, int] | None = None) -> dict[str, Any]:
     """Tek videonun sonucu: `first` olay türündeki ilk alarmın `start`'tan gecikmesi (yoksa None), `caught` ≤ `limit`,
-    `false` negatif videoda tüm alarmlar, `before` pozitif videoda `start`'tan önceki alarmlar."""
+    `false` negatif videoda tüm alarmlar, `before` pozitif videoda `start`'tan önceki alarmlar, `miss` kaçan pozitifin
+    nedeni (`miss_reason`; `seen` olay türünün [tespitli, hareketli] kare sayısı, verilmezse None)."""
     if label == "none":
-        return {"label": label, "first": None, "caught": False, "false": len(alarms), "before": 0}
+        return {"label": label, "first": None, "caught": False, "false": len(alarms), "before": 0, "miss": None}
     delays = sorted(t - start for t, k in alarms if k == label and t >= start - EPS)
     first = max(0.0, delays[0]) if delays else None
-    return {"label": label, "first": first, "caught": first is not None and first <= limit + EPS, "false": 0,
-            "before": sum(1 for t, _k in alarms if t < start - EPS)}
+    caught = first is not None and first <= limit + EPS
+    return {"label": label, "first": first, "caught": caught, "false": 0,
+            "before": sum(1 for t, _k in alarms if t < start - EPS), "miss": miss_reason(caught, seen)}
 
 
 def aggregate(outcomes: list[dict[str, Any]]) -> dict[str, Any]:
     """Videoların sonuçlarını toplar: pozitif sayısı, yakalanan, oran, ilk alarm ortanca/en geç (yakalananlarda), tür
-    başına (pozitif, yakalanan), negatif sayısı, negatiflerdeki yanlış alarm, pozitiflerde olaydan önceki alarm."""
+    başına (pozitif, yakalanan), negatif sayısı, negatiflerdeki yanlış alarm, pozitiflerde olaydan önceki alarm,
+    kaçanların nedene göre sayısı (`misses`; nedeni ölçülmeyen kaçan sayılmaz)."""
     pos = [o for o in outcomes if o["label"] != "none"]
     neg = [o for o in outcomes if o["label"] == "none"]
     firsts = [o["first"] for o in pos if o["caught"]]
@@ -301,6 +325,7 @@ def aggregate(outcomes: list[dict[str, Any]]) -> dict[str, Any]:
         "byLabel": {k: (sum(1 for o in pos if o["label"] == k), sum(o["caught"] for o in pos if o["label"] == k))
                     for k in KINDS},
         "negatives": len(neg), "false": sum(o["false"] for o in neg), "before": sum(o["before"] for o in pos),
+        "misses": {r: sum(1 for o in pos if o.get("miss") == r) for r in MISS_REASONS},
     }
 
 
@@ -380,8 +405,10 @@ def play(entries: list[dict[str, Any]], cache: DetectionCache, profile: Any,
     out = []
     for e in entries:
         an = FireAnalyzer(detector=cache.detector(str(e["video"])))
-        alarms = alarms_from_frames(frames(e["video"]), an, profile)
-        out.append(video_outcome(e["label"], e["start"], alarms))
+        seen: dict[str, list[int]] = {}
+        alarms = alarms_from_frames(frames(e["video"]), an, profile, seen=seen)
+        counts = seen.get(e["label"], [0, 0])
+        out.append(video_outcome(e["label"], e["start"], alarms, seen=(counts[0], counts[1])))
     return out
 
 
@@ -437,14 +464,16 @@ def markdown(model: str, sha: str, image: tuple[dict[str, Any], str, dict[str, i
     if events is not None:
         lines += ["## Olay düzeyi (videolar, varsayılan kurallar: alev 3 sn, duman 8 sn)", "",
                   (f"| Hassasiyet | Pozitif video | {ALARM_LIMIT_S:g} sn içinde alarm | Yangın | Duman | İlk alarm "
-                   "(ortanca / en geç, sn) | Negatif video | Yanlış alarm | Olaydan önce alarm |"),
-                  "|---|---|---|---|---|---|---|---|---|"]
+                   "(ortanca / en geç, sn) | Negatif video | Yanlış alarm | Olaydan önce alarm | Kaçan: model "
+                   "görmedi / hareketsiz / kural-süre |"),
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for s in SENSITIVITIES:
             a = events[s]
             by = {k: f"{a['byLabel'][k][1]}/{a['byLabel'][k][0]}" for k in KINDS}
             lines.append(f"| {SENS_NAMES[s]} | {a['positives']} | {pct(a['rate'])} ({a['caught']}) | {by['fire']} | "
                          f"{by['smoke']} | {num(a['medianFirst'], 1)} / {num(a['maxFirst'], 1)} | {a['negatives']} | "
-                         f"{a['false']} | {a['before']} |")
+                         f"{a['false']} | {a['before']} | "
+                         + " / ".join(str(a["misses"][r]) for r in MISS_REASONS) + " |")
         lines.append("")
     if sweeps is not None:
         lines += ["## Eşik kalibrasyonu (öneri)", "",
