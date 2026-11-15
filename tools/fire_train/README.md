@@ -67,7 +67,9 @@ Testler: `tools/tests/test_fire_train.py` (PyTorch gerektirmez; numpy/OpenCV ist
 
    `videolar.json`: `[{"video": "yol", "label": "fire"|"smoke"|"none", "start": saniye}]` (yollar manifestin
    klasörüne göre; `start` olayın göründüğü an, varsayılan 0). FIRESENSE'in alev/duman pozitif videoları `fire` /
-   `smoke`, negatifleri `none` olarak yazılır.
+   `smoke`, negatifleri `none` olarak yazılır. Olay tablosu kaçan pozitifleri nedenine göre ayırır: **model
+   görmedi** (olay türünde hiç tespit yok), **hareketsiz** (tespit var, hareket kapısından geçen yok), **kural/süre**
+   (hareketli tespit var, alarm 15 sn içinde doğmadı). İlki model verisine, diğer ikisi kural katmanına işaret eder.
 7. **Karar:** kabul hedefleri (aşağıda) tutarsa ve kullanıcı onaylarsa model GitHub sürümüne yüklenir,
    `core/fire_model.py` `FIRE_MODEL_URL` / `FIRE_MODEL_SHA256` doldurulur, kalibrasyon önerisi `core/fire_rules.py`
    `THRESHOLDS`'a ölçüm tablosuyla ayrı commit'te işlenir ve `docs/14-yangin-duman.md` model kartının ölçüm bölümü
