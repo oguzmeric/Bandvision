@@ -471,6 +471,9 @@ test("yükleme formu: Araç ve Hayvan kişi formunu kullanır (giriş yönü, ka
     await page.getByRole("button", { name: "Analizi başlat" }).click();
     await expect.poll(() => sent.length).toBe(value === "vehicle" ? 1 : 2);
     expect(sent[sent.length - 1].options).toEqual({ preset: value, truth: 8, countAnchor: "center" });
+    // Yanıt gelip form temizlenmeden aynı dosya yeniden seçilirse tarayıcı change olayı vermez (aynı dosya) ve gecikmiş
+    // yanıt seçimi siler: sonraki tura geçmeden form temizlenmiş olmalı.
+    await expect(page.getByText("Videoyu sürükle ya da seç")).toBeVisible();
   }
 });
 
