@@ -28,7 +28,7 @@ başladığı an. Pozitif videoda olay türündeki ilk alarm `start ≤ t ≤ st
 (alevli videoda duman) yanlış sayılmaz; `start`'tan önceki her alarm "olaydan önce" diye ayrıca sayılır. Negatif
 videodaki her alarm yanlış alarmdır.
 
-Kaçan pozitifler nedenine göre ayrılır (analiz edilen karelerde, olay türünde, eşik/boyut/yok sayma süzgecinden geçen
+Kaçan pozitifler nedenine göre ayrılır (`start`'tan itibaren analiz edilen karelerde, olay türünde, eşik/boyut/yok sayma süzgecinden geçen
 tespitlere göre): **model görmedi** (hiç tespit yok), **hareketsiz** (tespit var ama hiçbiri hareket kapısından
 geçmedi: kutu içi değişim ya da kare geneli ani değişim), **kural/süre** (hareketli tespit var, alarm 15 sn içinde
 doğmadı). Model iyileştirmesi ile kural ayarını ayırmak içindir; kabul kapısı değildir.
@@ -244,11 +244,12 @@ def read_manifest(path: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def alarms_from_frames(frames: Iterable[tuple[float, Any]], analyzer: Any, profile: Any,
-                       max_fps: float = MAX_FPS, seen: dict[str, list[int]] | None = None) -> list[tuple[float, str]]:
+                       max_fps: float = MAX_FPS, seen: dict[str, list[int]] | None = None,
+                       since: float = 0.0) -> list[tuple[float, str]]:
     """Kareleri (video zamanı, kare) canlı oturumdaki gibi en çok `max_fps` hızla analizöre verir: son analiz edilen
     kareden `1 / max_fps` sn dolmadan gelen kare atlanır (live/session.py `_fire_due`, video.py ile aynı kural). Döner:
-    doğan alarmlar (zaman, tür). `seen` verilirse tür başına [tespitli kare, hareketli tespitli kare] sayıları eklenir
-    (analizör sonucundaki `detections`: (tür, kutu, skor, hareket))."""
+    doğan alarmlar (zaman, tür). `seen` verilirse `since` sn ve sonrasındaki kareler için tür başına [tespitli kare,
+    hareketli tespitli kare] sayıları eklenir (analizör sonucundaki `detections`: (tür, kutu, skor, hareket))."""
     alarms: list[tuple[float, str]] = []
     last: float | None = None
     for t, frame in frames:
@@ -257,7 +258,7 @@ def alarms_from_frames(frames: Iterable[tuple[float, Any]], analyzer: Any, profi
         last = t
         r = analyzer.process(frame, t, profile)
         alarms += [(float(a.ts), str(a.kind)) for a in r.fired]
-        if seen is not None:
+        if seen is not None and t >= since - EPS:
             dets = getattr(r, "detections", ())
             for k in KINDS:
                 c = seen.setdefault(k, [0, 0])
@@ -406,7 +407,7 @@ def play(entries: list[dict[str, Any]], cache: DetectionCache, profile: Any,
     for e in entries:
         an = FireAnalyzer(detector=cache.detector(str(e["video"])))
         seen: dict[str, list[int]] = {}
-        alarms = alarms_from_frames(frames(e["video"]), an, profile, seen=seen)
+        alarms = alarms_from_frames(frames(e["video"]), an, profile, seen=seen, since=e["start"])
         counts = seen.get(e["label"], [0, 0])
         out.append(video_outcome(e["label"], e["start"], alarms, seen=(counts[0], counts[1])))
     return out

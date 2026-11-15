@@ -284,6 +284,9 @@ def test_alarms_from_frames_counts_seen_and_moving_frames_per_kind() -> None:
     seen: dict[str, list[int]] = {}
     ev.alarms_from_frames([(float(i), None) for i in range(5)], an, None, seen=seen)
     assert seen == {"fire": [2, 1], "smoke": [2, 1]}               # kare başına bir kez sayılır
+    late: dict[str, list[int]] = {}
+    ev.alarms_from_frames([(float(i), None) for i in range(5)], an, None, seen=late, since=1.0)
+    assert late == {"fire": [1, 0], "smoke": [2, 1]}               # olaydan (1 sn) önceki kare sayılmaz
 
 
 def test_aggregate_rates_and_first_alarm() -> None:
@@ -314,6 +317,10 @@ def test_gates_and_markdown() -> None:
     assert "| Normal | 5 | %80,0 (4) | 4/4 | 0/1 |" in md
     assert "Kaçan: model görmedi / hareketsiz / kural-süre |" in md
     assert md.count("| 0 / 0 / 0 |") == 3                          # sayımsız kaçan (smoke) nedene yazılmaz
+    missed = ev.aggregate([ev.video_outcome("fire", 0.0, [], seen=s)
+                           for s in [(0, 0), (3, 0), (3, 0), (3, 1), (3, 1), (3, 1)]])
+    md2 = ev.markdown("m.onnx", "ab" * 32, None, {s: missed for s in ev.SENSITIVITIES}, None)
+    assert md2.count("| 1 / 2 / 3 |") == 3                         # görmedi / hareketsiz / kural-süre sırası
     assert "| **Ortalama (mAP50)** | **0,600** | |" in md
     assert "Yangın: Düşük 0,50, Normal 0,35, Yüksek 0,25" in md
     assert md.rstrip().endswith("Sonuç: GEÇTİ")
@@ -518,3 +525,15 @@ def test_play_with_real_analyzer() -> None:
     un = ev.play([{"video": pathlib.Path("u"), "label": "smoke", "start": 0.0}], ev.DetectionCache(Model()),
                  ev.fire_profile("normal"), frames=frames)        # yalnız alev kutusu: duman hiç görülmedi
     assert un[0]["caught"] is False and un[0]["miss"] == "unseen"
+
+    class SmokeModel:
+        def detect(self, bgr: Any, conf: dict[str, float]) -> list[Detection]:
+            return [Detection(60, 40, 100, 80, 0.9, "smoke")]
+
+    short = frames(pathlib.Path("r"))[: 25 * 5]                     # 5 sn hareketli duman: 8 sn kuralı dolmaz
+    ru = ev.play([{"video": pathlib.Path("r"), "label": "smoke", "start": 0.0}], ev.DetectionCache(SmokeModel()),
+                 ev.fire_profile("normal"), frames=lambda _p: short)
+    assert ru[0]["caught"] is False and ru[0]["miss"] == "rule"
+    pre = ev.play([{"video": pathlib.Path("q"), "label": "smoke", "start": 6.0}], ev.DetectionCache(SmokeModel()),
+                  ev.fire_profile("normal"), frames=lambda _p: short)
+    assert pre[0]["miss"] == "unseen"                              # tespitler yalnız olaydan (6 sn) önce
