@@ -79,7 +79,7 @@ class CountLineIn(_Strict):
 
 
 class SafetyRuleIn(_Strict):
-    """Bir güvenlik kuralı: verilmeyen alan canlıdaki varsayılana düşer (eller yukarı 3 sn ve yerde yatma 10 sn açık; telefon kullanımı KAPALI, 60 sn).
+    """Bir güvenlik kuralı: verilmeyen alan canlıdaki varsayılana düşer (eller yukarı 3 sn ve yerde yatma 10 sn açık; telefon kullanımı KAPALI, 15 sn).
     Yanlış tür (ör. "false", "10") sessizce dönüştürülmez, reddedilir."""
     title: ClassVar[str]
     low: ClassVar[float]

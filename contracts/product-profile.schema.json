@@ -50,7 +50,7 @@
       "enum": ["center", "bottom"]
     },
     "safety": {
-      "description": "safety: poz güvenlik alarmı ayarları (tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md; telefon: docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md). Yoksa varsayılanlar: eller yukarı ve yerde yatma açık (3, 10 sn), telefon kapalı (60 sn), resim kapalı.",
+      "description": "safety: poz güvenlik alarmı ayarları (tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md; telefon: docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md). Yoksa varsayılanlar: eller yukarı ve yerde yatma açık (3, 10 sn), telefon kapalı (15 sn), resim kapalı.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "handsUp": { "type": "object", "additionalProperties": false, "required": ["enabled", "seconds"],

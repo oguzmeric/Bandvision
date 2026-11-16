@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md`
 
 ## Global Constraints
-- Kural varsayılanı **kapalı**, süre **60 sn**, aralık **10–600 sn** (çekirdek, canlı API, video işi, CLI, panel, şema hep aynı).
+- Kural varsayılanı **kapalı**, süre **15 sn** (R6, kullanıcı kararı), aralık **10–600 sn** (çekirdek, canlı API, video işi, CLI, panel, şema hep aynı). Kullanıcı kararı 2026-11-16: ofis kaydında (40 sn telefon kullanımı, kişi yer değiştiriyor) 15 sn kuralı iki kullanım bölümünü de yakaladı, 20 sn eşik 0,25'te yakalamadı.
 - Alarm türü adı: canlı `type = "phone"`, video işi `alarms[].kind = "phone"`. Metinler: başlık "TELEFON KULLANIMI", etiket "Telefon kullanımı", görüntü etiketi "TELEFON", Telegram `🚨 TELEFON KULLANIMI`.
 - Sabitler (başlangıç, `core/phone_rules.py`): `PHONE_CONF = 0.25`, `PHONE_NEAR = 0.6`, `PHONE_PAD = 0.2`, `PHONE_FPS = 2.0`, `PHONE_SLOT_S = 5.0`, `PHONE_SLOT_RATIO = 0.6`, `PHONE_END_S = 15.0`.
 - COCO sınıfı `"cell phone": 67` `CLASS_IDS`'e eklenir; profil `detectClasses` enumuna ve `GROUPS`'a **eklenmez**.
@@ -44,7 +44,7 @@
 
 **Interfaces:**
 - Produces:
-  - `SafetyConfig.phone: SafetyRule = SafetyRule(False, 60.0)`; `from_dict` eksikse varsayılan; `to_dict` `asdict` ile yazar.
+  - `SafetyConfig.phone: SafetyRule = SafetyRule(False, 15.0)`; `from_dict` eksikse varsayılan; `to_dict` `asdict` ile yazar.
   - `phone_rules.find_phones(detector, bgr: np.ndarray, box_px: tuple[float,float,float,float]) -> list[tuple[float,float,float,float,float]]` — kişi kutusu `PHONE_PAD` payla kareye sınırlanarak kırpılır, `detector.detect(crop, ["cell phone"], conf=PHONE_CONF)` sonucundan yalnız `cls == "cell phone"` olanlar, **tam kare piksel** `(x1, y1, x2, y2, skor)`; boş kırpıntı → `[]`.
   - `phone_rules.phone_hit(phones, kp: np.ndarray) -> bool | None` — `pose_rules.scale(kp)` yoksa ya da hiçbir bilek/baş görünmüyorsa None; bir telefon merkezi görünen bilek ya da `pose_rules.head(kp)`'ye `PHONE_NEAR · ölçek` uzaklık içindeyse True; aksi False.
   - `phone_rules.PhoneEvidence` — `observe(track_id: int, ts: float) -> None`, `update(track_id: int, ts: float, hit: bool | None, seconds: float) -> bool` (bu çağrıda alarm doğduysa True, bölüm başına bir kez), `sweep(ts: float, alive: set[int]) -> list[tuple[tuple[int, str], bool]]`, `close_all() -> list[tuple[tuple[int, str], bool]]`, `active() -> list[tuple[int, str, float, bool]]`. Anahtar türü daima `"phone"`.
@@ -64,7 +64,7 @@
 - [ ] **Step 2: Çalıştır, başarısız olduğunu gör**
   Run: `cd services/edge && pytest -q tests/test_phone_rules.py` → FAIL (modül yok).
 
-- [ ] **Step 3: `core/phone_rules.py`'yi yaz**; `CLASS_IDS`'e `"cell phone": 67`; `SafetyConfig.phone` + `from_dict` (eksik → `SafetyRule(False, 60.0)`).
+- [ ] **Step 3: `core/phone_rules.py`'yi yaz**; `CLASS_IDS`'e `"cell phone": 67`; `SafetyConfig.phone` + `from_dict` (eksik → `SafetyRule(False, 15.0)`).
   Kanıt penceresi kuralı (imzanın belirlemediği algoritma):
   ```text
   observe: iz gözlem sürekliliği; son gözlemden > PHONE_END_S geçmişse gözlem başlangıcı = ts.
@@ -87,7 +87,7 @@
   - `test_phone_only_rule_fires_phone_alarm`: handsUp/lying kapalı, phone açık 10 sn; kişi + bileğin yanında telefon her karede; 10 kare/sn 12 sn → tam bir `fired` `kind == "phone"`; poz çağrılmış.
   - `test_phone_search_rate_limited_to_phone_fps`: 10 kare/sn 5 sn → telefon araması 10 ± 1 kez.
   - `test_reset_and_end_all_report_fired_phone_episode`.
-  - `test_profile_safety_phone_roundtrip_and_default`: `phone` yoksa `enabled False, 60`; `{"phone": {"enabled": true, "seconds": 120}}` gidip gelir.
+  - `test_profile_safety_phone_roundtrip_and_default`: `phone` yoksa `enabled False, 15`; `{"phone": {"enabled": true, "seconds": 120}}` gidip gelir.
   Run: `cd services/edge && pytest -q tests/test_phone_rules.py tests/test_safety.py tests/test_profile_contract.py` → PASS; `ruff check . ../../tools` → temiz.
 
 - [ ] **Step 6: Commit** — `git commit -m "Telefon alarmı: çekirdek kurallar (kırpıntıda telefon, el/baş yakınlığı, dilimli kanıt penceresi)"`
@@ -95,7 +95,7 @@
 ### Task 2: Sözleşme ve canlı API
 
 **Files:**
-- Modify: `contracts/product-profile.schema.json` (`safety.phone`, açıklama "Yoksa varsayılanlar: eller yukarı ve yerde yatma açık (3, 10 sn), telefon kapalı (60 sn), resim kapalı.")
+- Modify: `contracts/product-profile.schema.json` (`safety.phone`, açıklama "Yoksa varsayılanlar: eller yukarı ve yerde yatma açık (3, 10 sn), telefon kapalı (15 sn), resim kapalı.")
 - Modify: `contracts/analysis-job.schema.json` (`options.safety.phone` 10–600; `alarms.kind` enumuna `"phone"`)
 - Modify: `contracts/examples/analysis-job-safety-done.json` (bir `phone` alarmı içeren örnek) ve gerekiyorsa profil örneği
 - Modify: `docs/02-contracts.md` (§1 `safety` satırı, §7 `options`/`alarms.kind`)
@@ -131,15 +131,15 @@
 
 **Files:**
 - Modify: `apps/dashboard/src/lib/live.ts` (`SafetyConfig.phone?: {enabled: boolean; seconds: number}`; `AlarmType` + `"phone"`; `ALARM_TITLES.phone = "TELEFON KULLANIMI"`; `ALARM_LABELS.phone = "Telefon kullanımı"`)
-- Modify: `apps/dashboard/src/components/live/SafetyPanel.tsx` (`SAFETY_DEFAULTS.phone = {enabled: false, seconds: 60}`; `SafetySettings` üçüncü satır "Telefon kullanımı", aralık 10–600 adım 10; `value.phone` yoksa varsayılan; satır altında yardım metni: "Kişinin elinde ya da yüzünün yanında telefon/tablet görülürse. Telefonla kulakta konuşma bu sürümde yakalanmaz. Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK).")
-- Modify: `apps/dashboard/src/lib/safetyAlarms.mjs` + `.d.mts` (`SAFETY_RULES.phone = {title: "Telefon kullanımı", min: 10, max: 600, def: 60}`; `ALARM_LABELS.phone`; `defaultSafetyForm().phone = {enabled: false, seconds: "60"}`)
+- Modify: `apps/dashboard/src/components/live/SafetyPanel.tsx` (`SAFETY_DEFAULTS.phone = {enabled: false, seconds: 15}`; `SafetySettings` üçüncü satır "Telefon kullanımı", aralık 10–600 adım 10; `value.phone` yoksa varsayılan; satır altında yardım metni: "Kişinin elinde ya da yüzünün yanında telefon/tablet görülürse. Telefonla kulakta konuşma bu sürümde yakalanmaz. Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK).")
+- Modify: `apps/dashboard/src/lib/safetyAlarms.mjs` + `.d.mts` (`SAFETY_RULES.phone = {title: "Telefon kullanımı", min: 10, max: 600, def: 15}`; `ALARM_LABELS.phone`; `defaultSafetyForm().phone = {enabled: false, seconds: "15"}`)
 - Modify: `apps/dashboard/src/lib/types.ts` (`AlarmKind` + `"phone"`, `JobOptions.safety.phone`)
 - Modify: `apps/dashboard/src/components/video/UploadCard.tsx` (güvenlik kural satırları `SAFETY_RULES`'tan geliyorsa otomatik; değilse üçüncü satır)
 - Test: `apps/dashboard/src/lib/safetyAlarms.test.mjs`, `apps/dashboard/e2e/safety-ui.spec.ts`, `apps/dashboard/e2e/video-analysis.spec.ts`
 
 - [ ] **Step 1: Testler**
   - `safetyAlarms.test.mjs`: varsayılan formda `phone` kapalı ve `safetyOptions` çıktısı `phone: {enabled: false}`; yalnız telefon açık (60) → `{preset: "safety", safety: {handsUp: {enabled:false}, lying: {enabled:false}, phone: {enabled:true, seconds:60}}}`; `"5"` → "Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı."; `alarmCounts`/`alarmRows` `phone` türünü "Telefon kullanımı" yazar.
-  - `safety-ui.spec.ts`: güvenlik kamerasının Ayarla panelinde "Telefon kullanımı" kutusu kapalı gelir; açıp süreyi değiştirince kaydedilen profil `safety.phone = {enabled: true, seconds: N}`; `phone` alanı olmayan kayıtlı profil açılınca kapalı/60 görünür ve kaydetme hatası yok; alarm sayfası tür filtresinde "Telefon kullanımı" var.
+  - `safety-ui.spec.ts`: güvenlik kamerasının Ayarla panelinde "Telefon kullanımı" kutusu kapalı gelir; açıp süreyi değiştirince kaydedilen profil `safety.phone = {enabled: true, seconds: N}`; `phone` alanı olmayan kayıtlı profil açılınca kapalı/15 görünür ve kaydetme hatası yok; alarm sayfası tür filtresinde "Telefon kullanımı" var.
   - `video-analysis.spec.ts`: güvenlik ön ayarında telefon satırı görünür, açılınca gönderilen `options.safety.phone` doğru; sonuç tablosunda `phone` alarmı "Telefon kullanımı".
 - [ ] **Step 2:** FAIL. **Step 3:** Uygula. **Step 4:** `npm run lint`, `npm test` (node unit), `npx playwright test e2e/safety-ui.spec.ts e2e/video-analysis.spec.ts` (`PYTHON=<edge venv python>`; portlar boş mu bak) → PASS.
 - [ ] **Step 5: Commit** — "Telefon alarmı: panel ayarı, alarm türü ve video yükleme formu".
@@ -147,7 +147,7 @@
 ### Task 5: iOS — alanı taşıma
 
 **Files:**
-- Modify: `apps/ios/BantSayac/Core/ProductProfile.swift` (`SafetyConfig.phone: Rule = SafetyConfig.defaultPhone`, `defaultPhone = Rule(enabled: false, seconds: 60)`, `CodingKeys` + `phone`, `init(from:)` `decodeIfPresent ?? defaultPhone`; eşlenik başlatıcı `phone` vermeden çalışmaya devam eder)
+- Modify: `apps/ios/BantSayac/Core/ProductProfile.swift` (`SafetyConfig.phone: Rule = SafetyConfig.defaultPhone`, `defaultPhone = Rule(enabled: false, seconds: 15)`, `CodingKeys` + `phone`, `init(from:)` `decodeIfPresent ?? defaultPhone`; eşlenik başlatıcı `phone` vermeden çalışmaya devam eder)
 - Test: `apps/ios/BantSayacTests/SafetyProfileTests.swift`
 
 - [ ] **Step 1: Testler** — `testPhoneMissingDecodesAsOffSixty`; `testPhoneRoundTrips` (`{"phone":{"enabled":true,"seconds":120}}` çöz → kodla → aynı JSON alanı); mevcut testler değişmeden geçer.

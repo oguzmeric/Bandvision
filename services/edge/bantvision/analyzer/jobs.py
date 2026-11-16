@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core import devices
+from ..core.profile import SafetyConfig
 
 SCHEMA = "bantvision.analysis-job.v1"
 RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
@@ -36,7 +37,6 @@ RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
 FIXED_PUBLIC_FILES = ("annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png")
 ALARM_IMAGE = re.compile(r"alarm-([0-9]{1,2})\.jpg")     # alarm resmi: yalnızca bu ad (sözleşme: ^alarm-[0-9]{1,2}\.jpg$)
 MAX_ALARMS = 500                                          # sonuçtaki alarm listesi (sözleşme `maxItems`)
-PHONE_DEFAULT_SECONDS = 60.0                              # telefon kuralının varsayılan süresi (canlı, profil ve CLI ile aynı)
 ALARM_KINDS = {"safety": ("handsUp", "lying", "phone"), "fire": ("fire", "smoke")}    # alarm veren ön ayar → izinli `kind`
 ALARMS_BROKEN = "alarm listesi bozuk"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".ts"}
@@ -151,7 +151,7 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
             elif rule.get("seconds") is not None:
                 args += [f"--{flag}", f"{float(rule['seconds']):g}"]
             elif key == "phone" and rule.get("enabled") is True:
-                args += [f"--{flag}", f"{PHONE_DEFAULT_SECONDS:g}"]   # telefon varsayılanı kapalı: açık kural süresiz de açık kalır
+                args += [f"--{flag}", f"{SafetyConfig().phone.seconds:g}"]   # tek kaynak: profil varsayılanı (kapalı kural süresiz açılırsa)
     if (options.get("fire") or {}).get("sensitivity"):
         args += ["--sensitivity", options["fire"]["sensitivity"]]
     return args

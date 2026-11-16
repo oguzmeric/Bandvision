@@ -50,7 +50,7 @@
         },
         "safety": {
           "type": "object", "additionalProperties": false,
-          "description": "Yalnızca preset safety: kurallar; verilmeyen kural varsayılanla çalışır (eller yukarı açık 3 sn, yerde yatma açık 10 sn, telefon kullanımı kapalı 60 sn). En az biri açık olmalı",
+          "description": "Yalnızca preset safety: kurallar; verilmeyen kural varsayılanla çalışır (eller yukarı açık 3 sn, yerde yatma açık 10 sn, telefon kullanımı kapalı 15 sn). En az biri açık olmalı",
           "properties": {
             "handsUp": {
               "type": "object", "additionalProperties": false,

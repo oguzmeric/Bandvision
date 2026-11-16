@@ -67,7 +67,7 @@ class SafetyConfig:
     (varsayılan kapalı; docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md), olay resmi gönderimi."""
     handsUp: SafetyRule = field(default_factory=lambda: SafetyRule(True, 3.0))
     lying: SafetyRule = field(default_factory=lambda: SafetyRule(True, 10.0))
-    phone: SafetyRule = field(default_factory=lambda: SafetyRule(False, 60.0))
+    phone: SafetyRule = field(default_factory=lambda: SafetyRule(False, 15.0))
     sendImage: bool = False
 
 
@@ -195,7 +195,7 @@ class Profile:
                 lying=SafetyRule(bool(sf.get("lying", {}).get("enabled", True)),
                                  float(sf.get("lying", {}).get("seconds", 10.0))),
                 phone=SafetyRule(bool(sf.get("phone", {}).get("enabled", False)),
-                                 float(sf.get("phone", {}).get("seconds", 60.0))),
+                                 float(sf.get("phone", {}).get("seconds", SafetyConfig().phone.seconds))),
                 sendImage=bool(sf.get("sendImage", False)))
         if "fire" in d:
             p.fire = FireConfig.from_dict(d["fire"])

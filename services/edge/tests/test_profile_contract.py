@@ -9,6 +9,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from bantvision.core import Profile
+from bantvision.core.profile import SafetyConfig
 
 CONTRACTS = pathlib.Path(__file__).resolve().parents[3] / "contracts"
 PROFILE_EXAMPLES = sorted((CONTRACTS / "examples").glob("profile-*.json"))
@@ -65,7 +66,7 @@ def test_safety_profile_round_trip_and_validate(validator: Draft202012Validator)
     d = p.to_dict()
     assert d["countMode"] == "safety" and d["safety"] == {
         "handsUp": {"enabled": True, "seconds": 3.0}, "lying": {"enabled": True, "seconds": 10.0},
-        "phone": {"enabled": False, "seconds": 60.0}, "sendImage": False}
+        "phone": {"enabled": False, "seconds": 15.0}, "sendImage": False}
     assert d["detectClasses"] == ["person"] and d["countAnchor"] == "bottom"
     assert_valid(validator, d)
     q = Profile.from_dict({**d, "safety": {"handsUp": {"enabled": False, "seconds": 5}, "lying": {"enabled": True,
@@ -78,11 +79,11 @@ def test_safety_profile_round_trip_and_validate(validator: Draft202012Validator)
 
 
 def test_profile_safety_phone_roundtrip_and_default(validator: Draft202012Validator) -> None:
-    """Telefon kuralı (docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md): yoksa kapalı, 60 sn; 10–600 sn."""
+    """Telefon kuralı (docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md): yoksa kapalı, 15 sn; 10–600 sn."""
     d = Profile.jeweler().to_dict()
     old = {**d, "safety": {k: v for k, v in d["safety"].items() if k != "phone"}}    # alansız (eski) profil
     q = Profile.from_dict(old)
-    assert (q.safety.phone.enabled, q.safety.phone.seconds) == (False, 60.0)
+    assert (q.safety.phone.enabled, q.safety.phone.seconds) == (False, 15.0)
     assert_valid(validator, old)
     on = {**d, "safety": {**d["safety"], "phone": {"enabled": True, "seconds": 120}}}
     assert_valid(validator, on)
@@ -95,3 +96,10 @@ def test_profile_safety_phone_roundtrip_and_default(validator: Draft202012Valida
                                                                                    "seconds": secs}}}))
     assert list(validator.iter_errors({**d, "safety": {**d["safety"], "phone": {"enabled": True}}}))
     assert "cell phone" not in json.dumps(validator.schema["properties"]["detectClasses"])   # sayım sınıfı değil
+
+
+def test_safety_without_phone_defaults_to_off_15s() -> None:
+    """Kullanıcı kararı 2026-11-16: telefon kuralı varsayılanı kapalı, 15 sn (phone'suz safety bloğu)."""
+    p = Profile.from_dict({**Profile.jeweler().to_dict(), "safety": {"sendImage": True}})
+    assert (p.safety.phone.enabled, p.safety.phone.seconds) == (False, 15.0)
+    assert (SafetyConfig().phone.enabled, SafetyConfig().phone.seconds) == (False, 15.0)

@@ -1069,9 +1069,9 @@ def test_phone_options_reach_video_tool() -> None:
         "--preset", "safety", "--phone", "45"]
     assert options_to_args({"preset": "safety", "safety": {"phone": {"enabled": False}}}) == [
         "--preset", "safety", "--no-phone"]
-    # telefon varsayılanı kapalı: seconds'sız açık kural CLI'da da açık olmalı (varsayılan süre 60)
+    # telefon varsayılanı kapalı: seconds'sız açık kural CLI'da da açık olmalı (varsayılan süre 15)
     assert options_to_args({"preset": "safety", "safety": {"phone": {"enabled": True}}}) == [
-        "--preset", "safety", "--phone", "60"]
+        "--preset", "safety", "--phone", "15"]
     assert options_to_args({"preset": "safety", "safety": {"phone": {}}}) == ["--preset", "safety"]
 
 
