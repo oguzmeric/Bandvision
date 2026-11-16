@@ -1197,6 +1197,187 @@ def test_session_stop_reports_alarms_cut_by_reset() -> None:
     assert [c[2] for c in calls] == [[(fired[0].track_id, "hands_up", True)]] and calls[0][1] == []
 
 
+class _Clock:
+    """`live.api` modülünün `time`'ı yerine: duvar saati (`time()`) elle sürülür, gerisi gerçek modül."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def time(self) -> float:
+        return self.now
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+
+T0 = 1_700_000_000.0
+SAFETY_BOX = (280, 80, 360, 440)                                 # 640×480'de ayakta kişi
+PHONE_NEAR_WRIST = (16.0, 242.0, 36.0, 262.0, 0.4)            # kırpıntıya göre, phone_kp sol bileğinde
+
+
+def _replay(mgr: Any, clock: _Clock, profile: Any, det: Any, pose: Any, change_at: float, change: Any,
+            until: float) -> tuple[dict[str, Any], float]:
+    """Güvenlik oturumunu 10 kare/sn kare zamanı = duvar saati − T0 ile sürer (`change_at`'te sahne değişir); alarm
+    kaydı ve bitiş bildiriminin kare zamanı döner."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from bantvision.core.safety import SafetyAnalyzer
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("t", lambda: "yok.mp4", profile, detector=det, pose=pose, alarm_sink=mgr.on_alarm)
+    s._render = lambda f, _p, _r: f                                       # type: ignore[method-assign]
+    an, frame, notice = SafetyAnalyzer(detector=det, pose=pose), np.zeros((480, 640, 3), np.uint8), None
+    try:
+        for k in range(round(until * 10)):
+            ts = k / 10
+            if k == round(change_at * 10):
+                change()
+            clock.now = T0 + ts
+            sr = an.process(frame, profile, 10.0, ts)
+            s._notify_alarms(SimpleNamespace(ts=ts, safety=sr, fire=None), frame, profile)  # type: ignore[arg-type]
+            if sr.ended and notice is None:
+                notice = ts
+    finally:
+        s.stop()
+    (a,) = mgr.alarms.list(session_id=s.id)
+    assert notice is not None
+    return a, notice
+
+
+def test_live_phone_alarm_ends_at_last_hit_not_end_notice(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Canlı telefon alarmının `endedAt`'i son isabettir; bitiş bildirimi PHONE_END_S (15 sn) sonra gelir ama kayıt o
+    ana yazılmaz: panelin süresi (endedAt − startedAt) gerçek kullanım kadardır."""
+    from fakes_safety import FakePhoneDetector, FakePose, phone_kp
+
+    from bantvision.core import Profile
+    from bantvision.core.phone_rules import PHONE_END_S
+    from bantvision.live import api
+
+    clock = _Clock(T0)
+    monkeypatch.setattr(api, "time", clock)
+    p = Profile.jeweler()
+    p.safety.handsUp.enabled = p.safety.lying.enabled = False
+    p.safety.phone.enabled, p.safety.phone.seconds = True, 10.0
+    det = FakePhoneDetector([SAFETY_BOX], phones=[PHONE_NEAR_WRIST])
+    a, notice = _replay(client.app.state.live, clock, p, det, FakePose(phone_kp()), 20.0,
+                        lambda: setattr(det, "phones", []), 40.0)   # 20. sn'de telefon bırakıldı, kişi kaldı
+    assert a["type"] == "phone" and T0 + 10.0 <= a["firedAt"] <= T0 + 11.0
+    assert 19.4 + PHONE_END_S <= notice <= 20.0 + PHONE_END_S + 0.2     # bildirim son isabetten 15 sn sonra geldi
+    assert T0 + 19.4 <= a["endedAt"] < T0 + 20.0                        # son isabet (iz başına ≤ 2 arama/sn)
+    assert PHONE_END_S < T0 + notice - a["endedAt"] <= PHONE_END_S + 0.11   # bildirimden 15 sn (+ ≤ 1 kare) önce
+    assert 18.9 <= a["endedAt"] - a["startedAt"] <= 20.0                # gerçek kullanım ≈ 20 sn (onay gecikmesi)
+
+
+def test_live_hands_up_alarm_ends_at_last_positive_frame(client: TestClient,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.core.pose_rules import FIRED_GRACE_S
+    from bantvision.live import api
+
+    clock = _Clock(T0)
+    monkeypatch.setattr(api, "time", clock)
+    det = FakeDetector([SAFETY_BOX])
+    a, notice = _replay(client.app.state.live, clock, Profile.jeweler(), det, FakePose(hands_up_kp()), 5.0,
+                        lambda: setattr(det, "boxes", []), 10.0)    # 5. sn'de kişi çıktı
+    assert a["type"] == "hands_up" and notice > 4.9 + FIRED_GRACE_S
+    assert a["endedAt"] == pytest.approx(T0 + 4.9, abs=1e-6)            # son olumlu kare, bildirim değil
+    assert a["firedAt"] <= a["endedAt"] and 4.5 <= a["endedAt"] - a["startedAt"] <= 4.9   # süre ≈ eller yukarı
+
+
+def test_live_alarm_end_is_clamped_and_fire_end_is_unchanged(client: TestClient,
+                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """Geri tarih alarm anından (firedAt) önceye ve geleceğe taşmaz (telefon alarmı ıska karede doğabilir: son isabet
+    alarmdan önce kalabilir, "alarmdan önce bitti" yazılmaz); süre verilmeyen bitiş (yangın/duman, eski çağrı, bilinmeyen
+    anahtar) bildirim anıdır."""
+    from bantvision.core import Profile
+    from bantvision.core.fire import FireAlarm
+    from bantvision.core.safety import SafetyAlarm
+    from bantvision.live import api
+
+    clock = _Clock(T0)
+    monkeypatch.setattr(api, "time", clock)
+    mgr = client.app.state.live
+    s = _fake_safety_session()
+    for tid in (1, 2, 3):
+        mgr.on_safety(s, [SafetyAlarm("phone", tid, (0, 0, 1, 1), 50.0, 60.0)], [], None)   # startedAt T0 − 10
+    clock.now = T0 + 5.0
+    mgr.on_alarm(s, [], [(1, "phone", True), (2, "phone", True), (3, "phone", True)], None,
+                 ended_ago={(1, "phone"): 30.0, (2, "phone"): -4.0})
+    got = {a["id"]: a for a in mgr.alarms.list(session_id="x")}
+    ends = sorted(a["endedAt"] for a in got.values())
+    assert ends == [T0, T0 + 5.0, T0 + 5.0]                             # alarm anına kırpıldı; gelecek yok; anahtar yok
+    fs = _fake_safety_session(id="f", profile=Profile.fire_watch())
+    mgr.on_alarm(fs, [FireAlarm("fire", 0, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    clock.now = T0 + 40.0
+    mgr.on_alarm(fs, [], [(0, "fire", True)], None)                     # yangın: bildirim anı (değişmedi)
+    (f,) = mgr.alarms.list(session_id="f")
+    assert f["endedAt"] == T0 + 40.0
+
+
+def test_session_passes_ended_ago_for_safety_ends_only() -> None:
+    """Oturum, güvenlik sonucundaki biten bölümlerin son olumlu gözleminin bu kareden ne kadar önce olduğunu
+    (`ended_ago`) alıcıya verir; yangın/duman ve bitişsiz güvenlik çağrısı eski biçimde kalır."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from bantvision.core import Profile
+    from bantvision.core.fire import FireResult
+    from bantvision.core.safety import SafetyResult
+    from bantvision.live.session import LiveSession
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), alarm_sink=lambda *a, **k: calls.append((a, k)) or [])
+    frame = np.zeros((48, 64, 3), np.uint8)
+    try:
+        sr = SafetyResult(ended=[(1, "phone", True), (2, "hands_up", True)],
+                          ended_last={(1, "phone"): 85.0, (2, "hands_up"): 97.0})
+        s._notify_alarms(SimpleNamespace(ts=100.0, safety=sr, fire=None), frame, s.profile)  # type: ignore[arg-type]
+        fr = FireResult(ended=[(0, "fire", True)])
+        s._notify_alarms(SimpleNamespace(ts=100.0, safety=None, fire=fr), frame, s.profile)  # type: ignore[arg-type]
+    finally:
+        s.stop()
+    (sa, sk), (fa, fk) = calls
+    assert sa[2] == sr.ended and sk == {"ended_ago": {(1, "phone"): 15.0, (2, "hands_up"): 3.0}}
+    assert fa[2] == [(0, "fire", True)] and fk == {}
+
+
+def test_session_stop_backdates_open_safety_alarms_from_last_frame() -> None:
+    """Oturum durunca açık alarmlı bölümlerin sonu da son olumlu gözleme göre: son işlenen karenin zamanı ve yakalama
+    saatinden (tekdüze) hesaplanır. Kare işlenmemişse süre verilmez (bitiş durdurma anı)."""
+    import numpy as np
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+
+    from bantvision.core import Profile
+    from bantvision.core.safety import SafetyAnalyzer
+    from bantvision.live.session import LiveSession
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    det, pose = FakeDetector([SAFETY_BOX]), FakePose(hands_up_kp())
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), detector=det, pose=pose,
+                    alarm_sink=lambda *a, **k: calls.append((a, k)) or [])
+    try:
+        an = SafetyAnalyzer(detector=det, pose=pose)
+        with s._lock:
+            s._pipe.safety = an
+            frame = np.zeros((480, 640, 3), np.uint8)
+            res = [an.process(frame, s.profile, 10.0, k / 10) for k in range(50)]   # 0–4,9 sn eller yukarı
+            (tid,) = [a.track_id for r in res for a in r.fired]
+            det.boxes = []
+            an.process(frame, s.profile, 10.0, 6.0)                       # kişi gitti; son olumlu 4,9, bölüm sürüyor
+            s._safety_ref = (6.0, time.monotonic() - 2.0)                 # son kare 6,0'da, 2 sn önce yakalandı
+    finally:
+        s.stop()
+    ((args, kw),) = calls
+    assert args[2] == [(tid, "hands_up", True)]
+    assert kw["ended_ago"].keys() == {(tid, "hands_up")}
+    assert 3.1 - 1e-6 <= kw["ended_ago"][(tid, "hands_up")] <= 3.1 + 1.0     # 2 sn + (6,0 − 4,9)
+
+
 def test_shared_pose_loads_in_background_and_never_blocks() -> None:
     import threading
 

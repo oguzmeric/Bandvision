@@ -172,7 +172,9 @@ class LiveSession:
         ortak; yoksa ilk karede yüklenir). `alarm_sink(oturum, doğan alarmlar, biten bölümler, olay resmi[, raw_jpeg=])`:
         poz güvenlik ve yangın/duman alarmları; yalnız yangın/duman alarmında `raw_jpeg` (çizimsiz kare, zor örnek için)
         verilir, güvenlik hiç vermez (çalışma iş parçacığından, sayım kilidi dışında çağrılır); yeni alarm kayıtlarının
-        kimliklerini döndürür; çalışma döngüsü biterken açık alarmların sonu da buradan gelir. `clip_sink`: olay kaydı
+        kimliklerini döndürür; çalışma döngüsü biterken açık alarmların sonu da buradan gelir. Güvenlikte biten
+        bölümlerin son olumlu gözlemi biliniyorsa `ended_ago={(iz, tür): sn}` (çağrıdan ne kadar önce) de verilir; alıcı
+        `endedAt`'i o ana geri alır (yangın/duman vermez). `clip_sink`: olay kaydı
         yazıcısı (engellemez); verilirse güvenlik/yangın oturumu ön kayıt tutar ve alarmda kayıt yakalar (sayım
         oturumunda tampon yok, ek iş yok).
         `clip_state(kimlikler, "failed")`: yakalama alınamadı (alarm kaydı `clipFailed` olur)."""
@@ -202,6 +204,9 @@ class LiveSession:
         self._last_healthy: float | None = None
         self._model_check_at = 0.0
         self._fire_last_ts: float | None = None             # son analiz edilen yangın karesinin zamanı (MAX_FPS)
+        # son işlenen güvenlik karesi (kare zamanı, yakalama saati — tekdüze): kapanışta açık bölümlerin son olumlu
+        # gözleminin ne kadar önce olduğu buradan hesaplanır
+        self._safety_ref: tuple[float, float] | None = None
         self._fire_missing: str | None = None               # dedektör "model kurulu değil" dedi (ortak model dışı yol)
         self._fire_last: FireResult | None = None           # son analiz edilen yangın karesinin FireResult'u (önizleme)
         if detector is not None:
@@ -652,12 +657,20 @@ class LiveSession:
             return
         with self._lock:
             ended: list[tuple[int, str, bool]] = []
+            ago: dict[tuple[int, str], float] = {}
             for an in (self._pipe.safety, self._pipe.fire):
                 if an is not None:                          # açık alarmlı bölümler + reset() ile kesilip bildirilmemişler
                     ended += an.end_all()
+            ref = self._safety_ref
+            if self._pipe.safety is not None and ref is not None:   # son olumlu gözlem, son kareden ve ondan bu yana
+                since = time.monotonic() - ref[1]
+                ago = {k: since + ref[0] - v for k, v in self._pipe.safety.ended_last.items()}
         if ended:
             try:
-                self._alarm_sink(self, [], ended, None)
+                if ago:
+                    self._alarm_sink(self, [], ended, None, ended_ago=ago)
+                else:                                       # yangın/duman ya da kare işlenmedi: bitiş durdurma anı
+                    self._alarm_sink(self, [], ended, None)
             except Exception:  # noqa: BLE001 — kapanışta alıcı hatası yutulur (günlüğe yazılır)
                 _LOG.exception("Alarm alıcısı kapanışta hata verdi (oturum %s)", self.id[:8])
 
@@ -684,9 +697,13 @@ class LiveSession:
                 except Exception:  # noqa: BLE001
                     _LOG.exception("Alarm karesi (çizimsiz) hazırlanamadı (oturum %s)", self.id[:8])
         ids: list[str] | None = None
+        # güvenlik: biten bölümün son olumlu gözlemi bu kareden ne kadar önce (alıcı endedAt'i o ana geri alır)
+        ago = {k: r.ts - v for k, v in sr.ended_last.items()} if sr is r.safety and sr.ended_last else None
         try:
             if raw is not None:
                 ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg, raw_jpeg=raw)
+            elif ago:
+                ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg, ended_ago=ago)
             else:                                           # güvenlik (ve resimsiz yangın): eski çağrı biçimi aynen
                 ids = self._alarm_sink(self, sr.fired, sr.ended, jpeg)
         except Exception:  # noqa: BLE001
@@ -746,6 +763,7 @@ class LiveSession:
                         self.status.message = ""
                 self._after_frame(r, frame)
                 if profile.countMode == "safety":
+                    self._safety_ref = (ts, captured)
                     self._after_safety_frame()
                     clips = self._clips
                     if clips is not None and r.safety is not None:      # olay kaydının iskeleti (yalnızca sayılar)

@@ -256,6 +256,35 @@ def test_end_all_reports_open_alarmed_episodes_and_pending_reset_ends() -> None:
     assert an3.episodes.active() and an3.end_all() == []
 
 
+def test_ended_last_carries_last_positive_frame_of_pose_ends() -> None:
+    """Canlı alarm kaydının `endedAt`'i son olumlu kareye oturur: `ended` bildirilen her bölümün son True zamanı
+    `ended_last`'ta — iz kaybıyla biten (sweep), `reset()` ile kesilen (sonraki sonuçta) ve `end_all()` ile kapanan."""
+    an, det, _pose, p = make([BOX])
+    tid = next(a.track_id for r in feed(an, p, 0, 40) for a in r.fired)  # son olumlu kare 3,9
+    det.boxes = []                                                     # kişi çıktı
+    res = feed(an, p, 40, 80)
+    (r,) = [r for r in res if r.ended]
+    assert r.ended == [(tid, "hands_up", True)] and r.ended_last == {(tid, "hands_up"): 3.9}
+    assert all(x.ended_last == {} for x in res if x is not r)
+
+    an, _det, _pose, p = make([BOX])
+    tid = next(a.track_id for r in feed(an, p, 0, 40) for a in r.fired)
+    an.reset()
+    r = an.process(FRAME, p, 10.0, 4.0)
+    assert r.ended == [(tid, "hands_up", True)] and r.ended_last == {(tid, "hands_up"): 3.9}
+    assert an.process(FRAME, p, 10.0, 4.1).ended_last == {}            # yalnızca bir kez
+
+    an, _det, _pose, p = make([BOX])
+    tid = next(a.track_id for r in feed(an, p, 0, 50) for a in r.fired)
+    assert an.end_all() == [(tid, "hands_up", True)] and an.ended_last == {(tid, "hands_up"): 4.9}
+    assert an.end_all() == [] and an.ended_last == {}
+
+    an, _det, _pose, p = make([BOX])
+    tid = next(a.track_id for r in feed(an, p, 0, 50) for a in r.fired)
+    an.reset()                                                         # kesilen bölüm henüz bildirilmedi
+    assert an.end_all() == [(tid, "hands_up", True)] and an.ended_last == {(tid, "hands_up"): 4.9}
+
+
 def test_pose_is_skipped_when_both_rules_are_disabled() -> None:
     """İki kural da kapalıysa poz modeli hiç çalışmaz (işlemci boşa harcanmaz); kişi izlenmeye devam eder."""
     p = Profile.jeweler()
@@ -378,6 +407,33 @@ def test_phone_episode_ends_after_person_leaves() -> None:
     det.boxes = []
     ends = [e for r in feed(an, p, 120, 300) for e in r.ended]
     assert ends == [(tid, "phone", True)]
+
+
+def test_ended_last_carries_last_hit_of_phone_ends() -> None:
+    """Telefon bölümü son isabetten `PHONE_END_S` sonra bildirilir; `ended_last` son isabeti taşır (sweep, reset,
+    end_all)."""
+    p = phone_only(10.0)
+    an, det, _pose = make_phone(p)
+    tid = next(a.track_id for r in feed(an, p, 0, 120) for a in r.fired)
+    last_hit = an.phone.started(tid) + next(a[2] for a in an.active() if a[1] == "phone")   # süre = son − ilk isabet
+    assert 11.4 <= last_hit <= 11.9
+    det.phones = []                                                    # telefon bırakıldı, kişi kaldı: ıskalar
+    res = feed(an, p, 120, 300)
+    (r,) = [r for r in res if r.ended]
+    assert r.ended == [(tid, "phone", True)] and r.ended_last == pytest.approx({(tid, "phone"): last_hit})
+    assert 15.0 < (res.index(r) + 120) / 10 - last_hit <= 15.2         # bildirim PHONE_END_S sonra
+
+    an, _det, _pose = make_phone(p)
+    tid = next(a.track_id for r in feed(an, p, 0, 120) for a in r.fired)
+    last_hit = an.phone.started(tid) + next(a[2] for a in an.active() if a[1] == "phone")
+    an.reset()
+    r = an.process(FRAME, p, 10.0, 12.0)
+    assert r.ended == [(tid, "phone", True)] and r.ended_last == pytest.approx({(tid, "phone"): last_hit})
+
+    an, _det, _pose = make_phone(p)
+    tid = next(a.track_id for r in feed(an, p, 0, 120) for a in r.fired)
+    last_hit = an.phone.started(tid) + next(a[2] for a in an.active() if a[1] == "phone")
+    assert an.end_all() == [(tid, "phone", True)] and an.ended_last == pytest.approx({(tid, "phone"): last_hit})
 
 
 def test_draw_safety_labels_phone() -> None:

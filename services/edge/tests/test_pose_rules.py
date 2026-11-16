@@ -217,6 +217,35 @@ def test_close_all_reports_every_episode_and_pending_end() -> None:
     assert ep.active() == [] and ep.close_all() == []
 
 
+def test_ended_last_is_last_true_of_every_reported_end() -> None:
+    """Biten bölümün son True zamanı `ended_last`'ta (canlı alarm kaydının `endedAt`'i bu ana oturur): sweep, ertelenmiş
+    son (bayat yeniden başlama) ve close_all; her çağrı öncekinin yerine geçer."""
+    ep, key = EpisodeTracker(), (1, "hands_up")
+    for t in range(36):
+        ep.update(key, True, t / 10, 3.0)                                    # son True 3,5; alarm 3,0'da
+    assert ep.ended_last == {}
+    assert ep.sweep(6.6, {1}) == [(key, True)] and ep.ended_last == {key: 3.5}
+    assert ep.sweep(6.7, {1}) == [] and ep.ended_last == {}
+    for t in range(70, 101):
+        ep.update(key, True, t / 10, 3.0)                                    # yeni bölüm, son True 10,0
+    assert not ep.update(key, True, 20.0, 3.0)                               # bayat: eskisi ertelenmiş son
+    ep.update((2, "lying"), True, 19.8, 10.0)
+    assert ep.sweep(20.0, {1, 2}) == [(key, True)] and ep.ended_last == {key: 10.0}
+    assert sorted(ep.close_all()) == [(key, False), ((2, "lying"), False)]
+    assert ep.ended_last == {key: 20.0, (2, "lying"): 19.8}
+    assert ep.close_all() == [] and ep.ended_last == {}
+
+
+def test_ended_last_prefers_the_fired_episode_when_a_key_ends_twice() -> None:
+    """Aynı anahtar iki kez biterse (ertelenmiş son + süren bölüm) alarm vermiş bölümün son True'su yazılır: canlıda
+    açık alarm kaydı ona aittir."""
+    ep, key = EpisodeTracker(), (1, "hands_up")
+    for t in range(31):
+        ep.update(key, True, t / 10, 3.0)                                    # 3,0'da alarm
+    assert not ep.update(key, True, 20.0, 3.0)                               # eskisi (alarmlı) ertelenmiş son
+    assert sorted(ep.close_all()) == [(key, False), (key, True)] and ep.ended_last == {key: 3.0}
+
+
 def test_episode_grace_adapts_to_frame_rate() -> None:
     # With grace_s=1.25, True frames every 1.0s for 4s fires once (threshold 3)
     ep_loose = EpisodeTracker()

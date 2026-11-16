@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from .pose_rules import KP_CONF, L_WR, R_WR, head, scale
+from .pose_rules import KP_CONF, L_WR, R_WR, head, last_of, scale
 
 PHONE_CONF = 0.25                   # kırpıntıda telefon skoru eşiği
 PHONE_NEAR = 0.6                    # telefon merkezi bilek/başa en çok bu kadar (× ölçek) uzak
@@ -120,12 +120,14 @@ class PhoneEvidence:
       bildirilir; eski isabetlerle geç alarm doğmaz.
     - `sweep`: (iz yaşamıyor ve alarm vermemiş) ya da son isabetten > `PHONE_END_S` ya da zaman son isabetten geride
       → bitti. Alarm vermiş bölüm iz kaybında `PHONE_END_S` dolunca biter (≥ `pose_rules.FIRED_GRACE_S`).
+    - `ended_last`: son `sweep` / `close_all`'ın bildirdiği bölümlerin son isabeti (canlı alarm kaydının `endedAt`'i).
     """
 
     def __init__(self) -> None:
         self._eps: dict[int, _PhoneEpisode] = {}
         self._obs: dict[int, tuple[float, float]] = {}            # iz → (gözlem başlangıcı, son gözlem)
-        self._pending_end: list[tuple[tuple[int, str], bool]] = []
+        self._pending_end: list[tuple[tuple[int, str], bool, float]] = []   # (anahtar, alarm verdi mi, son isabet)
+        self.ended_last: dict[tuple[int, str], float] = {}
 
     def observe(self, track_id: int, ts: float) -> None:
         o = self._obs.get(track_id)
@@ -135,7 +137,7 @@ class PhoneEvidence:
     def update(self, track_id: int, ts: float, hit: bool | None, seconds: float) -> bool:
         ep = self._eps.get(track_id)
         if ep is not None and (ts < ep.last_seen or ts - ep.last_hit > PHONE_END_S + 1e-9):
-            self._pending_end.append(((track_id, KIND), ep.fired))
+            self._pending_end.append(((track_id, KIND), ep.fired, ep.last_hit))
             del self._eps[track_id]
             ep = None
         if hit is True:
@@ -163,14 +165,17 @@ class PhoneEvidence:
         dead = [tid for tid, e in self._eps.items()
                 if (tid not in alive and not e.fired) or ts - e.last_hit > PHONE_END_S + 1e-9 or ts < e.last_hit]
         for tid in dead:
-            ended.append(((tid, KIND), self._eps.pop(tid).fired))
+            e = self._eps.pop(tid)
+            ended.append(((tid, KIND), e.fired, e.last_hit))
         self._obs = {tid: o for tid, o in self._obs.items() if tid in alive}
-        return ended
+        self.ended_last = last_of(ended)
+        return [(k, fired) for k, fired, _ in ended]
 
     def close_all(self) -> list[tuple[tuple[int, str], bool]]:
-        ended = self._pending_end + [((tid, KIND), e.fired) for tid, e in self._eps.items()]
+        ended = self._pending_end + [((tid, KIND), e.fired, e.last_hit) for tid, e in self._eps.items()]
         self._pending_end, self._eps, self._obs = [], {}, {}
-        return ended
+        self.ended_last = last_of(ended)
+        return [(k, fired) for k, fired, _ in ended]
 
     def started(self, track_id: int) -> float | None:
         """İzin süren bölümünün başlangıcı (ilk isabet); bölüm yoksa None. Alarmın `started`'ı buradan alınır

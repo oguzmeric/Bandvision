@@ -597,7 +597,8 @@ class LiveManager:
         return bool(block is not None and getattr(block, "sendImage", False))
 
     def on_alarm(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]],
-                 jpeg: bytes | None, raw_jpeg: bytes | None = None) -> list[str]:
+                 jpeg: bytes | None, raw_jpeg: bytes | None = None,
+                 ended_ago: dict[tuple[int, str], float] | None = None) -> list[str]:
         """Oturumdan (poz güvenlik ya da yangın/duman): biten bölümler (endedAt) ve doğan alarmlar (kayıt + bildirim);
         yeni alarm kayıtlarının kimlikleri
         döner (oturum bunlar için olay kaydı yakalar; aynı karedekiler tek kaydı paylaşır). Biten önce işlenir: aynı karede
@@ -608,7 +609,10 @@ class LiveManager:
         kalmaz. Olay resmi HER ZAMAN bu bilgisayarda saklanır (7 gün); Telegram'a resim yalnızca kamerada ilgili bloğun
         (`safety` ya da `fire`) `sendImage`'ı açıksa gider (kuyruk kaydının resim bayrağı alarm anındakine eşittir).
         `raw_jpeg`: çizimsiz alarm karesi (yalnız yangın/duman verir); yalnızca bu bilgisayarda saklanır, yanlış alarmda zor
-        örneğe eğitim karesi olarak kopyalanır; hiçbir yere gönderilmez."""
+        örneğe eğitim karesi olarak kopyalanır; hiçbir yere gönderilmez.
+        `ended_ago`: güvenlik bölümlerinin son olumlu gözlemi bu çağrıdan kaç sn önce ((iz, tür) → sn); verilen
+        bölümün `endedAt`'i o ana geri alınır (bitiş bildirimi toleranstan sonra gelir: telefonda `PHONE_END_S`, pozda
+        `FIRED_GRACE_S`), başlangıçtan önceye ve geleceğe taşmaz. Verilmeyen bölümün (yangın/duman) sonu çağrı anıdır."""
         now = time.time()                                   # alarm zamanları duvar saati
         mono = time.monotonic()                             # yalnız tekrar önleme süresi
         camera = getattr(s, "name", "Kamera")
@@ -616,7 +620,8 @@ class LiveManager:
         cam_key = f"{getattr(s, 'source_id', '')}|{getattr(s, 'channel_id', '') or ''}"
         new_ids: list[str] = []
         try:
-            self._register(s, fired, ended, jpeg, now, mono, camera, clip_pending, cam_key, new_ids, raw_jpeg)
+            self._register(s, fired, ended, jpeg, now, mono, camera, clip_pending, cam_key, new_ids, raw_jpeg,
+                           ended_ago)
         except BaseException:
             # kayıt eklendikten sonra hata: oturum kimlikleri alamaz, kaydı yakalayamaz — "yazılıyor" asılı kalmasın
             if new_ids:
@@ -628,14 +633,14 @@ class LiveManager:
 
     def _register(self, s: Any, fired: list[Any], ended: list[tuple[int, str, bool]], jpeg: bytes | None, now: float,
                   mono: float, camera: str, clip_pending: bool, cam_key: str, new_ids: list[str],
-                  raw_jpeg: bytes | None = None) -> None:
+                  raw_jpeg: bytes | None = None, ended_ago: dict[tuple[int, str], float] | None = None) -> None:
         """`on_alarm`'ın kilitli gövdesi; eklenen alarm kimlikleri `new_ids`'e yazılır (hata olsa da)."""
         with self._alarm_lock:
             mode = getattr(s.profile, "countMode", "safety")
             for tid, kind, _was_fired in ended:
                 aid = self._alarm_of.pop((s.id, tid, kind), None)
                 if aid:
-                    self.alarms.end(aid, now)
+                    self.alarms.end(aid, self._ended_at(aid, now, (ended_ago or {}).get((tid, kind))))
             for a in fired:
                 in_mode = mode == self._MODE_OF.get(a.kind, "safety")   # oturum hâlâ bu alarmın yönteminde
                 notify = "disabled"
@@ -659,6 +664,15 @@ class LiveManager:
                     self._last_sent[(cam_key, a.kind)] = mono
                     self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now),
                                           jpeg if self._send_image(s.profile, a.kind) else None)
+
+    def _ended_at(self, alarm_id: str, now: float, ago: float | None) -> float:
+        """Alarm kaydının sonu: `now − ago` (son olumlu gözlem), [firedAt, now] aralığında; `ago` yoksa `now`. Alt sınır
+        alarm anı: telefon alarmı ıska karede doğabilir, son isabet alarmdan önce kalırsa "alarmdan önce bitti" yazılmaz."""
+        if ago is None:
+            return now
+        rec_ = self.alarms.get(alarm_id)
+        floor = rec_.get("firedAt", rec_["startedAt"]) if rec_ is not None else now
+        return min(now, max(floor, now - ago))
 
     def close_alarms(self, session_id: str, now: float | None = None) -> None:
         """Oturumun açık alarmlarının sonunu yazar (oturum silindi/durdu, yöntem değişti, sunucu kapanıyor)."""

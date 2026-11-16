@@ -100,10 +100,25 @@ def _grace(ep: _Episode, grace_s: float) -> float:
     return max(grace_s, FIRED_GRACE_S) if ep.fired else grace_s
 
 
+def last_of(ends: list[tuple[tuple[int, str], bool, float]]) -> dict[tuple[int, str], float]:
+    """(anahtar, alarm vermiş mi, son olumlu zaman) listesinden anahtar → son olumlu zaman. Anahtar iki kez bittiyse
+    (ertelenmiş son + süren bölüm) alarm vermiş olanınki, yoksa ilki: canlıda açık alarm kaydı alarm vermiş bölümündür."""
+    out: dict[tuple[int, str], float] = {}
+    fired: set[tuple[int, str]] = set()
+    for k, was_fired, last in ends:
+        if k not in out or (was_fired and k not in fired):
+            out[k] = last
+        if was_fired:
+            fired.add(k)
+    return out
+
+
 class EpisodeTracker:
     def __init__(self) -> None:
         self._eps: dict[tuple[int, str], _Episode] = {}
-        self._pending_end: list[tuple[tuple[int, str], bool]] = []
+        self._pending_end: list[tuple[tuple[int, str], bool, float]] = []     # (anahtar, alarm verdi mi, son True)
+        # Son sweep/close_all'ın bildirdiği bölümlerin son True zamanı (canlı alarm kaydının endedAt'i bu ana oturur)
+        self.ended_last: dict[tuple[int, str], float] = {}
 
     def update(
         self, key: tuple[int, str], verdict: bool | None, ts: float, threshold_s: float, grace_s: float = GRACE_S
@@ -117,7 +132,7 @@ class EpisodeTracker:
         gap = ts - ep.last_true if ep is not None else float('inf')
         # Stale episode (non-monotonic ts or gap > grace + epsilon): restart and report end
         if ep is not None and (ts < ep.last_true or gap > _grace(ep, grace_s) + 1e-9):
-            self._pending_end.append((key, ep.fired))
+            self._pending_end.append((key, ep.fired, ep.last_true))
             self._eps[key] = _Episode(ts, ts)
             return False
         if ep is None:
@@ -136,20 +151,22 @@ class EpisodeTracker:
         ended = self._pending_end.copy()
         self._pending_end.clear()
         dead = [
-            (k, e.fired)
+            (k, e.fired, e.last_true)
             for k, e in self._eps.items()
             if (k[0] not in alive and not e.fired) or ts - e.last_true > _grace(e, grace_s) + 1e-9 or ts < e.last_true
         ]
         ended.extend(dead)
-        for k, _ in dead:
+        for k, _, _ in dead:
             self._eps.pop(k, None)
-        return ended
+        self.ended_last = last_of(ended)
+        return [(k, fired) for k, fired, _ in ended]
 
     def close_all(self) -> list[tuple[tuple[int, str], bool]]:
         """Hepsini bitirir (sıfırlama/kapanış): ertelenmiş sonlar ve tüm bölümler (anahtar, alarm vermiş mi)."""
-        ended = self._pending_end + [(k, e.fired) for k, e in self._eps.items()]
+        ended = self._pending_end + [(k, e.fired, e.last_true) for k, e in self._eps.items()]
         self._pending_end, self._eps = [], {}
-        return ended
+        self.ended_last = last_of(ended)
+        return [(k, fired) for k, fired, _ in ended]
 
     def active(self) -> list[tuple[int, str, float, bool]]:
         return [(k[0], k[1], e.last_true - e.start, e.fired) for k, e in self._eps.items()]

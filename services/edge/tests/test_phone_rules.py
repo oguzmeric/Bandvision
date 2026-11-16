@@ -223,6 +223,30 @@ def test_close_all_reports_fired_and_unfired() -> None:
     assert ev.active() == [] and ev.close_all() == [] and ev.sweep(61.0, {1, 2}) == []
 
 
+def test_ended_last_is_last_hit_of_every_reported_end() -> None:
+    """Biten bölümün son isabeti `ended_last`'ta (canlı alarm kaydının `endedAt`'i son isabete oturur, `PHONE_END_S`
+    sonraki bildirime değil): sweep, ertelenmiş son ve close_all; her çağrı öncekinin yerine geçer."""
+    ev, key = PhoneEvidence(), (3, "phone")
+    assert _drive(ev, 0.0, 60.0, _every_slot, tid=3) == [60.0]            # son isabet 60
+    for k in range(121, 151):                                          # 60,5–75: ıska
+        ev.observe(3, k * 0.5)
+        ev.update(3, k * 0.5, False, 60.0)
+        if k * 0.5 <= 60.0 + PHONE_END_S:
+            assert ev.sweep(k * 0.5, {3}) == [] and ev.ended_last == {}
+    assert ev.sweep(75.5, {3}) == [(key, True)] and ev.ended_last == {key: 60.0}
+    assert ev.sweep(76.0, {3}) == [] and ev.ended_last == {}
+
+    ev = PhoneEvidence()
+    ev.observe(4, 0.0)
+    ev.update(4, 0.0, True, 60.0)
+    ev.observe(4, 20.0)
+    ev.update(4, 20.0, True, 60.0)                                     # bayat: eskisi ertelenmiş son, yenisi başladı
+    assert ev.sweep(20.0, {4}) == [((4, "phone"), False)] and ev.ended_last == {(4, "phone"): 0.0}
+    ev.update(4, 21.0, False, 60.0)                                    # ıska son isabeti ilerletmez
+    assert ev.close_all() == [((4, "phone"), False)] and ev.ended_last == {(4, "phone"): 20.0}
+    assert ev.close_all() == [] and ev.ended_last == {}
+
+
 def test_slot_ratio_window_edges() -> None:
     from bantvision.core.phone_rules import _slot_ratio
 
