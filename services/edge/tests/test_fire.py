@@ -262,6 +262,16 @@ def test_high_sensitivity_counts_intermittent_smoke_by_second() -> None:
             assert got[0].kind == "smoke" and 8.0 - 1e-9 <= fired(res)[0][0] <= 9.0
 
 
+def test_high_sensitivity_alarms_on_continuous_smoke_in_a_half_fps_stream() -> None:
+    """0,5 kare/sn akışta sürekli görülen hareketli duman: Yüksek de (Normal gibi) alarm verir."""
+    for sens in ("high", "normal"):
+        p = Profile.fire_watch()
+        p.fire.sensitivity = sens
+        p.fire.smoke.seconds = 9.0
+        an, det, p = make(flame_from(0.0, SMOKE, cls="smoke"), p)
+        assert fired(run(an, det, p, 0.5, 0.0, 40.0, block=8)), sens
+
+
 def test_high_sensitivity_keeps_frame_voting_for_fire() -> None:
     """Dilimli oy yalnız dumanda: aralıklı alev Yüksek'te de kare oranıyla oylanır, alarm yok."""
     p = Profile.fire_watch()

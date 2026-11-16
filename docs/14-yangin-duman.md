@@ -65,7 +65,7 @@ Her analiz edilen karede model alev ve duman kutuları bulur; hassasiyet eşiği
 bölgede kalan kutular atılır. Kalan kutu, yaklaşık 1 sn önceki kareye göre içinde değişim (titreşim, yayılma) varsa oy
 verir: sabit bir alev resmi, kırmızı lamba ya da beyaz duvar oy vermez. Kare 8×6 hücreye bölünür; alarm için kural
 süresi boyunca aynı bölgede (komşu hücreler dahil) oy veren karelerin en az %60'ı ve en az 3 kare olumlu olmalıdır.
-Yüksek hassasiyette duman için kare yerine saniye sayılır: kural süresindeki saniyelerin en az %60'ında (en az 3 saniye)
+Yüksek hassasiyette duman için kare yerine saniye sayılır: kural süresinde kare gelen saniyelerin en az %60'ında (en az 3 saniye)
 aynı bölgede duman görülmesi yeterlidir; model dumanı aralıklı gördüğünde de alarm gelir. Bölüm başına tek alarm; 10 sn olumlu kare gelmezse bölüm biter. Ayrıntı ve sabitler: `03-algorithm.md` §4.12.
 
 ## 5. Sınırlar

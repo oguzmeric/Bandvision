@@ -171,7 +171,7 @@ class FireAnalyzer:
                 cell = votes.trigger(ts, rule.seconds, slot=slot)
                 if cell is not None:
                     ep.fired = True
-                    # trigger en az MIN_HITS değen kare buldu: box_at None olamaz (yedek yalnız tür için)
+                    # trigger en az MIN_HITS (dilimde SLOT_MIN) değen kare buldu: box_at None olamaz (yedek yalnız tür için)
                     ep.box = votes.box_at(cell) or (0.0, 0.0, 1.0, 1.0)
                     res.fired.append(FireAlarm(kind, TRACK_IDS[kind], ep.box, ep.started, ts))
 

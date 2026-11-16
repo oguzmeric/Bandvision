@@ -160,7 +160,9 @@ class CellVotes:
         çoksa en çok olumlu olan, eşitlikte kutuların kendisinin en çok kapladığı (alevin üstündeki hücre, komşu kenar
         hücresi değil). Pencere dışı eski kareler atılır. `slot` verilirse kare yerine zaman dilimi sayılır: pencere
         `[now − seconds, now]` `ceil(seconds / slot)` dilime bölünür (pencere başındaki kare ilk, `now` son dilimde);
-        hücre, dilimlerin en az `SLOT_RATIO` oranında ve en az `SLOT_MIN` dilimde olumlu olmalı."""
+        hücre, **oy veren karesi olan** dilimlerin en az `SLOT_RATIO` oranında ve en az `SLOT_MIN` dilimde olumlu olmalı.
+        Karesiz dilim (yavaş akış: 0,5 kare/sn'de her iki dilimden biri) ve yalnız oy dışı kare düşen dilim (ışık
+        patlaması) paydaya girmez: Yüksek, Normal'den az yakalamaz."""
         self.prune(now, seconds)
         if not self._v:
             return None
@@ -173,10 +175,13 @@ class CellVotes:
             start = now - seconds
             cols, rows = GRID
             hit = np.zeros((n, rows, cols), bool)
+            filled = np.zeros(n, bool)
             for t, g, _r, _m in self._v:
-                hit[min(n - 1, max(0, int((t - start) / slot)))] |= g
+                i = min(n - 1, max(0, int((t - start) / slot + EPS)))
+                hit[i] |= g
+                filled[i] = True
             count = hit.sum(axis=0)
-            ok = (count >= SLOT_MIN) & (count >= SLOT_RATIO * n - EPS)
+            ok = (count >= SLOT_MIN) & (count >= SLOT_RATIO * int(filled.sum()) - EPS)
         if not ok.any():
             return None
         raw = np.sum([r for _t, _g, r, _m in self._v], axis=0)

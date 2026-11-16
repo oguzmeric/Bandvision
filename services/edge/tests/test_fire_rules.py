@@ -132,7 +132,28 @@ def test_slot_votes_ratio_boundary_and_minimum() -> None:
     short = fr.CellVotes()
     for k in range(4):                                                  # 2 sn kural: 2 dilim, 2/2 ama < SLOT_MIN
         short.add(k * 0.5, [box])
-    assert short.trigger(1.5, 2.0, slot=1.0) is None
+    assert short.trigger(1.5, 2.0, slot=fr.SLOT_S) is None
+
+
+def test_slot_votes_divide_by_slots_that_had_a_voting_frame() -> None:
+    """Oran yalnız oy veren karesi olan dilimlere bölünür: 0,5 kare/sn akışta her karede görülen duman (7–30 sn kural)
+    tetikler (Yüksek, Normal'den az yakalamaz); oy dışı kare (ışık patlaması) dilimi boş bırakır, dumanın aleyhine
+    sayılmaz. Oy veren karesi olup dumansız dilim aleyhe sayılır."""
+    box = (0.30, 0.30, 0.36, 0.36)
+    for seconds in (7.0, 9.0, 12.0, 15.0, 20.0, 30.0):
+        slow = fr.CellVotes()
+        for k in range(int(seconds / 2) + 1):                           # 0,5 kare/sn, her karede duman
+            slow.add(k * 2.0, [box])
+        now = (int(seconds / 2)) * 2.0
+        assert slow.trigger(now, seconds) is not None                   # kare oranı (Normal) zaten tetikler
+        assert slow.trigger(now, seconds, slot=fr.SLOT_S) is not None, seconds
+    half = fr.CellVotes()
+    for k in range(9):                                                  # 1 kare/sn, 8 sn: 4 dumanlı + 5 boş oy veren
+        half.add(float(k), [box] if k in (0, 2, 4, 6) else [])
+    assert half.trigger(8.0, 8.0, slot=fr.SLOT_S) is None               # 4/8 dolu dilim (8. sn son dilime düşer)
+
+
+
 
 
 def test_cell_votes_ratio_hits_neighbourhood_and_closed_window() -> None:
