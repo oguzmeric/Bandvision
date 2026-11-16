@@ -1,6 +1,6 @@
 # Telefon / tablet kullanımı alarmı — tasarım
 
-Tarih: 2026-11-16. Durum: taslak (kullanıcı onayı bekleniyor).
+Tarih: 2026-11-16. Durum: kullanıcı onayladı (2026-11-16).
 
 ## Amaç ve neden
 Kullanıcı, iş güvenliği ve nöbet noktası paketlerinde bulunan "cep telefonu / tablet kullanımı" alarmını BantVision'a
@@ -83,7 +83,9 @@ duyurulur.
 
 ## Bilinen riskler
 - Telefonla kulakta konuşma: telefon çoğu zaman elin/başın arkasında kalır, nadiren görülür → kanıt penceresi
-  dolmayabilir. "El kulakta uzun süre" poz ipucu çeneye el dayamakla karışır; ilk sürümde eklenmez, ölçülür.
+  dolmayabilir. Kullanıcının "tel 1" kaydı (konuşma, 15 sn) bunu doğruladı: telefon yalnız 2 karede (yüz yanında)
+  görüldü. "El kulakta uzun süre" poz ipucu çeneye el dayamakla karışır; **ilk sürüm konuşmayı yakalamayı hedeflemez**
+  (belgede ve panel yardımında yazılır), ek kayıtlarla ölçülüp ayrı iş olarak değerlendirilir.
 - Telefon masada dururken eli yanında çalışan kişi (klavye) yanlış alarm üretebilir → kullanıcının "telefon masada,
   klavyede çalışma" kaydıyla ölçülür; gerekirse "telefon el/baş hizasında ve bilek ona doğru" gibi ek koşul eklenir.
 - Uzak/tepeden kamerada telefon birkaç pikseldir → kaçar. Belgeye kamera şartı yazılır (kişi boyu kabaca kare
