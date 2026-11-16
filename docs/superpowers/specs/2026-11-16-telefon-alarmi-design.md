@@ -1,6 +1,6 @@
 # Telefon / tablet kullanımı alarmı — tasarım
 
-Tarih: 2026-11-16. Durum: kullanıcı onayladı (2026-11-16).
+Tarih: 2026-11-16. Durum: kullanıcı onayladı (2026-11-16); yazılım uygulandı, doğruluk ölçümü kullanıcı kayıtlarıyla bekliyor.
 
 ## Amaç ve neden
 Kullanıcı, iş güvenliği ve nöbet noktası paketlerinde bulunan "cep telefonu / tablet kullanımı" alarmını BantVision'a
@@ -27,7 +27,7 @@ duyurulur.
    yatan kişinin yanına. Aynı kişi izleyici, aynı poz modeli, aynı bölüm (episode) mantığı, aynı alarm kaydı, klip,
    bildirim, bekleme süresi (kamera+tür başına 60 sn) ve onay akışı kullanılır. Alan kısıtı yok (güvenlik modundaki
    karar aynen geçerli; kural karedeki her kişiye uygulanır).
-2. **Varsayılan:** kapalı, 15 sn (Kullanıcı kararı 2026-11-16: ofis kaydında (40 sn telefon kullanımı, kişi yer değiştiriyor) 15 sn kuralı iki kullanım bölümünü de yakaladı, 20 sn eşik 0,25'te yakalamadı.). Aralık 10–600 sn (canlı API, video işi seçenekleri, şema aynı aralık).
+2. **Varsayılan:** kapalı, 15 sn (kullanıcı kararı, 2026-11-16: ofis kaydında 40 sn telefon kullanımı, kişi yer değiştiriyor; 15 sn kuralı iki kullanım bölümünü de yakaladı, 20 sn eşik 0,25'te yakalamadı). Aralık 10–600 sn (canlı API, video işi seçenekleri, şema aynı aralık).
 3. **Alarm türü adları:** canlı alarm `type = "phone"`, video işi `alarms[].kind = "phone"`. Metinler: büyük başlık
    "TELEFON KULLANIMI", etiket "Telefon kullanımı", görüntü üstü etiket "TELEFON", Telegram satırı mevcut biçimde
    (`🚨 TELEFON KULLANIMI — <kamera> · <tarih>`).

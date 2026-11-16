@@ -58,10 +58,11 @@ def test_match_pose_does_not_depend_on_alarm_order() -> None:
         assert r["hands_up"] == {"labels": 2, "caught": 2} and r["false"] == 0
 
 
-def result(hu: tuple[int, int], ly: tuple[int, int], false: int, hours: float) -> dict[str, Any]:
+def result(hu: tuple[int, int], ly: tuple[int, int], false: int, hours: float,
+           ph: tuple[int, int] = (0, 0)) -> dict[str, Any]:
     """`match_pose` sonucu biçiminde: tür başına (etiket, yakalanan), yanlış alarm, video süresi (saat)."""
     return {"hands_up": {"labels": hu[0], "caught": hu[1]}, "lying": {"labels": ly[0], "caught": ly[1]},
-            "false": false, "hours": hours}
+            "phone": {"labels": ph[0], "caught": ph[1]}, "false": false, "hours": hours}
 
 
 GOOD = (20, 20)
@@ -198,12 +199,13 @@ def test_run_collects_alarms_hours_and_seconds_and_releases(monkeypatch: pytest.
     assert len(seen) == (n + 2) // 3 and seen[:3] == pytest.approx([0.0, 3 / fps, 6 / fps])     # her 3. kare, video zamanı
     assert alarms == [(seen[1], "lying")]
     assert hours == pytest.approx(n / fps / 3600)                  # süre atlanan kareler dahil tüm videodan
-    assert seconds == {"hands_up": 4.0, "lying": 12.0} and released == [True]
+    assert seconds == {"hands_up": 4.0, "lying": 12.0, "phone": p.safety.phone.seconds} and released == [True]
 
 
-def fake_profile(hands_up_enabled: bool = True) -> Any:
+def fake_profile(hands_up_enabled: bool = True, phone_enabled: bool = False) -> Any:
     rule = types.SimpleNamespace
-    return rule(safety=rule(handsUp=rule(enabled=hands_up_enabled, seconds=3.0), lying=rule(enabled=True, seconds=10.0)))
+    return rule(safety=rule(handsUp=rule(enabled=hands_up_enabled, seconds=3.0), lying=rule(enabled=True, seconds=10.0),
+                            phone=rule(enabled=phone_enabled, seconds=15.0)))
 
 
 def patch_run(monkeypatch: pytest.MonkeyPatch, alarms: list[tuple[float, str]], hours: float,
@@ -213,7 +215,7 @@ def patch_run(monkeypatch: pytest.MonkeyPatch, alarms: list[tuple[float, str]], 
 
     def fake_run(video: str, _profile: Any, every: int = 1) -> tuple[list[tuple[float, str]], float, dict[str, float]]:
         calls.append((video, every))
-        return alarms, hours, {"hands_up": 3.0, "lying": 10.0}
+        return alarms, hours, {"hands_up": 3.0, "lying": 10.0, "phone": 15.0}
 
     monkeypatch.setattr(ev, "load_profile", lambda _path: profile or fake_profile())
     monkeypatch.setattr(ev, "run", fake_run)
@@ -408,6 +410,7 @@ def test_report_prints_tekrar_without_affecting_the_gate(capsys: pytest.CaptureF
 def test_report_single_video_output_is_unchanged(capsys: pytest.CaptureFixture[str]) -> None:
     assert ev.report(result(GOOD, GOOD, 1, 8.0)) is True
     assert capsys.readouterr().out == ("Eller yukarı: %100.0 (20/20)\nYerde yatan kişi: %100.0 (20/20)\n"
+                                       "Telefon kullanımı: etiket yok (ölçülmedi)\n"
                                        "Yanlış alarm: 1 (1.00 / 8 saat)\nGEÇTİ\n")    # tekrar yok → tekrar satırı, tablo yok
 
 
@@ -440,7 +443,7 @@ def patch_manifest_run(monkeypatch: pytest.MonkeyPatch, by_video: dict[str, tupl
     def fake_run(video: str, _profile: Any, every: int = 1) -> tuple[list[tuple[float, str]], float, dict[str, float]]:
         calls.append((video, every))
         alarms, hours = by_video[pathlib.Path(video).name]
-        return alarms, hours, {"hands_up": 3.0, "lying": 10.0}
+        return alarms, hours, {"hands_up": 3.0, "lying": 10.0, "phone": 15.0}
 
     monkeypatch.setattr(ev, "load_profile", lambda _path: profile or fake_profile())
     monkeypatch.setattr(ev, "run", fake_run)
@@ -604,3 +607,53 @@ def test_main_manifest_exits_1_when_one_camera_has_less_than_an_hour(
     patch_manifest_run(monkeypatch, {"a.mp4": (a1, 4.0), "b.mp4": (a2, 4.0), "c.mp4": ([], 1.0)})
     assert ev.main(["--manifest", m]) == 0                        # Depo tam 1 saat ve temiz: geçer
     assert capsys.readouterr().out.splitlines()[-1] == "GEÇTİ"
+
+
+# ---------------------------------------------------------------- telefon kullanımı (üçüncü tür)
+def test_phone_is_a_known_kind_with_its_turkish_name() -> None:
+    assert ev.KINDS == ("hands_up", "lying", "phone") and ev.NAMES["phone"] == "Telefon kullanımı"
+    assert '"phone"' in ev.LABEL_FORMAT
+
+
+def test_phone_label_is_accepted_and_a_phone_alarm_catches_it() -> None:
+    labels = ev.check_labels([{"t": 30.0, "type": "phone", "end": 80.0}])
+    assert labels[0]["type"] == "phone"
+    sec = {"hands_up": 3.0, "lying": 10.0, "phone": 15.0}
+    r = ev.match_pose(labels, [(46.0, "phone"), (60.0, "phone")], sec)      # 30 + 15 + 2 = 47: ilk alarm yakalar
+    assert r["phone"] == {"labels": 1, "caught": 1} and r["repeat"] == 1 and r["false"] == 0
+    assert r["hands_up"] == {"labels": 0, "caught": 0} and r["lying"] == {"labels": 0, "caught": 0}
+    wrong = ev.match_pose(labels, [(46.0, "lying")], sec)                   # tür uyuşmazsa yakalanmaz, yanlış alarm
+    assert wrong["phone"]["caught"] == 0 and wrong["false"] == 1
+    late = ev.match_pose(labels, [(48.0, "phone")], sec)                    # pencere dışı
+    assert late["phone"]["caught"] == 0 and late["false"] == 1
+
+
+def test_aggregate_sums_phone_capture() -> None:
+    r = ev.aggregate([("A", result(GOOD, GOOD, 0, 2.0, ph=(10, 9))), ("B", result(GOOD, GOOD, 0, 2.0, ph=(12, 12)))])
+    assert r["phone"] == {"labels": 22, "caught": 21}
+
+
+def test_unknown_label_type_still_exits_2_and_names_phone(tmp_path: pathlib.Path,
+                                                          capsys: pytest.CaptureFixture[str]) -> None:
+    lp = write(tmp_path, "l.json", [{"t": 5.0, "type": "tablet"}])
+    assert ev.main(["yok.mp4", "--profile", str(tmp_path / "p.json"), "--labels", lp]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("HATA: Etiket dosyası") and "phone" in err
+
+
+def test_report_phone_is_gated_only_when_it_has_labels(capsys: pytest.CaptureFixture[str]) -> None:
+    assert ev.report(result(GOOD, GOOD, 0, 8.0)) is True                    # telefon etiketi yok: ölçülmedi, kapı değil
+    assert "Telefon kullanımı: etiket yok" in capsys.readouterr().out
+    assert ev.report(result(GOOD, GOOD, 0, 8.0, ph=(20, 19))) is True      # %95
+    assert "Telefon kullanımı: %95.0 (19/20)" in capsys.readouterr().out
+    assert ev.report(result(GOOD, GOOD, 0, 8.0, ph=(20, 18))) is False
+    assert capsys.readouterr().out.splitlines()[-1] == "KALDI"
+    assert ev.report(result(GOOD, GOOD, 0, 8.0, ph=(5, 5))) is False       # etiket var ama 20'den az
+    assert "en az 20 etiket gerekli" in capsys.readouterr().out
+
+
+def test_warn_disabled_rules_covers_phone(capsys: pytest.CaptureFixture[str]) -> None:
+    ev.warn_disabled_rules(fake_profile(phone_enabled=False), [{"t": 1.0, "type": "phone"}])
+    assert "UYARI: profilde Telefon kullanımı kuralı kapalı" in capsys.readouterr().err
+    ev.warn_disabled_rules(fake_profile(phone_enabled=True), [{"t": 1.0, "type": "phone"}])
+    assert capsys.readouterr().err == ""

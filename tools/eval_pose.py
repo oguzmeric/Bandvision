@@ -4,7 +4,7 @@
 - Tek video: python tools/eval_pose.py VIDEO --profile PROFİL.json --labels VIDEO.pose.json [--every N]
 - Manifest (birden çok kayıt, birden çok kamera): python tools/eval_pose.py --manifest MANIFEST.json [--every N]
 
-Etiket: [{"t": saniye, "type": "hands_up"|"lying", "end": saniye (isteğe bağlı)}] — olayın başladığı an (`t`) ve
+Etiket: [{"t": saniye, "type": "hands_up"|"lying"|"phone", "end": saniye (isteğe bağlı)}] — olayın başladığı an (`t`) ve
 istenirse bittiği an (`end`). Alarm, aynı türde t ile t + süre + 2 sn arasında gelirse yakalanmış sayılır (sınır dahil);
 her alarm en çok bir etikete eşlenir. Bir etiket yakalandıktan sonra AYNI olayın içinde gelen aynı türdeki başka
 alarmlar `tekrar` sayılır: ayrı yazılır, yanlış alarm değildir ve kapıyı etkilemez. Olay `end` varsa t'den end + 2 sn'ye,
@@ -44,9 +44,10 @@ MIN_HOURS = 1.0                 # normal hareket kaydı en az bu kadar saat (tek
 MAX_FALSE_PER_8H = 1.0
 TOLERANCE_S = 2.0
 EVENT_EXTRA_S = 10.0            # `end` yokken olay, yakalama penceresinin bitiminden bu kadar daha sürer
-KINDS = ("hands_up", "lying")
-NAMES = {"hands_up": "Eller yukarı", "lying": "Yerde yatan kişi"}
-LABEL_FORMAT = '[{"t": saniye, "type": "hands_up"|"lying", "end": saniye (isteğe bağlı)}]'
+KINDS = ("hands_up", "lying", "phone")
+OPTIONAL_KINDS = ("phone",)     # etiketi yoksa ölçülmemiş sayılır, kapıyı etkilemez (eski ölçüm kayıtları bozulmaz)
+NAMES = {"hands_up": "Eller yukarı", "lying": "Yerde yatan kişi", "phone": "Telefon kullanımı"}
+LABEL_FORMAT = '[{"t": saniye, "type": "hands_up"|"lying"|"phone", "end": saniye (isteğe bağlı)}]'
 MANIFEST_FORMAT = '[{"video": "yol", "labels": "yol", "profile": "yol", "camera": "ad (isteğe bağlı)"}]'
 MANIFEST_KEYS = ("video", "labels", "profile", "camera")
 TEKRAR = "Tekrar (aynı olayın içinde, yanlış alarm sayılmaz)"
@@ -69,8 +70,7 @@ def match_pose(labels: list[dict], alarms: list[tuple[float, str]], seconds: dic
     `repeat` olur (ayrı sayılır, yanlış alarm değil). Geriye kalanlar yanlış alarmdır."""
     alarms = sorted(alarms)                                    # sıra bağımsız: en erken uygun alarm eşlenir
     used: set[int] = set()
-    r: dict = {"hands_up": {"labels": 0, "caught": 0}, "lying": {"labels": 0, "caught": 0}, "false": 0,
-               "repeat": 0, "hours": 0.0}
+    r: dict = {**{k: {"labels": 0, "caught": 0} for k in KINDS}, "false": 0, "repeat": 0, "hours": 0.0}
     caught: list[dict] = []
     for lab in sorted(labels, key=lambda x: x["t"]):
         kind = lab["type"]
@@ -94,8 +94,7 @@ def match_pose(labels: list[dict], alarms: list[tuple[float, str]], seconds: dic
 def aggregate(parts: list[tuple[str, dict]]) -> dict:
     """Kayıtların `match_pose` sonuçlarını (kamera adı, sonuç + `hours`) birleştirir: yakalama ve tekrar tüm kayıtlardan
     toplanır; yanlış alarm ve saat KAMERA BAŞINA toplanır (`cameras`, ilk görülme sırasıyla)."""
-    r: dict = {"hands_up": {"labels": 0, "caught": 0}, "lying": {"labels": 0, "caught": 0}, "false": 0,
-               "repeat": 0, "hours": 0.0, "cameras": {}}
+    r: dict = {**{k: {"labels": 0, "caught": 0} for k in KINDS}, "false": 0, "repeat": 0, "hours": 0.0, "cameras": {}}
     for camera, p in parts:
         for kind in KINDS:
             r[kind]["labels"] += p[kind]["labels"]
@@ -121,8 +120,8 @@ def check_labels(labels: Any) -> list[dict]:
             raise InputError(f"Etiket dosyası geçersiz: {i}. kaydın zamanı (t) 0 ya da daha büyük bir sayı "
                              "(saniye) olmalı.")
         if not isinstance(kind, str) or kind not in KINDS:
-            raise InputError(f"Etiket dosyası geçersiz: {i}. kaydın türü (type) \"hands_up\" ya da \"lying\" "
-                             f"olmalı; bulunan: {kind!r}.")
+            raise InputError(f"Etiket dosyası geçersiz: {i}. kaydın türü (type) \"hands_up\", \"lying\" ya da "
+                             f"\"phone\" olmalı; bulunan: {kind!r}.")
         if end is not None and (isinstance(end, bool) or not isinstance(end, (int, float))
                                 or not math.isfinite(end) or end < t):
             raise InputError(f"Etiket dosyası geçersiz: {i}. kaydın bitişi (end) başlangıçtan (t) küçük olmayan bir "
@@ -187,7 +186,8 @@ def run(video: str, profile: Any, every: int = 1) -> tuple[list[tuple[float, str
             k += 1
     finally:
         cap.release()
-    seconds = {"hands_up": profile.safety.handsUp.seconds, "lying": profile.safety.lying.seconds}
+    seconds = {"hands_up": profile.safety.handsUp.seconds, "lying": profile.safety.lying.seconds,
+               "phone": profile.safety.phone.seconds}
     return alarms, k / fps / 3600, seconds
 
 
@@ -229,7 +229,8 @@ def read_manifest(path: str) -> list[dict[str, str]]:
 
 
 def warn_disabled_rules(profile: Any, labels: list[dict], prefix: str = "") -> None:
-    for kind, rule in (("hands_up", profile.safety.handsUp), ("lying", profile.safety.lying)):
+    for kind, rule in (("hands_up", profile.safety.handsUp), ("lying", profile.safety.lying),
+                       ("phone", profile.safety.phone)):
         if not rule.enabled and any(lab["type"] == kind for lab in labels):
             print(f"UYARI: {prefix}profilde {NAMES[kind]} kuralı kapalı; bu türdeki etiketler yakalanamaz.",
                   file=sys.stderr)
@@ -299,6 +300,9 @@ def report(r: dict) -> bool:
     ok = True
     for kind in KINDS:
         n, c = r[kind]["labels"], r[kind]["caught"]
+        if n == 0 and kind in OPTIONAL_KINDS:
+            print(f"{NAMES[kind]}: etiket yok (ölçülmedi)")
+            continue
         enough = n >= MIN_LABELS
         passed = enough and 100 * c >= CAPTURE_MIN_PCT * n
         ok &= passed
