@@ -9,7 +9,7 @@ import { useAlarmCenter } from "./AlarmCenter";
 import AlarmViewer from "./AlarmViewer";
 import { FireWarning } from "./FireSettings";
 
-export const SAFETY_DEFAULTS: SafetyConfig = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false };
+export const SAFETY_DEFAULTS: SafetyConfig = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, phone: { enabled: false, seconds: 15 }, sendImage: false };
 
 /** Güvenlik ya da yangın/duman oturumunun yan paneli: izleniyor (ve izlenmiyorsa nedeni), süren durumlar, son alarmlar
  * (tıklayınca kayıt penceresi), deneme alarmı; yangın/duman oturumunda sabit uyarı */
@@ -117,8 +117,11 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
 
 /** Ayarla panelinde güvenlik kuralları */
 export function SafetySettings({ value, onChange }: { value: SafetyConfig | undefined; onChange: (v: SafetyConfig) => void }) {
-  const v = value ?? SAFETY_DEFAULTS;
-  const rule = (k: "handsUp" | "lying", label: string, min: number, max: number) => (
+  // Eski kayıtlı profilde `phone` yok: kapalı/15 görünür; ilk değişiklikte kaydedilen profile varsayılanıyla girer
+  const base = value ?? SAFETY_DEFAULTS;
+  const v = { ...base, phone: base.phone ?? SAFETY_DEFAULTS.phone! };
+  type Rule = "handsUp" | "lying" | "phone";
+  const rule = (k: Rule, label: string, min: number, max: number, step = 1, hint?: string) => (
     <div className="grid gap-1">
       <label className="flex items-center gap-2 text-[13px] font-medium">
         <input type="checkbox" className="h-4 w-4 accent-pl-accent" checked={v[k].enabled}
@@ -126,15 +129,18 @@ export function SafetySettings({ value, onChange }: { value: SafetyConfig | unde
         {label}
       </label>
       <label className="text-[13px]">{label} süresi: <b>{v[k].seconds} sn</b>
-        <input type="range" aria-label={`${label} süresi`} min={min} max={max} step={1} value={v[k].seconds} disabled={!v[k].enabled}
+        <input type="range" aria-label={`${label} süresi`} min={min} max={max} step={step} value={v[k].seconds} disabled={!v[k].enabled}
                className="mt-1 w-full accent-pl-accent" onChange={(e) => onChange({ ...v, [k]: { ...v[k], seconds: Number(e.target.value) } })} />
       </label>
+      {hint && <p className="text-[11.5px] text-pl-faint">{hint}</p>}
     </div>
   );
   return (
     <div role="group" aria-label="Güvenlik kuralları" className="grid gap-3">
       {rule("handsUp", "Eller yukarı", 3, 5)}
       {rule("lying", "Yerde yatan kişi", 5, 30)}
+      {rule("phone", "Telefon kullanımı", 10, 600, 5,
+        "Kişinin elinde ya da yüzünün yanında telefon/tablet görülürse. Telefonla kulakta konuşma bu sürümde yakalanmaz. Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK).")}
       <label className="flex items-start gap-2 text-[13px]">
         <input type="checkbox" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={v.sendImage} onChange={(e) => onChange({ ...v, sendImage: e.target.checked })} />
         <span>Olay resmini Telegram&apos;a gönder

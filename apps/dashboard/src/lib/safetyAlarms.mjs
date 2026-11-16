@@ -8,20 +8,25 @@ import { isAlarmImage } from "./resultFile.mjs";
 export const SAFETY_RULES = {
   handsUp: { title: "Eller yukarı", min: 3, max: 5, def: 3 },
   lying: { title: "Yerde yatma", min: 5, max: 30, def: 10 },
+  phone: { title: "Telefon kullanımı", min: 10, max: 600, def: 15 },
 };
+
+/** Varsayılan kapalı kurallar: işte verilmemişse özette "kapalı" yazar (telefon sonradan eklendi; eski işlerde yoktur) */
+const OFF_BY_DEFAULT = new Set(["phone"]);
 
 export const NO_RULE_ON = "En az bir kural açık olmalı.";
 
 /** Alarm türü → tablodaki ad (güvenlik: poz; yangın/duman işi: `fire`, `smoke`) */
-export const ALARM_LABELS = { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman" };
+export const ALARM_LABELS = { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", phone: "Telefon kullanımı", fire: "Yangın", smoke: "Duman" };
 
 const SECONDS = /^[0-9]+(?:[.,][0-9]+)?$/;
 
-/** Form durumu: iki kural, her birinde işaret kutusu ve metin olarak saniye */
+/** Form durumu: üç kural (telefon varsayılan kapalı), her birinde işaret kutusu ve metin olarak saniye */
 export function defaultSafetyForm() {
   return {
     handsUp: { enabled: true, seconds: String(SAFETY_RULES.handsUp.def) },
     lying: { enabled: true, seconds: String(SAFETY_RULES.lying.def) },
+    phone: { enabled: false, seconds: String(SAFETY_RULES.phone.def) },
   };
 }
 
@@ -74,7 +79,7 @@ export function alarmRows(result) {
 export function rulesSummary(safety) {
   return Object.entries(SAFETY_RULES).map(([key, rule]) => {
     const r = safety?.[key];
-    if (r?.enabled === false) return `${ALARM_LABELS[key]} kapalı`;
+    if (r?.enabled === false || (r === undefined && OFF_BY_DEFAULT.has(key))) return `${ALARM_LABELS[key]} kapalı`;
     return `${ALARM_LABELS[key]} ${(r?.seconds ?? rule.def).toLocaleString("tr-TR")} sn`;
   }).join(" · ");
 }

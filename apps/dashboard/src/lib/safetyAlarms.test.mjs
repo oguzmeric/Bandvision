@@ -2,37 +2,53 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ALARM_LABELS, alarmCounts, alarmRows, defaultSafetyForm, formatClock, rulesSummary, safetyOptions } from "./safetyAlarms.mjs";
 
-const form = (hu = {}, ly = {}) => {
+const form = (hu = {}, ly = {}, ph = {}) => {
   const f = defaultSafetyForm();
   Object.assign(f.handsUp, hu);
   Object.assign(f.lying, ly);
+  Object.assign(f.phone, ph);
   return f;
 };
 
-test("defaultSafetyForm: iki kural açık; eller yukarı 3 sn, yerde yatma 10 sn", () => {
+test("defaultSafetyForm: iki kural açık (eller yukarı 3 sn, yerde yatma 10 sn); telefon kapalı 15 sn", () => {
   assert.deepEqual(defaultSafetyForm(), {
     handsUp: { enabled: true, seconds: "3" },
     lying: { enabled: true, seconds: "10" },
+    phone: { enabled: false, seconds: "15" },
   });
 });
 
 test("safetyOptions: varsayılanlar sözleşmedeki options'a çevrilir (sayım alanı yok)", () => {
   assert.deepEqual(safetyOptions(defaultSafetyForm()), {
     preset: "safety",
-    safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 } },
+    safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, phone: { enabled: false } },
   });
+});
+
+test("safetyOptions: yalnız telefon açık (15 sn) tek başına geçerli kural", () => {
+  assert.deepEqual(safetyOptions(form({ enabled: false }, { enabled: false }, { enabled: true })), {
+    preset: "safety",
+    safety: { handsUp: { enabled: false }, lying: { enabled: false }, phone: { enabled: true, seconds: 15 } },
+  });
+});
+
+test("safetyOptions: telefon süresi 10–600; dışı sunucudakiyle aynı iletiyle reddedilir", () => {
+  const ph = "Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı.";
+  for (const s of ["5", "9,9", "601", "0", "", "abc"]) assert.equal(safetyOptions(form({}, {}, { enabled: true, seconds: s })), ph, s);
+  for (const s of ["10", "600", "45,5"]) assert.equal(safetyOptions(form({}, {}, { enabled: true, seconds: s })).safety.phone.seconds, Number(s.replace(",", ".")));
+  assert.deepEqual(safetyOptions(form({}, {}, { enabled: false, seconds: "5" })).safety.phone, { enabled: false });   // kapalıyken denetlenmez
 });
 
 test("safetyOptions: virgüllü ondalık kabul edilir; aralık uçları geçerli", () => {
   assert.deepEqual(safetyOptions(form({ seconds: "4,5" }, { seconds: "30" })).safety,
-    { handsUp: { enabled: true, seconds: 4.5 }, lying: { enabled: true, seconds: 30 } });
+    { handsUp: { enabled: true, seconds: 4.5 }, lying: { enabled: true, seconds: 30 }, phone: { enabled: false } });
   assert.deepEqual(safetyOptions(form({ seconds: "5" }, { seconds: "5" })).safety,
-    { handsUp: { enabled: true, seconds: 5 }, lying: { enabled: true, seconds: 5 } });
+    { handsUp: { enabled: true, seconds: 5 }, lying: { enabled: true, seconds: 5 }, phone: { enabled: false } });
 });
 
 test("safetyOptions: kapalı kuralın süresi gönderilmez ve denetlenmez", () => {
   const o = safetyOptions(form({ enabled: false, seconds: "99" }));
-  assert.deepEqual(o.safety, { handsUp: { enabled: false }, lying: { enabled: true, seconds: 10 } });
+  assert.deepEqual(o.safety, { handsUp: { enabled: false }, lying: { enabled: true, seconds: 10 }, phone: { enabled: false } });
 });
 
 test("safetyOptions: aralık dışı süre sunucudakiyle aynı Türkçe iletiyle reddedilir", () => {
@@ -50,7 +66,7 @@ test("safetyOptions: boş, sayı olmayan ve bilimsel yazım reddedilir", () => {
 });
 
 test("safetyOptions: iki kural da kapalıysa 'En az bir kural açık olmalı.'", () => {
-  assert.equal(safetyOptions(form({ enabled: false }, { enabled: false })), "En az bir kural açık olmalı.");
+  assert.equal(safetyOptions(form({ enabled: false }, { enabled: false })), "En az bir kural açık olmalı.");      // telefon varsayılan kapalı
   assert.equal(safetyOptions(form({ enabled: false, seconds: "x" }, { enabled: false, seconds: "x" })),
     "En az bir kural açık olmalı.");                                  // kapalı kuralın süresi hata vermez
 });
@@ -74,7 +90,7 @@ test("formatClock: negatif 00:00, sayı olmayan —", () => {
 const alarm = (over = {}) => ({ kind: "handsUp", trackId: 3, startS: 12.4, atS: 15.4, endS: 19, image: "alarm-1.jpg", ...over });
 
 test("ALARM_LABELS: tür adları (güvenlik ve yangın/duman)", () => {
-  assert.deepEqual(ALARM_LABELS, { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman" });
+  assert.deepEqual(ALARM_LABELS, { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", phone: "Telefon kullanımı", fire: "Yangın", smoke: "Duman" });
 });
 
 test("alarmRows: yangın/duman işinin alarmları Yangın / Duman adıyla", () => {
@@ -88,6 +104,11 @@ test("alarmRows: tür adı, saat, süre ve resim", () => {
   assert.equal(rows.length, 2);
   assert.deepEqual(rows[0], { key: 0, kind: "handsUp", label: "Eller yukarı", startS: 12.4, clock: "00:12", duration: "7 sn", image: "alarm-1.jpg" });
   assert.deepEqual(rows[1], { key: 1, kind: "lying", label: "Yerde yatan kişi", startS: 61, clock: "01:01", duration: "34 sn", image: "alarm-2.jpg" });
+});
+
+test("alarmRows: telefon alarmı 'Telefon kullanımı' adıyla", () => {
+  const rows = alarmRows({ alarms: [alarm({ kind: "phone" })], files: ["alarm-1.jpg"] });
+  assert.deepEqual(rows.map((r) => [r.kind, r.label]), [["phone", "Telefon kullanımı"]]);
 });
 
 test("alarmRows: süre — endS null ise '—'; yuvarlanır; negatif fark 0 sn", () => {
@@ -122,23 +143,25 @@ test("alarmRows: bilinmeyen tür ham haliyle gösterilir (çökmez)", () => {
 
 test("rulesSummary: iş seçeneklerindeki kurallar; verilmeyen kural varsayılanla, kapalı kural 'kapalı'", () => {
   assert.equal(rulesSummary({ handsUp: { enabled: true, seconds: 4.5 }, lying: { enabled: false } }),
-    "Eller yukarı 4,5 sn · Yerde yatan kişi kapalı");
-  assert.equal(rulesSummary({}), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn");
-  assert.equal(rulesSummary(undefined), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn");
-  assert.equal(rulesSummary({ handsUp: { seconds: 5 } }), "Eller yukarı 5 sn · Yerde yatan kişi 10 sn");
+    "Eller yukarı 4,5 sn · Yerde yatan kişi kapalı · Telefon kullanımı kapalı");
+  assert.equal(rulesSummary({}), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı kapalı");     // telefon: verilmezse kapalı
+  assert.equal(rulesSummary(undefined), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı kapalı");
+  assert.equal(rulesSummary({ handsUp: { seconds: 5 } }), "Eller yukarı 5 sn · Yerde yatan kişi 10 sn · Telefon kullanımı kapalı");
+  assert.equal(rulesSummary({ phone: { enabled: true, seconds: 90 } }), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı 90 sn");
+  assert.equal(rulesSummary({ phone: { enabled: true } }), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı 15 sn");
 });
 
-const TYPES = ["hands_up", "lying", "fire", "smoke", "test"];
+const TYPES = ["hands_up", "lying", "phone", "fire", "smoke", "test"];
 
 test("alarmCounts: toplam, tür listesindeki her tür (sıfır dahil) ve yanlış alarm", () => {
   const c = alarmCounts([
-    { type: "fire" }, { type: "fire", falseAlarm: true }, { type: "smoke" }, { type: "hands_up" }, { type: "test" },
+    { type: "fire" }, { type: "fire", falseAlarm: true }, { type: "smoke" }, { type: "hands_up" }, { type: "test" }, { type: "phone" },
   ], TYPES);
-  assert.deepEqual(c, { total: 5, hands_up: 1, lying: 0, fire: 2, smoke: 1, test: 1, false: 1 });
+  assert.deepEqual(c, { total: 6, hands_up: 1, lying: 0, phone: 1, fire: 2, smoke: 1, test: 1, false: 1 });
   assert.deepEqual(Object.keys(c), ["total", ...TYPES, "false"]);                  // sayaçların sırası tür listesinden
 });
 
 test("alarmCounts: boş liste sıfırlar; listede olmayan tür yalnız toplama girer", () => {
-  assert.deepEqual(alarmCounts([], TYPES), { total: 0, hands_up: 0, lying: 0, fire: 0, smoke: 0, test: 0, false: 0 });
+  assert.deepEqual(alarmCounts([], TYPES), { total: 0, hands_up: 0, lying: 0, phone: 0, fire: 0, smoke: 0, test: 0, false: 0 });
   assert.deepEqual(alarmCounts([{ type: "flood" }, { type: "total" }], ["fire"]), { total: 2, fire: 0, false: 0 });
 });

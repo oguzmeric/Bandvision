@@ -127,6 +127,71 @@ test("güvenlik paneli (sahte API): izleme nedeni, kart Sorun/izleniyor noktası
   await expect(panel.locator("span.bg-ok-600")).toHaveCount(1);
 });
 
+/** Ayarla paneli (sahte API): telefon kuralı kapalı/15 gelir; açılıp süre değişince kaydedilen profilde `safety.phone` olur */
+async function openSafetySettings(page: Page, safety: Record<string, unknown>) {
+  await login(page);
+  const session = fakeSession({ state: "live", message: "", model: "ready", lastAlarmAt: null, healthy: true });
+  session.profile.safety = safety as typeof session.profile.safety;
+  const puts: Array<{ url: string; body: { safety?: Record<string, { enabled: boolean; seconds: number }> } }> = [];
+  await page.route("**/api/live/sessions", (route) => route.request().method() === "GET" ? route.fulfill({ json: [session] }) : route.continue());
+  await page.route("**/api/live/sessions/abc123/profile*", (route) => {
+    puts.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    return route.fulfill({ json: session });
+  });
+  await page.route("**/api/live/sessions/abc123/stream*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.goto("/live?s=abc123");
+  await page.getByRole("button", { name: "Ayarla", exact: true }).click();
+  const group = page.getByRole("group", { name: "Güvenlik kuralları" });
+  await expect(group).toBeVisible();
+  return { group, puts };
+}
+
+const PHONE_HELP = "Kişinin elinde ya da yüzünün yanında telefon/tablet görülürse. Telefonla kulakta konuşma bu sürümde yakalanmaz. "
+  + "Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK).";
+
+test("Ayarla paneli (sahte API): Telefon kullanımı kapalı gelir; açıp süreyi değiştirince kaydedilen profilde safety.phone", async ({ page }) => {
+  const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
+                                                          phone: { enabled: false, seconds: 15 }, sendImage: false });
+  const box = group.getByRole("checkbox", { name: "Telefon kullanımı" });
+  const slider = group.getByRole("slider", { name: "Telefon kullanımı süresi" });
+  await expect(box).not.toBeChecked();
+  await expect(slider).toHaveValue("15");
+  await expect(slider).toBeDisabled();
+  await expect(slider).toHaveAttribute("min", "10");
+  await expect(slider).toHaveAttribute("max", "600");
+  await expect(slider).toHaveAttribute("step", "5");
+  await expect(group.getByText(PHONE_HELP)).toBeVisible();
+  await box.check();
+  await expect(slider).toBeEnabled();
+  await slider.fill("120");
+  await expect(group.getByText("Telefon kullanımı süresi: 120 sn")).toBeVisible();
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
+  const saved = puts.find((p) => p.url.includes("save=true"))!.body;
+  expect(saved.safety?.phone).toEqual({ enabled: true, seconds: 120 });
+  expect(saved.safety?.handsUp).toEqual({ enabled: true, seconds: 3 });          // diğer kurallar bozulmaz
+});
+
+test("Ayarla paneli (sahte API): phone alanı olmayan kayıtlı profil kapalı/15 görünür; başka ayar değişince kayıt phone varsayılanıyla gider", async ({ page }) => {
+  const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, sendImage: false });
+  await expect(group.getByRole("checkbox", { name: "Telefon kullanımı" })).not.toBeChecked();
+  await expect(group.getByRole("slider", { name: "Telefon kullanımı süresi" })).toHaveValue("15");
+  // dokunmadan kaydet: profil olduğu gibi gider (phone eklenmez), hata yok
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
+  expect(puts.find((p) => p.url.includes("save=true"))!.body.safety).not.toHaveProperty("phone");
+  await expect(page.getByRole("alert").filter({ hasText: /hata|geçersiz/i })).toHaveCount(0);
+
+  // bir kural değişince nesne tamamlanır: phone = kapalı/15
+  await page.getByRole("button", { name: "Ayarla", exact: true }).click();
+  await group.getByRole("slider", { name: "Eller yukarı süresi" }).fill("4");
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(2);
+  const saved = puts.filter((p) => p.url.includes("save=true"))[1].body;
+  expect(saved.safety?.phone).toEqual({ enabled: false, seconds: 15 });
+  expect(saved.safety?.handsUp).toEqual({ enabled: true, seconds: 4 });
+});
+
 interface FakeAlarm {
   id: string; sessionId: string | null; camera: string; type: string; startedAt: number; firedAt: number;
   endedAt: number | null; acked: boolean; notify: string; image: boolean;
@@ -865,6 +930,7 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
     mk("h1", "hands_up", "Tezgah kamerası", now - 3600, { clip: true, clipStartedAt: now - 3608 }),
     mk("h2", "hands_up", "Kasa", now - 7200, { falseAlarm: true, notify: "suppressed" }),
     mk("l1", "lying", "Tezgah kamerası", now - 2 * 86400, { acked: false, endedAt: null, notify: "failed" }),
+    mk("p1", "phone", "Kasa", now - 5 * 86400),                                          // telefon alarmı (tür süzgeci)
     mk("o1", "hands_up", "Depo", now - 10 * 86400),                                   // varsayılan 7 günün dışında
   ];
   const asked: URLSearchParams[] = [];
@@ -908,8 +974,8 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
     await expect(count("false")).toHaveText(String(falseN));
   };
   // varsayılan: son 7 gün, en yeni önce; 10 günlük alarm yok
-  await expect(rows).toHaveCount(4);
-  await expectCounts(4, 2, 1, 1, 1);
+  await expect(rows).toHaveCount(5);
+  await expectCounts(5, 2, 1, 1, 1);
   await expect(rows.nth(0)).toContainText("Deneme alarmı");
   await expect(rows.nth(3)).toContainText("Yerde yatan kişi");
   const q0 = asked.at(-1)!;
@@ -938,10 +1004,17 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
   await expectCounts(2, 1, 1, 0, 0);
   await camera.selectOption("");
   // tür süzgeci (sunucuya gider)
+  await expect(page.getByLabel("Tür", { exact: true }).locator("option"))
+    .toHaveText(["Tüm türler", "Eller yukarı", "Yerde yatan kişi", "Telefon kullanımı", "Yangın", "Duman", "Deneme alarmı"]);
   await page.getByLabel("Tür", { exact: true }).selectOption("lying");
   await expect(rows).toHaveCount(1);
   expect(asked.at(-1)!.get("type")).toBe("lying");
   await expectCounts(1, 0, 1, 0, 0);
+  await page.getByLabel("Tür", { exact: true }).selectOption("phone");
+  await expect(rows).toHaveCount(1);
+  expect(asked.at(-1)!.get("type")).toBe("phone");
+  await expect(rows.first()).toContainText("Telefon kullanımı");
+  await expect(count("phone")).toHaveText("1");
   await page.getByLabel("Tür", { exact: true }).selectOption("");
   // yalnızca onaylanmamış
   await page.getByRole("checkbox", { name: "Yalnızca onaylanmamış" }).check();
@@ -952,14 +1025,14 @@ test("Alarmlar sayfası (sahte API): kenar çubuğunda İzleme grubunda Canlı i
   const d = new Date(Date.now() - 11 * 86_400_000);
   const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   await page.getByLabel("Başlangıç tarihi").fill(ymd);
-  await expect(rows).toHaveCount(5);
-  await expectCounts(5, 3, 1, 1, 1);
+  await expect(rows).toHaveCount(6);
+  await expectCounts(6, 3, 1, 1, 1);
 
   // satıra tıklayınca aynı pencere (göz atma): durum, Kapat; kaydı olan alarmda video
   await rows.nth(1).click();
   const modal = modalOf(page);
   await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
-  await expect(modal.getByTestId("alarm-counter")).toHaveText("2 / 5");
+  await expect(modal.getByTestId("alarm-counter")).toHaveText("2 / 6");
   await expect(modal.getByTestId("alarm-state")).toContainText("Onaylandı");
   await expect(modal.getByTestId("alarm-video")).toHaveAttribute("src", "/api/live/alarms/h1/clip.webm");
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toHaveCount(0);   // zaten onaylı

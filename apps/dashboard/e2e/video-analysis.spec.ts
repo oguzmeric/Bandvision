@@ -209,7 +209,7 @@ function safetyJob(name: string, alarms: MockAlarm[], files: string[], id = SAFE
   return mockJob(id, {
     status,
     video: { name, sizeBytes: 1024, seconds: 18, fps: 25, width: 720, height: 480 },
-    options: { preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 } } },
+    options: { preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, phone: { enabled: true, seconds: 60 } } },
     result: { count: alarms.length, truth: null, errorPct: null, calibration: {}, processingFps: 14.8,
               device: { kind: "gpu", name: "Test GPU", note: null }, alarms, files },
   });
@@ -236,6 +236,7 @@ test("güvenlik işi: Alarm kutusu, alarm tablosu (saat, tür, süre, küçük r
     { kind: "handsUp", trackId: 3, startS: 12.4, atS: 15.4, endS: 19.0, image: "alarm-1.jpg" },
     { kind: "lying", trackId: 5, startS: 61, atS: 71, endS: 95, image: "alarm-2.jpg" },
     { kind: "lying", trackId: 7, startS: 100.2, atS: 110.2, endS: null, image: null },
+    { kind: "phone", trackId: 9, startS: 130, atS: 190, endS: 200, image: null },
   ];
   const files = ["annotated.mp4", "alarms.csv", "profile.json", "alarm-1.jpg", "alarm-2.jpg"];
   await page.route("**/api/jobs", (r) => r.fulfill({ json: [safetyJob("kuyumcu.mp4", alarms, files)] }));
@@ -247,7 +248,7 @@ test("güvenlik işi: Alarm kutusu, alarm tablosu (saat, tür, süre, küçük r
 
   // Sayım kutuları yerine Alarm / İşleme hızı / Cihaz
   const stat = detail.getByText("Alarm", { exact: true }).locator("..");
-  await expect(stat.locator("b")).toHaveText("3");
+  await expect(stat.locator("b")).toHaveText("4");
   await expect(detail.getByText("İşleme hızı", { exact: true })).toBeVisible();
   await expect(detail.getByText("Cihaz", { exact: true })).toBeVisible();
   for (const gone of ["Doğruluk", "Giriş", "Çıkış", "Doğru adet", "Sayım", "Yöntem"]) {
@@ -258,12 +259,15 @@ test("güvenlik işi: Alarm kutusu, alarm tablosu (saat, tür, süre, küçük r
   const table = detail.getByTestId("alarm-table");
   await expect(table.getByRole("columnheader")).toHaveText(["Başlangıç", "Tür", "Süre", "Resim"]);
   const rows = detail.getByTestId("alarm-row");
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(4);
   await expect(rows.nth(0).getByRole("cell")).toHaveText(["00:12", "Eller yukarı", "7 sn", ""]);
   await expect(rows.nth(0).getByRole("button", { name: "Videoda 00:12 anına git (Eller yukarı)" })).toBeVisible();
   await expect(rows.nth(1).getByRole("button", { name: "Videoda 01:01 anına git (Yerde yatan kişi)" })).toBeVisible();
   await expect(rows.nth(1).getByRole("cell")).toHaveText(["01:01", "Yerde yatan kişi", "34 sn", ""]);
   await expect(rows.nth(2).getByRole("cell")).toHaveText(["01:40", "Yerde yatan kişi", "—", "—"]);   // bitişi ve resmi yok
+  await expect(rows.nth(3).getByRole("cell")).toHaveText(["02:10", "Telefon kullanımı", "70 sn", "—"]);
+  await expect(rows.nth(3).getByRole("button", { name: "Videoda 02:10 anına git (Telefon kullanımı)" })).toBeVisible();
+  await expect(detail.getByTestId("alarm-rules")).toHaveText("Kurallar: Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı 60 sn");
 
   // Küçük resim: işin dosya yolundan, gerçekten yüklenir; resimsiz satırda resim yok
   const thumb = rows.nth(0).locator("img");
@@ -411,6 +415,12 @@ test("yükleme formu: Güvenlik alarmı sayım alanlarını gizler, kuralları g
   await expect(page.getByRole("checkbox", { name: "Yerde yatan kişi" })).toBeChecked();
   await expect(hu).toHaveValue("3");
   await expect(ly).toHaveValue("10");
+  // telefon kullanımı: üçüncü satır, varsayılan kapalı/15, aralık 10–600
+  const ph = page.getByLabel("Telefon kullanımı süresi (sn)");
+  await expect(page.getByRole("checkbox", { name: "Telefon kullanımı" })).not.toBeChecked();
+  await expect(ph).toHaveValue("15");
+  await expect(ph).toBeDisabled();
+  await expect(page.getByText("sn · 10–600")).toBeVisible();
 
   // aralık dışı süre: istek gitmez, sunucudakiyle aynı metin
   await hu.fill("6");
@@ -428,12 +438,23 @@ test("yükleme formu: Güvenlik alarmı sayım alanlarını gizler, kuralları g
   await expect(page.getByTestId("upload-error")).toHaveText("En az bir kural açık olmalı.");
   expect(sent).toHaveLength(0);
 
-  // geçerli: yatan kişi 12 sn, eller yukarı kapalı
+  // telefon açık, aralık dışı süre
+  await page.getByRole("checkbox", { name: "Telefon kullanımı" }).check();
+  await ph.fill("5");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(page.getByTestId("upload-error")).toHaveText("Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı.");
+  await ph.fill("601");
+  await page.getByRole("button", { name: "Analizi başlat" }).click();
+  await expect(page.getByTestId("upload-error")).toHaveText("Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı.");
+  // telefon tek başına açıkken "En az bir kural açık" hatası çıkmaz (süre geçerliyse istek gider; aşağıda)
+  await ph.fill("90");
+
+  // geçerli: yatan kişi 12 sn, eller yukarı kapalı, telefon 90 sn
   await page.getByRole("checkbox", { name: "Yerde yatan kişi" }).check();
   await ly.fill("12");
   await page.getByRole("button", { name: "Analizi başlat" }).click();
   await expect.poll(() => sent.length).toBe(1);
-  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: false }, lying: { enabled: true, seconds: 12 } } });
+  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: false }, lying: { enabled: true, seconds: 12 }, phone: { enabled: true, seconds: 90 } } });
   expect(sent[0].name).toBe("ui_test_clip.mp4");
 });
 
@@ -447,7 +468,7 @@ test("yükleme formu: güvenliğe geçmeden yazılan sayım değerleri güvenlik
   await preset.selectOption("safety");
   await page.getByRole("button", { name: "Analizi başlat" }).click();
   await expect.poll(() => sent.length).toBe(1);
-  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 } } });
+  expect(sent[0].options).toEqual({ preset: "safety", safety: { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, phone: { enabled: false } } });
   await preset.selectOption("egg");                                               // geri dönünce sayım alanları yeniden görünür
   await expect(page.getByLabel(/Doğru adet/)).toBeVisible();
   await expect(page.getByText("Alan ve sayım çizgisi")).toBeVisible();

@@ -14,7 +14,7 @@ export function categoryOf(p: Profile): string {
 }
 
 export function profileStatus(p: Profile): string {
-  if (p.countMode === "safety") return "Eller yukarı / yerde yatan kişi";
+  if (p.countMode === "safety") return p.safety?.phone?.enabled ? "Eller yukarı / yerde yatan kişi / telefon kullanımı" : "Eller yukarı / yerde yatan kişi";
   if (p.countMode === "fire") return "Alev / duman erken uyarısı";
   if (p.countMode === "detect") return "Giriş / çıkış sayımı";
   if (p.countMode === "linescan") return "Bitişik / hacimli ürün";

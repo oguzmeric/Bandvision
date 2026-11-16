@@ -193,16 +193,16 @@ test("Alarmlar sayfası (sahte API): Yangın/Duman etiketleri, sayaçlar tür li
   // sayaçlar: toplam, her tür (tür listesinin sırasıyla), yanlış alarm
   const counts = page.getByTestId("alarm-counts");
   expect(await counts.locator("b").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid"))))
-    .toEqual(["count-total", "count-hands_up", "count-lying", "count-fire", "count-smoke", "count-test", "count-false"]);
+    .toEqual(["count-total", "count-hands_up", "count-lying", "count-phone", "count-fire", "count-smoke", "count-test", "count-false"]);
   await expect(counts).toContainText("Yangın 1");
   await expect(counts).toContainText("Duman 2");
-  for (const [k, n] of [["total", 4], ["hands_up", 1], ["lying", 0], ["fire", 1], ["smoke", 2], ["test", 0], ["false", 1]] as const) {
+  for (const [k, n] of [["total", 4], ["hands_up", 1], ["lying", 0], ["phone", 0], ["fire", 1], ["smoke", 2], ["test", 0], ["false", 1]] as const) {
     await expect(page.getByTestId(`count-${k}`)).toHaveText(String(n));
   }
 
   // tür süzgeci: Yangın ve Duman seçenekleri; sunucuya gider
   const type = page.getByLabel("Tür", { exact: true });
-  await expect(type.locator("option")).toHaveText(["Tüm türler", "Eller yukarı", "Yerde yatan kişi", "Yangın", "Duman", "Deneme alarmı"]);
+  await expect(type.locator("option")).toHaveText(["Tüm türler", "Eller yukarı", "Yerde yatan kişi", "Telefon kullanımı", "Yangın", "Duman", "Deneme alarmı"]);
   await type.selectOption("smoke");
   await expect(rows).toHaveCount(2);
   expect(calls.asked.at(-1)!.get("type")).toBe("smoke");

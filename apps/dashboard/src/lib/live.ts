@@ -42,6 +42,8 @@ export interface LabColor { L: number; a: number; b: number }
 export interface SafetyConfig {
   handsUp: { enabled: boolean; seconds: number };
   lying: { enabled: boolean; seconds: number };
+  /** Telefon kullanımı (10–600 sn, varsayılan kapalı/15); eski kayıtlı profilde yoktur */
+  phone?: { enabled: boolean; seconds: number };
   sendImage: boolean;
 }
 
@@ -204,7 +206,7 @@ export function safetyHealth(s: LiveSession): { healthy: boolean; reason: string
   return { healthy: true, reason: null, cause: null };
 }
 
-export type AlarmType = "hands_up" | "lying" | "fire" | "smoke" | "test";
+export type AlarmType = "hands_up" | "lying" | "phone" | "fire" | "smoke" | "test";
 export interface Alarm {
   id: string; sessionId: string | null; camera: string; type: AlarmType;
   startedAt: number; firedAt: number; endedAt: number | null; acked: boolean;
@@ -234,7 +236,7 @@ export function toggleFalseAlarm(a: Pick<Alarm, "id" | "falseAlarm">): Promise<A
 export const ARCHIVE_LEAD_S = 10;
 /** Alarm penceresinin büyük başlığı */
 export const ALARM_TITLES: Record<AlarmType, string> = {
-  hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", fire: "Yangın", smoke: "Duman", test: "DENEME ALARMI",
+  hands_up: "ELLER YUKARI", lying: "YERDE YATAN KİŞİ", phone: "TELEFON KULLANIMI", fire: "Yangın", smoke: "Duman", test: "DENEME ALARMI",
 };
 /** clipPending göndermeyen eski sunucuda: kameralı alarmdan sonra bu kadar saniye "Kayıt hazırlanıyor…" */
 export const CLIP_PENDING_S = 20;
@@ -251,7 +253,7 @@ export interface NotifyConfig {
 }
 /** Alarm türünün adı; sıra Alarmlar sayfasındaki tür süzgecinin ve sayaçlarının sırasıdır */
 export const ALARM_LABELS: Record<AlarmType, string> = {
-  hands_up: "Eller yukarı", lying: "Yerde yatan kişi", fire: "Yangın", smoke: "Duman", test: "Deneme alarmı",
+  hands_up: "Eller yukarı", lying: "Yerde yatan kişi", phone: "Telefon kullanımı", fire: "Yangın", smoke: "Duman", test: "Deneme alarmı",
 };
 export const NOTIFY_LABELS: Record<Alarm["notify"], string> = {
   disabled: "Telegram kapalı", queued: "Gönderiliyor", sent: "Telegram'a gitti", failed: "Gönderilemedi", suppressed: "Tekrar (gönderilmedi)",

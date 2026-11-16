@@ -184,7 +184,7 @@ export default function UploadCard({ onCreated }: { onCreated: (job: AnalysisJob
       {safety ? (
         <fieldset className="mt-2.5">
           <legend className={lbl}>Kurallar</legend>
-          {(["handsUp", "lying"] as const).map((key) => {
+          {(["handsUp", "lying", "phone"] as const).map((key) => {
             const rule = SAFETY_RULES[key], f = rules[key];
             const set = (patch: Partial<typeof f>) => setRules({ ...rules, [key]: { ...f, ...patch } });
             return (

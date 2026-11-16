@@ -8,8 +8,8 @@ export type CountMode = "blob" | "linescan" | "detect" | "safety" | "fire";
 export type CountAnchor = "center" | "bottom";
 export type Direction = "down" | "up" | "right" | "left";
 export type ResultFile = "annotated.mp4" | "counts.csv" | "alarms.csv" | "profile.json" | "background.png";
-/** Video alarmının türü: güvenlikte pozun türü (`handsUp`, `lying`), yangın/duman işinde `fire`, `smoke` */
-export type AlarmKind = "handsUp" | "lying" | "fire" | "smoke";
+/** Video alarmının türü: güvenlikte pozun türü (`handsUp`, `lying`, `phone`), yangın/duman işinde `fire`, `smoke` */
+export type AlarmKind = "handsUp" | "lying" | "phone" | "fire" | "smoke";
 /** Yangın/duman hassasiyeti */
 export type FireSensitivity = "low" | "normal" | "high";
 
@@ -47,7 +47,7 @@ export interface JobOptions {
   line?: number;
   bgRange?: [number, number];
   /** Yalnızca preset safety */
-  safety?: { handsUp?: SafetyRule; lying?: SafetyRule };
+  safety?: { handsUp?: SafetyRule; lying?: SafetyRule; phone?: SafetyRule };
   /** Yalnızca preset fire: kurallar ve hassasiyet (verilmeyen varsayılan: alev 3 sn, duman 8 sn, normal) */
   fire?: { fire?: SafetyRule; smoke?: SafetyRule; sensitivity?: FireSensitivity };
 }

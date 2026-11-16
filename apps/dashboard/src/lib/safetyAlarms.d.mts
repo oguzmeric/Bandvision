@@ -8,6 +8,7 @@ export interface SafetyRuleForm {
 export interface SafetyForm {
   handsUp: SafetyRuleForm;
   lying: SafetyRuleForm;
+  phone: SafetyRuleForm;
 }
 export interface AlarmRow {
   key: number;
@@ -20,7 +21,7 @@ export interface AlarmRow {
   image: string | null;
 }
 
-export const SAFETY_RULES: Record<"handsUp" | "lying", { title: string; min: number; max: number; def: number }>;
+export const SAFETY_RULES: Record<"handsUp" | "lying" | "phone", { title: string; min: number; max: number; def: number }>;
 export const NO_RULE_ON: string;
 export const ALARM_LABELS: Record<AlarmKind, string>;
 export function defaultSafetyForm(): SafetyForm;
