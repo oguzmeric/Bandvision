@@ -11,8 +11,17 @@ export const SAFETY_RULES = {
   phone: { title: "Telefon kullanımı", min: 10, max: 600, def: 15 },
 };
 
-/** Varsayılan kapalı kurallar: işte verilmemişse özette "kapalı" yazar (telefon sonradan eklendi; eski işlerde yoktur) */
+/**
+ * Varsayılan kapalı kurallar (telefon; sonradan eklendi, eski işlerde yoktur). Sunucuyla aynı kural (analyzer/app.py
+ * `_phone_on`, jobs.py): yalnız `enabled: true` ya da `enabled` verilmeden `seconds` verilmesi açar; `{}`,
+ * `enabled: false` ya da hiç verilmemesi kapalıdır.
+ */
 const OFF_BY_DEFAULT = new Set(["phone"]);
+
+function ruleOn(key, r) {
+  if (OFF_BY_DEFAULT.has(key)) return r?.enabled === true || (r?.enabled === undefined && r?.seconds != null);
+  return r?.enabled !== false;
+}
 
 export const NO_RULE_ON = "En az bir kural açık olmalı.";
 
@@ -79,7 +88,7 @@ export function alarmRows(result) {
 export function rulesSummary(safety) {
   return Object.entries(SAFETY_RULES).map(([key, rule]) => {
     const r = safety?.[key];
-    if (r?.enabled === false || (r === undefined && OFF_BY_DEFAULT.has(key))) return `${ALARM_LABELS[key]} kapalı`;
+    if (!ruleOn(key, r)) return `${ALARM_LABELS[key]} kapalı`;
     return `${ALARM_LABELS[key]} ${(r?.seconds ?? rule.def).toLocaleString("tr-TR")} sn`;
   }).join(" · ");
 }

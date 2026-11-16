@@ -151,6 +151,16 @@ test("rulesSummary: iş seçeneklerindeki kurallar; verilmeyen kural varsayılan
   assert.equal(rulesSummary({ phone: { enabled: true } }), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı 15 sn");
 });
 
+test("rulesSummary: telefon sunucudaki gibi yalnız enabled:true ya da enabled'sız seconds ile açık; {} kapalı", () => {
+  const tail = (phone) => rulesSummary({ phone }).split(" · ")[2];
+  assert.equal(tail({}), "Telefon kullanımı kapalı");                       // sunucu {}'i kapalı sayar (jobs.py, app.py)
+  assert.equal(tail({ enabled: false, seconds: 90 }), "Telefon kullanımı kapalı");
+  assert.equal(tail({ seconds: 45 }), "Telefon kullanımı 45 sn");           // süre verilmesi açar
+  assert.equal(tail({ enabled: true }), "Telefon kullanımı 15 sn");
+  assert.equal(tail(null), "Telefon kullanımı kapalı");
+  assert.equal(rulesSummary({ handsUp: {}, lying: {} }), "Eller yukarı 3 sn · Yerde yatan kişi 10 sn · Telefon kullanımı kapalı");   // varsayılanı açık kurallar {} ile açık kalır
+});
+
 const TYPES = ["hands_up", "lying", "phone", "fire", "smoke", "test"];
 
 test("alarmCounts: toplam, tür listesindeki her tür (sıfır dahil) ve yanlış alarm", () => {

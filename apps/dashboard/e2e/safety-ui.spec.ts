@@ -147,7 +147,7 @@ async function openSafetySettings(page: Page, safety: Record<string, unknown>) {
 }
 
 const PHONE_HELP = "Kişinin elinde ya da yüzünün yanında telefon/tablet görülürse. Telefonla kulakta konuşma bu sürümde yakalanmaz. "
-  + "Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK).";
+  + "Kişi görüntüde yeterince büyük olmalı. Çalışanları bilgilendirin (KVKK). Deneme: doğruluğu henüz ölçülmedi.";
 
 test("Ayarla paneli (sahte API): Telefon kullanımı kapalı gelir; açıp süreyi değiştirince kaydedilen profilde safety.phone", async ({ page }) => {
   const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
@@ -161,6 +161,7 @@ test("Ayarla paneli (sahte API): Telefon kullanımı kapalı gelir; açıp süre
   await expect(slider).toHaveAttribute("max", "600");
   await expect(slider).toHaveAttribute("step", "5");
   await expect(group.getByText(PHONE_HELP)).toBeVisible();
+  await expect(box).toHaveAccessibleDescription(PHONE_HELP);                  // açıklama işaret kutusuna bağlı
   await box.check();
   await expect(slider).toBeEnabled();
   await slider.fill("120");
