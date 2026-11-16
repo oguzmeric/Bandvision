@@ -48,15 +48,20 @@ duyurulur.
 ## Algılama (çekirdek)
 - **Kişi kırpıntısında arama:** telefon kuralı açıkken her onaylı ve bu karede görülen kişi için kutu %20 payla
   kırpılır, aynı paylaşılan YOLOX-S modeliyle yalnız `"cell phone"` aranır. Kişi başına en çok `PHONE_FPS = 2` arama/sn
-  (ek yük sınırlı; kişi sayısıyla doğrusal). Kural kapalıyken bugünkü davranış birebir aynı kalır. `CLASS_IDS`'e
+  ve kare başına en çok `PHONE_MAX_PER_FRAME = 2` arama: sırası gelenlerden en uzun süredir aranmamış olanlar, hiç
+  aranmamış olan önce. Ek yük kişi sayısından bağımsız olarak sınırlıdır: kural açık kamera başına kare başına en çok 2
+  ek çıkarım. Kural kapalıyken bugünkü davranış birebir aynı kalır. `CLASS_IDS`'e
   `"cell phone": 67` eklenir ama profil `detectClasses` enumuna **eklenmez** (sayım sınıfı değil).
 - **İsabet (kırpıntı başına):** telefon skoru ≥ `PHONE_CONF` (başlangıç 0,25) ve merkezi kişinin görünen bileğine ya
-  da başına `PHONE_NEAR · ölçek` (başlangıç 0,6) uzaklıktan yakın. Ölçek ya da el/baş görünmüyorsa o arama sayılmaz.
-- **Kanıt penceresi (iz başına):** kural süresi `seconds` (S) `PHONE_SLOT_S = 5 sn`'lik dilimlere bölünür. Kişi son S
+  da başına `PHONE_NEAR · ölçek` (başlangıç 0,6) uzaklıktan yakın. Ölçek ya da el/baş görünmüyorsa karar yoktur; bu
+  eklemlerden önceden bilindiği için arama hiç yapılmaz (bütçeden yemez).
+- **Kanıt penceresi (iz başına):** kural süresi `seconds` (S) ⌈S / `PHONE_SLOT_S`⌉ eşit dilime bölünür (`PHONE_SLOT_S` =
+  5 sn; S 5'in katıysa dilim tam 5 sn). Kişi son S
   saniye boyunca izlenmişse ve bu dilimlerin en az `PHONE_SLOT_RATIO` (başlangıç 0,6) kadarında en az bir isabet varsa
   alarm (bölüm başına bir kez). Bölüm, `PHONE_END_S` (başlangıç 15 sn) boyunca isabet gelmezse ya da iz kaybolursa
   biter (alarm vermiş bölüm mevcut kurallardaki gibi en az `FIRED_GRACE_S`). Bölüm süresi (etkin listesi) ilk isabetten
-  beri geçen süredir. Çıktı biçimi diğer kurallarla aynı (`fired`, `ended`, `active`; anahtar `(iz, "phone")`), böylece
+  son isabete kadar geçen süredir (ıskalar uzatmaz; video işinde alarm bitişi son isabettir); alarmın başlangıcı bölümün
+  başlangıcıdır. Çıktı biçimi diğer kurallarla aynıdır: `fired`, `ended`, `active`, anahtar `(iz, "phone")`. Böylece
   canlı alarm/klip/bildirim yolu değişmez.
 - Poz yalnız onaylı ve bu karede görülen izlerde, en az bir kural açıkken çalışır (bugünkü gibi). Telefon kuralı tek
   başına açıksa da poz çalışır (el/baş konumu için gerekli).
@@ -76,14 +81,16 @@ duyurulur.
 - **Panel canlı:** `SafetySettings` üçüncü satır (açık/kapalı + süre), `ALARM_LABELS` / `ALARM_TITLES`, alarm sayfası
   filtresi (etiket tablosundan otomatik).
 - **iOS:** `SafetyConfig.phone` taşıma + test.
-- **Ölçüm aracı:** `tools/eval_pose.py` etiket türlerine `"phone"`.
+- **Ölçüm aracı:** `tools/eval_pose.py` etiket türlerine `"phone"`. Kullanılan profillerin hiçbirinde açık olmayan ve
+  etiketsiz tür "ölçülmedi" sayılır; telefon ölçümü öteki iki kural kapalı profillerle, ≥ 20 telefon etiketiyle (birkaç
+  kayıt) yapılır.
 - **Belgeler:** `docs/02-contracts.md`, `docs/03-algorithm.md` §4.11'e telefon alt bölümü, `docs/13-web-platform.md`
   (güvenlik alarmı ve video ile test), `docs/12-durum.md`. Panel yardım metni: kural çalışanları izlediği için
   kullanıcıya "çalışanları bilgilendirin (KVKK)" notu.
 
 ## Bilinen riskler
 - Telefonla kulakta konuşma: telefon çoğu zaman elin/başın arkasında kalır, nadiren görülür → kanıt penceresi
-  dolmayabilir. Kullanıcının "tel 1" kaydı (konuşma, 15 sn) bunu doğruladı: telefon yalnız 2 karede (yüz yanında)
+  dolmayabilir. Kullanıcının konuşma kaydı (15 sn) bunu doğruladı: telefon yalnız 2 karede (yüz yanında)
   görüldü. "El kulakta uzun süre" poz ipucu çeneye el dayamakla karışır; **ilk sürüm konuşmayı yakalamayı hedeflemez**
   (belgede ve panel yardımında yazılır), ek kayıtlarla ölçülüp ayrı iş olarak değerlendirilir.
 - Telefon masada dururken eli yanında çalışan kişi (klavye) yanlış alarm üretebilir → kullanıcının "telefon masada,

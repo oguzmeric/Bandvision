@@ -50,7 +50,7 @@
         },
         "safety": {
           "type": "object", "additionalProperties": false,
-          "description": "Yalnızca preset safety: kurallar; verilmeyen kural varsayılanla çalışır (eller yukarı açık 3 sn, yerde yatma açık 10 sn, telefon kullanımı kapalı 15 sn). En az biri açık olmalı",
+          "description": "Yalnızca preset safety: kurallar; verilmeyen kural varsayılanla çalışır (eller yukarı açık 3 sn, yerde yatma açık 10 sn, telefon kullanımı kapalı 15 sn). Telefonda enabled verilmeden seconds verilmesi kuralı açar; {} ya da enabled false kapalıdır. En az biri açık olmalı",
           "properties": {
             "handsUp": {
               "type": "object", "additionalProperties": false,
@@ -130,7 +130,7 @@
               "trackId": { "type": "integer" },
               "startS": { "type": "number", "minimum": 0, "description": "Pozun başladığı video saniyesi" },
               "atS": { "type": "number", "minimum": 0, "description": "Alarmın çaldığı video saniyesi" },
-              "endS": { "type": ["number", "null"], "minimum": 0, "description": "Pozun bittiği saniye; video bitince hâlâ sürüyorsa video sonu" },
+              "endS": { "type": ["number", "null"], "minimum": 0, "description": "Pozun bittiği saniye (telefonda telefonun son görüldüğü an); video bitince hâlâ sürüyorsa video sonu" },
               "image": { "type": ["string", "null"], "pattern": "^alarm-[0-9]{1,2}\\.jpg$", "description": "Alarm anının işaretli karesi (files içinde); resimsiz alarmda null" }
             }
           }

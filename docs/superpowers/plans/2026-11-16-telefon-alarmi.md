@@ -150,7 +150,7 @@
 - Modify: `apps/ios/BantSayac/Core/ProductProfile.swift` (`SafetyConfig.phone: Rule = SafetyConfig.defaultPhone`, `defaultPhone = Rule(enabled: false, seconds: 15)`, `CodingKeys` + `phone`, `init(from:)` `decodeIfPresent ?? defaultPhone`; eşlenik başlatıcı `phone` vermeden çalışmaya devam eder)
 - Test: `apps/ios/BantSayacTests/SafetyProfileTests.swift`
 
-- [ ] **Step 1: Testler** — `testPhoneMissingDecodesAsOffSixty`; `testPhoneRoundTrips` (`{"phone":{"enabled":true,"seconds":120}}` çöz → kodla → aynı JSON alanı); mevcut testler değişmeden geçer.
+- [ ] **Step 1: Testler** — `testPhoneMissingDecodesAsOffFifteen`; `testPhoneRoundTrips` (`{"phone":{"enabled":true,"seconds":120}}` çöz → kodla → aynı JSON alanı); mevcut testler değişmeden geçer.
 - [ ] **Step 2–4:** Uygula; bu makinede Xcode yok → doğrulama CI `ios.yml` (macOS) koşusunda; yerelde yalnız Swift sözdizimi gözle ve mevcut test kalıbıyla tutarlılık.
 - [ ] **Step 5: Commit** — "Telefon alarmı: iOS profil alanını taşır".
 
@@ -169,4 +169,4 @@
 
 ### Son doğrulama (tüm dal)
 - `cd services/edge && pytest -q` (tam), `ruff check . ../../tools`, `pytest -q ../../tools/tests` ; panel `npm run lint && npm test && npx playwright test` (tam e2e); iOS CI.
-- Kullanıcının iki ofis kaydıyla duman testi (kayıtlar repoya girmez): `video.py --preset safety --no-hands-up --no-lying --phone 10` ile `tel 2` (24 sn telefon elde) ve `tel 1` (kulakta konuşma, 15 sn) işlenir; sonuç kullanıcıya raporlanır (kabul kapısı değil — kapı, ek kayıtlarla `eval_pose` ölçümüdür). `tel 1` için alarm beklenmez (belgelenmiş sınır).
+- Kullanıcının iki ofis kaydıyla duman testi (kayıtlar repoya girmez): `video.py --preset safety --no-hands-up --no-lying --phone 10` ile telefon elde kaydı (24 sn) ve konuşma kaydı (kulakta konuşma, 15 sn) işlenir; sonuç kullanıcıya raporlanır (kabul kapısı değil — kapı, ek kayıtlarla `eval_pose` ölçümüdür). Konuşma kaydı için alarm beklenmez (belgelenmiş sınır).
