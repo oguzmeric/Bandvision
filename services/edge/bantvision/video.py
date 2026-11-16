@@ -68,13 +68,15 @@ PRESETS = {"generic": Profile, "egg": Profile.egg, "flour": Profile.flour_sack, 
            "safety": Profile.jeweler, "fire": Profile.fire_watch}
 MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek sıra, bitişik hacimli ürünler)",
            "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)",
-           "safety": "güvenlik alarmı (poz: eller yukarı, yerde yatan kişi)",
+           "safety": "güvenlik alarmı (poz: eller yukarı, yerde yatan kişi, telefon kullanımı)",
            "fire": "yangın/duman erken uyarısı (alev ve duman tanıma; hareket doğrulamalı)"}
-SAFETY_KINDS = {"hands_up": "handsUp", "lying": "lying"}   # çekirdek adı → sözleşme adı
-SAFETY_LABELS_TR = {"handsUp": "Eller yukarı", "lying": "Yerde yatan kişi"}   # alarmlar.csv "tur" sütunu (kullanıcı indirir)
-SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0)}   # ad, en az, en çok (sn)
+SAFETY_KINDS = {"hands_up": "handsUp", "lying": "lying", "phone": "phone"}   # çekirdek adı → sözleşme adı
+SAFETY_LABELS_TR = {"handsUp": "Eller yukarı", "lying": "Yerde yatan kişi", "phone": "Telefon kullanımı"}   # alarmlar.csv "tur" sütunu (kullanıcı indirir)
+SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0),
+                 "phone": ("Telefon kullanımı", 10.0, 600.0)}   # ad, en az, en çok (sn)
 FIRE_LABELS_TR = {"fire": "Yangın", "smoke": "Duman"}        # alarmlar.csv "tur" sütunu (sözleşme `kind` = çekirdek adı)
 FIRE_RANGES = {"fire": ("Yangın", 2.0, 10.0), "smoke": ("Duman", 5.0, 30.0)}   # ad, en az, en çok (sn)
+USER_CLASSES = [c for c in CLASS_IDS if c != "cell phone"]    # "cell phone" yalnız telefon kuralının iç araması
 MAX_ALARM_IMAGES = 50                                       # alarm resmi sınırı (sonrakiler resimsiz listelenir)
 MAX_ALARMS = 500                                            # listedeki alarm sınırı (`count` gerçek toplam kalır)
 ALARM_IMAGE_WIDTH = 640
@@ -883,9 +885,9 @@ def build_profile(a: argparse.Namespace) -> Profile:
         names: list[str] = []
         for c in a.classes.split(","):
             names += GROUPS.get(c.strip(), [c.strip()])
-        bad = [c for c in names if c not in CLASS_IDS]
+        bad = [c for c in names if c not in USER_CLASSES]
         if bad:
-            raise SystemExit(f"--classes: bilinmeyen sınıf {bad}; seçenekler: {sorted(GROUPS)} ya da {sorted(CLASS_IDS)}")
+            raise SystemExit(f"--classes: bilinmeyen sınıf {bad}; seçenekler: {sorted(GROUPS)} ya da {sorted(USER_CLASSES)}")
         p.detectClasses = names
     if a.anchor:
         p.countAnchor = a.anchor
@@ -925,7 +927,7 @@ _COUNTING_OPTIONS = ("mode", "truth", "truth_out", "direction", "line", "count_l
 
 
 def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, profile: Profile) -> None:
-    given_rules = any(v is not None and v is not False for v in (a.hands_up, a.no_hands_up, a.lying, a.no_lying))
+    given_rules = any(v is not None and v is not False for v in (a.hands_up, a.no_hands_up, a.lying, a.no_lying, a.phone, a.no_phone))
     # --mode safety profilini ezer (profile.countMode değişir): güvenlik, ön ayardan da anlaşılır
     if profile.countMode != "safety" and a.preset != "safety":
         if given_rules:
@@ -934,12 +936,13 @@ def apply_safety_options(ap: argparse.ArgumentParser, a: argparse.Namespace, pro
     if any(getattr(a, name) is not None for name in _COUNTING_OPTIONS):
         ap.error("Güvenlik alarmı videosunda sayım ayarları kullanılmaz.")
     for rule, off, sec in ((profile.safety.handsUp, a.no_hands_up, a.hands_up),
-                           (profile.safety.lying, a.no_lying, a.lying)):
+                           (profile.safety.lying, a.no_lying, a.lying),
+                           (profile.safety.phone, a.no_phone, a.phone)):
         if off:
             rule.enabled = False
         if sec is not None:
             rule.enabled, rule.seconds = True, sec
-    if not (profile.safety.handsUp.enabled or profile.safety.lying.enabled):
+    if not (profile.safety.handsUp.enabled or profile.safety.lying.enabled or profile.safety.phone.enabled):
         ap.error("En az bir kural açık olmalı.")
 
 
@@ -1005,7 +1008,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calib-seconds", type=float, default=30.0, help="kalibrasyonda kullanılacak ilk N saniye")
     ap.add_argument("--out-width", type=int, default=960, help="işaretli videonun genişliği")
     ap.add_argument("--no-video", action="store_true", help="işaretli video yazma (daha hızlı)")
-    for flag, kind, what in (("hands-up", "hands_up", "eller yukarı"), ("lying", "lying", "yerde yatan kişi")):
+    for flag, kind, what in (("hands-up", "hands_up", "eller yukarı"), ("lying", "lying", "yerde yatan kişi"),
+                             ("phone", "phone", "telefon kullanımı")):
         g = ap.add_mutually_exclusive_group()
         lo, hi = SAFETY_RANGES[kind][1:]
         g.add_argument(f"--{flag}", type=_seconds_arg(kind), metavar="SANİYE",
@@ -1067,7 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
               f"(en çok {FIRE_MAX_FPS:g} kare/sn analiz edilir)")
     elif safety:
         sf = profile.safety
-        rules = [f"{SAFETY_RANGES[k][0]} {r.seconds:g} sn" for k, r in (("hands_up", sf.handsUp), ("lying", sf.lying))
+        rules = [f"{SAFETY_RANGES[k][0]} {r.seconds:g} sn" for k, r in (("hands_up", sf.handsUp), ("lying", sf.lying), ("phone", sf.phone))
                  if r.enabled]
         print("  kurallar: " + ", ".join(rules) + "  (videodaki herkese uygulanır)")
     elif detect:

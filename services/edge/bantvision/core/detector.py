@@ -21,7 +21,8 @@ MODEL_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1
 MODEL_SHA256 = "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"
 INPUT = yolox.INPUT
 
-# COCO sınıf kimlikleri (YOLOX çıktısındaki sıra); yalnızca sayımda desteklenenler
+# COCO sınıf kimlikleri (YOLOX çıktısındaki sıra). Sayımda seçilebilenler `GROUPS`'taki sınıflardır; "cell phone" yalnız
+# güvenlik telefon kuralının iç araması içindir (profil `detectClasses` ve `--classes` onu kabul etmez).
 CLASS_IDS = {
     "person": 0, "bicycle": 1, "car": 2, "motorcycle": 3, "bus": 5, "truck": 7,
     "bird": 14, "cat": 15, "dog": 16, "horse": 17, "sheep": 18, "cow": 19,

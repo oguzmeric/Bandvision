@@ -36,7 +36,8 @@ RESULT_FILES = {  # video aracının çıktısı → yayımlanan ad
 FIXED_PUBLIC_FILES = ("annotated.mp4", "counts.csv", "alarms.csv", "profile.json", "background.png")
 ALARM_IMAGE = re.compile(r"alarm-([0-9]{1,2})\.jpg")     # alarm resmi: yalnızca bu ad (sözleşme: ^alarm-[0-9]{1,2}\.jpg$)
 MAX_ALARMS = 500                                          # sonuçtaki alarm listesi (sözleşme `maxItems`)
-ALARM_KINDS = {"safety": ("handsUp", "lying"), "fire": ("fire", "smoke")}    # alarm veren ön ayar → izinli `kind`
+PHONE_DEFAULT_SECONDS = 60.0                              # telefon kuralının varsayılan süresi (canlı, profil ve CLI ile aynı)
+ALARM_KINDS = {"safety": ("handsUp", "lying", "phone"), "fire": ("fire", "smoke")}    # alarm veren ön ayar → izinli `kind`
 ALARMS_BROKEN = "alarm listesi bozuk"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".mts", ".ts"}
 # JavaScript `String.prototype.trim`'in attığı karakterler (boşluk + satır sonu). Python'un `str.strip()`'i farklıdır
@@ -140,7 +141,7 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
     if bg:
         args += ["--bg-range", f"{float(bg[0])},{float(bg[1])}"]
     # güvenlik ve yangın/duman: kapalı kural --no-…, süresi verilen kural --… SANİYE
-    for group, rules_for in (("safety", (("handsUp", "hands-up"), ("lying", "lying"))),
+    for group, rules_for in (("safety", (("handsUp", "hands-up"), ("lying", "lying"), ("phone", "phone"))),
                              ("fire", (("fire", "fire"), ("smoke", "smoke")))):
         rules = options.get(group) or {}
         for key, flag in rules_for:
@@ -149,6 +150,8 @@ def options_to_args(options: dict[str, Any]) -> list[str]:
                 args.append(f"--no-{flag}")
             elif rule.get("seconds") is not None:
                 args += [f"--{flag}", f"{float(rule['seconds']):g}"]
+            elif key == "phone" and rule.get("enabled") is True:
+                args += [f"--{flag}", f"{PHONE_DEFAULT_SECONDS:g}"]   # telefon varsayılanı kapalı: açık kural süresiz de açık kalır
     if (options.get("fire") or {}).get("sensitivity"):
         args += ["--sensitivity", options["fire"]["sensitivity"]]
     return args
@@ -340,7 +343,7 @@ def checked_alarms(raw: Any, count: Any, images: list[str], preset: str | None =
     """Özetteki alarm listesi, her öğe sözleşme şeklinde ve tutarlıysa kopyası: `count` (gerçek toplam) listeden az olamaz ve
     resmi olan her alarmın resmi gerçekten taşınmış olmalı (`images`). Liste bizim kendi çıktımız: bozukluk bir hatadır,
     sessizce atlanmaz (`ValueError` → iş "Sonuç hazırlanamadı: alarm listesi bozuk" ile başarısız olur). `kind` ön ayara
-    uygun olmalı (`ALARM_KINDS`: yangın işinde `fire`/`smoke`, ötekinde `handsUp`/`lying`)."""
+    uygun olmalı (`ALARM_KINDS`: yangın işinde `fire`/`smoke`, ötekinde `handsUp`/`lying`/`phone`)."""
     kinds = ALARM_KINDS.get(preset or "", ALARM_KINDS["safety"])
     if (not isinstance(raw, list) or len(raw) > MAX_ALARMS or not all(_valid_alarm(a, kinds) for a in raw)
             or not isinstance(count, int) or isinstance(count, bool) or count < len(raw)

@@ -14,7 +14,7 @@ from typing import Any
 import cv2
 import numpy as np
 import pytest
-from fakes_safety import hands_up_kp
+from fakes_safety import FakePhoneDetector, hands_up_kp, phone_kp
 
 from bantvision import video
 from bantvision.core import devices
@@ -365,3 +365,106 @@ def test_marked_video_and_progress_json(fakes: None, src: pathlib.Path, tmp_path
     prog = [x for x in lines if "progress" in x]
     assert prog and prog[-1] == {"progress": 1.0, "count": 1}
     assert [x["stage"] for x in lines if "stage" in x] == ["calibrating", "counting"]
+
+
+# ---- telefon kullanımı -----------------------------------------------------------------------------------------
+
+PHONE_NEAR_WRIST = (16.0, 242.0, 36.0, 262.0, 0.4)   # kırpıntıya göre; phone_kp sol bileğinin (290, 260) yanı (test_safety.py ile aynı)
+
+
+@pytest.fixture
+def phone_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kişi 2 sn'den sonra bileğinin yanında telefon tutuyor; poz ayakta, eller göğüste (eller yukarı/yatma değil)."""
+    orig = video.read_frames
+
+    def spy(info: Any, start: float = 0.0, end: float | None = None, step: int = 1) -> Any:
+        for k, t, f in orig(info, start, end, step):
+            Clock.t = t
+            yield k, t, f
+
+    class Detector(FakePhoneDetector):
+        used = devices.Used("cpu", "cpu", "CPU", None)
+
+        def __init__(self, path: Any = None, device: str | None = None) -> None:
+            super().__init__([PERSON])
+
+        def detect(self, crop: np.ndarray, classes: list[str], conf: float = 0.15, iou: float = 0.45) -> list[object]:
+            self.phones = [PHONE_NEAR_WRIST] if Clock.t >= 2.0 else []
+            return super().detect(crop, classes, conf)
+
+    class Pose:
+        def __init__(self, path: Any = None, device: str | None = None) -> None:
+            pass
+
+        def estimate(self, _bgr: np.ndarray, _box: object) -> np.ndarray:
+            return phone_kp()
+
+    monkeypatch.setattr(video, "read_frames", spy)
+    monkeypatch.setattr(video, "ObjectDetector", Detector)
+    monkeypatch.setattr(video, "PoseEstimator", Pose)
+
+
+def test_phone_alone_is_accepted_and_alarm_in_csv_and_summary(phone_fakes: None, tmp_path: pathlib.Path) -> None:
+    src = tmp_path / "uzun.mp4"                                       # kural en az 10 sn: 10 sn'lik ortak video yetmez
+    w = cv2.VideoWriter(str(src), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
+    for _ in range(int(FPS * 20)):
+        w.write(np.full((H, W, 3), 40, np.uint8))
+    w.release()
+    s, out = run(src, tmp_path, "--no-hands-up", "--no-lying", "--phone", "10")
+    assert s["count"] == 1 and [a["kind"] for a in s["alarms"]] == ["phone"]
+    a = s["alarms"][0]
+    assert a["startS"] == pytest.approx(2.0, abs=0.7) and 6.0 <= a["atS"] - a["startS"] <= 10.0   # dilimli kanıt: pencere dolmadan
+    assert a["image"] == "alarm-1.jpg"
+    rows = list(csv.reader((out / "alarmlar.csv").open(encoding="utf-8"), delimiter=";"))
+    assert rows[1][3] == "Telefon kullanımı"
+
+
+def test_phone_is_off_by_default(phone_fakes: None, src: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    s, _ = run(src, tmp_path)                                         # eller yukarı + yatma açık, telefon kapalı
+    assert s["count"] == 0 and s["alarms"] == []
+
+
+def test_no_rule_on_when_phone_is_default_off(src: pathlib.Path, tmp_path: pathlib.Path,
+                                              capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--preset", "safety", "--no-hands-up", "--no-lying"])
+    assert e.value.code == 2 and "En az bir kural açık olmalı." in capsys.readouterr().err
+    assert not (tmp_path / "o").exists()
+
+
+def test_phone_rule_on_counting_preset_is_refused(src: pathlib.Path, tmp_path: pathlib.Path,
+                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--preset", "people", "--phone", "30"])
+    assert e.value.code == 2 and "yalnızca güvenlik alarmı" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("sec", ["9", "601"])
+def test_phone_seconds_out_of_range_is_a_usage_error(src: pathlib.Path, tmp_path: pathlib.Path,
+                                                     capsys: pytest.CaptureFixture[str], sec: str) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--preset", "safety", "--phone", sec])
+    assert e.value.code == 2
+    assert "Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı." in capsys.readouterr().err
+
+
+def test_phone_flags_are_mutually_exclusive(src: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--preset", "safety", "--phone", "30", "--no-phone"])
+    assert e.value.code == 2
+
+
+def test_summary_line_lists_enabled_rules(phone_fakes: None, src: pathlib.Path, tmp_path: pathlib.Path,
+                                          capsys: pytest.CaptureFixture[str]) -> None:
+    run(src, tmp_path, "--no-lying", "--phone", "90")
+    out = capsys.readouterr().out
+    assert "Telefon kullanımı 90 sn" in out and "Eller yukarı 3 sn" in out and "Yerde yatma" not in out
+    assert "telefon kullanımı)" in video.MODE_TR["safety"]
+
+
+@pytest.mark.parametrize("cls", ["cell phone", "person,cell phone", "people,cell phone"])
+def test_cell_phone_is_not_a_user_class(src: pathlib.Path, tmp_path: pathlib.Path, cls: str) -> None:
+    with pytest.raises(SystemExit) as e:
+        video.main([str(src), "--out", str(tmp_path / "o"), "--mode", "detect", "--classes", cls])
+    msg = str(e.value)
+    assert "bilinmeyen sınıf ['cell phone']" in msg and "cell phone" not in msg.split("seçenekler:")[1]

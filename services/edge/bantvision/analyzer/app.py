@@ -79,7 +79,7 @@ class CountLineIn(_Strict):
 
 
 class SafetyRuleIn(_Strict):
-    """Bir güvenlik kuralı: verilmeyen alan canlıdaki varsayılana düşer (açık; eller yukarı 3 sn, yerde yatma 10 sn).
+    """Bir güvenlik kuralı: verilmeyen alan canlıdaki varsayılana düşer (eller yukarı 3 sn ve yerde yatma 10 sn açık; telefon kullanımı KAPALI, 60 sn).
     Yanlış tür (ör. "false", "10") sessizce dönüştürülmez, reddedilir."""
     title: ClassVar[str]
     low: ClassVar[float]
@@ -104,9 +104,14 @@ class LyingIn(SafetyRuleIn):
     title, low, high = "Yerde yatma", 5.0, 30.0
 
 
+class PhoneIn(SafetyRuleIn):
+    title, low, high = "Telefon kullanımı", 10.0, 600.0
+
+
 class SafetyIn(_Strict):
     handsUp: HandsUpIn | None = None
     lying: LyingIn | None = None
+    phone: PhoneIn | None = None
 
 
 class FireRuleIn(SafetyRuleIn):
@@ -164,8 +169,9 @@ def refuse_mixed_options(opts: OptionsIn) -> None:
         return
     if any(getattr(opts, name) is not None for name in COUNTING_OPTIONS):
         raise HTTPException(422, SAFETY_WITH_COUNTING)
-    rules = (opts.safety.handsUp, opts.safety.lying) if opts.safety else ()
-    if len(rules) == 2 and all(r is not None and r.enabled is False for r in rules):
+    sf = opts.safety or SafetyIn()
+    phone_on = sf.phone is not None and sf.phone.enabled is not False and (sf.phone.enabled or sf.phone.seconds is not None)
+    if all(r is not None and r.enabled is False for r in (sf.handsUp, sf.lying)) and not phone_on:   # telefon varsayılanı kapalı
         raise HTTPException(422, NO_RULE_ON)
 
 

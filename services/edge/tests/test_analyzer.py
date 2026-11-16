@@ -1059,3 +1059,45 @@ def test_worker_fire_job_with_missing_model_fails_with_turkish_reason(tmp_path: 
     assert done is not None
     assert done["status"] == "failed", done
     assert done["error"] == "Analiz başarısız: Yangın/duman modeli kurulu değil."
+
+
+def test_phone_options_reach_video_tool() -> None:
+    from bantvision.analyzer.jobs import options_to_args
+    assert options_to_args({"preset": "safety", "safety": {"phone": {"enabled": True, "seconds": 90}}}) == [
+        "--preset", "safety", "--phone", "90"]
+    assert options_to_args({"preset": "safety", "safety": {"phone": {"seconds": 45}}}) == [
+        "--preset", "safety", "--phone", "45"]
+    assert options_to_args({"preset": "safety", "safety": {"phone": {"enabled": False}}}) == [
+        "--preset", "safety", "--no-phone"]
+    # telefon varsayılanı kapalı: seconds'sız açık kural CLI'da da açık olmalı (varsayılan süre 60)
+    assert options_to_args({"preset": "safety", "safety": {"phone": {"enabled": True}}}) == [
+        "--preset", "safety", "--phone", "60"]
+    assert options_to_args({"preset": "safety", "safety": {"phone": {}}}) == ["--preset", "safety"]
+
+
+def test_phone_seconds_range_error_is_turkish_and_422(client: TestClient) -> None:
+    for sec in (5, 601):
+        r = _post(client, {"preset": "safety", "safety": {"phone": {"seconds": sec}}})
+        assert r.status_code == 422
+        assert "Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı." in r.json()["detail"]
+    assert client.get("/api/v1/jobs").json() == []
+
+
+def test_phone_alone_is_a_valid_rule_set(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eller yukarı ve yatma kapalı olsa da telefon açıksa iş kabul edilir; telefon verilmezse (varsayılan kapalı) 422."""
+    _accept_without_analysis(client, monkeypatch)
+    off = {"handsUp": {"enabled": False}, "lying": {"enabled": False}}
+    for phone in ({"enabled": True}, {"seconds": 90}, {"enabled": True, "seconds": 90}):
+        r = _post(client, {"preset": "safety", "safety": {**off, "phone": phone}})
+        assert r.status_code == 202, r.text
+    for safety in (off, {**off, "phone": {}}, {**off, "phone": {"enabled": False}}):
+        r = _post(client, {"preset": "safety", "safety": safety})
+        assert r.status_code == 422 and r.json()["detail"] == "En az bir kural açık olmalı."
+
+
+def test_phone_alarm_kind_is_accepted_in_results() -> None:
+    from bantvision.analyzer.jobs import checked_alarms
+    alarm = {"kind": "phone", "trackId": 2, "startS": 3.0, "atS": 63.0, "endS": 70.0, "image": None}
+    assert checked_alarms([alarm], 1, [], "safety") == [alarm]
+    with pytest.raises(ValueError):
+        checked_alarms([alarm], 1, [], "fire")
