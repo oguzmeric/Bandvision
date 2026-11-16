@@ -162,14 +162,17 @@ class CellVotes:
         `[now − seconds, now]` `ceil(seconds / slot)` dilime bölünür (pencere başındaki kare ilk, `now` son dilimde);
         hücre, **oy veren karesi olan** dilimlerin en az `SLOT_RATIO` oranında ve en az `SLOT_MIN` dilimde olumlu olmalı.
         Karesiz dilim (yavaş akış: 0,5 kare/sn'de her iki dilimden biri) ve yalnız oy dışı kare düşen dilim (ışık
-        patlaması) paydaya girmez: Yüksek, Normal'den az yakalamaz."""
+        patlaması) paydaya girmez. Dilimli kipte kare oyunun tetiklediği hücre de tetikler (ikisinden biri yeter): Yüksek,
+        Normal'in kare oyuyla yakalayacağını hiçbir akış hızında kaçırmaz."""
         self.prune(now, seconds)
         if not self._v:
             return None
+        frames = len(self._v)
+        count = np.sum([g for _t, g, _r, _m in self._v], axis=0)
+        ok = (count >= MIN_HITS) & (count >= RATIO * frames - EPS)
+        raw = np.sum([r for _t, _g, r, _m in self._v], axis=0)
         if slot is None:
-            count = np.sum([g for _t, g, _r, _m in self._v], axis=0)
-            ok = (count >= MIN_HITS) & (count >= RATIO * len(self._v) - EPS)
-            n = len(self._v)
+            score = np.where(ok, count * (frames + 1) + raw, -1)
         else:
             n = max(1, math.ceil(seconds / slot - EPS))
             start = now - seconds
@@ -180,12 +183,12 @@ class CellVotes:
                 i = min(n - 1, max(0, int((t - start) / slot + EPS)))
                 hit[i] |= g
                 filled[i] = True
-            count = hit.sum(axis=0)
-            ok = (count >= SLOT_MIN) & (count >= SLOT_RATIO * int(filled.sum()) - EPS)
+            slots = hit.sum(axis=0)
+            ok = ok | ((slots >= SLOT_MIN) & (slots >= SLOT_RATIO * int(filled.sum()) - EPS))
+            base = max(n, frames) + 1                      # önce dilim sayısı, sonra kare sayısı, sonra yalın kaplama
+            score = np.where(ok, (slots * base + count) * base + raw, -1)
         if not ok.any():
             return None
-        raw = np.sum([r for _t, _g, r, _m in self._v], axis=0)
-        score = np.where(ok, count * (max(n, len(self._v)) + 1) + raw, -1)
         r, c = np.unravel_index(int(np.argmax(score)), count.shape)
         return int(r), int(c)
 

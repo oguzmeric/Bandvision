@@ -130,9 +130,9 @@ def test_slot_votes_ratio_boundary_and_minimum() -> None:
     assert votes({0, 2, 4, 6}).trigger(8.0, 8.0, slot=1.0) is None      # 4/8 = 0,5 < 0,6
     assert votes({0, 2, 4, 5, 6}).trigger(8.0, 8.0, slot=1.0) is not None   # 5/8 = 0,625
     short = fr.CellVotes()
-    for k in range(4):                                                  # 2 sn kural: 2 dilim, 2/2 ama < SLOT_MIN
-        short.add(k * 0.5, [box])
-    assert short.trigger(1.5, 2.0, slot=fr.SLOT_S) is None
+    for k in range(11):                                                 # 2 sn kural, 5 kare/sn: her saniyenin ilk karesi
+        short.add(k * 0.2, [box] if k % 5 == 0 else [])                 # dilim 2/2 ama 2 < SLOT_MIN; kare 3/11 < RATIO
+    assert short.trigger(2.0, 2.0, slot=fr.SLOT_S) is None
 
 
 def test_slot_votes_divide_by_slots_that_had_a_voting_frame() -> None:
@@ -153,7 +153,15 @@ def test_slot_votes_divide_by_slots_that_had_a_voting_frame() -> None:
     assert half.trigger(8.0, 8.0, slot=fr.SLOT_S) is None               # 4/8 dolu dilim (8. sn son dilime düşer)
 
 
-
+def test_slot_mode_also_accepts_what_frame_voting_accepts() -> None:
+    """Yüksek (dilimli) her zaman kare oyunun tetiklediğini de tetikler: 1 kare/sn, 7 sn kural, duman 0, 2, 4, 6, 7. sn
+    karelerinde: kare oranı 5/8 tetikler; 6 ve 7. kare aynı son dilime düştüğü için dilim oranı 4/7 tetiklemezdi."""
+    box = (0.30, 0.30, 0.36, 0.36)
+    v = fr.CellVotes()
+    for k in range(8):
+        v.add(float(k), [box] if k in (0, 2, 4, 6, 7) else [])
+    assert v.trigger(7.0, 7.0) is not None
+    assert v.trigger(7.0, 7.0, slot=fr.SLOT_S) is not None
 
 
 def test_cell_votes_ratio_hits_neighbourhood_and_closed_window() -> None:
