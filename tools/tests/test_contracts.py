@@ -156,6 +156,14 @@ NEGATIVE_CASES = [
      "maximum", ["options", "safety", "handsUp", "seconds"]),
     ("iş yerde yatma süresi 5'ten kısa", *SAFETY_JOB, _set(["options", "safety", "lying", "seconds"], 4),
      "minimum", ["options", "safety", "lying", "seconds"]),
+    ("iş telefon süresi 10'dan kısa", *SAFETY_JOB, _set(["options", "safety", "phone"], {"enabled": True, "seconds": 9}),
+     "minimum", ["options", "safety", "phone", "seconds"]),
+    ("iş telefon süresi 600'den uzun", *SAFETY_JOB, _set(["options", "safety", "phone"], {"enabled": True, "seconds": 601}),
+     "maximum", ["options", "safety", "phone", "seconds"]),
+    ("profil telefon süresi 10'dan kısa", *PROFILE, _set(["safety"], {"phone": {"enabled": True, "seconds": 9}}),
+     "minimum", ["safety", "phone", "seconds"]),
+    ("profil telefon süresi 600'den uzun", *PROFILE, _set(["safety"], {"phone": {"enabled": True, "seconds": 601}}),
+     "maximum", ["safety", "phone", "seconds"]),
     ("iş kural ayarında bilinmeyen kural", *SAFETY_JOB, _set(["options", "safety", "fire"], {"enabled": True}),
      "additionalProperties", ["options", "safety"]),
     ("iş alarmı güvenlik olmayan işte", *SAFETY_JOB, _set(["options", "preset"], "people"), "not", ["result"]),
@@ -255,3 +263,21 @@ def test_template_layout_accepts_catalog_and_grid_ids() -> None:
     catalog = json.loads((vc.CONTRACTS / "view-layouts.schema.json").read_text(encoding="utf-8"))
     ids = catalog["properties"]["layouts"]["items"]["properties"]["id"]["enum"]
     assert ids == [d["id"] for d in _layouts()]
+
+
+@pytest.mark.parametrize("seconds", [10, 600])
+def test_phone_rule_bounds_are_accepted(seconds: int) -> None:
+    job = load(SAFETY_JOB[0])
+    job["options"]["safety"]["phone"] = {"enabled": True, "seconds": seconds}
+    assert vc.errors_for(job, SAFETY_JOB[1]) == []
+    profile = load(PROFILE[0])
+    profile["safety"] = {"phone": {"enabled": True, "seconds": seconds}}
+    assert vc.errors_for(profile, PROFILE[1]) == []
+
+
+def test_phone_alarm_kind_is_valid_in_job_result() -> None:
+    job = load(SAFETY_JOB[0])
+    assert any(a["kind"] == "phone" for a in job["result"]["alarms"])
+    assert vc.errors_for(job, SAFETY_JOB[1]) == []
+    job["result"]["alarms"][0]["kind"] = "tablet"
+    assert vc.errors_for(job, SAFETY_JOB[1]) != []

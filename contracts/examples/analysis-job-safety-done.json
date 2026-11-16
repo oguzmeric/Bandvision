@@ -17,25 +17,28 @@
     "preset": "safety",
     "safety": {
       "handsUp": { "enabled": true, "seconds": 3 },
-      "lying": { "enabled": true, "seconds": 10 }
+      "lying": { "enabled": true, "seconds": 10 },
+      "phone": { "enabled": true, "seconds": 60 }
     }
   },
   "progress": 1.0,
   "result": {
-    "count": 2,
+    "count": 3,
     "calibration": {},
     "processingFps": 14.8,
     "device": { "kind": "gpu", "name": "NVIDIA GeForce RTX 3050 Laptop GPU", "note": null },
     "alarms": [
       { "kind": "handsUp", "trackId": 3, "startS": 12.4, "atS": 15.4, "endS": 19.0, "image": "alarm-1.jpg" },
-      { "kind": "lying", "trackId": 5, "startS": 61.0, "atS": 71.0, "endS": 95.0, "image": "alarm-2.jpg" }
+      { "kind": "lying", "trackId": 5, "startS": 61.0, "atS": 71.0, "endS": 95.0, "image": "alarm-2.jpg" },
+      { "kind": "phone", "trackId": 7, "startS": 20.0, "atS": 80.0, "endS": 95.0, "image": "alarm-3.jpg" }
     ],
     "files": [
       "annotated.mp4",
       "alarms.csv",
       "profile.json",
       "alarm-1.jpg",
-      "alarm-2.jpg"
+      "alarm-2.jpg",
+      "alarm-3.jpg"
     ]
   }
 }

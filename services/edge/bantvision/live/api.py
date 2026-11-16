@@ -577,10 +577,10 @@ class LiveManager:
     WATCH_RETRY_MAX: ClassVar[int] = 360                # en çok 30 dakika
 
     _TITLES: ClassVar[dict[str, str]] = {
-        "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "test": "🧪 DENEME ALARMI",
+        "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "phone": "🚨 TELEFON KULLANIMI", "test": "🧪 DENEME ALARMI",
         "fire": "🔥 YANGIN", "smoke": "💨 DUMAN"}
     # alarm türü → onu üreten yöntem (uçuştaki alarm: oturum o yöntemden çıktıysa kayıt hemen kapanır)
-    _MODE_OF: ClassVar[dict[str, str]] = {"hands_up": "safety", "lying": "safety", "fire": "fire", "smoke": "fire"}
+    _MODE_OF: ClassVar[dict[str, str]] = {"hands_up": "safety", "lying": "safety", "phone": "safety", "fire": "fire", "smoke": "fire"}
     _CHECK_LINE: ClassVar[str] = "Görüntüyü hemen kontrol edin."
 
     def _text(self, kind: str, camera: str, ts: float) -> str:
@@ -1699,7 +1699,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     @r.get("/alarms")
     def alarms(active: bool = False, since: float | None = None, until: float | None = None,
                session_id: str | None = Query(None, alias="sessionId"),
-               kind: Literal["hands_up", "lying", "test", "fire", "smoke"] | None = Query(None, alias="type"),
+               kind: Literal["hands_up", "lying", "phone", "test", "fire", "smoke"] | None = Query(None, alias="type"),
                limit: int = Query(50, ge=1, le=1000)) -> list[dict[str, Any]]:
         """Alarm günlüğü (en yeni önce, varsayılan en çok 50; Alarmlar sayfası 1000'e kadar ister). `sessionId`: yalnızca
         o kameranın alarmları — yan panel, başka kameraların alarmları yüzünden kendi alarmlarını kaçırmasın. `since` /
@@ -1827,11 +1827,12 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
     return r
 
 
-_SAFETY_RULES = {"handsUp": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0)}   # ad, en az, en çok (sn)
+_SAFETY_RULES = {"handsUp": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0),
+                 "phone": ("Telefon kullanımı", 10.0, 600.0)}   # ad, en az, en çok (sn)
 
 
 def _check_safety(sf: Any) -> None:
-    """`safety` bloğu (sözleşme: handsUp 3–5 sn, lying 5–30 sn, sendImage): yanlış tür ya da aralık dışı 422 olur.
+    """`safety` bloğu (sözleşme: handsUp 3–5 sn, lying 5–30 sn, phone 10–600 sn, sendImage): yanlış tür ya da aralık dışı 422 olur.
     Eksik alanlar varsayılana düşer; `bool("false")` gibi sessiz dönüşümlere izin verilmez."""
     def bad(msg: str) -> HTTPException:
         return HTTPException(422, f"Güvenlik ayarı geçersiz: {msg}")

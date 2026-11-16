@@ -2,7 +2,7 @@
 alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en çok `MAX_CLIPS`). Yangın/duman alarmında ayrıca
 çizimsiz alarm karesi alarm-images/<id>.raw.jpg (kayıtta alan yok; resimle birlikte silinir, yalnız zor örnek için).
 
-Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
+Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"phone"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
 falseAlarm}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
 yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: kayıt alınamadı (görüntü yok, kuyruk dolu,

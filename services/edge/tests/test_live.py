@@ -679,6 +679,60 @@ def test_safety_alarm_reaches_store_status_and_queue(client: TestClient, monkeyp
     assert "GIZLI" not in client.get("/api/v1/live/notify").text
 
 
+def test_safety_phone_range_validated_in_turkish(client: TestClient) -> None:
+    body = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    for sec in (5, 9.9, 601):
+        r = client.post("/api/v1/live/profiles", json={**body, "safety": {"phone": {"enabled": True, "seconds": sec}}})
+        assert r.status_code == 422, r.text
+        assert "Telefon kullanımı süresi 10–600 sn arasında bir sayı olmalı." in r.json()["detail"]
+    for sec in (10, 60, 600):
+        r = client.post("/api/v1/live/profiles", json={**body, "name": f"T{sec}",
+                                                       "safety": {"phone": {"enabled": True, "seconds": sec}}})
+        assert r.status_code == 201 and r.json()["safety"]["phone"]["seconds"] == sec
+    r = client.put(f"/api/v1/live/profiles/{body['id']}", json={**body, "safety": {"phone": {"seconds": 5}}})
+    assert r.status_code == 422 and "Telefon kullanımı" in r.json()["detail"]
+
+
+def test_phone_alarm_reaches_store_with_title_and_type_filter(client: TestClient) -> None:
+    import httpx
+
+    from bantvision.core.safety import SafetyAlarm
+
+    texts: list[str] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("sendMessage"):
+            texts.append(json.loads(request.content)["text"])
+        return httpx.Response(200, json={"ok": True})
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    mgr.notifier._client = httpx.Client(transport=httpx.MockTransport(telegram))
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 1, (0, 0, 1, 1), 0.0, 3.0)], [], None)
+    mgr.on_safety(s, [SafetyAlarm("phone", 2, (0, 0, 1, 1), 0.0, 60.0)], [], None)
+    mgr.notifier.flush()
+    phone = client.get("/api/v1/live/alarms", params={"type": "phone"}).json()
+    assert len(phone) == 1 and phone[0]["type"] == "phone" and phone[0]["camera"] == "Tezgah"
+    assert phone[0]["endedAt"] is None and phone[0]["notify"] in ("queued", "sent")
+    assert any(t.startswith("🚨 TELEFON KULLANIMI — Tezgah") for t in texts)
+    assert len(client.get("/api/v1/live/alarms").json()) == 2
+
+
+def test_phone_alarm_cooldown_per_camera_and_kind(client: TestClient) -> None:
+    from bantvision.core.safety import SafetyAlarm
+
+    mgr, s = client.app.state.live, _fake_safety_session()
+    _mock_telegram(client)
+    client.put("/api/v1/live/notify", json={"enabled": True, "chatId": "-1", "token": "1:T"})
+    mgr.on_safety(s, [SafetyAlarm("phone", 1, (0, 0, 1, 1), 0.0, 60.0)], [], None)
+    mgr.on_safety(s, [SafetyAlarm("phone", 2, (0, 0, 1, 1), 5.0, 65.0)], [], None)
+    mgr.on_safety(s, [SafetyAlarm("hands_up", 3, (0, 0, 1, 1), 5.0, 8.0)], [], None)
+    by = {(a["type"], a["notify"]) for a in client.get("/api/v1/live/alarms").json()}
+    notes = [a["notify"] for a in client.get("/api/v1/live/alarms", params={"type": "phone"}).json()]
+    assert sorted(notes) == ["queued", "suppressed"] or sorted(notes) == ["sent", "suppressed"]
+    assert ("hands_up", "suppressed") not in by and any(t == "hands_up" for t, _ in by)
+
+
 def test_safety_alarm_with_image_is_stored_and_sent_as_photo(client: TestClient,
                                                              monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
