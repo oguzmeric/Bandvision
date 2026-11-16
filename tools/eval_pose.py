@@ -19,6 +19,10 @@ yazılır. 1 saatten kısa bir kamera sonucu KALDI yapar ("yetersiz süre: <kame
 kameralar arasında toplanmaz. Tek video kipinde video en az 1 saat olmalı. Her kaydın etiket/profil/video girdisi hiçbir
 video işlenmeden önce denetlenir.
 
+Tür kapısı: her tür en az 20 etiket ve %95 yakalama ister. Kullanılan profillerin HİÇBİRİNDE kuralı açık olmayan ve
+etiketi de olmayan tür "ölçülmedi" yazılır ve kapıya girmez (ör. yalnız telefon ölçümü: profillerde eller yukarı ve
+yerde yatma kapalı; ≥ 20 telefon etiketi, yani birkaç kayıt). Kuralı açık ama etiketsiz tür KALDI yapar.
+
 Profil: güvenlik (`countMode = "safety"`) profili JSON'u; web panelinde kameranın kayıtlı ayarı
 (<ANALYZER_DATA_DIR>/live/camera_profiles.json içindeki ilgili kaydın kendisi) ya da GET /api/v1/live/sessions/{id}
 yanıtı (içindeki "profile" alınır). Bu araç Python/web yolunu ölçer: video canlıdaki gibi `Pipeline` ile işlenir, yalnızca
@@ -45,7 +49,6 @@ MAX_FALSE_PER_8H = 1.0
 TOLERANCE_S = 2.0
 EVENT_EXTRA_S = 10.0            # `end` yokken olay, yakalama penceresinin bitiminden bu kadar daha sürer
 KINDS = ("hands_up", "lying", "phone")
-OPTIONAL_KINDS = ("phone",)     # etiketi yoksa ölçülmemiş sayılır, kapıyı etkilemez (eski ölçüm kayıtları bozulmaz)
 NAMES = {"hands_up": "Eller yukarı", "lying": "Yerde yatan kişi", "phone": "Telefon kullanımı"}
 LABEL_FORMAT = '[{"t": saniye, "type": "hands_up"|"lying"|"phone", "end": saniye (isteğe bağlı)}]'
 MANIFEST_FORMAT = '[{"video": "yol", "labels": "yol", "profile": "yol", "camera": "ad (isteğe bağlı)"}]'
@@ -92,9 +95,12 @@ def match_pose(labels: list[dict], alarms: list[tuple[float, str]], seconds: dic
 
 
 def aggregate(parts: list[tuple[str, dict]]) -> dict:
-    """Kayıtların `match_pose` sonuçlarını (kamera adı, sonuç + `hours`) birleştirir: yakalama ve tekrar tüm kayıtlardan
-    toplanır; yanlış alarm ve saat KAMERA BAŞINA toplanır (`cameras`, ilk görülme sırasıyla)."""
+    """Kayıtların `match_pose` sonuçlarını (kamera adı, sonuç + `hours` + `enabled`) birleştirir: yakalama ve tekrar tüm
+    kayıtlardan toplanır; yanlış alarm ve saat KAMERA BAŞINA toplanır (`cameras`, ilk görülme sırasıyla); açık kurallar
+    (`enabled`) birleşimdir (en az bir profilde açık olan tür)."""
     r: dict = {**{k: {"labels": 0, "caught": 0} for k in KINDS}, "false": 0, "repeat": 0, "hours": 0.0, "cameras": {}}
+    on = {k for _, p in parts for k in p.get("enabled", KINDS)}
+    r["enabled"] = [k for k in KINDS if k in on]
     for camera, p in parts:
         for kind in KINDS:
             r[kind]["labels"] += p[kind]["labels"]
@@ -228,9 +234,18 @@ def read_manifest(path: str) -> list[dict[str, str]]:
     return check_manifest(data, p.resolve().parent)
 
 
+def _rules(profile: Any) -> list[tuple[str, Any]]:
+    sf = profile.safety
+    return [("hands_up", sf.handsUp), ("lying", sf.lying), ("phone", sf.phone)]
+
+
+def enabled_kinds(profile: Any) -> list[str]:
+    """Profilde kuralı açık türler (KINDS sırasıyla)."""
+    return [kind for kind, rule in _rules(profile) if rule.enabled]
+
+
 def warn_disabled_rules(profile: Any, labels: list[dict], prefix: str = "") -> None:
-    for kind, rule in (("hands_up", profile.safety.handsUp), ("lying", profile.safety.lying),
-                       ("phone", profile.safety.phone)):
+    for kind, rule in _rules(profile):
         if not rule.enabled and any(lab["type"] == kind for lab in labels):
             print(f"UYARI: {prefix}profilde {NAMES[kind]} kuralı kapalı; bu türdeki etiketler yakalanamaz.",
                   file=sys.stderr)
@@ -260,6 +275,7 @@ def evaluate_manifest(entries: list[dict[str, str]], every: int) -> dict:
             raise InputError(f"Manifest {i}. kayıt ({e['name']}): {err}") from err
         r = match_pose(labels, alarms, seconds)
         r["hours"] = hours
+        r["enabled"] = enabled_kinds(profile)
         parts.append((e["camera"], r))
     return aggregate(parts)
 
@@ -296,11 +312,14 @@ def report_cameras(r: dict) -> bool:
 
 def report(r: dict) -> bool:
     """Sonucu Türkçe yazar; kabul ölçütleri tutuyorsa True. `r` kamera tablosu (`cameras`, manifest) taşıyorsa yanlış
-    alarm kamera başına sınanır; taşımıyorsa (tek video) videonun tamamı tek kameradır."""
+    alarm kamera başına sınanır; taşımıyorsa (tek video) videonun tamamı tek kameradır. Kullanılan profillerin hiçbirinde
+    açık olmayan (`enabled` dışı) ve etiketi olmayan tür "ölçülmedi" yazılır, kapıya girmez; `enabled` yoksa her tür
+    sınanır."""
     ok = True
+    enabled = set(r.get("enabled", KINDS))
     for kind in KINDS:
         n, c = r[kind]["labels"], r[kind]["caught"]
-        if n == 0 and kind in OPTIONAL_KINDS:
+        if n == 0 and kind not in enabled:
             print(f"{NAMES[kind]}: etiket yok (ölçülmedi)")
             continue
         enough = n >= MIN_LABELS
@@ -333,6 +352,7 @@ def evaluate_single(a: argparse.Namespace, every: int) -> dict:
     alarms, hours, seconds = run(a.video, profile, every)
     r = match_pose(labels, alarms, seconds)
     r["hours"] = hours
+    r["enabled"] = enabled_kinds(profile)
     return r
 
 
