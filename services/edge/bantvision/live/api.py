@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import Receive, Scope, Send
 
 from ..core import Profile, devices
+from ..core.detector import USER_CLASSES
 from ..core.fire_model import FireModelMissing
 from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
@@ -577,10 +578,11 @@ class LiveManager:
     WATCH_RETRY_MAX: ClassVar[int] = 360                # en çok 30 dakika
 
     _TITLES: ClassVar[dict[str, str]] = {
-        "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "phone": "🚨 TELEFON KULLANIMI", "test": "🧪 DENEME ALARMI",
-        "fire": "🔥 YANGIN", "smoke": "💨 DUMAN"}
+        "hands_up": "🚨 ELLER YUKARI", "lying": "🚨 YERDE YATAN KİŞİ", "phone": "🚨 TELEFON KULLANIMI",
+        "test": "🧪 DENEME ALARMI", "fire": "🔥 YANGIN", "smoke": "💨 DUMAN"}
     # alarm türü → onu üreten yöntem (uçuştaki alarm: oturum o yöntemden çıktıysa kayıt hemen kapanır)
-    _MODE_OF: ClassVar[dict[str, str]] = {"hands_up": "safety", "lying": "safety", "phone": "safety", "fire": "fire", "smoke": "fire"}
+    _MODE_OF: ClassVar[dict[str, str]] = {
+        "hands_up": "safety", "lying": "safety", "phone": "safety", "fire": "fire", "smoke": "fire"}
     _CHECK_LINE: ClassVar[str] = "Görüntüyü hemen kontrol edin."
 
     def _text(self, kind: str, camera: str, ts: float) -> str:
@@ -1906,9 +1908,18 @@ def _check_fire(fb: Any, mode: Any) -> None:
         raise bad("En az bir kural açık olmalı.")
 
 
+def _check_classes(classes: Any) -> None:
+    """`detectClasses` yalnız kullanıcı sınıflarından (core/detector.py `USER_CLASSES`, video `--classes` ile aynı küme);
+    "cell phone" telefon kuralının iç aramasıdır, sayım sınıfı olarak seçilemez."""
+    for c in classes if isinstance(classes, list) else []:
+        if str(c) not in USER_CLASSES:
+            raise HTTPException(422, f"Tanıma sınıfı geçersiz: {c}.")
+
+
 def _profile_from(body: dict[str, Any]) -> Profile:
     _check_safety(body.get("safety"))
     _check_fire(body.get("fire"), body.get("countMode"))
+    _check_classes(body.get("detectClasses"))
     try:
         p = Profile.from_dict(body)
     except (KeyError, TypeError, ValueError) as e:

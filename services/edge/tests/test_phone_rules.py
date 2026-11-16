@@ -2,10 +2,19 @@
 (tasarım docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md "Algılama (çekirdek)")."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from fakes_safety import FakePhoneDetector, phone_kp
 
-from bantvision.core.phone_rules import PHONE_CONF, PHONE_END_S, PhoneEvidence, find_phones, phone_hit
+from bantvision.core.phone_rules import (
+    PHONE_CONF,
+    PHONE_END_S,
+    PhoneEvidence,
+    find_phones,
+    phone_hit,
+    phone_possible,
+)
 
 FRAME = np.zeros((300, 400, 3), np.uint8)
 
@@ -68,10 +77,27 @@ def test_phone_hit_uses_only_visible_wrist_and_head() -> None:
     assert phone_hit(_phone_at(290, 260), kp2) is None
 
 
+def test_phone_possible_matches_when_phone_hit_can_decide() -> None:
+    """Aramadan önce eklemlerden: ölçek ve en az bir görünen bilek/baş varsa True (o zaman `phone_hit` None değildir)."""
+    kp = phone_kp()
+    assert phone_possible(kp) is True
+    no_anchor = kp.copy()
+    no_anchor[[0, 1, 2, 3, 4, 9, 10], 2] = 0.0                         # bilek ve baş yok
+    assert phone_possible(no_anchor) is False
+    no_scale = kp.copy()
+    no_scale[[5, 6], 2] = 0.0                                          # omuzlar yok: ölçek yok
+    assert phone_possible(no_scale) is False
+    one_wrist = kp.copy()
+    one_wrist[[0, 1, 2, 3, 4, 9], 2] = 0.0                             # yalnız sağ bilek
+    assert phone_possible(one_wrist) is True
+    for k in (kp, no_anchor, no_scale, one_wrist):
+        assert (phone_hit([], k) is not None) == phone_possible(k)
+
+
 # ---------------------------------------------------------------- kanıt penceresi
 
-def _drive(ev: PhoneEvidence, start: float, stop: float, hit_at: object, seconds: float = 60.0,
-           observe_from: float = 0.0, tid: int = 1, step: float = 0.5) -> list[float]:
+def _drive(ev: PhoneEvidence, start: float, stop: float, hit_at: Callable[[float], bool | None],
+           seconds: float = 60.0, observe_from: float = 0.0, tid: int = 1, step: float = 0.5) -> list[float]:
     """`start`–`stop` arası `step` adımla: gözlem (`observe_from`'dan itibaren) ve karar; `hit_at(ts)` → bool | None.
     Alarm doğan zamanlar döner."""
     fired = []
@@ -95,11 +121,24 @@ def test_evidence_fires_when_enough_slots_have_hits() -> None:
     assert fired == [60.0]                                             # tam bir kez, gözlem 60 sn'ye ulaşınca
     (tid, kind, dur, was_fired), = ev.active()
     assert (tid, kind, was_fired) == (1, "phone", True)
-    assert dur == 70.0                                                 # ilk isabetten (0) beri
+    assert dur == 70.0                                                 # ilk isabetten (0) son isabete (70)
+
+
+def test_active_duration_is_last_hit_minus_start_and_frozen_during_misses() -> None:
+    """Süre = son isabet − ilk isabet (eller yukarıdaki son olumlu kare gibi): ıskalar ve kararsız kareler süreyi
+    uzatmaz, bu yüzden video işinde alarm bitişi son isabete oturur (PHONE_END_S kadar geç değil)."""
+    ev = PhoneEvidence()
+    for k in range(29):                                                # 0–14 sn; isabet 2–6 sn, 10 sn'den sonra karar yok
+        ts = k * 0.5
+        ev.observe(1, ts)
+        ev.update(1, ts, (2.0 <= ts <= 6.0) if ts < 10.0 else None, 60.0)
+        if ts >= 6.0:
+            assert ev.active()[0][2] == 4.0                            # 6 − 2, ıskada ve None'da donuk
+    assert ev.started(1) == 2.0 and ev.started(2) is None
 
 
 def test_evidence_does_not_fire_below_slot_ratio() -> None:
-    def hits_in(slots: set[int]) -> object:
+    def hits_in(slots: set[int]) -> Callable[[float], bool | None]:
         return lambda ts: ts % 5.0 == 0.0 and ts < 60.0 and int(ts // 5) in slots
 
     # Dilimler dağınık: isabetsiz aralık en çok 10 sn (< PHONE_END_S), bölüm kopmaz.
@@ -191,3 +230,13 @@ def test_slot_ratio_window_edges() -> None:
     assert _slot_ratio([-1e-12], 60.0 - 1e-12, 60.0) == 1 / 12          # kayan nokta gürültüsü dilim −1 üretmez
     assert _slot_ratio([10.0, 20.0], 12.0, 12.0) == 1 / 3               # 12 sn: ⌈12/5⌉ = 3 dilim; 20 pencere dışı
     assert _slot_ratio([-0.5], 12.0, 12.0) == 0.0                       # pencere dışı sayılmaz
+
+
+def test_slot_ratio_uses_equal_slots_when_seconds_is_not_a_multiple_of_slot() -> None:
+    from bantvision.core.phone_rules import _slot_ratio
+
+    # 11 sn: 3 eşit dilim (3,67 sn); 5 sn'lik dilimler + 1 sn'lik kısa son dilim değil
+    assert _slot_ratio([0.0, 4.0], 11.0, 11.0) == 2 / 3                 # 4,0 ikinci dilimde (5 sn dilimde ilkindeydi)
+    assert _slot_ratio([10.5], 11.0, 11.0) == 1 / 3
+    assert _slot_ratio([11.0], 11.0, 11.0) == 1 / 3                     # pencere sonu son dilimde
+    assert _slot_ratio([0.0, 5.0, 10.0], 15.0, 15.0) == 1.0             # S % 5 == 0: değişmez

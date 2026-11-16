@@ -34,7 +34,7 @@ import cv2
 import numpy as np
 
 from .core import Pipeline, Profile, devices
-from .core.detector import CLASS_IDS, GROUPS, ObjectDetector
+from .core.detector import GROUPS, USER_CLASSES, ObjectDetector
 from .core.fire import FireAnalyzer
 from .core.fire_model import FireDetector, FireModelMissing
 from .core.fire_rules import MAX_FPS as FIRE_MAX_FPS
@@ -76,7 +76,6 @@ SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma
                  "phone": ("Telefon kullanımı", 10.0, 600.0)}   # ad, en az, en çok (sn)
 FIRE_LABELS_TR = {"fire": "Yangın", "smoke": "Duman"}        # alarmlar.csv "tur" sütunu (sözleşme `kind` = çekirdek adı)
 FIRE_RANGES = {"fire": ("Yangın", 2.0, 10.0), "smoke": ("Duman", 5.0, 30.0)}   # ad, en az, en çok (sn)
-USER_CLASSES = [c for c in CLASS_IDS if c != "cell phone"]    # "cell phone" yalnız telefon kuralının iç araması
 MAX_ALARM_IMAGES = 50                                       # alarm resmi sınırı (sonrakiler resimsiz listelenir)
 MAX_ALARMS = 500                                            # listedeki alarm sınırı (`count` gerçek toplam kalır)
 ALARM_IMAGE_WIDTH = 640

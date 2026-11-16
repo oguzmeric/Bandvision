@@ -149,6 +149,13 @@ class OptionsIn(_Strict):
     fire: FireIn | None = None
 
 
+def _phone_on(rule: PhoneIn | None) -> bool:
+    """Telefon kuralı açık mı: varsayılanı kapalı olduğundan `enabled: true` ya da `enabled` verilmeden `seconds` verilmesi
+    açar; `{}`, `enabled: false` ya da hiç verilmemesi kapalıdır. jobs.py (`--phone` / `--no-phone`) ve panelin özeti
+    (apps/dashboard/src/lib/safetyAlarms.mjs `rulesSummary`) aynı kuralı uygular."""
+    return rule is not None and (rule.enabled is True or (rule.enabled is None and rule.seconds is not None))
+
+
 def refuse_mixed_options(opts: OptionsIn) -> None:
     """Alarm analizleri (güvenlik, yangın/duman) ile sayım ayarları birbirine karışmaz: sessizce yok sayılmaz, iş açılmadan
     422 verilir."""
@@ -170,8 +177,7 @@ def refuse_mixed_options(opts: OptionsIn) -> None:
     if any(getattr(opts, name) is not None for name in COUNTING_OPTIONS):
         raise HTTPException(422, SAFETY_WITH_COUNTING)
     sf = opts.safety or SafetyIn()
-    phone_on = sf.phone is not None and sf.phone.enabled is not False and (sf.phone.enabled or sf.phone.seconds is not None)
-    if all(r is not None and r.enabled is False for r in (sf.handsUp, sf.lying)) and not phone_on:   # telefon varsayılanı kapalı
+    if all(r is not None and r.enabled is False for r in (sf.handsUp, sf.lying)) and not _phone_on(sf.phone):
         raise HTTPException(422, NO_RULE_ON)
 
 

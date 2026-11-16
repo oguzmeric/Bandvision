@@ -444,7 +444,7 @@ class LiveSession:
         since = self._last_healthy if self._last_healthy is not None else self._watch_start
         return {
             "active": [{"type": k, "trackId": tid, "seconds": round(sec, 1)}
-                       for tid, k, sec, _f in (self._pipe.safety.episodes.active() if self._pipe.safety else [])],
+                       for tid, k, sec, _f in (self._pipe.safety.active() if self._pipe.safety else [])],
             "lastAlarmAt": self._last_alarm_at,
             "model": model, "modelError": model_error or None,          # "loading" | "ready" | "error"
             "detector": det, "detectorError": det_error or None,

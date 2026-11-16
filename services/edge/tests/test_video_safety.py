@@ -372,9 +372,9 @@ def test_marked_video_and_progress_json(fakes: None, src: pathlib.Path, tmp_path
 PHONE_NEAR_WRIST = (16.0, 242.0, 36.0, 262.0, 0.4)   # kırpıntıya göre; phone_kp sol bileğinin (290, 260) yanı (test_safety.py ile aynı)
 
 
-@pytest.fixture
-def phone_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kişi 2 sn'den sonra bileğinin yanında telefon tutuyor; poz ayakta, eller göğüste (eller yukarı/yatma değil)."""
+def install_phone_fakes(monkeypatch: pytest.MonkeyPatch, until: float = float("inf")) -> None:
+    """Kişi 2 sn'den (`until`'e dek) bileğinin yanında telefon tutuyor; poz ayakta, eller göğüste (eller yukarı/yatma
+    değil)."""
     orig = video.read_frames
 
     def spy(info: Any, start: float = 0.0, end: float | None = None, step: int = 1) -> Any:
@@ -389,7 +389,7 @@ def phone_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
             super().__init__([PERSON])
 
         def detect(self, crop: np.ndarray, classes: list[str], conf: float = 0.15, iou: float = 0.45) -> list[object]:
-            self.phones = [PHONE_NEAR_WRIST] if Clock.t >= 2.0 else []
+            self.phones = [PHONE_NEAR_WRIST] if 2.0 <= Clock.t < until else []
             return super().detect(crop, classes, conf)
 
     class Pose:
@@ -402,6 +402,31 @@ def phone_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(video, "read_frames", spy)
     monkeypatch.setattr(video, "ObjectDetector", Detector)
     monkeypatch.setattr(video, "PoseEstimator", Pose)
+
+
+@pytest.fixture
+def phone_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_phone_fakes(monkeypatch)
+
+
+def make_video(path: pathlib.Path, seconds: float) -> pathlib.Path:
+    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
+    for _ in range(int(FPS * seconds)):
+        w.write(np.full((H, W, 3), 40, np.uint8))
+    w.release()
+    return path
+
+
+def test_phone_alarm_ends_at_last_sighting_not_end_s_later(monkeypatch: pytest.MonkeyPatch,
+                                                           tmp_path: pathlib.Path) -> None:
+    """Telefon 2–10 sn görünür, 40 sn video, kural 10 sn: bitiş son isabette (± bir arama aralığı), PHONE_END_S (15 sn)
+    sonra değil; başlangıç ilk isabet."""
+    install_phone_fakes(monkeypatch, until=10.0)
+    s, _ = run(make_video(tmp_path / "kirk.mp4", 40), tmp_path, "--no-hands-up", "--no-lying", "--phone", "10")
+    assert s["count"] == 1
+    a = s["alarms"][0]
+    assert a["startS"] == pytest.approx(2.0, abs=0.7)
+    assert a["endS"] == pytest.approx(10.0, abs=0.6)
 
 
 def test_phone_alone_is_accepted_and_alarm_in_csv_and_summary(phone_fakes: None, tmp_path: pathlib.Path) -> None:

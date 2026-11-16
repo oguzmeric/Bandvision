@@ -718,6 +718,42 @@ def test_phone_alarm_reaches_store_with_title_and_type_filter(client: TestClient
     assert len(client.get("/api/v1/live/alarms").json()) == 2
 
 
+def test_live_status_shows_running_phone_episode(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Canlı durumdaki `safety.active` telefon bölümünü de gösterir (yalnız eller yukarı / yatma değil)."""
+    from fakes_safety import FakePhoneDetector, FakePose, phone_kp
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    mgr = client.app.state.live
+    # kişi kutusu (280, 80, 360, 440); telefon kırpıntıda sol bileğin (290, 260) üstünde
+    mgr.detector = FakePhoneDetector([(280, 80, 360, 440)], phones=[(16.0, 242.0, 36.0, 262.0, 0.4)])
+    mgr.pose = FakePose(phone_kp())
+    src = client.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                          name="Tezgah")).json()
+    prof = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
+    prof = client.put(f"/api/v1/live/profiles/{prof['id']}", json={**prof, "safety": {
+        **prof["safety"], "handsUp": {"enabled": False, "seconds": 3}, "lying": {"enabled": False, "seconds": 10},
+        "phone": {"enabled": True, "seconds": 60}}}).json()
+    s = client.post("/api/v1/live/sessions", json={"sourceId": src["id"], "profileId": prof["id"]}).json()
+    active = wait_for(lambda: client.get(f"/api/v1/live/sessions/{s['id']}").json()["safety"]["active"], timeout=30)
+    assert active[0]["type"] == "phone" and isinstance(active[0]["trackId"], int) and active[0]["seconds"] >= 0
+
+
+def test_detect_classes_outside_user_classes_are_rejected_in_turkish(client: TestClient) -> None:
+    """"cell phone" yalnız telefon kuralının iç araması: profilde tanıma sınıfı olarak kabul edilmez (video --classes ile
+    aynı küme, core/detector.py `USER_CLASSES`)."""
+    from bantvision.core.detector import USER_CLASSES
+
+    assert "cell phone" not in USER_CLASSES and "person" in USER_CLASSES
+    body = client.post("/api/v1/live/profiles", json={"preset": "people"}).json()
+    for bad in ("cell phone", "unicorn"):
+        r = client.post("/api/v1/live/profiles", json={**body, "name": "X", "detectClasses": ["person", bad]})
+        assert r.status_code == 422 and r.json()["detail"] == f"Tanıma sınıfı geçersiz: {bad}."
+        r = client.put(f"/api/v1/live/profiles/{body['id']}", json={**body, "detectClasses": [bad]})
+        assert r.status_code == 422 and r.json()["detail"] == f"Tanıma sınıfı geçersiz: {bad}."
+    ok = client.post("/api/v1/live/profiles", json={**body, "name": "Araç", "detectClasses": ["car", "truck"]})
+    assert ok.status_code == 201 and ok.json()["detectClasses"] == ["car", "truck"]
+
+
 def test_phone_alarm_cooldown_per_camera_and_kind(client: TestClient) -> None:
     from bantvision.core.safety import SafetyAlarm
 
@@ -730,7 +766,7 @@ def test_phone_alarm_cooldown_per_camera_and_kind(client: TestClient) -> None:
     by = {(a["type"], a["notify"]) for a in client.get("/api/v1/live/alarms").json()}
     notes = [a["notify"] for a in client.get("/api/v1/live/alarms", params={"type": "phone"}).json()]
     assert sorted(notes) == ["queued", "suppressed"] or sorted(notes) == ["sent", "suppressed"]
-    assert ("hands_up", "suppressed") not in by and any(t == "hands_up" for t, _ in by)
+    assert [n for t, n in by if t == "hands_up"] in (["queued"], ["sent"])    # telefonun bekleme süresi ona dokunmaz
 
 
 def test_safety_alarm_with_image_is_stored_and_sent_as_photo(client: TestClient,

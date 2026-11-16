@@ -6,6 +6,8 @@ merkezi görünen bir bileğe ya da başa `PHONE_NEAR · ölçek` uzaklıktan ya
 olduğundan (elinde telefon tutan kişide karelerin ~%25'i) eller yukarı gibi "sürekli doğru + kısa tolerans" yerine
 dilimli kanıt penceresi kullanılır (`PhoneEvidence`): kural süresi S, `PHONE_SLOT_S`'lik dilimlere bölünür; iz son S
 saniye boyunca gözlenmişse ve dilimlerin en az `PHONE_SLOT_RATIO` kadarında isabet varsa bölüm başına bir alarm.
+Ek yük: kamera başına kare başına en çok `PHONE_MAX_PER_FRAME` kırpıntı araması (en uzun süredir aranmamış izlere), iz
+başına en çok `PHONE_FPS`/sn; eklemlerden karar çıkamayacaksa (`phone_possible` yanlış) arama hiç yapılmaz.
 Sabitler başlangıç değerleridir; tools/eval_pose.py ile kullanıcı kayıtlarında kalibre edilir.
 """
 from __future__ import annotations
@@ -22,6 +24,7 @@ PHONE_CONF = 0.25                   # kırpıntıda telefon skoru eşiği
 PHONE_NEAR = 0.6                    # telefon merkezi bilek/başa en çok bu kadar (× ölçek) uzak
 PHONE_PAD = 0.2                     # kişi kutusu payı (her yönde, kutu boyunun oranı)
 PHONE_FPS = 2.0                     # iz başına en çok saniyede bu kadar arama
+PHONE_MAX_PER_FRAME = 2             # kare başına (çözümleyici çağrısı) en çok bu kadar kırpıntı araması
 PHONE_SLOT_S = 5.0                  # kanıt penceresi dilim boyu (sn)
 PHONE_SLOT_RATIO = 0.6              # alarm için isabetli dilim oranı
 PHONE_END_S = 15.0                  # isabetsiz bu kadar sn (ya da iz kaybı) bölümü bitirir
@@ -52,9 +55,8 @@ def find_phones(detector: Any, bgr: np.ndarray, box_px: tuple[float, float, floa
     return out
 
 
-def phone_hit(phones: list[Phone], kp: np.ndarray) -> bool | None:
-    """Telefon merkezi görünen bir bileğe ya da başa `PHONE_NEAR · ölçek` uzaklık içinde mi. Ölçek yoksa ya da hiçbir
-    bilek/baş görünmüyorsa None (bu arama sayılmaz); telefon yoksa ya da hepsi uzaksa False."""
+def _anchors(kp: np.ndarray) -> tuple[float, list[np.ndarray]] | None:
+    """(ölçek, görünen bilekler ve baş); ölçek yoksa ya da hiçbiri görünmüyorsa None."""
     s = scale(kp)
     if s is None:
         return None
@@ -62,8 +64,22 @@ def phone_hit(phones: list[Phone], kp: np.ndarray) -> bool | None:
     hd = head(kp)
     if hd is not None:
         anchors.append(hd)
-    if not anchors:
+    return (s, anchors) if anchors else None
+
+
+def phone_possible(kp: np.ndarray) -> bool:
+    """Bu eklemlerle `phone_hit` karar verebilir mi (ölçek ve en az bir görünen bilek/baş). Yanlışsa kırpıntı araması
+    yapılmaz: sonuç ne olursa olsun karar çıkmazdı."""
+    return _anchors(kp) is not None
+
+
+def phone_hit(phones: list[Phone], kp: np.ndarray) -> bool | None:
+    """Telefon merkezi görünen bir bileğe ya da başa `PHONE_NEAR · ölçek` uzaklık içinde mi. Ölçek yoksa ya da hiçbir
+    bilek/baş görünmüyorsa None (bu arama sayılmaz); telefon yoksa ya da hepsi uzaksa False."""
+    a = _anchors(kp)
+    if a is None:
         return None
+    s, anchors = a
     limit = PHONE_NEAR * s
     for x1, y1, x2, y2, _score in phones:
         c = np.array(((x1 + x2) / 2, (y1 + y2) / 2))
@@ -75,18 +91,20 @@ def phone_hit(phones: list[Phone], kp: np.ndarray) -> bool | None:
 @dataclass
 class _PhoneEpisode:
     start: float                                    # ilk isabet
-    last_hit: float
-    last_seen: float                                # son karar (her update); süre = last_seen − start
+    last_hit: float                                 # süre = last_hit − start (son olumlu karar, EpisodeTracker gibi)
+    last_seen: float                                # son karar (her update); zaman geri gitti mi denetimi
     hits: list[float] = field(default_factory=list)  # son `seconds` içindeki isabet zamanları
     fired: bool = False
 
 
 def _slot_ratio(hits: list[float], ts: float, seconds: float) -> float:
-    """[ts − seconds, ts] penceresi n = ⌈seconds / PHONE_SLOT_S⌉ dilime bölünür (dilim i = [ts − seconds + i·SLOT, …),
-    pencerenin sonundaki isabet son dilime); en az bir isabeti olan dilim oranı."""
+    """[ts − seconds, ts] penceresi n = ⌈seconds / PHONE_SLOT_S⌉ EŞİT dilime bölünür (dilim boyu seconds / n; S, 5'in
+    katıysa tam `PHONE_SLOT_S`; dilim i = [ts − seconds + i·boy, …), pencerenin sonundaki isabet son dilime); en az bir
+    isabeti olan dilim oranı. Eşit dilim: S = 11'de 1 sn'lik kısa son dilim oranı bozmaz."""
     n = max(1, math.ceil(seconds / PHONE_SLOT_S - 1e-9))
+    width = seconds / n
     lo = ts - seconds
-    slots = {min(n - 1, max(0, int((h - lo) // PHONE_SLOT_S))) for h in hits if lo - 1e-9 <= h <= ts + 1e-9}
+    slots = {min(n - 1, max(0, int((h - lo) // width))) for h in hits if lo - 1e-9 <= h <= ts + 1e-9}
     return len(slots) / n
 
 
@@ -154,5 +172,12 @@ class PhoneEvidence:
         self._pending_end, self._eps, self._obs = [], {}, {}
         return ended
 
+    def started(self, track_id: int) -> float | None:
+        """İzin süren bölümünün başlangıcı (ilk isabet); bölüm yoksa None. Alarmın `started`'ı buradan alınır
+        (alarm ıska karesinde doğabilir: ts − süre başlangıcı vermez)."""
+        ep = self._eps.get(track_id)
+        return ep.start if ep is not None else None
+
     def active(self) -> list[tuple[int, str, float, bool]]:
-        return [(tid, KIND, e.last_seen - e.start, e.fired) for tid, e in self._eps.items()]
+        """(iz, "phone", süre, alarm verdi mi); süre = son isabet − ilk isabet (ıskalar ve kararsız kareler uzatmaz)."""
+        return [(tid, KIND, e.last_hit - e.start, e.fired) for tid, e in self._eps.items()]

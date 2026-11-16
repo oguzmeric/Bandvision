@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from fakes_safety import FakeDetector, FakePhoneDetector, FakePose, hands_up_kp, phone_kp
 
 from bantvision.core import Pipeline, Profile
@@ -385,3 +386,121 @@ def test_draw_safety_labels_phone() -> None:
     assert _SAFETY_LABELS["phone"] == "TELEFON"
     r = SafetyResult(active=[(7, "phone", 61.0, True)], boxes={7: (0.4, 0.2, 0.6, 0.9)})
     assert (draw_safety(FRAME.copy(), Profile.jeweler(), r) == np.array(RED, np.uint8)).all(axis=2).any()
+
+
+def test_analyzer_active_includes_phone_and_pose_episodes() -> None:
+    """`SafetyAnalyzer.active()`: eller yukarı/yatma ve telefon bölümleri aynı biçimde (canlı durum bunu okur)."""
+    p = phone_only(10.0)
+    p.safety.handsUp.enabled = True
+    an, _det, pose = make_phone(p)
+    res = feed(an, p, 0, 30)
+    assert any(a[1] == "phone" for a in an.active()) and an.active() == res[-1].active
+    pose.kp = hands_up_kp()                                            # eller yukarı da başlar
+    res = feed(an, p, 30, 40)
+    kinds = {a[1] for a in an.active()}
+    assert kinds == {"phone", "hands_up"} and an.active() == res[-1].active
+
+
+def test_phone_alarm_started_is_episode_start_even_when_firing_frame_is_a_miss() -> None:
+    """Alarm ıska karesinde doğsa da başlangıç ilk isabettir (ts − süre değil: süre son isabette durur)."""
+    p = phone_only(10.0)
+    an, det, _pose = make_phone(p)
+    res = feed(an, p, 0, 10)
+    k0 = next(j for j, r in enumerate(res) if r.tracks)                # ilk arama ve ilk isabet
+    feed(an, p, 10, k0 + 61)                                           # 6 sn telefon elde: iki dilimde de isabet
+    det.phones = []                                                    # sonra hep ıska
+    fired = [(k, a) for k, r in enumerate(feed(an, p, k0 + 61, 150), k0 + 61) for a in r.fired]
+    assert len(fired) == 1
+    k, alarm = fired[0]
+    assert k >= k0 + 100                                               # 10 sn gözlemde, ıska karesinde doğdu
+    assert abs(alarm.started - k0 / 10) < 1e-9                         # ts − süre olsaydı ≈ 4 sn geç
+
+
+FIVE = [(20 + 120 * i, 80, 100 + 120 * i, 440) for i in range(5)]     # yan yana beş kişi
+
+
+def _spy_searches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[float, float]]:
+    """`safety.find_phones` sarılır: her aramanın kişi kutusunun sol üstü (piksel) kaydedilir."""
+    import bantvision.core.safety as safety_mod
+
+    seen: list[tuple[float, float]] = []
+    real = safety_mod.find_phones
+
+    def spy(detector: object, bgr: np.ndarray, box_px: tuple[float, float, float, float]) -> list[object]:
+        seen.append((round(box_px[0]), round(box_px[1])))
+        return real(detector, bgr, box_px)
+
+    monkeypatch.setattr(safety_mod, "find_phones", spy)
+    return seen
+
+
+def test_phone_search_budget_per_frame_and_every_person_is_searched(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bantvision.core.phone_rules import PHONE_FPS, PHONE_MAX_PER_FRAME
+
+    assert PHONE_MAX_PER_FRAME == 2
+    seen = _spy_searches(monkeypatch)
+    p = phone_only(60.0)
+    det, pose = FakePhoneDetector(FIVE, phones=[]), FakePose(phone_kp())
+    an = SafetyAnalyzer(detector=det, pose=pose)
+    per_frame: list[int] = []
+    first = None
+    for k in range(100):                                              # 10 kare/sn, 10 sn
+        before = len(seen)
+        r = an.process(FRAME, p, 10.0, k / 10)
+        per_frame.append(len(seen) - before)
+        if first is None and len(r.tracks) == 5:
+            first = k
+            searched_from = before
+    assert first is not None and max(per_frame) <= PHONE_MAX_PER_FRAME
+    assert det.phone_calls == len(seen)
+    # beş kişi 3 karede (2 + 2 + 1) en az bir kez aranır: hiç aranmamış iz önce gelir
+    assert len({x for x, _ in seen[searched_from:searched_from + 5]}) == 5
+    # her kişi kendi hızında (≤ PHONE_FPS/sn) aranmaya devam eder; bütçe (20/sn) beş kişiye (10/sn) yeter
+    span = (100 - first) / 10
+    for x in {b[0] for b in FIVE}:
+        n = sum(1 for sx, _ in seen if sx == x)
+        assert PHONE_FPS * span - 2 <= n <= PHONE_FPS * span + 1
+
+
+def test_phone_budget_is_shared_fairly_when_people_exceed_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1 kare/sn akışta beş kişi her kare aranmak ister ama kare başına 2: en uzun süredir aranmamış olan önce."""
+    seen = _spy_searches(monkeypatch)
+    p = phone_only(60.0)
+    an = SafetyAnalyzer(detector=FakePhoneDetector(FIVE, phones=[]), pose=FakePose(phone_kp()))
+    counts: list[int] = []
+    for k in range(30):
+        before = len(seen)
+        r = an.process(FRAME, p, 1.0, float(k))
+        counts.append(len(seen) - before)
+        if len(an._phone_last) == 5:                                   # herkes en az bir kez arandıktan sonra:
+            assert max(k - v for v in an._phone_last.values()) <= 2    # kimse 3 kareden uzun beklemez
+    assert max(counts) == 2 and len(r.tracks) == 5 and len(an._phone_last) == 5
+    assert sorted({x for x, _ in seen[-10:]}) == sorted(b[0] for b in FIVE)
+
+
+def test_no_visible_wrist_or_head_makes_no_phone_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _spy_searches(monkeypatch)
+    p = phone_only(10.0)
+    an, det, pose = make_phone(p)
+    kp = phone_kp()
+    kp[[0, 1, 2, 3, 4, 9, 10], 2] = 0.0                                # bilek ve baş yok (ölçek var)
+    pose.kp = kp
+    res = feed(an, p, 0, 50)
+    assert any(r.tracks for r in res) and pose.calls > 0
+    assert seen == [] and det.phone_calls == 0 and an._phone_last == {}
+    pose.kp = phone_kp()                                               # bilekler görünür olunca hemen aranır
+    an.process(FRAME, p, 10.0, 5.0)
+    assert det.phone_calls == 1
+
+
+def test_person_touching_frame_edge_is_phone_searched_and_can_fire() -> None:
+    """Kutu sol kenarda: kırpıntı kareye sınırlanır (çökmez), telefon tam kareye doğru taşınır ve alarm doğar."""
+    p = phone_only(10.0)
+    kp = phone_kp()
+    kp[:, 0] -= 280                                                    # eklemler kutuyla birlikte sola: bilek (10, 260)
+    det = FakePhoneDetector([(0, 80, 80, 440)], phones=[(0.0, 242.0, 20.0, 262.0, 0.4)])   # kırpıntı (0, 8)'den
+    an = SafetyAnalyzer(detector=det, pose=FakePose(kp))
+    fired = [a for r in feed(an, p, 0, 120) for a in r.fired]
+    shapes = [sh for c, sh in zip(det.calls, det.shapes) if c == ["cell phone"]]
+    assert shapes and all(sh[1] == 96 for sh in shapes)                # x 0–96 (sol pay kareye kırpıldı)
+    assert len(fired) == 1 and fired[0].kind == "phone" and fired[0].box[0] < 0.01
