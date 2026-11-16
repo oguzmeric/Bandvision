@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from fakes_safety import FakeDetector, FakePose, hands_up_kp
+from fakes_safety import FakeDetector, FakePhoneDetector, FakePose, hands_up_kp, phone_kp
 
 from bantvision.core import Pipeline, Profile
 from bantvision.core.profile import Roi
@@ -267,3 +267,121 @@ def test_pose_is_skipped_when_both_rules_are_disabled() -> None:
     p.safety.lying.enabled = True                                      # biri açılınca poz yine çalışır
     feed(an, p, 50, 60)
     assert pose.calls > 0
+
+
+# ---------------------------------------------------------------- telefon kullanımı (üçüncü kural)
+
+# BOX (280, 80, 360, 440) kırpıntısı %20 payla (264, 8)'den başlar; phone_kp sol bileği (290, 260) kırpıntıda
+# ≈ (26, 252). FakePhoneDetector telefon kutularını kırpıntıya göre verir.
+PHONE_NEAR_WRIST = (16.0, 242.0, 36.0, 262.0, 0.4)
+
+
+def make_phone(profile: Profile, phones: list[tuple[float, float, float, float, float]] | None = None
+               ) -> tuple[SafetyAnalyzer, FakePhoneDetector, FakePose]:
+    det, pose = FakePhoneDetector([BOX], phones=[PHONE_NEAR_WRIST] if phones is None else phones), FakePose(phone_kp())
+    return SafetyAnalyzer(detector=det, pose=pose), det, pose
+
+
+def phone_only(seconds: float = 10.0) -> Profile:
+    p = Profile.jeweler()
+    p.safety.handsUp.enabled = False
+    p.safety.lying.enabled = False
+    p.safety.phone.enabled = True
+    p.safety.phone.seconds = seconds
+    return p
+
+
+def test_phone_rule_off_by_default_never_searches_crops() -> None:
+    p = Profile.jeweler()
+    assert not p.safety.phone.enabled
+    an, det, pose = make_phone(p)
+    pose.kp = hands_up_kp()
+    res = feed(an, p, 0, 50)
+    assert det.phone_calls == 0 and det.calls == [["person"]] * 50     # kişi tanıma sayısı değişmez (kare başına 1)
+    fired = [a.kind for r in res for a in r.fired]
+    assert fired == ["hands_up"]                                       # mevcut kurallar aynen
+    assert not any(a[1] == "phone" for r in res for a in r.active)
+
+
+def test_phone_only_rule_fires_phone_alarm() -> None:
+    p = phone_only(10.0)
+    an, _det, pose = make_phone(p)
+    res = feed(an, p, 0, 120)                                          # 10 kare/sn, 12 sn
+    fired = [(k, a) for k, r in enumerate(res) for a in r.fired]
+    assert len(fired) == 1 and fired[0][1].kind == "phone" and pose.calls > 0
+    k, alarm = fired[0]
+    first = next(j for j, r in enumerate(res) if r.tracks)             # onaylı iz: ilk arama ve ilk isabet
+    assert alarm.ts == k / 10 and 10.0 <= alarm.ts <= 11.0             # 10 sn gözlem (+ onay gecikmesi)
+    assert abs(alarm.started - first / 10) < 1e-9                       # başlangıç = ilk isabet
+    assert alarm.track_id == res[-1].tracks[0].id
+    assert any(a[1] == "phone" and a[3] for a in res[-1].active)
+    x1, y1, x2, y2 = alarm.box
+    assert abs(x1 - 280 / 640) < 0.02 and abs(y1 - 80 / 480) < 0.02
+    assert abs(x2 - 360 / 640) < 0.02 and abs(y2 - 440 / 480) < 0.02
+
+
+def test_phone_rule_without_phone_never_fires() -> None:
+    p = phone_only(10.0)
+    an, det, _pose = make_phone(p, phones=[])
+    res = feed(an, p, 0, 150)
+    assert det.phone_calls > 0 and not any(r.fired or r.active for r in res)
+
+
+def test_phone_far_from_hands_and_head_never_fires() -> None:
+    p = phone_only(10.0)
+    an, _det, _pose = make_phone(p, phones=[(60.0, 400.0, 76.0, 412.0, 0.9)])   # dizde (≈ 332, 414)
+    assert not any(r.fired for r in feed(an, p, 0, 150))
+
+
+def test_phone_search_rate_limited_to_phone_fps() -> None:
+    p = phone_only(60.0)
+    an, det, _pose = make_phone(p)
+    feed(an, p, 0, 50)                                                 # 10 kare/sn 5 sn
+    assert 9 <= det.phone_calls <= 11
+    assert all(c in (["person"], ["cell phone"]) for c in det.calls)
+
+
+def test_phone_search_resumes_after_time_goes_backwards() -> None:
+    p = phone_only(60.0)
+    an, det, _pose = make_phone(p)
+    feed(an, p, 0, 20)
+    before = det.phone_calls
+    an.process(FRAME, p, 10.0, 0.0)                                    # video başa sardı
+    assert det.phone_calls == before + 1
+
+
+def test_reset_and_end_all_report_fired_phone_episode() -> None:
+    p = phone_only(10.0)
+    an, _det, _pose = make_phone(p)
+    tid = next(a.track_id for r in feed(an, p, 0, 120) for a in r.fired)
+    an.reset()
+    assert an._phone_last == {}                                        # arama zamanları temizlendi
+    r = an.process(FRAME, p, 10.0, 12.0)
+    assert r.ended == [(tid, "phone", True)] and r.active == []
+    assert an.process(FRAME, p, 10.0, 12.1).ended == []                # yalnızca bir kez
+
+    an2, _det2, _pose2 = make_phone(p)
+    tid2 = next(a.track_id for r in feed(an2, p, 0, 120) for a in r.fired)
+    assert an2.end_all() == [(tid2, "phone", True)]
+    assert an2.end_all() == [] and not an2.phone.active()
+
+    an3, _det3, _pose3 = make_phone(p)
+    feed(an3, p, 0, 30)                                                # alarm vermemiş bölüm bildirilmez
+    assert an3.phone.active() and an3.end_all() == []
+
+
+def test_phone_episode_ends_after_person_leaves() -> None:
+    p = phone_only(10.0)
+    an, det, _pose = make_phone(p)
+    tid = next(a.track_id for r in feed(an, p, 0, 120) for a in r.fired)
+    det.boxes = []
+    ends = [e for r in feed(an, p, 120, 300) for e in r.ended]
+    assert ends == [(tid, "phone", True)]
+
+
+def test_draw_safety_labels_phone() -> None:
+    from bantvision.overlay import _SAFETY_LABELS, RED, draw_safety
+
+    assert _SAFETY_LABELS["phone"] == "TELEFON"
+    r = SafetyResult(active=[(7, "phone", 61.0, True)], boxes={7: (0.4, 0.2, 0.6, 0.9)})
+    assert (draw_safety(FRAME.copy(), Profile.jeweler(), r) == np.array(RED, np.uint8)).all(axis=2).any()

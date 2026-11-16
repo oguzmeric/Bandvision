@@ -140,7 +140,7 @@ def draw_detect(frame: np.ndarray, profile: Profile, det: DetectResult | None, e
 
 _SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14),
              (14, 16), (0, 5), (0, 6)]
-_SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE"}
+_SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE", "phone": "TELEFON"}
 
 
 def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:

@@ -50,13 +50,15 @@
       "enum": ["center", "bottom"]
     },
     "safety": {
-      "description": "safety: poz güvenlik alarmı ayarları (tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md). Yoksa varsayılanlar: ikisi açık, 3 ve 10 sn, resim kapalı.",
+      "description": "safety: poz güvenlik alarmı ayarları (tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md; telefon: docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md). Yoksa varsayılanlar: eller yukarı ve yerde yatma açık (3, 10 sn), telefon kapalı (60 sn), resim kapalı.",
       "type": "object", "additionalProperties": false,
       "properties": {
         "handsUp": { "type": "object", "additionalProperties": false, "required": ["enabled", "seconds"],
           "properties": { "enabled": { "type": "boolean" }, "seconds": { "type": "number", "minimum": 3, "maximum": 5 } } },
         "lying": { "type": "object", "additionalProperties": false, "required": ["enabled", "seconds"],
           "properties": { "enabled": { "type": "boolean" }, "seconds": { "type": "number", "minimum": 5, "maximum": 30 } } },
+        "phone": { "type": "object", "additionalProperties": false, "required": ["enabled", "seconds"],
+          "properties": { "enabled": { "type": "boolean" }, "seconds": { "type": "number", "minimum": 10, "maximum": 600 } } },
         "sendImage": { "type": "boolean" }
       }
     },

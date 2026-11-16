@@ -63,9 +63,11 @@ class SafetyRule:
 
 @dataclass
 class SafetyConfig:
-    """Poz güvenlik alarmı (countMode = "safety"): eller yukarı 3–5 sn, yerde yatma 5–30 sn, olay resmi gönderimi."""
+    """Poz güvenlik alarmı (countMode = "safety"): eller yukarı 3–5 sn, yerde yatma 5–30 sn, telefon kullanımı 10–600 sn
+    (varsayılan kapalı; docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md), olay resmi gönderimi."""
     handsUp: SafetyRule = field(default_factory=lambda: SafetyRule(True, 3.0))
     lying: SafetyRule = field(default_factory=lambda: SafetyRule(True, 10.0))
+    phone: SafetyRule = field(default_factory=lambda: SafetyRule(False, 60.0))
     sendImage: bool = False
 
 
@@ -188,11 +190,13 @@ class Profile:
         if d.get("safety"):
             sf = d["safety"]
             p.safety = SafetyConfig(
-                SafetyRule(bool(sf.get("handsUp", {}).get("enabled", True)),
-                           float(sf.get("handsUp", {}).get("seconds", 3.0))),
-                SafetyRule(bool(sf.get("lying", {}).get("enabled", True)),
-                           float(sf.get("lying", {}).get("seconds", 10.0))),
-                bool(sf.get("sendImage", False)))
+                handsUp=SafetyRule(bool(sf.get("handsUp", {}).get("enabled", True)),
+                                   float(sf.get("handsUp", {}).get("seconds", 3.0))),
+                lying=SafetyRule(bool(sf.get("lying", {}).get("enabled", True)),
+                                 float(sf.get("lying", {}).get("seconds", 10.0))),
+                phone=SafetyRule(bool(sf.get("phone", {}).get("enabled", False)),
+                                 float(sf.get("phone", {}).get("seconds", 60.0))),
+                sendImage=bool(sf.get("sendImage", False)))
         if "fire" in d:
             p.fire = FireConfig.from_dict(d["fire"])
         if d.get("countLine"):
