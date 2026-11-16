@@ -241,6 +241,35 @@ def test_tiny_boxes_are_dropped() -> None:
 
 # ---------------------------------------------------------------- bölüm yaşam döngüsü
 
+def blinking(cls: str, box: tuple[float, float, float, float], every: float = 1.0, width: float = 0.2):
+    """Model nesneyi her `every` sn'de bir, `width` sn boyunca görür (aralıklı tanıma)."""
+    def script(ts: float) -> list[Item]:
+        return [(cls, box, 0.9, True)] if (ts % every) < width - 1e-9 else []
+    return script
+
+
+def test_high_sensitivity_counts_intermittent_smoke_by_second() -> None:
+    """Yüksek hassasiyette duman saniye dilimleriyle oylanır: her saniyenin yalnız ilk karesinde (5 kare/sn akışta %20)
+    görülen hareketli duman alarm verir; Normal ve Düşük'te kare oranı (%60) aranır, alarm yok."""
+    for sens, expect in (("high", True), ("normal", False), ("low", False)):
+        p = Profile.fire_watch()
+        p.fire.sensitivity = sens
+        an, det, p = make(blinking("smoke", SMOKE), p)
+        res = run(an, det, p, 5.0, 0.0, 20.0, block=8)
+        got = [a for _ts, a in fired(res)]
+        assert bool(got) is expect, sens
+        if expect:
+            assert got[0].kind == "smoke" and 8.0 - 1e-9 <= fired(res)[0][0] <= 9.0
+
+
+def test_high_sensitivity_keeps_frame_voting_for_fire() -> None:
+    """Dilimli oy yalnız dumanda: aralıklı alev Yüksek'te de kare oranıyla oylanır, alarm yok."""
+    p = Profile.fire_watch()
+    p.fire.sensitivity = "high"
+    an, det, p = make(blinking("fire", FLAME), p)
+    assert fired(run(an, det, p, 5.0, 0.0, 20.0)) == []
+
+
 def test_episode_ends_end_s_after_last_positive_and_a_new_episode_alarms_again() -> None:
     an, det, p = make(lambda ts: [("fire", FLAME, 0.9, True)] if 2.0 <= ts < 8.0 or 30.0 <= ts else [])
     res = run(an, det, p, 5.0, 0.0, 40.0)

@@ -105,6 +105,36 @@ def test_motion_history_reference_selection() -> None:
     assert slow.push(4.0, gray(50, (100, 160))) is None                 # zaman geri gitti: geçmiş atılır
 
 
+def test_slot_votes_count_seconds_not_frames() -> None:
+    """Dilimli oy (Yüksek hassasiyette duman): pencere `SLOT_S` dilimlere bölünür; hücre, dilimlerin en az `SLOT_RATIO`
+    oranında (ve en az `SLOT_MIN` dilimde) en az bir olumlu kare görmüşse tetikler. 5 kare/sn akışta her saniyenin yalnız
+    ilk karesinde görülen duman kare oranında (%20) tetiklemez, dilimde (%100) tetikler."""
+    box = (0.30, 0.30, 0.36, 0.36)
+    v = fr.CellVotes()
+    for k in range(41):                                                 # 0–8 sn, 5 kare/sn
+        v.add(k * 0.2, [box] if k % 5 == 0 else [])
+    assert v.trigger(8.0, 8.0) is None                                  # kare oranı 9/41
+    assert v.trigger(8.0, 8.0, slot=fr.SLOT_S) is not None              # 8/8 dilim
+    assert (fr.SLOT_S, fr.SLOT_RATIO, fr.SLOT_MIN) == (1.0, 0.6, 3)
+
+
+def test_slot_votes_ratio_boundary_and_minimum() -> None:
+    box = (0.30, 0.30, 0.36, 0.36)
+
+    def votes(hit_seconds: set[int]) -> fr.CellVotes:
+        v = fr.CellVotes()
+        for k in range(1, 41):                                          # (0, 8] sn, 5 kare/sn: 8 dilim
+            v.add(k * 0.2, [box] if k % 5 == 1 and (k // 5) in hit_seconds else [])
+        return v
+
+    assert votes({0, 2, 4, 6}).trigger(8.0, 8.0, slot=1.0) is None      # 4/8 = 0,5 < 0,6
+    assert votes({0, 2, 4, 5, 6}).trigger(8.0, 8.0, slot=1.0) is not None   # 5/8 = 0,625
+    short = fr.CellVotes()
+    for k in range(4):                                                  # 2 sn kural: 2 dilim, 2/2 ama < SLOT_MIN
+        short.add(k * 0.5, [box])
+    assert short.trigger(1.5, 2.0, slot=1.0) is None
+
+
 def test_cell_votes_ratio_hits_neighbourhood_and_closed_window() -> None:
     box = (0.30, 0.30, 0.36, 0.36)                                      # sütun 2, satır 1
     near = (0.40, 0.30, 0.46, 0.36)                                     # komşu hücre (sütun 3)

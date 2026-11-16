@@ -49,8 +49,11 @@ Sessizce "izleniyor" görünmez.
 - **Hariç bölgeler:** ocak, fırın, mangal, kaynak tezgâhı, mum, şömine, buhar/duman çıkan baca veya havalandırma,
   hareketli kırmızı/turuncu tabela ve ışıklar. Bölgeyi kaynağın biraz dışına taşacak kadar büyük çizin; bölgeden
   dışarı taşan alev (kutu merkezi bölge dışında) yine alarm verir.
-- **Hassasiyet:** önce Normal. Yanlış alarm çoksa önce hariç bölge, sonra Düşük. Küçük ve soluk alev/duman
-  kaçırılıyorsa Yüksek (yanlış alarm artabilir).
+- **Hassasiyet:** önce Normal. Yanlış alarm çoksa önce hariç bölge, sonra Düşük. Küçük, soluk ya da aralıklı görünen
+  duman kaçırılıyorsa Yüksek: eşik düşer ve duman saniye dilimleriyle oylanır (§4). Ölçümde (FIRESENSE, 24 yangın/duman
+  videosu) Yüksek 21'ini, Normal 17'sini yakaladı; yangınsız videolarda yanlış alarm aynı kaldı (1/25), ama parlak metal,
+  gri duvar/naylon ve hareketli beyaz çuval (big-bag) gibi yüzeylerde Yüksek'te yanlış alarm arttı: bu alanlar hariç bölge
+  yapılmalıdır.
 - **Süreler:** varsayılanlar (alev 3 sn, duman 8 sn) çoğu yer için uygundur. Duman yavaş gelişir; buharın sık olduğu
   yerde duman süresini uzatmak yanlış alarmı azaltır, alarmı geciktirir.
 - **Işık:** gece IR geçişi ve ani ışık değişimi kendi başına alarm doğurmaz (§5), ama sürekli yanıp sönen ışık kaynağı
@@ -62,7 +65,8 @@ Her analiz edilen karede model alev ve duman kutuları bulur; hassasiyet eşiği
 bölgede kalan kutular atılır. Kalan kutu, yaklaşık 1 sn önceki kareye göre içinde değişim (titreşim, yayılma) varsa oy
 verir: sabit bir alev resmi, kırmızı lamba ya da beyaz duvar oy vermez. Kare 8×6 hücreye bölünür; alarm için kural
 süresi boyunca aynı bölgede (komşu hücreler dahil) oy veren karelerin en az %60'ı ve en az 3 kare olumlu olmalıdır.
-Bölüm başına tek alarm; 10 sn olumlu kare gelmezse bölüm biter. Ayrıntı ve sabitler: `03-algorithm.md` §4.12.
+Yüksek hassasiyette duman için kare yerine saniye sayılır: kural süresindeki saniyelerin en az %60'ında (en az 3 saniye)
+aynı bölgede duman görülmesi yeterlidir; model dumanı aralıklı gördüğünde de alarm gelir. Bölüm başına tek alarm; 10 sn olumlu kare gelmezse bölüm biter. Ayrıntı ve sabitler: `03-algorithm.md` §4.12.
 
 ## 5. Sınırlar
 

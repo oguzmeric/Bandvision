@@ -27,6 +27,13 @@ GLOBAL_CHANGE_MAX = 0.80    # kare genelinde değişen oran bundan büyükse kar
 GRID = (8, 6)               # (sütun, satır)
 RATIO = 0.6                 # hücre: penceredeki oy veren karelerin en az bu oranında olumlu
 MIN_HITS = 3                # ... ve en az bu kadar olumlu kare
+# Yüksek hassasiyette duman: model dumanı aralıklı görür (gerçek duman videolarında karelerin ~%12–28'i), kare oranı
+# (%60) dolmaz. Pencere SLOT_S sn dilimlere bölünür; hücre dilimlerin en az SLOT_RATIO oranında (ve en az SLOT_MIN dilimde)
+# en az bir olumlu kare görmüşse tetikler. Ölçüm (v1, FIRESENSE 24 pozitif): Yüksek'te 17 → 21 yakalama, negatiflerde
+# yanlış alarm aynı (1/25); parlak/gri hareketli yüzeyli sahnelerde yanlış alarm artar (hariç bölge çizilir).
+SLOT_S = 1.0
+SLOT_RATIO = 0.6
+SLOT_MIN = 3
 END_S = 10.0                # son olumlu kareden bu kadar sonra bölüm biter
 MAX_FPS = 5.0               # canlı oturumda en çok bu hızda analiz (oturum uygular, analizör değil)
 
@@ -148,19 +155,32 @@ class CellVotes:
         while self._v and self._v[0][0] < cut:
             self._v.popleft()
 
-    def trigger(self, now: float, seconds: float) -> tuple[int, int] | None:
+    def trigger(self, now: float, seconds: float, slot: float | None = None) -> tuple[int, int] | None:
         """Penceredeki karelerin en az `RATIO` oranında ve en az `MIN_HITS` karede olumlu hücre (satır, sütun); birden
         çoksa en çok olumlu olan, eşitlikte kutuların kendisinin en çok kapladığı (alevin üstündeki hücre, komşu kenar
-        hücresi değil). Pencere dışı eski kareler atılır."""
+        hücresi değil). Pencere dışı eski kareler atılır. `slot` verilirse kare yerine zaman dilimi sayılır: pencere
+        `[now − seconds, now]` `ceil(seconds / slot)` dilime bölünür (pencere başındaki kare ilk, `now` son dilimde);
+        hücre, dilimlerin en az `SLOT_RATIO` oranında ve en az `SLOT_MIN` dilimde olumlu olmalı."""
         self.prune(now, seconds)
         if not self._v:
             return None
-        count = np.sum([g for _t, g, _r, _m in self._v], axis=0)
-        ok = (count >= MIN_HITS) & (count >= RATIO * len(self._v) - EPS)
+        if slot is None:
+            count = np.sum([g for _t, g, _r, _m in self._v], axis=0)
+            ok = (count >= MIN_HITS) & (count >= RATIO * len(self._v) - EPS)
+            n = len(self._v)
+        else:
+            n = max(1, math.ceil(seconds / slot - EPS))
+            start = now - seconds
+            cols, rows = GRID
+            hit = np.zeros((n, rows, cols), bool)
+            for t, g, _r, _m in self._v:
+                hit[min(n - 1, max(0, int((t - start) / slot)))] |= g
+            count = hit.sum(axis=0)
+            ok = (count >= SLOT_MIN) & (count >= SLOT_RATIO * n - EPS)
         if not ok.any():
             return None
         raw = np.sum([r for _t, _g, r, _m in self._v], axis=0)
-        score = np.where(ok, count * (len(self._v) + 1) + raw, -1)
+        score = np.where(ok, count * (max(n, len(self._v)) + 1) + raw, -1)
         r, c = np.unravel_index(int(np.argmax(score)), count.shape)
         return int(r), int(c)
 

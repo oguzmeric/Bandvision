@@ -25,6 +25,7 @@ from .fire_rules import (
     GLOBAL_CHANGE_MAX,
     KINDS,
     MOTION_MIN,
+    SLOT_S,
     TRACK_IDS,
     Box,
     CellVotes,
@@ -165,7 +166,9 @@ class FireAnalyzer:
                 if ep.fired:
                     ep.box = _union(pos[kind])                       # alarmlı kutu alevi izler
             if ep is not None and not ep.fired and ts - ep.started >= rule.seconds - EPS:
-                cell = votes.trigger(ts, rule.seconds)
+                # Yüksek hassasiyette duman saniye dilimleriyle oylanır (aralıklı tanıma; fire_rules.SLOT_S)
+                slot = SLOT_S if kind == "smoke" and cfg.sensitivity == "high" else None
+                cell = votes.trigger(ts, rule.seconds, slot=slot)
                 if cell is not None:
                     ep.fired = True
                     # trigger en az MIN_HITS değen kare buldu: box_at None olamaz (yedek yalnız tür için)

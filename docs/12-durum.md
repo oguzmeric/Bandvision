@@ -325,6 +325,7 @@ Kamerada alev ve dumanı görüp güvenlik alarmıyla aynı yoldan haber verir. 
   - [ ] `eval_fire.py` raporu: mAP50 (sınıf başına), hassasiyet başına olay düzeyi tablo, eşik önerisi → `fire_rules.py` `THRESHOLDS` ayrı commit'te.
   - [ ] D-Fire sınıf düzeninin doğrulanması: `prepare_data.py --include-public` toplam kutu sayıları README'dekilerle (fire 14.692, smoke 11.865) aynı mı.
   - [x] `GLOBAL_CHANGE_MAX` 0,40 → 0,80 ve `MOTION_PIX` 8 → 15 (FIRESENSE ölçümü, 2026-11-11). Kalan: hızlı büyüyen alev/duman videolarında oy dışı kalan kare oranı ve alarm gecikmesi; IR geçişi ve ışık açma/kapamada hâlâ yanlış alarm olmadığı. Gerekirse eşik ya da kural (ör. yalnız kutu dışı değişimi saymak) yeniden değerlendirilir.
+  - [x] Yüksek hassasiyette duman dilimli oy (2026-11-16, v1 modeli): FIRESENSE 15 sn yakalama Normal 17/24 → Yüksek 21/24, yangınsız negatiflerde yanlış alarm 1/25 (değişmedi, gece araç farı); 20 demo videosunda yanlış alarm Normal 2, Yüksek 5. Normal ve Düşük değişmedi. Kalan: iki duman videosunu model hiç görmüyor (yoğun yakın duman, uzak ince duman) — model işi.
   - [ ] Yavaş akış: 1 kare/sn'den yavaş kamerada 2 sn'lik alev kuralı `MIN_HITS = 3`'ü sağlayamaz; sahadaki kayıt cihazı alt akışlarının kare hızı ölçülüp gerekiyorsa panelde en kısa sürenin akış hızına göre sınırlanması.
   - [ ] Oturum `fps`'inin yangın modunda analiz hızı olduğu (≤ 5) ve çok kamerada (ör. 9 yangın + sayım oturumları) ekran kartı yükü.
   - [ ] Ofis kameralarında 8 saatlik normal çalışma kaydında yanlış alarm sayısı (kamera başına).

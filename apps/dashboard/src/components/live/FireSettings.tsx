@@ -65,7 +65,7 @@ export function FireSettings({ value, status, onChange }: {
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11.5px] text-pl-faint">Yüksek: daha küçük ve soluk alev/duman da yakalanır, yanlış alarm artabilir.</p>
+        <p className="mt-1 text-[11.5px] text-pl-faint">Yüksek: daha küçük ve soluk alev/duman ile aralıklı görünen duman da yakalanır; parlak ya da gri hareketli yüzeylerde yanlış alarm artabilir (o alanı hariç bölge yapın).</p>
       </div>
       <label className="flex items-start gap-2 text-[13px]">
         <input type="checkbox" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={v.sendImage} onChange={(e) => onChange({ ...v, sendImage: e.target.checked })} />
