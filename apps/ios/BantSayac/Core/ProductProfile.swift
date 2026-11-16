@@ -112,14 +112,17 @@ struct SafetyConfig: Codable, Equatable, Sendable {
     var handsUp: Rule
     var lying: Rule
     var sendImage: Bool
+    /// Telefon kullanımı kuralı (varsayılan kapalı, 15 sn): iPhone yalnızca taşır; bu cihazda işlenmez.
+    var phone: Rule = SafetyConfig.defaultPhone
 
-    enum CodingKeys: String, CodingKey { case handsUp, lying, sendImage }
+    enum CodingKeys: String, CodingKey { case handsUp, lying, sendImage, phone }
 }
 
 extension SafetyConfig {
     /// Sözleşme varsayılanları: şemada `safety` alanları zorunlu değil, Python da eksikleri bunlarla doldurur
     static let defaultHandsUp = Rule(enabled: true, seconds: 3)
     static let defaultLying = Rule(enabled: true, seconds: 10)
+    static let defaultPhone = Rule(enabled: false, seconds: 15)
 
     /// Eksik alan varsayılanla dolar (`{}` geçerli): kısmi blok kayıtlı profil listesinin okunmasını bozmasın.
     /// Uzantıda: eşlenik (memberwise) başlatıcı korunur. `Rule` katı kalır (`enabled` ve `seconds` birlikte gelir).
@@ -128,6 +131,7 @@ extension SafetyConfig {
         handsUp = try c.decodeIfPresent(Rule.self, forKey: .handsUp) ?? Self.defaultHandsUp
         lying = try c.decodeIfPresent(Rule.self, forKey: .lying) ?? Self.defaultLying
         sendImage = try c.decodeIfPresent(Bool.self, forKey: .sendImage) ?? false
+        phone = try c.decodeIfPresent(Rule.self, forKey: .phone) ?? Self.defaultPhone
     }
 }
 

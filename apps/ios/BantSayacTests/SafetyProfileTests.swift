@@ -67,6 +67,27 @@ final class SafetyProfileTests: XCTestCase {
         XCTAssertEqual(back.mode, .blob)
     }
 
+    /// Eski profilde `phone` yok: kapalı, 15 sn (Python ile aynı varsayılan)
+    func testPhoneMissingDecodesAsOffFifteen() throws {
+        let cfg = try Self.decodeBlock(Self.block)
+        XCTAssertEqual(cfg.phone, SafetyConfig.Rule(enabled: false, seconds: 15))
+        XCTAssertEqual(try Self.decodeBlock("{}").phone, SafetyConfig.defaultPhone)
+        // Eşlenik başlatıcı `phone` vermeden de çalışır ve varsayılanı alır
+        XCTAssertEqual(Self.contractDefaults.phone, SafetyConfig.defaultPhone)
+    }
+
+    /// iPhone'da kaydedilince telefon kuralı kaybolmaz
+    func testPhoneRoundTrips() throws {
+        let cfg = try Self.decodeBlock(#"{"phone":{"enabled":true,"seconds":120}}"#)
+        XCTAssertEqual(cfg.phone, SafetyConfig.Rule(enabled: true, seconds: 120))
+        let data = try JSONEncoder().encode(cfg)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let phone = try XCTUnwrap(obj["phone"] as? [String: Any])
+        XCTAssertEqual(phone["enabled"] as? Bool, true)
+        XCTAssertEqual(phone["seconds"] as? Double, 120)
+        XCTAssertEqual(try JSONDecoder().decode(SafetyConfig.self, from: data), cfg)
+    }
+
     /// Sabit liste denetimi (sözleşmedeki `countMode` sıralaması elle yazılmıştır); şema dosyasını okumaz.
     func testCountModeRawValues() {
         XCTAssertEqual(CountMode.allCases.map(\.rawValue), ["blob", "linescan", "detect", "safety", "fire"])
