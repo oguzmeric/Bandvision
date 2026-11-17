@@ -93,6 +93,23 @@ Başarı: alarm gelince operatör tek bakışta (1) şu an kamerada ne olduğunu
     - Yangın/duman bu işin dışında (orada "Hariç bölgeler" var); video işi (`analysis-job`) seçeneklerine alan
       eklenmez. iPhone profili alanları okur ve geri yazar (işlemez), yangındaki gibi.
 
+12. **Profesyonel başlık, emoji yok** (kullanıcı eski pencere için: "çok amatör, logo ve dahası"): alarm arayüzünde
+    hiç emoji kullanılmaz; tür başına küçük SVG simge (alev, duman, eller yukarı kişi, yerde yatan kişi, telefon, zil)
+    renkli başlıkta beyaz yuvarlak köşeli rozet içinde. Başlık: rozet · tür adı · "<kamera> · <tarih-saat>" · sağda
+    durum çipi.
+13. **Alarm sesleri** (kullanıcı: "alarm sesi seçmemiz gerek … 10 tane alarm sesi wav dosyası belirleyelim"). Benim
+    kararlarım:
+    - 10 ses, depodaki bir üretici betikle sentezlenir (lisans sorunu yok, tekrar üretilebilir) ve panelle gelir:
+      `apps/dashboard/public/sounds/alarm-01.wav` … `alarm-10.wav` (22 050 Hz, tek kanal, 16 bit, 1–2 sn).
+      Adları: Klasik bip, Siren, Hızlı siren, Çan, Uyarı düdüğü, Nabız, Yükselen ton, İkili korna, Sonar, Yumuşak gong.
+    - Bildirim ayarlarında (bugünkü "Sesli uyarı" yanında) üç grup için ses seçimi ve "Dinle": Yangın/duman (varsayılan
+      Siren), Kişi alarmları — eller yukarı, yerde yatan, deneme (varsayılan Hızlı siren), Telefon kullanımı (varsayılan
+      Klasik bip); ses düzeyi kaydırıcısı (varsayılan %80). Ayarlar bu tarayıcıda (bugünkü ses ayarı gibi çerez).
+    - Çalma: kritik alarmda ses, pencere açık ve onaylanmamış kritik alarm varken 3 sn arayla tekrar eder; "Gördüm",
+      "Küçült" ya da pencerenin kapanması sesi durdurur. Uyarıda (telefon) yeni alarm başına bir kez. "Sesli uyarı"
+      kapalıysa hiç çalmaz (bugünkü varsayılan: kapalı).
+    - Tarayıcı sesi engellerse (sayfayla hiç etkileşim yok) üst çubukta "Alarm sesi için sayfaya bir kez tıklayın" yazar.
+
 ## Sunucu (edge) değişikliği
 
 - Alarm kaydına **`box`** alanı: alarmı tetikleyen kutu, normalize `[x1, y1, x2, y2]` (0–1); `SafetyAlarm.box` ve

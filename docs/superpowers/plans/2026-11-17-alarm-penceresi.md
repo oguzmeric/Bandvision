@@ -125,7 +125,7 @@ verir; `AlarmBanner` ince sayaç çubuğu olur.
 **Interfaces:**
 - Consumes: Task 2'nin tümü; `Alarm.box`.
 - Produces:
-  - `AlarmMedia` props: `{ alarm: Alarm; liveUrl: string | null; initial: "live" | "clip"; size: "large" | "card" }`;
+  - `AlarmMedia` props: `{ alarm: Alarm; liveUrl: string | null; initial: "live" | "clip"; size: "large" | "compact" }`;
     görüntü alanını, "● Canlı | Alarm kaydı" düğmelerini (`data-testid="media-live"` / `"media-clip"`,
     `aria-pressed`), canlı `<img data-testid="alarm-live">`, köşe penceresini (`<button data-testid="alarm-inset">`,
     `data-side="left|right"`) ve hata yazısını (`data-testid="live-error"`, metin "Canlı görüntü alınamıyor") çizer.
@@ -169,7 +169,7 @@ verir; `AlarmBanner` ince sayaç çubuğu olur.
 - Docs: `docs/13-web-platform.md` (alarm şeridi ve pencere maddeleri)
 
 **Interfaces:**
-- Consumes: Task 2 (`alarmSeverity`, `agoText`, `liveStreamUrl`), Task 3 (`AlarmMedia`).
+- Consumes: Task 2 (`alarmSeverity`, `agoText`, `liveStreamUrl`), Task 3 (`AlarmMedia` with `size="compact"`; `AlarmIcon({ type, className })` SVG simgeleri — emoji yok).
 - Produces:
   - `AlarmToast` props: `{ warnings: Alarm[]; liveSessionIds: ReadonlySet<string>; onAck: (a: Alarm) => Promise<boolean>;
     onFalseAlarm: (a: Alarm) => Promise<boolean>; onHide: (id: string) => void; onOpenAll: (id: string) => void }`.
@@ -300,3 +300,38 @@ verir; `AlarmBanner` ince sayaç çubuğu olur.
 - [ ] **Step 3:** Uygula (yangındaki hariç bölge akışının kalıbı).
 - [ ] **Step 4:** panel e2e (`safety-ui`, `phone-menu`, `fire-ui`, `alarm-popup`), `lint`, `typecheck`, `test:unit` → PASS.
 - [ ] **Step 5:** Docs; commit: "Panelde güvenlik analiz alanları ve alarmda alan adı".
+
+### Task 8: Alarm sesleri (10 ses, tür grubuna göre seçim)
+
+**Files:**
+- Create: `tools/make_alarm_sounds.py` (numpy + `wave`; deterministik), `apps/dashboard/public/sounds/alarm-01.wav` …
+  `alarm-10.wav` (betiğin çıktısı, commit edilir), `apps/dashboard/src/lib/alarmSounds.mjs` + `.d.mts` + `.test.mjs`
+- Modify: `apps/dashboard/src/lib/attention.ts` (ses seçimi/düzeyi çerezleri), `components/live/AttentionSettings.tsx`
+  (seçim, Dinle, düzey), `components/live/AlarmCenter.tsx` (çalma kuralları), `components/live/AlarmBanner.tsx`
+  (engellendi uyarısı), `package.json` (`test:unit`)
+- Test: `services/edge/tests/test_alarm_sounds.py` ya da `tools` testi (betik 10 geçerli WAV üretir, aynı girdiyle aynı
+  baytlar), `alarmSounds.test.mjs`, `apps/dashboard/e2e/alarm-popup.spec.ts` (ekle)
+- Docs: `docs/13-web-platform.md` (Bildirimler / dikkat çekme maddesi)
+
+**Interfaces:**
+- Consumes: Task 2 (`alarmSeverity`), Task 4 (pencere açık/küçük durumu `AlarmCenter`'da).
+- Produces:
+  - `SOUNDS: ReadonlyArray<{id: string; name: string; file: string}>` — 10 kayıt, `id` `"alarm-01"`…`"alarm-10"`, adlar
+    spec'teki sırayla, `file` `/sounds/alarm-NN.wav`.
+  - `soundGroup(type: string): "fire" | "person" | "phone"` — `fire`/`smoke` → fire, `phone` → phone, diğerleri person.
+  - `DEFAULT_SOUND: Record<"fire"|"person"|"phone", string>` = `{fire: "alarm-02", person: "alarm-03", phone: "alarm-01"}`;
+    `DEFAULT_VOLUME = 0.8`.
+  - `attention.ts`: `readSound(group) -> string` (geçersiz/eksik → varsayılan), `writeSound(group, id)`,
+    `readVolume() -> number` (0–1, geçersiz → 0.8), `writeVolume(v)`; `playAlarmSound(id, volume) -> Promise<boolean>`
+    (`HTMLAudioElement`; engellenirse `false`).
+- [ ] **Step 1: Failing tests:** betik: 10 dosya, her biri RIFF/WAVE, 22050 Hz, mono, 16 bit, 1.0–2.0 sn, iki çalıştırma
+  aynı baytlar; `soundGroup` eşlemesi; `SOUNDS` 10 benzersiz id/ad; e2e: ayarlarda üç seçim ve "Dinle" (ses isteği
+  `/sounds/alarm-02.wav` gider), seçim değişince çerez güncellenir; "Sesli uyarı" açıkken kritik alarm gelince
+  seçilen grubun dosyası istenir ve 3 sn sonra yeniden istenir, "Gördüm" sonrası istenmez; telefon uyarısında tek
+  istek; ses kapalıyken hiç istek yok; `play()` reddedilince (`page.addInitScript` ile `HTMLMediaElement.prototype.play`
+  reddeden sahte) üst çubukta "Alarm sesi için sayfaya bir kez tıklayın".
+- [ ] **Step 2:** testler FAIL.
+- [ ] **Step 3:** Uygula; WAV'ları betikle üret ve commit et.
+- [ ] **Step 4:** panel e2e tamamı, `lint`, `typecheck`, `test:unit`; betik testi PASS.
+- [ ] **Step 5:** Docs; commit: "Alarm sesleri: 10 ses, tür grubuna göre seçim, kritik alarmda tekrar".
+
