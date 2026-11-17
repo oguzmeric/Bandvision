@@ -335,3 +335,40 @@ verir; `AlarmBanner` ince sayaç çubuğu olur.
 - [ ] **Step 4:** panel e2e tamamı, `lint`, `typecheck`, `test:unit`; betik testi PASS.
 - [ ] **Step 5:** Docs; commit: "Alarm sesleri: 10 ses, tür grubuna göre seçim, kritik alarmda tekrar".
 
+### Task 9: Ekran kartı hatası — okunur neden ve kendiliğinden geri dönüş
+
+**Files:**
+- Modify: `services/edge/bantvision/core/devices.py` (`_reason`, `GuardedSession`, yeni not metinleri)
+- Test: `services/edge/tests/test_devices.py` (mevcut sahte `ort` kalıbıyla)
+- Docs: ekran kartı/işlemci düşüşünü anlatan doküman yerleri (`docs/` içinde "işlemciye" / "N4" / "Ekran kartı çalışırken"
+  geçen satırlar)
+
+**Interfaces:**
+- Produces:
+  - `_reason(e)`: `UnicodeDecodeError` ise `e.object` baytları `locale.getpreferredencoding(False)` ile
+    (`errors="replace"`) çözülür; çözülen metinde `\b([0-9A-Fa-f]{8})\s+(\S[^\r\n]*)` bulunursa sonuç
+    `f"DirectML {hr.upper()}: {ileti}"` (yolsuz, tek boşluklu, en çok `REASON_MAX`); bulunmazsa çözülen metnin ilk boş
+    olmayan satırı (bugünkü temizlikle). Diğer hatalarda davranış aynı.
+  - `_n4(reason)` → `"Ekran kartı çalışırken hata verdi ({reason}); işlemci kullanılıyor, ekran kartı yeniden denenecek."`
+  - `_n5(reason)` → `"Ekran kartı tekrar tekrar hata verdi ({reason}); işlemci kullanılıyor. Programı yeniden başlatınca ekran kartı yeniden denenir."`
+  - `GuardedSession(..., gpu: Gpu | None = None, _clock: Callable[[], float] = time.monotonic)`; `open_session` kart
+    oturumunda `gpu`'yu geçer. Sabitler: `GPU_RETRY_DELAYS_S = (60.0, 300.0, 1800.0)`, `GPU_FAIL_LIMIT = 3`,
+    `GPU_FAIL_WINDOW_S = 3600.0`.
+  - Kural: kartta çalışırken hata → işlemciye düş, hata zamanı kaydedilir; son `GPU_FAIL_WINDOW_S` içindeki hata sayısı
+    `GPU_FAIL_LIMIT`'e ulaştıysa denemeler durur (`_n5`), değilse bir sonraki deneme `GPU_RETRY_DELAYS_S[k]` sonra
+    (k = bu düşüşten beri başarısız yeniden kurma sayısı, son gecikmede kalır). İşlemcideyken `run` çağrısı deneme zamanı
+    geldiyse (tek iş parçacığı dener, diğerleri işlemcide sürer; `_lock` ile) kart oturumunu yeniden kurar; DirectML ilk
+    sağlayıcıysa duruma geçer (`Used("gpu", …, note=None)`), günlüğe "Ekran kartına geri dönüldü (<ad>)"; kurulamazsa
+    sonraki gecikme planlanır. Baştan işlemcide açılan oturum (seçim "cpu" ya da açılış düşüşü N3) hiç denemez.
+- [ ] **Step 1: Failing tests:** (a) `_reason` cp1254 baytlı `UnicodeDecodeError` (`"… 80004005 Belirtilmemiş hata".encode("cp1254")`)
+  → `"DirectML 80004005: Belirtilmemiş hata"` (testte `locale.getpreferredencoding` `"cp1254"` döndürecek biçimde
+  sahtelenir); HRESULT'suz baytlar → çözülmüş ilk satır; (b) kart hatası → işlemci, not `_n4`; saat 59 sn ilerleyince
+  deneme yok, 60 sn'de yeniden kurulur ve sonraki `run` kartta, not `None`; (c) yeniden kurma başarısız → sonraki
+  deneme 300 sn sonra, sonra 1800, sonra yine 1800; (d) 1 saat içinde 3. kart hatası → `_n5`, saat ne kadar ilerlerse
+  ilerlesin deneme yok; 3 hata 1 saatten geniş aralığa yayılmışsa denemeler sürer; (e) baştan işlemci oturumu hiç
+  denemez; (f) eşzamanlı iki `run` deneme anında yalnız bir kez yeniden kurar.
+- [ ] **Step 2:** testler FAIL.
+- [ ] **Step 3:** Uygula.
+- [ ] **Step 4:** `test_devices*.py` ve edge'in tüm testleri, `ruff` → PASS.
+- [ ] **Step 5:** Docs; commit: "Ekran kartı hatası: okunur neden ve kendiliğinden geri dönüş".
+

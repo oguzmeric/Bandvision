@@ -110,6 +110,18 @@ Başarı: alarm gelince operatör tek bakışta (1) şu an kamerada ne olduğunu
       kapalıysa hiç çalmaz (bugünkü varsayılan: kapalı).
     - Tarayıcı sesi engellerse (sayfayla hiç etkileşim yok) üst çubukta "Alarm sesi için sayfaya bir kez tıklayın" yazar.
 
+14. **Ekran kartı hatası: okunur neden ve kendiliğinden geri dönüş** (kullanıcı ekranda "Ekran kartı çalışırken hata
+    verdi ('utf-8' codec can't decode byte 0xfe …)" gördü; onay: "evet ekle"). Günlükteki asıl hata DirectML'in
+    "80004005 Belirtilmemiş hata"sıdır: Windows iletiyi Türkçe kod sayfasıyla (cp1254) yazar, ONNX Runtime onu UTF-8
+    sanıp çözemez. Kararlarım:
+    - Neden metni: `UnicodeDecodeError`'ın baytları Windows'un ANSI kod sayfasıyla çözülür; içinde 8 haneli HRESULT
+      varsa not "DirectML 80004005: Belirtilmemiş hata" biçimindedir. Ekrandaki not: "Ekran kartı çalışırken hata
+      verdi (DirectML 80004005: Belirtilmemiş hata); işlemci kullanılıyor, ekran kartı yeniden denenecek."
+    - Çalışırken hatadan sonra işlemciye düşülür (bugünkü gibi) ve ekran kartı **1 dk, 5 dk, 30 dk** sonra yeniden
+      denenir (oturum yeniden kurulur; DirectML etkinse geri dönülür, not kalkar). Son 1 saatte 3 kez ekran kartı hatası
+      olduysa denemeler durur, not: "Ekran kartı tekrar tekrar hata verdi (…); işlemci kullanılıyor. Programı yeniden
+      başlatınca ekran kartı yeniden denenir." Açılışta açılamama (N3) bu işin dışında.
+
 ## Sunucu (edge) değişikliği
 
 - Alarm kaydına **`box`** alanı: alarmı tetikleyen kutu, normalize `[x1, y1, x2, y2]` (0–1); `SafetyAlarm.box` ve
