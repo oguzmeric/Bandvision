@@ -373,6 +373,15 @@ test("header small text keeps at least 4.5:1 contrast on every alarm colour", as
 // ------------------------------------------------------------------ köşe kartları (uyarı), alarm çubuğu, ekran kenarı
 
 const toastsOf = (page: Page) => page.getByTestId("alarm-toasts");
+/** Ekran okuyucunun duyuru bölgesinde okuyacağı yazı: aria-hidden alt ağaçlar hariç */
+const spokenText = (loc: Locator) => loc.evaluate((root) => {
+  const walk = (n: Node): string => {
+    if (n.nodeType === Node.TEXT_NODE) return n.textContent ?? "";
+    if (n instanceof Element && n.getAttribute("aria-hidden") === "true") return "";
+    return [...n.childNodes].map(walk).join("");
+  };
+  return walk(root);
+});
 /** Sekme başlığı yanıp sönerken alarm hâlini bekler (her saniye sayfa başlığıyla değişir) */
 const alarmTitle = async (page: Page, text: string) => {
   await expect.poll(() => page.title(), { intervals: [100] }).toBe(text);
@@ -422,6 +431,33 @@ test("phone alarm shows corner card without modal", async ({ page }) => {
   await expect(page.getByTestId("alarm-banner")).toHaveCount(0);
 });
 
+test("corner card region is not re-announced by the ticking time; a new warning is", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 3, clipPending: false }));
+  const toasts = toastsOf(page);
+  await expect(toasts.getByTestId("alarm-toast")).toHaveCount(1);
+  await expect(toasts.getByTestId("alarm-live")).toBeVisible();
+  const ago = toasts.getByTestId("toast-ago");
+  await expect(ago).toHaveAttribute("aria-hidden", "true");
+  const before = await spokenText(toasts);
+  const agoBefore = await ago.textContent();
+  expect(before).toContain("Kasa");
+  expect(before).not.toMatch(/sn önce/);                                   // geçen süre okunmaz, saat okunur
+  expect(before).toMatch(/\d{2}:\d{2}:\d{2}/);
+  await page.waitForTimeout(2200);                                         // kart boşta: görünen süre ilerler
+  await expect.poll(() => ago.textContent()).not.toBe(agoBefore);
+  expect(await spokenText(toasts)).toBe(before);                          // okunan yazı değişmedi
+  // yeni uyarı yine duyurulur (bölgeye okunan yazıyla eklenir)
+  list.push(alarm({ id: "p2", type: "phone", camera: "Depo", firedAt: now - 30 }));
+  await expect(toasts.getByTestId("alarm-toast")).toHaveCount(2);
+  const after = await spokenText(toasts);
+  expect(after).toContain("Depo");
+  expect(after).toContain("Telefon kullanımı");
+});
+
 test("critical arrives while card shown opens window and hides cards", async ({ page }) => {
   await login(page);
   const list: FakeAlarm[] = [];
@@ -440,6 +476,9 @@ test("critical arrives while card shown opens window and hides cards", async ({ 
   await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
   await expect(page.getByTestId("alarm-banner")).toContainText("Son: Duman — Depo");
   await modal.getByRole("button", { name: "Küçült" }).click();
+  // çubuktaki sayaçların yazısı ≥4,5:1 (kırmızı yazı açık zeminde, sarı çipte koyu yazı)
+  expect(await contrastOf(page.getByTestId("alarm-count-critical")), "kritik sayacı").toBeGreaterThanOrEqual(4.5);
+  expect(await contrastOf(page.getByTestId("alarm-count-warning")), "uyarı sayacı").toBeGreaterThanOrEqual(4.5);
   await expect(modal).toHaveCount(0);
   await expect(toasts.getByTestId("alarm-toast")).toHaveCount(1);
   await expect(toasts.getByTestId("alarm-toast")).toContainText("Kasa");
@@ -495,6 +534,13 @@ test("card hide keeps alarm in bar", async ({ page }) => {
   const n = calls.polls;
   await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(n + 1);
   await expect(toast).toHaveCount(0);
+  // sayfa yenilense de bu sekmede gizli kalır (pencere de açılmaz: alarm bu sekmede gösterildi)
+  await page.reload();
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  const m = calls.polls;
+  await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(m + 1);
+  await expect(toast).toHaveCount(0);
+  await expect(modalOf(page)).toHaveCount(0);
   await page.getByRole("button", { name: "Alarmları göster" }).click();
   const modal = modalOf(page);
   await expect(modal).toBeVisible();
@@ -515,6 +561,12 @@ test("ack failure on card shows error", async ({ page }) => {
   await expect(toast.getByTestId("toast-error")).toHaveText("Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.");
   await expect(toast).toHaveCount(1);
   await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  // pencere açılıp küçültülünce eski hata kartta yeniden çıkmaz
+  await page.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modalOf(page)).toBeVisible();
+  await modalOf(page).getByRole("button", { name: "Küçült" }).click();
+  await expect(toast).toHaveCount(1);
+  await expect(toast.getByTestId("toast-error")).toHaveCount(0);
   // ikinci deneme başarılı: kart kapanır
   calls.ackFails = false;
   await toast.getByRole("button", { name: "Gördüm", exact: true }).click();

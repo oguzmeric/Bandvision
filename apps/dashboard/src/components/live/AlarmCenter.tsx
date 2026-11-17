@@ -46,6 +46,8 @@ interface AlarmCenterValue {
   markFalse: (a: Alarm) => Promise<boolean>;
   /** Alarm penceresini bu alarmda açar (çubuktaki "Alarmları göster", köşedeki "+N uyarı daha", masaüstü bildirimi) */
   open: (id: string) => void;
+  /** Pencereyi, pencerenin sırasındaki (kritikler üstte, grup içinde yeniden eskiye) ilk alarmda açar */
+  openFirst: () => void;
   /** Alarm listesini hemen yeniden ister (başka yerde onaylandı) */
   refresh: () => void;
 }
@@ -94,8 +96,9 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   /** Açık alarm penceresi: gösterilen alarm ve listedeki yeri (alarm onaylanınca aynı yerdeki sonrakine geçilir) */
   const [viewer, setViewer] = useState<{ id: string; index: number } | null>(null);
-  /** × ile gizlenen köşe kartları (bu sekmede; alarm çubukta ve pencerenin listesinde kalır) */
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  /** × ile gizlenen köşe kartları (bu sekmede, sayfa yenilense de; alarm çubukta ve pencerenin listesinde kalır). Sunucu
+   * çiziminde depo yok: boş başlar; ilk çizimde alarm olmadığından (yoklama sonra gelir) çizim farkı doğmaz */
+  const [hidden, setHidden] = useState<Set<string>>(() => (typeof window === "undefined" ? new Set() : loadIds(HIDDEN_KEY)));
   /** Cevap yalnızca istek ile cevap arasında sıra değişmediyse uygulanır (onaydan önce başlayan istek geri getirmesin) */
   const seq = useRef(0);
   const refreshRef = useRef<() => void>(() => undefined);
@@ -109,8 +112,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const warnings = useMemo(() => ordered.filter((a) => alarmSeverity(a.type) === "warning" && !hidden.has(a.id)), [ordered, hidden]);
   const critical = ordered.some((a) => alarmSeverity(a.type) === "critical");
 
-  // gizlenen kartlar sayfa yenilense de gizli kalır (oturum belleği; sunucu çiziminde pencere nesnesi yok)
-  useEffect(() => { setHidden(loadIds(HIDDEN_KEY)); }, []);
+  useEffect(() => { saveIds(HIDDEN_KEY, hidden); }, [hidden]);
 
   useEffect(() => {
     let alive = true;
@@ -282,16 +284,15 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   }, []);
 
   const close = useCallback(() => setViewer(null), []);
-  const hide = useCallback((id: string) => {
-    setHidden((h) => {
-      const next = new Set(h).add(id);
-      saveIds(HIDDEN_KEY, next);
-      return next;
-    });
-  }, []);
+  const hide = useCallback((id: string) => setHidden((h) => new Set(h).add(id)), []);
+  /** Pencereyi pencerenin sırasındaki ilk alarmda açar (çubuktaki "Alarmları göster"; sıranın tek kaynağı burası) */
+  const openFirst = useCallback(() => {
+    const first = latest.current[0];
+    if (first) open(first.id);
+  }, [open]);
   const refresh = useCallback(() => refreshRef.current(), []);
-  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh }),
-    [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh]);
+  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, openFirst, refresh }),
+    [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, openFirst, refresh]);
   const showing = viewer === null ? null
     : ordered.some((a) => a.id === viewer.id) ? viewer.id
     : ordered.length > 0 ? ordered[Math.min(viewer.index, ordered.length - 1)].id

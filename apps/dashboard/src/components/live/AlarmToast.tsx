@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ALARM_LABELS, alarmImageUrl, type Alarm } from "@/lib/live";
-import { agoText, alarmSeverity, liveStreamUrl } from "@/lib/alarmPopup.mjs";
+import { agoText, liveStreamUrl } from "@/lib/alarmPopup.mjs";
 import AlarmIcon from "./AlarmIcon";
 import AlarmMedia from "./AlarmMedia";
 import { ALARM_TONES } from "./AlarmViewer";
+import { runAlarmAction, type AlarmAction } from "./alarmAction";
 
 /** Köşede en çok bu kadar uyarı (ilki tam, ikincisi küçük); fazlası "+N uyarı daha" */
 const SHOWN = 2;
@@ -52,16 +53,17 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
     return () => clearInterval(t);
   }, [any]);
 
-  async function act(a: Alarm, kind: "ack" | "false") {
-    if (kind === "false" && !confirm("Bu alarm yanlış alarm olarak işaretlensin mi? Alarm kapanır ve listede «Yanlış alarm» olarak görünür.")) return;
-    setBusy(a.id);
-    setError(null);
-    const ok = await (kind === "ack" ? onAck(a) : onFalseAlarm(a));
-    setBusy(null);
-    if (!ok) {
-      setError({ id: a.id, text: kind === "ack" ? "Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin."
-        : "Yanlış alarm kaydedilemedi. Tekrar deneyin." });
-    }
+  // kartı kalkan (onaylandı, başka yerde kapandı ya da pencere açılınca kartlar çizilmiyor) alarmın hatası silinir: Küçült'ten
+  // sonra eski "Gördüm kaydedilemedi" geri gelmesin
+  useEffect(() => {
+    if (error && !warnings.some((w) => w.id === error.id)) setError(null);
+  }, [error, warnings]);
+
+  async function act(a: Alarm, kind: AlarmAction) {
+    const text = await runAlarmAction(a, kind, {
+      onAck, onFalseAlarm, onStart: () => { setBusy(a.id); setError(null); }, onEnd: () => setBusy(null),
+    });
+    if (text) setError({ id: a.id, text });
   }
 
   const now = Date.now() / 1000;
@@ -91,14 +93,16 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
     </button>
   );
   const clock = (a: Alarm) => new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR");
+  // geçen süre saniyede bir değişir: duyuru bölgesinin içinde olduğu için ekran okuyucudan gizli (yoksa her saniye yeniden
+  // okunurdu); saat okunur
+  const ago = (a: Alarm) => <span aria-hidden="true" data-testid="toast-ago"> · {agoText(now - a.firedAt)}</span>;
 
   return (
     <section data-testid="alarm-toasts" aria-live="assertive" aria-label="Uyarılar"
              className="pointer-events-none fixed bottom-4 right-4 z-50 grid w-[min(23rem,calc(100vw-2rem))] gap-2">
       {shown.map((a, i) => {
+        // yalnız uyarılar (telefon) kart olur: sarı başlıkta koyu yazı ≥6:1
         const tone = ALARM_TONES[a.type];
-        // sarı başlıkta koyu yazı zaten ≥6:1; başka tür renginde (beyaz yazı) küçük başlık koyu yarı saydam zemin üstünde
-        const shade = alarmSeverity(a.type) === "warning" ? "" : "rounded-[2px] bg-black/25 px-1.5";
         const label = ALARM_LABELS[a.type];
         if (i === 0) {
           const liveUrl = liveStreamUrl(a, liveSessionIds);
@@ -110,14 +114,14 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
                   <AlarmIcon type={a.type} className="h-[18px] w-[18px]" />
                 </span>
                 <p className="min-w-0 flex-1 truncate text-[14px] font-bold">
-                  <span className={shade} data-testid="toast-title">{label}</span>
+                  <span data-testid="toast-title">{label}</span>
                 </p>
-                {hide(a, alarmSeverity(a.type) === "warning" ? "hover:bg-black/10" : "hover:bg-white/15")}
+                {hide(a, "hover:bg-black/10")}
               </header>
               <AlarmMedia alarm={a} liveUrl={liveUrl} initial={liveUrl ? "live" : "clip"} size="compact" />
               <div className="grid gap-2 px-2.5 py-2">
                 <p data-testid="toast-meta" className="truncate text-[12.5px] tabular-nums text-pl-muted">
-                  <b className="font-semibold text-pl-ink" title={a.camera}>{a.camera}</b> · {clock(a)} · {agoText(now - a.firedAt)}
+                  <b className="font-semibold text-pl-ink" title={a.camera}>{a.camera}</b> · {clock(a)}{ago(a)}
                 </p>
                 {errorLine(a)}
                 {buttons(a, false)}
@@ -141,7 +145,7 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
                     <AlarmIcon type={a.type} className={`h-3.5 w-3.5 shrink-0 ${tone.icon}`} />{label}
                   </span>
                   <span className="block truncate tabular-nums text-pl-muted">
-                    <span title={a.camera}>{a.camera}</span> · {clock(a)} · {agoText(now - a.firedAt)}
+                    <span title={a.camera}>{a.camera}</span> · {clock(a)}{ago(a)}
                   </span>
                 </p>
                 {hide(a, "-mr-1 -mt-1 text-pl-muted hover:bg-pl-head")}

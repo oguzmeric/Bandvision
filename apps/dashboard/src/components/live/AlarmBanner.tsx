@@ -5,7 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { KEEP_UNSAVED_ATTR } from "@/components/UnsavedGuard";
 import { refusalText } from "@/lib/analyzerRefusal.mjs";
 import { ALARM_LABELS } from "@/lib/live";
-import { alarmSeverity, sortAlarms } from "@/lib/alarmPopup.mjs";
+import { alarmSeverity } from "@/lib/alarmPopup.mjs";
 import { useAlarmCenter } from "./AlarmCenter";
 
 /**
@@ -21,7 +21,7 @@ export default function AlarmBanner() {
   const pathname = usePathname();
   const search = useSearchParams().toString();
   if (!center) return null;
-  const { alarms, problem, unwatched, ackFailed, open } = center;
+  const { alarms, problem, unwatched, ackFailed, openFirst } = center;
 
   const next = pathname + (search ? `?${search}` : "");
   const refused = problem && refusalText(problem);
@@ -70,7 +70,7 @@ export default function AlarmBanner() {
             <span className="min-w-0 flex-1 truncate text-pl-muted">
               Son: <b className="font-semibold text-pl-ink">{ALARM_LABELS[last.type]} — {last.camera}</b>
             </span>
-            <button type="button" onClick={() => open(sortAlarms(alarms)[0].id)} className="pl-btn h-7 text-[12.5px] font-semibold">
+            <button type="button" onClick={openFirst} className="pl-btn h-7 text-[12.5px] font-semibold">
               Alarmları göster
             </button>
           </div>

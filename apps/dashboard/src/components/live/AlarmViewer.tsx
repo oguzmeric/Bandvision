@@ -8,6 +8,7 @@ import {
 import { agoText, alarmSeverity, liveStreamUrl } from "@/lib/alarmPopup.mjs";
 import AlarmIcon from "./AlarmIcon";
 import AlarmMedia from "./AlarmMedia";
+import { runAlarmAction, type AlarmAction } from "./alarmAction";
 
 /** "active": onaylanmamış alarmlar (alarm penceresi, Küçült); "browse": geçmiş alarmlar (Alarmlar sayfası, Son alarmlar) */
 export type ViewerMode = "active" | "browse";
@@ -126,19 +127,11 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
     else if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); }
   }
 
-  async function act(kind: "ack" | "false") {
-    const undo = kind === "false" && Boolean(a.falseAlarm);
-    if (kind === "false" && !confirm(undo
-      ? "Yanlış alarm işareti kaldırılsın mı? Alarm onaylanmış olarak kalır."
-      : "Bu alarm yanlış alarm olarak işaretlensin mi? Alarm kapanır ve listede «Yanlış alarm» olarak görünür.")) return;
-    setBusy(true);
-    setError(null);
-    const ok = await (kind === "ack" ? onAck(a) : onFalseAlarm(a));
-    setBusy(false);
-    if (!ok) {
-      setError({ id: a.id, text: kind === "ack" ? "Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin."
-        : undo ? "Yanlış alarm işareti kaldırılamadı. Tekrar deneyin." : "Yanlış alarm kaydedilemedi. Tekrar deneyin." });
-    }
+  async function act(kind: AlarmAction) {
+    const text = await runAlarmAction(a, kind, {
+      onAck, onFalseAlarm, onStart: () => { setBusy(true); setError(null); }, onEnd: () => setBusy(false),
+    });
+    if (text) setError({ id: a.id, text });
   }
 
   const now = Date.now() / 1000;
