@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { KIND_CATEGORY, type AnalysisKind } from "@/lib/analysisKind";
+import { KIND_CATEGORY, KIND_PRESET, matchesKind, type AnalysisKind } from "@/lib/analysisKind";
 import { api, type CatalogCategory, type LiveSession, type Profile } from "@/lib/live";
 import { useRetryWhileFailed } from "@/lib/useRetryWhileFailed";
 
@@ -14,7 +14,13 @@ export function categoryOf(p: Profile): string {
 }
 
 export function profileStatus(p: Profile): string {
-  if (p.countMode === "safety") return p.safety?.phone?.enabled ? "Eller yukarı / yerde yatan kişi / telefon kullanımı" : "Eller yukarı / yerde yatan kişi";
+  if (p.countMode === "safety") {
+    // açık kurallar (kayıtsız kural varsayılanında: eller yukarı ve yerde yatan açık, telefon kapalı)
+    const s = p.safety;
+    const on = [(s?.handsUp?.enabled ?? true) && "eller yukarı", (s?.lying?.enabled ?? true) && "yerde yatan kişi",
+      (s?.phone?.enabled ?? false) && "telefon kullanımı"].filter((x): x is string => typeof x === "string").join(" / ");
+    return on ? on.charAt(0).toLocaleUpperCase("tr") + on.slice(1) : "Bütün kurallar kapalı";
+  }
   if (p.countMode === "fire") return "Alev / duman erken uyarısı";
   if (p.countMode === "detect") return "Giriş / çıkış sayımı";
   if (p.countMode === "linescan") return "Bitişik / hacimli ürün";
@@ -131,7 +137,10 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
         )}
         <div className="grid max-h-[50vh] gap-3 overflow-y-auto pr-1">
           {catalog.filter((c) => c.available && (!kind || c.id === KIND_CATEGORY[kind])).map((cat) => {
-            const list = (profiles ?? []).filter((p) => categoryOf(p) === cat.id);
+            // telefon: yalnız telefon kuralı açık güvenlik profilleri ve "Telefon kullanımı" hazır profili
+            const list = (profiles ?? []).filter((p) => categoryOf(p) === cat.id && (!kind || matchesKind(p, kind)));
+            const only = kind ? KIND_PRESET[kind] : undefined;
+            const presets = only ? cat.presets.filter((pr) => pr.key === only) : cat.presets;
             return (
               <div key={cat.id}>
                 <p className="mb-1 text-[13px] font-semibold">{cat.title}</p>
@@ -171,7 +180,7 @@ export default function StartSessionDialog({ sourceId, channelId, title, substre
                       )}
                     </div>
                   ))}
-                  {cat.presets.map((pr) => (
+                  {presets.map((pr) => (
                     <button key={pr.key} type="button" onClick={() => addPreset(pr.key)}
                             className="rounded-[2px] border border-dashed border-pl-line px-2.5 py-1.5 text-left text-[13px] text-pl-muted hover:bg-pl-side hover:text-pl-accent">
                       + {pr.name} profili ekle

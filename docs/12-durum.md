@@ -207,7 +207,7 @@ Bilgisayar tarafı yol haritasının 1. projesi (sıra: sade arayüz → ekran k
 
 - **Ne var:**
   - **Kabuk:** solda yazılı, gruplu menü: İzleme, Analizler, Donanım, Sistem. Gruplar açılıp kapanır ve tarayıcıda hatırlanır. Yangın ve duman, Kalite kontrol, Raporlar ve Lisans gridir, tıklanınca "yakında" der (Cihaz ayarları §5i ile açıldı). Telefonda menü "Menü" düğmesinin arkasında bir çekmecedir. Altta durum şeridi: analiz sunucusu çalışıyor / kapalı / yetki hatası, işlemci yükü, ekran kartı yükü (§5i). Yeni **Hakkında** sayfası panelin ve analiz sunucusunun sürümünü ve git kısa özetini gösterir. Bütün sayfalar sade görünümdedir (düz başlık, form satırları, tablolar); eski kart görünümünü bir birim testi bekçisi yakalar. Sayfa adresleri değişmedi.
-  - **Analizler:** Ürün sayımı, Kişi sayımı ve Güvenlik alarmı (poz), canlı sayım sayfasının türe süzülmüş hâlleridir (`/live?tur=urun|kisi|guvenlik`). "Yeni analiz" o türün profilleriyle başlatır.
+  - **Analizler:** Ürün sayımı, Kişi sayımı ve Güvenlik alarmı (poz), canlı sayım sayfasının türe süzülmüş hâlleridir (`/live?tur=urun|kisi|guvenlik`). Sonradan eklenenler: Yangın / duman (`tur=yangin`) ve Telefon kullanımı (`tur=telefon`: telefon kuralı açık güvenlik kameraları; hazır profil "Telefon kullanımı", 2026-11-17). "Yeni analiz" o türün profilleriyle başlatır.
   - **Canlı izleme** (`/watch`):
     - Şablonlar üstte sekmelerdir: "+" yeni 2×2 şablon açar; sağ tıkla Yeniden adlandır / Kopyala / Sil; seçili sekme bu tarayıcıda hatırlanır.
     - Şablon editörü menüsü: Yeni şablon, Geri al, Yinele, Kaydet, Farklı kaydet…, Seçili kutuyu boşalt, NVR'dan şablon ve 10 düzen düğmesi (1, 2×2, 3×3, 4×4, 1+5, 1+7, 4×3, 5×5, 8×8, N×M).

@@ -11,8 +11,9 @@ from conftest import local_client
 from fastapi.testclient import TestClient
 
 from bantvision.analyzer import Settings, create_app
+from bantvision.core import Profile
 from bantvision.live.power import disable_power_throttling
-from bantvision.live.store import CATALOG, LiveStore
+from bantvision.live.store import CATALOG, LiveStore, make_preset
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 CLIP = ROOT / "apps" / "ios" / "BantSayacUITests" / "ui_test_clip.mp4"
@@ -49,7 +50,7 @@ def test_store_seeds_profiles_like_phone_catalog(tmp_path: pathlib.Path) -> None
     people = next(p for p in store.profiles() if p["name"] == "Mağaza girişi")
     assert people["countMode"] == "detect"
     presets = {k["key"] for c in CATALOG for k in c["presets"]}
-    assert presets == {"egg", "flour", "box", "generic", "people", "jeweler", "fire"}   # jeweler, fire: tohumlanmaz, "+ ekle" ile
+    assert presets == {"egg", "flour", "box", "generic", "people", "jeweler", "phone", "fire"}   # jeweler, phone, fire: tohumlanmaz, "+ ekle" ile
 
 
 def test_store_keeps_password_out_of_sources(tmp_path: pathlib.Path) -> None:
@@ -604,9 +605,14 @@ def test_staff_events_reach_status_csv_and_labels() -> None:
 
 def test_catalog_has_safety_preset(client: TestClient) -> None:
     cat = {c["id"]: c for c in client.get("/api/v1/live/catalog").json()}
-    assert cat["safety"]["available"] and cat["safety"]["presets"] == [{"key": "jeweler", "name": "Kuyumcu güvenliği"}]
+    assert cat["safety"]["available"] and cat["safety"]["presets"] == [
+        {"key": "jeweler", "name": "Kuyumcu güvenliği"}, {"key": "phone", "name": "Telefon kullanımı"}]
     p = client.post("/api/v1/live/profiles", json={"preset": "jeweler"}).json()
     assert p["countMode"] == "safety" and p["name"] == "Kuyumcu güvenliği"
+    q = client.post("/api/v1/live/profiles", json={"preset": "phone"}).json()
+    assert q["countMode"] == "safety" and q["name"] == "Telefon kullanımı"
+    assert q["safety"]["phone"] == {"enabled": True, "seconds": 15.0}
+    assert not q["safety"]["handsUp"]["enabled"] and not q["safety"]["lying"]["enabled"]
 
 
 # ---------------------------------------------------------------------- poz güvenlik: oturum, alarm günlüğü, Telegram
@@ -3157,3 +3163,16 @@ def test_thumbnail_in_flight_across_source_edit_does_not_mark(client: TestClient
     monkeypatch.setattr(nvr, "snapshot", snapshot)
     r = client.get(f"/api/v1/live/sources/{sid}/snapshot", params={"channel": "4"})
     assert r.status_code == 200 and not mgr.sub_dead(sid, "4") and "x-sub-dead" not in r.headers
+
+
+def test_phone_preset_watches_only_phone_use() -> None:
+    """"Telefon kullanımı" hazır profili: güvenlik modu, yalnız telefon kuralı açık (15 sn); sözleşmeye gidip geri gelir."""
+    p = make_preset("phone")
+    assert p.name == "Telefon kullanımı" and p.countMode == "safety"
+    assert (p.safety.phone.enabled, p.safety.phone.seconds) == (True, 15.0)
+    assert not p.safety.handsUp.enabled and not p.safety.lying.enabled
+    d = p.to_dict()
+    assert d["safety"]["phone"] == {"enabled": True, "seconds": 15.0}
+    assert Profile.from_dict(d).safety == p.safety
+    safety = next(c for c in CATALOG if c["id"] == "safety")
+    assert {"key": "phone", "name": "Telefon kullanımı"} in safety["presets"]

@@ -29,8 +29,9 @@ CATALOG: list[dict[str, Any]] = [
          {"key": "box", "name": "Koli / kutu"}, {"key": "generic", "name": "Genel ürün"}]},
     {"id": "people", "title": "Kişi sayımı", "subtitle": "Mağaza girişi: giren ve çıkan kişi sayısı",
      "available": True, "presets": [{"key": "people", "name": "Mağaza girişi"}]},
-    {"id": "safety", "title": "Güvenlik", "subtitle": "Eller yukarı ve yerde yatan kişi alarmı",
-     "available": True, "presets": [{"key": "jeweler", "name": "Kuyumcu güvenliği"}]},
+    {"id": "safety", "title": "Güvenlik", "subtitle": "Eller yukarı, yerde yatan kişi ve telefon kullanımı alarmı",
+     "available": True, "presets": [{"key": "jeweler", "name": "Kuyumcu güvenliği"},
+                                    {"key": "phone", "name": "Telefon kullanımı"}]},
     {"id": "fire", "title": "Yangın / duman", "subtitle": "Alev ve duman için erken uyarı",
      "available": True, "presets": [{"key": "fire", "name": "Yangın / duman"}]},
     {"id": "vehicle", "title": "Araç sayımı", "subtitle": "Giriş/çıkış ve otopark doluluğu", "available": False,
@@ -44,7 +45,8 @@ CATALOG: list[dict[str, Any]] = [
 
 def make_preset(key: str) -> Profile:
     makers = {"egg": Profile.egg, "flour": Profile.flour_sack, "box": Profile.box, "generic": Profile,
-              "people": Profile.people, "jeweler": Profile.jeweler, "fire": Profile.fire_watch}
+              "people": Profile.people, "jeweler": Profile.jeweler, "phone": Profile.phone_watch,
+              "fire": Profile.fire_watch}
     if key not in makers:
         raise KeyError(key)
     p = makers[key]()

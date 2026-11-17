@@ -331,6 +331,16 @@ class Profile:
                    detectConfidence=0.35, countAnchor="bottom", minHits=3, processingWidth=640)
 
     @classmethod
+    def phone_watch(cls) -> Profile:
+        """Telefon kullanımı: yalnız telefon kuralı açık (15 sn); eller yukarı ve yerde yatan kişi kapalı. Kuyumcu
+        güvenliğiyle aynı kişi tanıma ayarları (güvenlik modu, eğik kamera)."""
+        p = cls.jeweler()
+        p.name = "Telefon kullanımı"
+        p.safety = SafetyConfig(handsUp=SafetyRule(False, 3.0), lying=SafetyRule(False, 10.0),
+                                phone=SafetyRule(True, 15.0))
+        return p
+
+    @classmethod
     def fire_watch(cls) -> Profile:
         """Yangın / duman erken uyarısı: alev (3 sn) ve duman (8 sn) kuralı; sabit kamera, tüm kare."""
         return cls(name="Yangın / duman", roi=Roi(0.0, 0.0, 1.0, 1.0), countMode="fire", processingWidth=640,

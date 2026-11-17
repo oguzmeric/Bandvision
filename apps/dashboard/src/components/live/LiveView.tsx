@@ -16,7 +16,7 @@ import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, isWatchMode, safetyHealth, STATE_LABELS, stateDot, watchStatus, type LabColor, type LiveSession, type Profile } from "@/lib/live";
 import { fireConfig } from "@/lib/fireAlarms.mjs";
 import { FIRE_OK_TEXT, GUARD_OK_TEXT } from "@/lib/views";
-import { KIND_NOUN, kindOfMode, parseKind } from "@/lib/analysisKind";
+import { KIND_MODE_OF, KIND_NOUN, kindOfMode, matchesKind, parseKind } from "@/lib/analysisKind";
 import { DIRECTION_LABELS, type CountAnchor, type CountMode } from "@/lib/types";
 
 function Counter({ label, value, tone, hint, testId }: { label: string; value: number; tone: "total" | "in" | "out"; hint?: string; testId: string }) {
@@ -97,12 +97,19 @@ export default function LiveView() {
   const params = useSearchParams();
   const [all, setSessions] = useState<LiveSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // ?tur= ile süzülmüş görünüm (yoksa ya da geçersizse tüm oturumlar); süzme profilin sayım yöntemine göre
+  // ?tur= ile süzülmüş görünüm (yoksa ya da geçersizse tüm oturumlar); süzme profilin sayım yöntemine göre (telefon:
+  // telefon kuralı açık güvenlik kameraları). Bu türde gösterilen kamera, kuralı Ayarla'da kapatılsa da listeden
+  // düşmez (taslak sunucuya anında uygulanır; panel elden gitmesin); tür değişince ya da sayfa yenilenince düşer.
   const kind = parseKind(params.get("tur"));
   const turQuery = kind ? `&tur=${kind}` : "";
-  const sessions = all && kind ? all.filter((s) => kindOfMode(s.profile.countMode ?? "blob") === kind) : all;
+  const [shown, setShown] = useState<{ kind: string; id: string } | null>(null);
+  const sessions = all && kind
+    ? all.filter((s) => matchesKind(s.profile, kind) || (shown?.kind === kind && shown.id === s.id && kindOfMode(s.profile.countMode ?? "blob") === KIND_MODE_OF[kind]))
+    : all;
   // ?s= yalnızca süzmeye uyuyorsa geçerli; yoksa süzülmüş listenin ilki seçilir
   const session = sessions?.find((s) => s.id === params.get("s")) ?? sessions?.[0] ?? null;
+  const shownId = session?.id ?? null;
+  useEffect(() => { if (kind && shownId) setShown({ kind, id: shownId }); }, [kind, shownId]);
 
   // kalibrasyon taslağı (sunucudaki oturuma anında uygulanır; Kaydet ile profile yazılır, İptal ile geri alınır)
   const [draft, setDraft] = useState<Profile | null>(null);
