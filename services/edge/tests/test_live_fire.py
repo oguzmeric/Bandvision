@@ -668,15 +668,23 @@ def test_fire_session_publishes_clip_overlays_only_for_analysed_frames() -> None
     det = ConstFire(box=WIDE)
     s = LiveSession("t", lambda: "yok.mp4", Profile.fire_watch(), fire=det, clip_sink=lambda _j: None)
     rng = np.random.default_rng(2)
+    clips = s._clips
+    assert clips is not None
+    # Yayımlanan her işaret kaydedilir: ön kaydın zaman penceresi (PRE_S + POST_S + 1 sn) testin süresine bağlı olmasın
+    ovs: list[Any] = []
+    publish = clips.publish_overlay
+    clips.publish_overlay = lambda data, t: (ovs.append(data), publish(data, t))[-1]
     try:
         for i in range(12):                                   # 2,4 sn, 5 kare/sn analiz + arada atlanan kareler
-            for ts in (100.0 + i * 0.2, 100.0 + i * 0.2 + 0.05):
+            for k, ts in enumerate((100.0 + i * 0.2, 100.0 + i * 0.2 + 0.05)):
                 seq = _inject(s, ts, _scene(rng))
                 s.jpeg(after=seq, timeout=5.0)
-                time.sleep(0.09)
-        assert s._clips is not None
-        ovs = [ov for _t, ov in s._clips._overlays]
-        assert len(ovs) == det.calls == 12 and all(ov.kind == "fire" for ov in ovs)
+                assert s._jpeg_seq > seq                      # kare işlendi (önizleme çizildi), sonraki kare birleşmez
+                assert det.calls == len(ovs) == i + 1, (i, k, det.calls, len(ovs))   # atlanan kare: ne analiz ne işaret
+                # önizleme ≤ 12/sn: sonraki kare de çizilsin. 1/12 sn'nin üstünde, Windows'ta time.monotonic() 15,6 ms
+                # adımlı olduğundan bekleme o adım kadar kısa ölçülebilir (0,09 sn ~78 ms sayılıp önizleme atlanırdı)
+                time.sleep(0.12)
+        assert all(ov.kind == "fire" for ov in ovs) and clips._overlays[-1][1] is ovs[-1]
         assert not ovs[-1].empty and ovs[0].empty                     # ilk karede hareket kıyası yok: kutu oy vermez
         assert _orange(cv2.imdecode(np.frombuffer(s.jpeg()[1] or b"", np.uint8), cv2.IMREAD_COLOR), WIDE) > 20
     finally:
