@@ -33,8 +33,8 @@ Başarı: alarm gelince operatör tek bakışta (1) şu an kamerada ne olduğunu
 3. **Renk ve başlık**: tür rengi başlık şeridinde — yangın/duman turuncu, kişi alarmları kırmızı, telefon sarı (koyu
    yazı), deneme alarmı gri-mavi. Başlıkta simge + tür adı + "DEVAM EDİYOR" (sürüyorsa) ya da "Süre: N sn".
 4. **Ortadaki pencere** (kritik):
-   - Bilgi satırı: Kamera, Saat (tarih-saat), Geçen süre (canlı sayaç: "38 sn önce", "9 dk önce"), Bildirim
-     (`NOTIFY_LABELS`).
+   - Bilgi satırı: Geçen süre (canlı sayaç: "38 sn önce", "9 dk önce"), Bildirim (`NOTIFY_LABELS`); kamera ve
+     tarih-saat başlıktadır (madde 12).
    - Düğmeler (bugünküler korunur): Gördüm (odak burada), Kamerayı aç, Kayıt cihazında izle (koşulları aynı),
      Yanlış alarm (onay sorar), Küçült (Esc de; asla onay değil).
    - Sağda **açık alarmlar listesi** (yalnız etkin kipte ve birden çok alarm varken): kritikler üstte, sonra uyarılar;
