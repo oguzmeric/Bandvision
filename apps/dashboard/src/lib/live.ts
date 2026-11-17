@@ -224,6 +224,8 @@ export interface Alarm {
   /** Alarmı veren oturumun kaynağı ve kanalı (kayıt cihazı kanalıysa "Kayıt cihazında izle"); eski kayıtlarda yok */
   sourceId?: string | null;
   channelId?: string | null;
+  /** İhlal eden kişinin/nesnenin normalize (0–1) kutusu [x1, y1, x2, y2]; eski kayıtta yok ya da null */
+  box?: [number, number, number, number] | null;
 }
 /**
  * "Yanlış alarm" düğmesi iki yönlüdür: işaretli değilse işaretler (gövdesiz istek; alarm onaylanır), işaretliyse geri
