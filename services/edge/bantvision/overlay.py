@@ -11,6 +11,7 @@ import math
 import os
 import pathlib
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import cv2
@@ -143,33 +144,96 @@ _SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12)
 _SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE", "phone": "TELEFON"}
 
 
+_SAFETY_RULE_OF = {"hands_up": "handsUp", "lying": "lying", "phone": "phone"}
+_COUNTING = (30, 190, 245)                      # poz güvenlik: süre doluyor (sarı)
+_MAX_NAMED_PEOPLE = 6                           # bundan kalabalıkta "Kişi" yazısı bırakılır (kutular kalır)
+
+
+@dataclass(frozen=True)
+class SafetyTag:
+    """Kişi üstü etiket: normalize kutu, durum ("person" | "counting" | "alarm"), yazı, süre ilerlemesi (yalnız counting)."""
+    box: tuple[float, float, float, float]
+    state: str
+    text: str
+    progress: float | None
+
+
+def _clock(sec: float) -> str:
+    n = int(sec)
+    return f"{n // 60}:{n % 60:02d}"
+
+
+def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
+    """Çizilecek etiketler (sıra: person, counting, alarm). Gözlenen her kişi bir etiket alır: alarm vermiş bölümü varsa
+    alarm; yoksa açık kuralı sayan en dolu bölüm varsa counting; yoksa person. Alarmlı iz gözlenmese de `r.boxes`
+    kutusuyla çıkar."""
+    people = len(r.tracks) <= _MAX_NAMED_PEOPLE
+    obs = {t.id: tuple(float(v) for v in t.box) for t in r.tracks}
+    person: list[SafetyTag] = []
+    counting: list[SafetyTag] = []
+    alarm: list[SafetyTag] = []
+    ids = sorted(set(obs) | {tid for tid, _k, _s, fired in r.active if fired})
+    for tid in ids:
+        box = obs.get(tid) or (tuple(float(v) for v in r.boxes[tid]) if tid in r.boxes else None)
+        if box is None:
+            continue
+        fired = [(k, sec) for i, k, sec, f in r.active if i == tid and f]
+        if fired:
+            names = " / ".join(_SAFETY_LABELS[k] for k in sorted({k for k, _ in fired}))
+            alarm.append(SafetyTag(box, "alarm", f"{names} · ALARM {_clock(max(sec for _, sec in fired))}", None))
+            continue
+        best: tuple[float, str, float, float] | None = None              # (ilerleme, tür, sn, eşik)
+        for i, kind, sec, f in r.active:
+            rule = getattr(profile.safety, _SAFETY_RULE_OF[kind], None) if i == tid else None
+            if rule is None or not rule.enabled or rule.seconds <= 0:
+                continue
+            prog = min(1.0, max(0.0, sec / rule.seconds))
+            if best is None or prog > best[0]:
+                best = (prog, kind, sec, rule.seconds)
+        if best is not None:
+            prog, kind, sec, thr = best
+            counting.append(SafetyTag(box, "counting", f"{_SAFETY_LABELS[kind]} {int(sec)} / {thr:g} sn", prog))
+        elif tid in obs:
+            person.append(SafetyTag(box, "person", "Kişi" if people else "", None))
+    return person + counting + alarm
+
+
+_TAG_STYLE = {"person": (GRAY, DARK), "counting": (_COUNTING, DARK), "alarm": (RED, WHITE)}   # (kutu/zemin, yazı)
+
+
 def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:
-    """Poz güvenlik: iskeletler; alarm vermiş (aktif) izin kutusu kırmızı ve etiketli. Alarmlı iz bu karede
-    gözlenmese de (tanıma bir kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir."""
+    """Poz güvenlik: iskeletler ve kişi üstü etiketler (`safety_tags`): ince gri "Kişi", süresi dolan kural için sarı kutu
+    ve ilerleme çubuğu, alarm veren iz için kalın kırmızı kutu ve süre. Alarmlı iz bu karede gözlenmese de (tanıma bir
+    kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir."""
     if r is None:
         return frame
     h, w = frame.shape[:2]
     s = max(0.6, w / 960)
     th = max(1, round(2 * s))
-    alarming = {(tid, kind) for tid, kind, _sec, fired in r.active if fired}
-    boxes: dict[int, Any] = dict(r.boxes)
     for t in r.tracks:
-        boxes[t.id] = t.box                                    # gözlenen iz: güncel kutu
         kp = r.poses.get(t.id)
         if kp is not None:
             for a, b in _SKELETON:
                 if kp[a, 2] >= KP_CONF and kp[b, 2] >= KP_CONF:
                     cv2.line(frame, (int(kp[a, 0]), int(kp[a, 1])), (int(kp[b, 0]), int(kp[b, 1])), CYAN, th,
                              cv2.LINE_AA)
-    for tid in sorted({tid for tid, _ in alarming}):
-        box = boxes.get(tid)
-        if box is None:
-            continue
-        kinds = sorted(k for (i, k) in alarming if i == tid)
-        x1, y1, x2, y2 = (int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h))
-        cv2.rectangle(frame, (x1, y1), (x2, y2), RED, th * 2, cv2.LINE_AA)
-        put_text(frame, " / ".join(_SAFETY_LABELS[k] for k in kinds), (x1, max(0, y1 - int(26 * s))),
-                 int(20 * s), RED)
+    for tag in safety_tags(profile, r):
+        col, ink = _TAG_STYLE[tag.state]
+        x1, y1, x2, y2 = (int(tag.box[0] * w), int(tag.box[1] * h), int(tag.box[2] * w), int(tag.box[3] * h))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), col, {"person": 1, "counting": th * 2, "alarm": th * 3}[tag.state],
+                      cv2.LINE_AA)
+        if tag.text:
+            size = int(18 * s)
+            tw, tht = text_size(tag.text, size)
+            lh = tht + int(8 * s)
+            ty = y1 - lh if y1 - lh >= 0 else y1                 # üstte yer yoksa kutunun içinde, üst kenarda
+            cv2.rectangle(frame, (x1, ty), (x1 + tw + int(8 * s), ty + lh), col, -1)
+            put_text(frame, tag.text, (x1 + int(4 * s), ty + int(2 * s)), size, ink)
+        if tag.progress is not None:
+            bh = max(3, int(5 * s))
+            by2 = min(h - 1, y2)
+            cv2.rectangle(frame, (x1, by2 - bh), (x2, by2), DARK, -1)
+            cv2.rectangle(frame, (x1, by2 - bh), (x1 + int((x2 - x1) * tag.progress), by2), col, -1)
     return frame
 
 

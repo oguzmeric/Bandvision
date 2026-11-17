@@ -594,10 +594,12 @@ def test_overlay_keypoints_are_scaled_to_the_clip_frame(monkeypatch: pytest.Monk
     (img,) = _written(monkeypatch, tmp_path, jobs[0])
     raw = clips._decode(jobs[0].frames[0][2])
     kp = dict(ov.poses)[1] * np.array([0.5, 0.5, 1.0])
-    want = draw_safety(raw.copy(), ov.profile, SafetyResult(tracks=ov.result(320, 240).tracks, poses={1: kp}))
+    full = ov.result(320, 240)                                   # etiketler de aynı çizimden gelir (süre/alarm kutusu)
+    want = draw_safety(raw.copy(), ov.profile,
+                       SafetyResult(tracks=full.tracks, poses={1: kp}, active=full.active, boxes=full.boxes))
     assert np.array_equal(img, want)
     assert not np.array_equal(img[60, 160], raw[60, 160])        # omuz çizgisi y = 240/4 = 60
-    assert np.array_equal(img[120, 240:300], raw[120, 240:300])  # ölçeksiz omuz çizgisi y = 120, x = 192…448 olurdu
+    assert np.array_equal(img[120, 250:300], raw[120, 250:300])  # (x = 240 artık etiket kutusu kenarı) ölçeksiz omuz çizgisi y = 120, x = 192…448 olurdu
 
 
 def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
