@@ -4,7 +4,7 @@ alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en ço
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"phone"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
-falseAlarm}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
+falseAlarm, box}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
 yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: kayıt alınamadı (görüntü yok, kuyruk dolu,
 kodlayıcı/disk hatası ya da yazılırken sunucu kapandı); `falseAlarm`: kullanıcı "Yanlış alarm" dedi (kayıt onaylanmış
 da sayılır; geri alınabilir). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
@@ -41,11 +41,25 @@ _ID = re.compile(r"[0-9a-f]{32}")
 _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "startedAt": 0.0, "endedAt": None,
                              "acked": False, "notify": "disabled", "image": False, "clip": False,
                              "clipStartedAt": None, "clipPending": False, "clipFailed": False,
-                             "falseAlarm": False, "sourceId": None, "channelId": None}
+                             "falseAlarm": False, "sourceId": None, "channelId": None,
+                             "box": None}
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
 _RAW = ".raw.jpg"                   # çizimsiz alarm karesi: alarm-images/<id>.raw.jpg (zor örneğin eğitim karesi)
+
+
+def _valid_box(raw: Any) -> list[float] | None:
+    """Alarmı tetikleyen kutu: 4 sonlu sayı, normalize 0 ≤ x1 < x2 ≤ 1 ve 0 ≤ y1 < y2 ≤ 1; geçersizse None.
+    Geçerliyse 4 basamağa yuvarlanmış liste."""
+    if not isinstance(raw, list | tuple) or len(raw) != 4:
+        return None
+    if any(isinstance(v, bool) or not isinstance(v, int | float) or not math.isfinite(v) for v in raw):
+        return None
+    x1, y1, x2, y2 = (round(float(v), 4) for v in raw)
+    if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
+        return None
+    return [x1, y1, x2, y2]
 
 
 def _record(item: Any) -> dict[str, Any] | None:
@@ -57,6 +71,7 @@ def _record(item: Any) -> dict[str, Any] | None:
         return None
     for k, v in _DEFAULTS.items():
         item.setdefault(k, v)
+    item["box"] = _valid_box(item["box"])
     return item
 
 
@@ -115,16 +130,18 @@ class AlarmStore:
 
     def add(self, session_id: str | None, camera: str, kind: str, started_at: float, fired_at: float,
             jpeg: bytes | None, notify: str, clip_pending: bool = False, source_id: str | None = None,
-            channel_id: str | None = None, raw_jpeg: bytes | None = None) -> dict[str, Any]:
+            channel_id: str | None = None, raw_jpeg: bytes | None = None,
+            box: Sequence[float] | None = None) -> dict[str, Any]:
         """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der).
         `source_id` / `channel_id`: alarmın kamerası (kayıttan izlemeye geçiş; eski kayıtlarda ve oturumsuz deneme
         alarmında None). `raw_jpeg`: çizimsiz alarm karesi (yalnız yangın/duman) `<id>.raw.jpg` olarak yazılır; kayıtta
-        alanı yoktur, yazılamazsa yalnız uyarı."""
+        alanı yoktur, yazılamazsa yalnız uyarı. `box`: alarmı tetikleyen kutu (normalize x1,y1,x2,y2; geçersizse/yoksa None)."""
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
              "image": jpeg is not None, "clip": False, "clipStartedAt": None,
              "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False,
-             "sourceId": source_id, "channelId": channel_id}
+             "sourceId": source_id, "channelId": channel_id,
+             "box": _valid_box(list(box) if box is not None else None)}
         with self._lock:
             if jpeg is not None:
                 try:

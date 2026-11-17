@@ -742,3 +742,11 @@ def test_safety_alarm_sink_is_called_without_raw_frame() -> None:
     (sa, sk), (fa, fk) = calls
     assert len(sa) == 4 and sk == {}                                    # güvenlik: eski çağrı biçimi aynen
     assert len(fa) == 4 and set(fk) == {"raw_jpeg"} and fk["raw_jpeg"][:2] == b"\xff\xd8"
+
+
+def test_on_alarm_keeps_trigger_box_for_fire_and_safety(client: TestClient) -> None:
+    mgr = client.app.state.live
+    s = _fake_session()
+    box = (0.25, 0.25, 0.5, 0.75)
+    ids = mgr.on_alarm(s, [FireAlarm("fire", 0, box, 0.0, 3.0), SafetyAlarm("lying", 1, box, 0.0, 3.0)], [], None)
+    assert [mgr.alarms.get(i)["box"] for i in ids] == [list(box)] * 2

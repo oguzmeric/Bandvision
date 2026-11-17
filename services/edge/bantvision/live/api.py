@@ -651,7 +651,7 @@ class LiveManager:
                                        clip_pending=clip_pending and in_mode,
                                        source_id=getattr(s, "source_id", None) or None,
                                        channel_id=getattr(s, "channel_id", None) or None,
-                                       raw_jpeg=raw_jpeg)
+                                       raw_jpeg=raw_jpeg, box=getattr(a, "box", None))
                 new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:

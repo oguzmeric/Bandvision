@@ -496,3 +496,30 @@ def test_old_records_get_none_source_and_channel(tmp_path: pathlib.Path) -> None
     _write(tmp_path, [_rec("e" * 32)])
     a = AlarmStore(tmp_path).list()[0]
     assert a["sourceId"] is None and a["channelId"] is None
+
+
+def test_alarm_record_keeps_trigger_box(tmp_path: pathlib.Path) -> None:
+    st = AlarmStore(tmp_path)
+    a = st.add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled", box=(0.1, 0.2, 0.3, 0.4))
+    assert a["box"] == [0.1, 0.2, 0.3, 0.4]
+    rec = st.get(a["id"])
+    assert rec is not None and rec["box"] == [0.1, 0.2, 0.3, 0.4]
+    assert AlarmStore(tmp_path).get(a["id"])["box"] == [0.1, 0.2, 0.3, 0.4]    # type: ignore[index]
+    b = st.add("s", "Tezgah", "test", 1.0, 2.0, None, "disabled")
+    assert b["box"] is None
+    c = st.add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled", box=(0.123456, 0.2, 0.3, 0.4))
+    assert c["box"] == [0.1235, 0.2, 0.3, 0.4]                                # 4 basamağa yuvarlanır
+
+
+def test_old_alarm_record_without_box_reads_none(tmp_path: pathlib.Path) -> None:
+    _write(tmp_path, [_rec("a" * 32)])
+    got = AlarmStore(tmp_path).get("a" * 32)
+    assert got is not None and got["box"] is None
+
+
+@pytest.mark.parametrize("bad", [[0.5, 0.5, 0.4, 0.6], [0, 0, 1], [-0.1, 0, 0.5, 0.5], ["a", 0, 1, 1],
+                                 [0, 0, 1.2, 1], [0.2, 0.6, 0.5, 0.6], "box", [True, 0, 1, 1]])
+def test_invalid_box_is_none(tmp_path: pathlib.Path, bad: object) -> None:
+    _write(tmp_path, [_rec("b" * 32, box=bad)])
+    got = AlarmStore(tmp_path).get("b" * 32)
+    assert got is not None and got["box"] is None
