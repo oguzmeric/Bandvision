@@ -60,6 +60,39 @@ Başarı: alarm gelince operatör tek bakışta (1) şu an kamerada ne olduğunu
    alanı "Alarm kaydı"nda açılır (geçmiş alarm), "Canlı" düğmesi yine kullanılabilir. Onay/yanlış alarm durum
    rozetleri bugünkü gibi.
 
+10. **Kişi üstü etiket** (kullanıcı onayı 2026-11-17: "evet uygun, alarm penceresiyle birlikte ekle"; yazı "Kişi",
+    çünkü ekrandaki metinler Türkçe): poz güvenlik çiziminde (`overlay.draw_safety`; canlı işaretli akış, alarm
+    kaydı ve video analizi aynı çizimi kullanır) iskeletlere ek olarak:
+    - Gözlenen her kişi: ince gri kutu ve küçük "Kişi" etiketi. Karede 6'dan çok kişi varken "Kişi" yazısı çıkmaz,
+      yalnız ince kutu kalır (kalabalık).
+    - Süre doluyor (kural açık, bölüm sürüyor, alarm henüz yok): sarı kalın kutu, etiket "TELEFON 9 / 15 sn" (geçen
+      tam saniye / kuralın süresi) ve etiketin altında süre çubuğu. Aynı kişide birden çok kural sayıyorsa dolmaya en
+      yakın olanı gösterilir.
+    - Alarm verildi: kırmızı, daha kalın kutu, etiket "TELEFON · ALARM 0:21" (bölümün süresi dk:sn). Kişi bu karede
+      görünmese de son bilinen kutusu çizilir (bugünkü gibi).
+    - Etiket adları: TELEFON, ELLER YUKARI, YERDE. Etiket kutunun üstüne sığmazsa kutunun içine, üst kenara yazılır.
+
+11. **Güvenlik analiz alanları** (kullanıcı isteği 2026-11-17: "analiz yapılması istenen alanda taranabilsin …
+    görüntülerde belli bölgelerde analiz yapılmak istenebilir"; "trassirde aynı ekranda 15 farklı bölge seçilip
+    alarm aktif edilebiliyor". 2026-10-07'deki "güvenlikte alan kısıtı yok" kararını kullanıcı böylece değiştirdi).
+    Benim kararlarım:
+    - Profil sözleşmesinde `safety.areas`: en çok **16** alan; her alan `{name, points, rules}`: `name` 1–40 karakter
+      (boşluk kırpılır), `points` 3–12 `[x, y]` köşe (0–1), `rules` bu alanda açık kurallar — `handsUp`, `lying`,
+      `phone` alt kümesi, boş olamaz. Alan yoksa bütün kare ve bütün açık kurallar (bugünkü davranış).
+    - Bir kurala ancak kamerada açıksa (süresi kameranın kural ayarından) ve kişinin **kutu merkezi**, `rules`'unda o
+      kural olan bir alanın içindeyse bakılır. Hiçbir alanın içinde olmayan kişi analizde yok sayılır (iskelet, etiket,
+      sayaç, alarm yok). Alandan çıkan kişinin bölümü, görünmeyen kişi gibi biter. Kişi birden çok alandaysa kurallar
+      birleşir; alarmın alanı, listede ilk gelen ve o kuralı içeren alandır.
+    - Alarm kaydına `area` (alanın adı; alan yoksa `null`). Alarm penceresinin bilgi satırında ve köşe kartında
+      "Alan: <ad>"; Telegram iletisinde kamera adının yanında.
+    - Alanlar canlı işaretli görüntüde, alarm kaydında ve video analizinde ince açık mavi çizgiyle ve ilk köşesinde
+      adı ve içindeki kişi sayısıyla çizilir: "Masa 3: 1" (sarı/kırmızı kişi etiketleriyle karışmasın diye mavi). İçinde alarmı süren kişi olan alan kalın kırmızı çizilir (hangi alanda alarm olduğu ekrandan görülür; kullanıcı: "ekranda da hangi alanlarda aktif bölgeler görebiliyorsun").
+    - Panelde güvenlik (poz) ve telefon kameralarının "Ayarla" bölümünde "Analiz alanları": görüntü üstünde çokgen
+      düzenleyici (yangındaki hariç bölge düzenleyicisi) ve alan listesi (ad kutusu, kural kutucukları, sil). Yeni
+      alanın adı "Alan N", kuralları kamerada açık olanlar. Açıklama: "Boş bırakırsanız bütün görüntü izlenir."
+    - Yangın/duman bu işin dışında (orada "Hariç bölgeler" var); video işi (`analysis-job`) seçeneklerine alan
+      eklenmez. iPhone profili alanları okur ve geri yazar (işlemez), yangındaki gibi.
+
 ## Sunucu (edge) değişikliği
 
 - Alarm kaydına **`box`** alanı: alarmı tetikleyen kutu, normalize `[x1, y1, x2, y2]` (0–1); `SafetyAlarm.box` ve

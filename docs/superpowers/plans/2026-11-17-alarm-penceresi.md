@@ -199,3 +199,104 @@ verir; `AlarmBanner` ince sayaç çubuğu olur.
 - [ ] **Step 3:** Uygula.
 - [ ] **Step 4:** Bütün panel e2e (`npx playwright test`), `lint`, `typecheck`, `test:unit` → PASS.
 - [ ] **Step 5:** Docs; commit: "Telefon uyarısı köşe kartında; ince alarm çubuğu ve ekran kenarı".
+
+### Task 5: Kişi üstü etiket (poz güvenlik çizimi)
+
+**Files:**
+- Modify: `services/edge/bantvision/overlay.py` (`draw_safety` ve yeni saf yardımcı)
+- Test: `services/edge/tests/test_overlay_safety.py` (yeni)
+- Docs: `docs/03-algorithm.md` ve `docs/13-web-platform.md`'de poz güvenlik canlı görüntü/olay kaydı çizimini anlatan
+  yerler ("iskelet ve alarmlı kırmızı kutu" geçen cümleler)
+
+**Interfaces:**
+- Consumes: `SafetyResult` (`tracks`, `active: (iz, tür, süre sn, alarm verdi mi)`, `boxes`, `poses`), `Profile.safety`
+  (`handsUp` / `lying` / `phone`: `SafetyRule(enabled, seconds)`).
+- Produces: `SafetyTag` (dataclass: `box: tuple[float, float, float, float]` normalize, `state: "person" | "counting" | "alarm"`,
+  `text: str`, `progress: float | None`) ve `safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]`
+  (çizim sırası: önce `person`, sonra `counting`, en son `alarm`); `draw_safety` bunları çizer.
+  Renkler (BGR): person `(170, 170, 170)` 1 px, counting `(30, 190, 245)` kalın, alarm `RED` daha kalın; etiket zemini
+  kutu rengi, yazı counting/person'da koyu `(20, 20, 20)`, alarmda beyaz.
+
+- [ ] **Step 1: Failing tests** (`safety_tags` üzerinde; çizim için yalnız duman testi):
+  - `test_observed_person_gets_person_tag`: tek iz, `active` boş → `[SafetyTag(box, "person", "Kişi", None)]`.
+  - `test_more_than_six_people_drop_person_text`: 7 iz → 7 `person` etiketi, hepsinin `text == ""`.
+  - `test_counting_phone_shows_seconds_and_progress`: telefon kuralı açık 15 sn, `active=[(1, "phone", 9.7, False)]` →
+    iz 1 için `SafetyTag(box, "counting", "TELEFON 9 / 15 sn", 9.7/15)` (yuvarlama `progress` için yok; `person`
+    etiketi o iz için çıkmaz).
+  - `test_counting_picks_rule_closest_to_firing`: aynı izde `hands_up` 1.0/3 ve `phone` 12/15 → yalnız telefon etiketi.
+  - `test_fired_alarm_shows_duration`: `active=[(1, "phone", 81.2, True)]` → `"TELEFON · ALARM 1:21"`, state `alarm`,
+    `progress None`; iz bu karede gözlenmese de `r.boxes[1]` ile etiket var.
+  - `test_disabled_rule_not_counted`: kural kapalıyken `active`'te sayan bölüm → `counting` yok, yalnız `person`.
+  - `test_labels_are_turkish`: `hands_up` → "ELLER YUKARI", `lying` → "YERDE"; süre `3.0` → "3 sn" (ondalık yok).
+  - `test_draw_safety_smoke`: 640×360 siyah kare, sayan + alarmlı iz → çizim hata vermez, kutu kenarındaki piksel
+    rengi beklenen BGR.
+- [ ] **Step 2:** `PYTHONPATH=. <ana venv python> -m pytest tests/test_overlay_safety.py -q` → FAIL.
+- [ ] **Step 3:** `safety_tags` + `draw_safety` (etiket kutunun üstüne sığmazsa içine; süre çubuğu yalnız counting'de).
+  İskelet çizimi aynen kalır. `test_clips.py`'deki `draw_safety` beklentileri değişirse güncelle.
+- [ ] **Step 4:** Edge'in tüm testleri ve `ruff check .` → PASS.
+- [ ] **Step 5:** Docs; commit: "Poz güvenlik çiziminde kişi üstü etiket: Kişi, süre doluyor, alarm".
+
+### Task 6: Güvenlik analiz alanları — sözleşme, edge, iPhone
+
+**Files:**
+- Modify: `contracts/product-profile.schema.json` (`safety.areas`), `docs/02-contracts.md` (`safety` satırı: "alan
+  kısıtı yoktur" cümlesi değişir)
+- Modify: `services/edge/bantvision/core/profile.py` (`SafetyArea`, `SafetyConfig.areas`, okuma/doğrulama/yazma),
+  `services/edge/bantvision/core/safety.py` (alan süzgeci, kural başına), `services/edge/bantvision/overlay.py`
+  (alanların çizimi), `services/edge/bantvision/live/alarms.py` + `live/api.py` (alarm kaydında `area`; Telegram metni)
+- Modify: `apps/ios/BantSayac/Core/ProductProfile.swift` (`SafetyConfig.areas`, `decodeIfPresent ?? []`),
+  `apps/ios/BantSayacTests/` (yangındaki `FireProfileTests` kalıbıyla gidiş-dönüş testi)
+- Test: `services/edge/tests/test_safety.py`, `test_overlay_safety.py`, `test_alarms.py`, profil/sözleşme testleri
+- Docs: `docs/03-algorithm.md` poz güvenlik bölümü, `docs/13-web-platform.md` (güvenlik bölümü, alarm kaydı alanları)
+
+**Interfaces:**
+- Consumes: Task 5 (`safety_tags`, `draw_safety`), Task 1 (`AlarmLog.add`).
+- Produces:
+  - `SafetyArea` dataclass `{name: str, points: list[tuple[float, float]], rules: list[str]}`;
+    `SafetyConfig.areas: list[SafetyArea]` (varsayılan `[]`); JSON `"areas": [{"name", "points": [[x, y], …], "rules": [...]}]`,
+    boşsa yazılmaz. Sınırlar: en çok 16 alan, ad 1–40 karakter (kırpılmış), 3–12 köşe 0–1 aralığında, `rules`
+    boş olmayan ve yalnız `handsUp`/`lying`/`phone`; aykırısı profil okunurken hata (canlı API `422`, mevcut kalıp).
+  - `area_rules(box, areas) -> tuple[set[str], dict[str, str]] | None` — alan yoksa `None` (her şey serbest); varsa
+    (kutu merkezinin içinde olduğu alanların kural birleşimi, kural → ilk eşleşen alan adı). Kural adları sözleşmedeki
+    (`handsUp`, `lying`, `phone`); `SafetyAlarm.kind` eşlemesi (`hands_up` ↔ `handsUp`) tek yerde.
+  - `SafetyAlarm.area: str | None`; alarm kaydında `"area": str | None` (`AlarmLog.add(..., area=None)`, eski kayıtta
+    `None`).
+
+- [ ] **Step 1: Failing tests:** profil gidiş-dönüşü (alanlar korunur; boşsa JSON'da yok); geçersiz alanlar reddedilir
+  (2 köşe, 13 köşe, 1.2 koordinat, 17 alan, boş ad, 41 karakter ad, boş `rules`, bilinmeyen kural); `area_rules`
+  (merkez içeride/dışarıda/iki alanın kesişiminde, alan yok → `None`); güvenlik analizinde: alan dışındaki kişi süre
+  biriktirmez ve alarm üretmez; `rules: ["phone"]` olan alandaki kişi telefon alarmı üretir ama eller yukarı
+  üretmez; alarmın `area`'sı doğru ad; alarm kaydı `area` saklar ve eski kayıtta `None`; Telegram metni alan adını
+  içerir; `safety_tags`/`draw_safety` alan dışındaki kişiye etiket/iskelet çizmez, alanı mavi çizer ve etiketi "<ad>: <alan içindeki kişi sayısı>" (ör. "Masa 3: 1"; kişinin kutu merkezi alanın içindeyse sayılır). İçinde alarmı süren (state alarm) kişi olan alan kalın kırmızı çizilir — test: `test_area_with_active_alarm_drawn_red`.
+- [ ] **Step 2:** testler FAIL.
+- [ ] **Step 3:** Uygula. Süzgeç iz eşlemeden sonra, kurallardan önce: hiçbir alanda olmayan iz `SafetyResult.tracks`/
+  `poses`'a girmez; alandaki iz için yalnız izinli kurallar işletilir (izinli olmayan kuralın bölümü biter).
+- [ ] **Step 4:** Edge'in tüm testleri, `ruff`; sözleşme şemasını doğrulayan test(ler) PASS. Swift bu bilgisayarda
+  derlenemez: kalıbı birebir izle ve raporda belirt.
+- [ ] **Step 5:** Docs; commit: "Güvenlik analiz alanları: alan başına kurallar, alarmda alan adı".
+
+### Task 7: Panelde "Analiz alanları" ve alarmda alan adı
+
+**Files:**
+- Modify: `apps/dashboard/src/components/live/LiveView.tsx` (güvenlik taslağında `ZonesEditor` + alan listesi), panelin
+  profil tipleri (`safety` bloğu), güvenlik ayar paneli (kuralların düzenlendiği yer), `src/lib/live.ts`
+  (`Alarm.area?: string | null`), `AlarmViewer.tsx` bilgi satırı ve `AlarmToast.tsx` ("Alan: <ad>", yalnız `area` varken)
+- Test: `apps/dashboard/e2e/safety-ui.spec.ts`, `alarm-popup.spec.ts` (ekle)
+- Docs: `docs/13-web-platform.md`
+
+**Interfaces:**
+- Consumes: Task 6 (`safety.areas` JSON, `Alarm.area`), `ZonesEditor` (`{src, aspect, zones, onChange, editable}`;
+  çokgenler `number[][][]`), Task 3/4 bileşenleri.
+- Produces: güvenlik kamerasında "Ayarla" açıkken görüntü üstünde çokgen düzenleyici ve "Analiz alanları" listesi
+  (`data-testid="safety-area"` satırlar: ad kutusu, `handsUp`/`lying`/`phone` kutucukları — yalnız kamerada açık
+  kurallar seçilebilir —, "Sil"); en çok 16 alan (16'da "Alan ekle" devre dışı); yeni alan "Alan N" ve açık
+  kurallarla; açıklama "Boş bırakırsanız bütün görüntü izlenir."; değişiklik `PUT sessions/{id}/profile` ile.
+
+- [ ] **Step 1: Failing e2e:** güvenlik oturumunda Ayarla → "Analiz alanları"; çokgen eklenince profil isteğinde
+  `safety.areas[0]` = `{name: "Alan 1", points: […], rules: [açık kurallar]}`; ad değiştirilip bir kural kaldırılınca
+  istek güncel; 16 alanda ekleme kapalı; kaydedilmiş alanlı profil açılınca alanlar listede; `/live?tur=telefon`
+  oturumunda da aynı; `area: "Masa 3"` olan alarmda pencerede ve köşe kartında "Alan: Masa 3", `area: null`'da satır yok.
+- [ ] **Step 2:** build + spec → FAIL.
+- [ ] **Step 3:** Uygula (yangındaki hariç bölge akışının kalıbı).
+- [ ] **Step 4:** panel e2e (`safety-ui`, `phone-menu`, `fire-ui`, `alarm-popup`), `lint`, `typecheck`, `test:unit` → PASS.
+- [ ] **Step 5:** Docs; commit: "Panelde güvenlik analiz alanları ve alarmda alan adı".
