@@ -19,6 +19,12 @@
   --color-ok-line: #bfe8d3;
   --color-warn-line: #f0d9a8;
   --color-nok-line: #f3c2c7;
+  /* Alarm penceresinin tür renkleri (başlık şeridi): yangın/duman turuncu, telefon (uyarı) sarı üstünde koyu yazı, deneme
+     alarmı gri-mavi; kişi alarmları nok-600 */
+  --color-fire-600: #e2531f;
+  --color-alert-warn: #d89a1e;
+  --color-alert-warn-ink: #2b1d00;
+  --color-alert-test: #4a5f7d;
 
   /* Sade arayüz (TRASSIR'a yakın gri-mavi; taslak duzen.html): menü, durum şeridi ve .pl-* sınıfları */
   --color-pl-bg: #ffffff;

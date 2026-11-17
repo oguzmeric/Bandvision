@@ -3,18 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ALARM_TITLES, ARCHIVE_LEAD_S, CLIP_PENDING_MAX_S, CLIP_PENDING_S, NOTIFY_LABELS, alarmClipUrl, alarmImageUrl, api, type Alarm, type Source,
+  ALARM_LABELS, ALARM_TITLES, ARCHIVE_LEAD_S, NOTIFY_LABELS, alarmImageUrl, api, type Alarm, type AlarmType, type Source,
 } from "@/lib/live";
+import { agoText, alarmSeverity, liveStreamUrl } from "@/lib/alarmPopup.mjs";
+import AlarmIcon from "./AlarmIcon";
+import AlarmMedia from "./AlarmMedia";
 
 /** "active": onaylanmamış alarmlar (alarm penceresi, Küçült); "browse": geçmiş alarmlar (Alarmlar sayfası, Son alarmlar) */
 export type ViewerMode = "active" | "browse";
 
 interface Props {
-  /** Gezinilen alarmlar, yeniden eskiye */
+  /** Gezinilen alarmlar (etkin kipte kritikler üstte, grup içinde yeniden eskiye; göz atmada yeniden eskiye) */
   alarms: Alarm[];
   /** Gösterilen alarm (listede yoksa ilk alarm) */
   id: string;
   mode: ViewerMode;
+  /** Hâlâ açık canlı oturumların kimlikleri (canlı görüntü oturumun işaretli akışından; yoksa kameranın ham akışından) */
+  liveSessionIds: ReadonlySet<string>;
   onSelect: (id: string) => void;
   /** Küçült (etkin) / Kapat (göz atma); Esc de bunu yapar — asla "Gördüm" değil */
   onClose: () => void;
@@ -28,30 +33,35 @@ const SOURCES_RETRY_MS = 5000;
 
 const FOCUSABLE = 'a[href], button:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])';
 
-/** 0:05 biçimi (kayıt içi saniye) */
-function clock(sec: number): string {
-  const s = Math.max(0, Math.round(sec));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
+/** Tür rengi: başlık şeridi (`head`), başlıktaki beyaz rozetin simge rengi (`icon`) ve liste satırının sol kenarı (`edge`).
+ * Yangın/duman turuncu, kişi alarmları kırmızı, telefon sarı (koyu yazı), deneme gri-mavi */
+export const ALARM_TONES: Record<AlarmType, { head: string; icon: string; edge: string }> = {
+  fire: { head: "bg-fire-600 text-white", icon: "text-fire-600", edge: "border-l-fire-600" },
+  smoke: { head: "bg-fire-600 text-white", icon: "text-fire-600", edge: "border-l-fire-600" },
+  hands_up: { head: "bg-nok-600 text-white", icon: "text-nok-ink", edge: "border-l-nok-600" },
+  lying: { head: "bg-nok-600 text-white", icon: "text-nok-ink", edge: "border-l-nok-600" },
+  phone: { head: "bg-alert-warn text-alert-warn-ink", icon: "text-alert-warn-ink", edge: "border-l-alert-warn" },
+  test: { head: "bg-alert-test text-white", icon: "text-alert-test", edge: "border-l-alert-test" },
+};
 
 /**
- * Alarm penceresi: büyük kırmızı başlık (tür, kamera, tarih-saat, sürüyor/süre), ihlal anının kaydı (video; hazır
- * değilse olay resmi), kayıt içinde durumun başladığı ve alarmın verildiği an (tıklayınca oraya atlar), Gördüm /
- * Kamerayı aç / Kayıt cihazında izle (kayıt cihazı kanalında; alarm anından 10 sn önceden) / Yanlış alarm / Küçült. Birden çok alarmda "1 / 3" ve ‹ › ile gezinilir.
+ * Ortadaki alarm penceresi: tür renginde başlık (beyaz rozette türün çizgi simgesi — emoji yok —, tür, altında "<kamera> ·
+ * <tarih-saat>", sağda "devam ediyor" ya da "Süre: N sn"), bilgi satırı (Geçen süre — saniyede bir —, Bildirim), görüntü alanı (`AlarmMedia`: etkin kipte canlı kaynak varsa Canlı ve alarm anı
+ * köşe penceresi; yoksa ve göz atmada Alarm kaydı), Gördüm / Kamerayı aç / Kayıt cihazında izle (kayıt cihazı kanalında;
+ * alarm anından 10 sn önceden) / Yanlış alarm / Küçült. Etkin kipte birden çok alarmda sağda açık alarmlar listesi (olay
+ * resmi küçüğü — canlı değil —, tür, kamera, geçen süre); dar ekranda (< 768 px) liste gizlenir, "1 / 3" ve ‹ › gelir. Göz
+ * atmada liste yok, ‹ › her genişlikte.
  * Yerel `<dialog>` + `showModal()`: tarayıcının üst katmanında açılır — açık başka bir modal pencerenin (ör. "Canlı sayımı
  * başlat", geometri) de üstünde; sayfanın geri kalanı etkisizdir. Erişilebilirlik: `role="alertdialog"`, açılınca odak
  * pencereye (Gördüm) gelir ve içinde kalır (Tab döner); Esc (`cancel`) küçültür, asla onaylamaz.
  */
-export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck, onFalseAlarm }: Props) {
+export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect, onClose, onAck, onFalseAlarm }: Props) {
   const index = Math.max(0, alarms.findIndex((x) => x.id === id));
   const a = alarms[index];
   const dialog = useRef<HTMLDialogElement>(null);
   const primary = useRef<HTMLButtonElement>(null);
-  const video = useRef<HTMLVideoElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
-  const [playFailed, setPlayFailed] = useState<string | null>(null);   // oynatılamayan kayıt (ör. 404)
-  const [duration, setDuration] = useState<{ id: string; sec: number } | null>(null);
   const [, setTick] = useState(0);
   /** Kayıt cihazı kaynaklarının kimlikleri ("Kayıt cihazında izle" yalnız onlarda); kaynaklı alarm görülünce bir kez istenir */
   const [recorders, setRecorders] = useState<Set<string> | null>(null);
@@ -97,23 +107,18 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     }
   }, [shownId, busy]);
 
-  const now = Date.now() / 1000;
-  const age = a ? now - a.firedAt : 0;
-  // kayıt yakalanıyor/yazılıyor: sunucunun clipPending'i (eski sunucuda: kameralı alarmda ilk 20 sn); bayat bayrağa
-  // karşı en çok 2 dakika
-  const pending = a ? !a.clip && (a.clipPending ?? (a.sessionId !== null && age < CLIP_PENDING_S)) && age < CLIP_PENDING_MAX_S : false;
-  // kayıt hazırlanırken ekran kendiliğinden yenilensin (süre dolunca resim/simgeye geçilir)
+  // geçen süre (bilgi satırı ve liste) saniyede bir
   useEffect(() => {
-    if (!pending) return;
-    const t = setTimeout(() => setTick((x) => x + 1), 1000);
-    return () => clearTimeout(t);
-  });
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   if (!a) return null;
 
   function trap(e: React.KeyboardEvent) {
     if (e.key !== "Tab" || !dialog.current) return;
-    const items = [...dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+    // görünmeyenler (dar ekranda liste, geniş ekranda ‹ ›) sayılmaz: odak alamazlar
+    const items = [...dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0);
     if (items.length === 0) { e.preventDefault(); return; }
     const first = items[0], last = items[items.length - 1];
     const cur = document.activeElement;
@@ -136,29 +141,20 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
     }
   }
 
-  const showVideo = Boolean(a.clip) && playFailed !== a.id;
+  const now = Date.now() / 1000;
+  const severity = alarmSeverity(a.type);
+  const onWarn = severity === "warning";                    // sarı başlık: koyu yazı, koyu kenarlı düğmeler
   const ongoing = a.type !== "test" && a.endedAt === null;
-  const base = a.clipStartedAt ?? null;
-  const len = duration?.id === a.id ? duration.sec : null;
-  const marks = showVideo && base !== null ? [
-    ...(a.type !== "test" && a.startedAt < a.firedAt ? [{ key: "start", label: "Durum başladı", t: a.startedAt - base }] : []),
-    { key: "fired", label: "Alarm anı", t: a.firedAt - base },
-  ] : [];
-  const seek = (t: number) => {
-    const v = video.current;
-    if (!v) return;
-    v.currentTime = Math.max(0, t);
-    void v.play().catch(() => undefined);
-  };
+  const liveUrl = liveStreamUrl(a, liveSessionIds);
+  const queue = mode === "active" && alarms.length > 1;
   // alarm anından 10 sn önceden kayıt cihazında izle (yalnız kayıt cihazı kanalındaki alarm)
   const archiveHref = a.sourceId && a.channelId && recorders?.has(a.sourceId)
     ? `/archive?source=${encodeURIComponent(a.sourceId)}&channel=${encodeURIComponent(a.channelId)}&t=${Math.max(0, Math.floor(a.firedAt - ARCHIVE_LEAD_S))}`
     : null;
-  const withImage = a.image ? "; olay resmi gösteriliyor." : ".";
-  const caption = pending ? "Kayıt hazırlanıyor…"
-    : playFailed === a.id ? "Kayıt oynatılamadı; olay resmi gösteriliyor."
-    : a.clipFailed ? `Kayıt alınamadı${withImage}`
-    : "Bu alarmın kaydı yok.";
+  const navBtn = `grid h-7 w-7 place-items-center rounded-[2px] border text-base disabled:opacity-40 ${onWarn
+    ? "border-black/25 bg-black/10 hover:bg-black/15" : "border-white/40 bg-white/15 hover:bg-white/25"}`;
+  const term = "text-[11.5px] text-pl-faint";
+  const desc = "truncate font-semibold tabular-nums";
 
   return (
     <dialog ref={dialog} role="alertdialog" aria-modal="true" aria-label="Alarm" onKeyDown={trap}
@@ -166,124 +162,125 @@ export default function AlarmViewer({ alarms, id, mode, onSelect, onClose, onAck
             // tarayıcı kendisi kapattıysa durum eşlensin; geliştirmede (StrictMode) ilk kapanışın geç gelen olayı, yeniden
             // açılmış pencereyi kapatmasın
             onClose={() => { if (alive.current && !dialog.current?.open) onClose(); }}
-            data-testid="alarm-modal"
-            // yükseklik sınırı pencerenin kendisinde (tarayıcının modal varsayılanı içeriği kırpardı); iç ızgara onu doldurur,
-            // kısa ekranda orta bölüm kayar, başlık ve düğmeler hep görünür (iç ızgara 2 px kısa: pencerenin 1 px kenarlığı)
-            className="m-auto max-h-[calc(100dvh-1.5rem)] w-[min(48rem,calc(100vw-1.5rem))] max-w-none overflow-hidden rounded-[3px] border border-pl-line bg-white p-0 text-pl-ink outline-none backdrop:bg-black/50">
-      <div className="grid max-h-[calc(100dvh-1.5rem-2px)] grid-rows-[auto_minmax(0,1fr)_auto]">
-        <header className="flex flex-wrap items-start gap-x-4 gap-y-2 bg-nok-600 px-4 py-3 text-white">
-          <span className="mt-0.5 text-3xl" aria-hidden="true">🚨</span>
-          <div className="min-w-0 flex-1">
-            <p className="text-2xl font-bold uppercase tracking-wide md:text-[28px]" data-testid="alarm-title">{ALARM_TITLES[a.type]}</p>
-            <p className="mt-0.5 truncate text-[15px] font-semibold">{a.camera}</p>
-            <p className="text-[13px] text-white/85" data-testid="alarm-time">{new Date(a.firedAt * 1000).toLocaleString("tr-TR")}</p>
-          </div>
-          <div className="flex flex-col items-end gap-2">
+            data-testid="alarm-modal" data-severity={severity} data-kind={a.type}
+            // yükseklik sınırı pencerenin kendisinde (tarayıcının modal varsayılanı içeriği kırpardı); iç kutular onu doldurur,
+            // kısa ekranda orta bölüm kayar, başlık ve düğmeler hep görünür (iç kutu 2 px kısa: pencerenin 1 px kenarlığı)
+            className={`m-auto max-h-[calc(100dvh-1.5rem)] ${queue ? "w-[min(68rem,calc(100vw-1.5rem))]" : "w-[min(52rem,calc(100vw-1.5rem))]"} max-w-none overflow-hidden rounded-[3px] border border-pl-line bg-white p-0 text-pl-ink outline-none backdrop:bg-black/60`}>
+      <div className="flex max-h-[calc(100dvh-1.5rem-2px)]">
+        <div className="grid max-h-[calc(100dvh-1.5rem-2px)] min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto]">
+          <header data-testid="alarm-header" className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 ${ALARM_TONES[a.type].head}`}>
+            <span className={`grid h-11 w-11 shrink-0 place-items-center rounded-[6px] bg-white ${ALARM_TONES[a.type].icon}`} aria-hidden="true">
+              <AlarmIcon type={a.type} className="h-7 w-7" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[22px] font-bold uppercase leading-tight tracking-wide md:text-[26px]" data-testid="alarm-title">{ALARM_TITLES[a.type]}</p>
+              <p className={`truncate text-[13.5px] font-medium ${onWarn ? "text-alert-warn-ink/85" : "text-white/90"}`}>
+                <span title={a.camera}>{a.camera}</span> · <span className="tabular-nums" data-testid="alarm-time">{new Date(a.firedAt * 1000).toLocaleString("tr-TR")}</span>
+              </p>
+            </div>
             {ongoing ? (
-              <span className="inline-flex items-center gap-1.5 rounded-[2px] bg-white px-2 py-0.5 text-[12px] font-bold text-nok-ink" data-testid="alarm-status">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-nok-600" aria-hidden="true" />devam ediyor
+              <span className="inline-flex items-center gap-1.5 rounded-[2px] bg-white px-2 py-0.5 text-[12px] font-bold uppercase text-nok-ink" data-testid="alarm-status">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-nok-600 motion-reduce:animate-none" aria-hidden="true" />devam ediyor
               </span>
             ) : a.endedAt !== null && (
-              <span className="rounded-[2px] bg-white/20 px-2 py-0.5 text-[12px] font-semibold" data-testid="alarm-status">
+              <span className={`rounded-[2px] px-2 py-0.5 text-[12px] font-semibold ${onWarn ? "bg-black/10" : "bg-white/20"}`} data-testid="alarm-status">
                 Süre: {Math.max(0, Math.round(a.endedAt - a.startedAt))} sn
               </span>
             )}
             {alarms.length > 1 && (
-              <div className="flex items-center gap-1 text-[13px] font-semibold">
+              // etkin kipte yalnız dar ekranda (genişte sağdaki liste var); göz atmada her genişlikte
+              <div className={`flex items-center gap-1 text-[13px] font-semibold ${queue ? "md:hidden" : ""}`}>
                 <button type="button" aria-label="Önceki alarm" disabled={index === 0} onClick={() => onSelect(alarms[index - 1].id)}
-                        className="grid h-7 w-7 place-items-center rounded-[2px] border border-white/40 bg-white/15 text-base hover:bg-white/25 disabled:opacity-40">‹</button>
+                        className={navBtn}>‹</button>
                 <span data-testid="alarm-counter" className="min-w-12 text-center tabular-nums">{index + 1} / {alarms.length}</span>
                 <button type="button" aria-label="Sonraki alarm" disabled={index === alarms.length - 1} onClick={() => onSelect(alarms[index + 1].id)}
-                        className="grid h-7 w-7 place-items-center rounded-[2px] border border-white/40 bg-white/15 text-base hover:bg-white/25 disabled:opacity-40">›</button>
+                        className={navBtn}>›</button>
               </div>
             )}
-          </div>
-        </header>
+          </header>
 
-        <div className="overflow-auto">
-          <div className="relative grid aspect-video place-items-center bg-[#111]">
-            {showVideo ? (
-              <video key={a.id} ref={video} src={alarmClipUrl(a.id)} autoPlay muted loop playsInline controls data-testid="alarm-video"
-                     aria-label="İhlal anının kaydı" className="h-full w-full object-contain"
-                     onError={() => setPlayFailed(a.id)}
-                     onLoadedMetadata={(e) => { const d = e.currentTarget.duration; if (Number.isFinite(d) && d > 0) setDuration({ id: a.id, sec: d }); }} />
-            ) : a.image ? (
-              // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi (analiz sunucusundan, vekil üzerinden)
-              <img src={alarmImageUrl(a.id)} alt="Olay resmi" className="h-full w-full object-contain" />
-            ) : (
-              <span className="text-6xl" aria-hidden="true">🚨</span>
-            )}
-            {!showVideo && (
-              <p role="status" data-testid="clip-caption"
-                 className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-[2px] bg-black/70 px-3 py-1 text-[12.5px] font-medium text-white">
-                {caption}
+          <div className="overflow-auto">
+            {/* kamera ve tarih-saat başlığın ikinci satırında; burada yinelenmez */}
+            <dl className="flex flex-wrap gap-x-8 gap-y-1.5 border-b border-pl-line-soft bg-pl-side px-4 py-2 text-[13px]">
+              <div className="min-w-0"><dt className={term}>Geçen süre</dt><dd className={desc} data-testid="alarm-ago">{agoText(now - a.firedAt)}</dd></div>
+              <div className="min-w-0"><dt className={term}>Bildirim</dt><dd className={desc}>{NOTIFY_LABELS[a.notify]}</dd></div>
+            </dl>
+
+            <AlarmMedia alarm={a} liveUrl={liveUrl} initial={mode === "browse" || !liveUrl ? "clip" : "live"} size="large" />
+
+            {mode === "browse" && (
+              <p className="flex flex-wrap gap-2 px-4 pt-3 text-[12px]" data-testid="alarm-state">
+                <span className={`rounded-[2px] px-2 py-0.5 font-medium ${a.acked ? "bg-ok-50 text-ok-ink" : "bg-warn-50 text-warn-ink"}`}>{a.acked ? "Onaylandı" : "Onay bekliyor"}</span>
+                {a.falseAlarm && <span className="rounded-[2px] bg-pl-head px-2 py-0.5 font-medium text-pl-muted">Yanlış alarm</span>}
               </p>
             )}
           </div>
 
-          {marks.length > 0 && (
-            <div className="px-4 pt-3" data-testid="alarm-timeline">
-              {len !== null && (
-                // kaydın süresi üstünde iki an (süre video yüklenince bilinir)
-                <div className="relative h-1.5 rounded-full bg-pl-line" aria-hidden="true">
-                  {marks.map((m) => (
-                    <span key={m.key} className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white ${m.key === "fired" ? "bg-nok-600" : "bg-warn-700"}`}
-                          style={{ left: `${Math.min(100, Math.max(0, (m.t / len) * 100))}%` }} />
-                  ))}
-                </div>
+          <footer className="mt-3 grid gap-2 border-t border-pl-line-soft bg-pl-side px-4 py-3">
+            {error?.id === a.id && <p role="status" className="text-[13px] font-medium text-nok-ink">{error.text}</p>}
+            <div className="flex flex-wrap gap-2">
+              {!a.acked && (
+                <button ref={primary} type="button" disabled={busy} onClick={() => act("ack")}
+                        className="h-10 min-w-32 rounded-[2px] border border-nok-600 bg-nok-600 px-5 text-[15px] font-bold text-white hover:bg-[#c42f3f] disabled:opacity-60">
+                  Gördüm
+                </button>
               )}
-              <div className="mt-2 flex flex-wrap gap-2">
-                {marks.map((m) => (
-                  <button key={m.key} type="button" onClick={() => seek(m.t)}
-                          className="pl-btn text-[12.5px]">
-                    <span className={`h-2 w-2 rounded-full ${m.key === "fired" ? "bg-nok-600" : "bg-warn-700"}`} aria-hidden="true" />
-                    {m.label}{m.t < 0 ? " (kayıttan önce)" : ` · ${clock(m.t)}`}
-                  </button>
-                ))}
-              </div>
+              {a.sessionId && (
+                <Link href={`/live?s=${a.sessionId}`} onClick={() => { if (mode === "active") onClose(); }}
+                      className="pl-btn h-10 px-4 font-semibold">
+                  Kamerayı aç
+                </Link>
+              )}
+              {archiveHref && (
+                <Link href={archiveHref} onClick={() => { if (mode === "active") onClose(); }}
+                      className="pl-btn h-10 px-4 font-semibold">
+                  Kayıt cihazında izle
+                </Link>
+              )}
+              <button type="button" disabled={busy} onClick={() => act("false")} className="pl-btn h-10 px-4">
+                {a.falseAlarm ? "Yanlış alarm işaretini kaldır" : "Yanlış alarm"}
+              </button>
+              <button type="button" onClick={onClose}
+                      className="pl-btn ml-auto h-10 px-4">
+                {mode === "active" ? "Küçült" : "Kapat"}
+              </button>
             </div>
-          )}
-
-          {mode === "browse" && (
-            <p className="flex flex-wrap gap-2 px-4 pt-3 text-[12px]" data-testid="alarm-state">
-              <span className={`rounded-[2px] px-2 py-0.5 font-medium ${a.acked ? "bg-ok-50 text-ok-ink" : "bg-warn-50 text-warn-ink"}`}>{a.acked ? "Onaylandı" : "Onay bekliyor"}</span>
-              {a.falseAlarm && <span className="rounded-[2px] bg-pl-head px-2 py-0.5 font-medium text-pl-muted">Yanlış alarm</span>}
-              <span className="rounded-[2px] border border-pl-line-soft bg-pl-side px-2 py-0.5 text-pl-muted">{NOTIFY_LABELS[a.notify]}</span>
-            </p>
-          )}
+            {mode === "active" && <p className="text-[11.5px] text-pl-faint">Küçültünce alarm sayfanın üstündeki şeritte kalır; Gördüm deyince kapanır.</p>}
+          </footer>
         </div>
 
-        <footer className="mt-3 grid gap-2 border-t border-pl-line-soft bg-pl-side px-4 py-3">
-          {error?.id === a.id && <p role="status" className="text-[13px] font-medium text-nok-ink">{error.text}</p>}
-          <div className="flex flex-wrap gap-2">
-            {!a.acked && (
-              <button ref={primary} type="button" disabled={busy} onClick={() => act("ack")}
-                      className="h-10 min-w-32 rounded-[2px] border border-nok-600 bg-nok-600 px-5 text-[15px] font-bold text-white hover:bg-[#c42f3f] disabled:opacity-60">
-                Gördüm
-              </button>
-            )}
-            {a.sessionId && (
-              <Link href={`/live?s=${a.sessionId}`} onClick={() => { if (mode === "active") onClose(); }}
-                    className="pl-btn h-10 px-4 font-semibold">
-                Kamerayı aç
-              </Link>
-            )}
-            {archiveHref && (
-              <Link href={archiveHref} onClick={() => { if (mode === "active") onClose(); }}
-                    className="pl-btn h-10 px-4 font-semibold">
-                Kayıt cihazında izle
-              </Link>
-            )}
-            <button type="button" disabled={busy} onClick={() => act("false")} className="pl-btn h-10 px-4">
-              {a.falseAlarm ? "Yanlış alarm işaretini kaldır" : "Yanlış alarm"}
-            </button>
-            <button type="button" onClick={onClose}
-                    className="pl-btn ml-auto h-10 px-4">
-              {mode === "active" ? "Küçült" : "Kapat"}
-            </button>
-          </div>
-          {mode === "active" && <p className="text-[11.5px] text-pl-faint">Küçültünce alarm sayfanın üstündeki şeritte kalır; Gördüm deyince kapanır.</p>}
-        </footer>
+        {queue && (
+          // liste pencereyi uzatmasın: mutlak konumlu kutuda kayar (pencerenin yüksekliğini orta sütun belirler)
+          <aside aria-label="Açık alarmlar" className="relative hidden w-64 shrink-0 border-l border-pl-line-soft bg-pl-side md:block">
+            <div className="absolute inset-0 flex flex-col">
+              <p className="border-b border-pl-line-soft px-3 py-2 text-[12px] font-semibold text-pl-muted">Açık alarmlar ({alarms.length})</p>
+              <ul data-testid="alarm-queue" className="min-h-0 flex-1 overflow-auto">
+                {alarms.map((x) => {
+                  const current = x.id === a.id;
+                  return (
+                    <li key={x.id}>
+                      <button type="button" data-testid="queue-item" aria-current={current ? "true" : undefined}
+                              onClick={() => onSelect(x.id)}
+                              className={`flex w-full items-center gap-2.5 border-b border-l-4 border-b-pl-line-soft px-2.5 py-2 text-left text-[12.5px] ${ALARM_TONES[x.type].edge} ${current ? "bg-pl-sel" : "hover:bg-pl-head"}`}>
+                        <span className="grid h-11 w-[4.25rem] shrink-0 place-items-center overflow-hidden rounded-[2px] bg-[#111]">
+                          {x.image
+                            // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi küçüğü (canlı değil: bağlantı sınırı)
+                            ? <img src={alarmImageUrl(x.id)} alt="" className="h-full w-full object-cover" />
+                            : <AlarmIcon type={x.type} className="h-6 w-6 text-white/75" />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-semibold">{ALARM_LABELS[x.type]}</span>
+                          <span className="block truncate text-pl-muted">{x.camera}</span>
+                          <span className="block text-[11.5px] tabular-nums text-pl-faint">{agoText(now - x.firedAt)}</span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </aside>
+        )}
       </div>
     </dialog>
   );

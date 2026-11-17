@@ -56,6 +56,10 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI", { timeout: 10_000 });
   await expect(modal).toContainText("Tezgah kamerası");
+  // oturum açık: pencere kameranın canlı (işaretli) görüntüsünde açılır; "Alarm kaydı"na geçilir
+  await expect(modal.getByTestId("media-live")).toHaveAttribute("aria-pressed", "true");
+  await expect(modal.getByTestId("alarm-live")).toHaveAttribute("src", /^\/api\/live\/sessions\/[^/]+\/stream\?k=\d+$/);
+  await modal.getByTestId("media-clip").click();
   const video = modal.getByTestId("alarm-video");
   await expect(video).toBeVisible({ timeout: 20_000 });                 // sonraki yoklamada clip: true
   const src = await video.getAttribute("src");

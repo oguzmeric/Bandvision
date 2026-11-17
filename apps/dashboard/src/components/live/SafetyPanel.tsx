@@ -5,7 +5,7 @@ import {
   ALARM_LABELS, NOTIFY_LABELS, STATE_LABELS, alarmImageUrl, api, safetyHealth, stateDot, toggleFalseAlarm, watchStatus, type Alarm, type LiveSession,
   type SafetyConfig,
 } from "@/lib/live";
-import { useAlarmCenter } from "./AlarmCenter";
+import { NO_LIVE_SESSIONS, useAlarmCenter } from "./AlarmCenter";
 import AlarmViewer from "./AlarmViewer";
 import { FireWarning } from "./FireSettings";
 
@@ -109,7 +109,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
       )}
       {fire && <div className="mt-2.5"><FireWarning /></div>}
       {viewing && alarms.some((a) => a.id === viewing) && (
-        <AlarmViewer alarms={alarms} id={viewing} mode="browse" onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
+        <AlarmViewer alarms={alarms} id={viewing} mode="browse" liveSessionIds={center?.liveSessionIds ?? NO_LIVE_SESSIONS} onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
       )}
     </section>
   );

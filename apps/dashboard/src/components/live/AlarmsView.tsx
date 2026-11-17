@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ALARM_LABELS, ALARM_LIST_LIMIT, NOTIFY_LABELS, alarmImageUrl, api, toggleFalseAlarm, type Alarm, type AlarmType } from "@/lib/live";
 import { alarmCounts } from "@/lib/safetyAlarms.mjs";
-import { useAlarmCenter } from "./AlarmCenter";
+import { NO_LIVE_SESSIONS, useAlarmCenter } from "./AlarmCenter";
 import AlarmViewer from "./AlarmViewer";
 
 const POLL_MS = 5000;
@@ -176,7 +176,7 @@ export default function AlarmsView() {
       </section>
 
       {viewing && visible.some((a) => a.id === viewing) && (
-        <AlarmViewer alarms={visible} id={viewing} mode="browse" onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
+        <AlarmViewer alarms={visible} id={viewing} mode="browse" liveSessionIds={center?.liveSessionIds ?? NO_LIVE_SESSIONS} onSelect={setViewing} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
       )}
     </div>
   );

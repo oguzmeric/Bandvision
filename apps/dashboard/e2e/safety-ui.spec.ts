@@ -502,17 +502,24 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect(modal).toContainText("Tezgah kamerası");
   await expect(modal.getByTestId("alarm-time")).toHaveText(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}$/);
   await expect(modal.getByTestId("alarm-status")).toHaveText("devam ediyor");
-  await expect(modal.getByTestId("alarm-counter")).toHaveText("1 / 2");
+  // birden çok alarm: geniş ekranda sağda açık alarmlar listesi (‹ › yalnız dar ekranda)
+  const items = modal.getByTestId("queue-item");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(modal.getByTestId("alarm-counter")).toBeHidden();
   // odak pencerede (Gördüm); Tab / Shift+Tab pencereden çıkmaz
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();
   for (let i = 0; i < 10; i += 1) await page.keyboard.press("Tab");
   expect(await modal.evaluate((el) => el.contains(document.activeElement))).toBe(true);
   for (let i = 0; i < 4; i += 1) await page.keyboard.press("Shift+Tab");
   expect(await modal.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  // oturum açık değil, kaynak yok: canlı görüntü yok, pencere "Alarm kaydı"nda açılır
+  await expect(modal.getByTestId("media-clip")).toHaveAttribute("aria-pressed", "true");
+  await expect(modal.getByTestId("media-live")).toBeDisabled();
   // kayıt sunucuda hâlâ yazılıyor (clipPending; alarm 45 sn önce — sabit 20 sn sınırı yok): olay resmi ve
   // "Kayıt hazırlanıyor…"
   await expect(modal.getByTestId("clip-caption")).toHaveText("Kayıt hazırlanıyor…");
-  await expect(modal.locator("img")).toHaveAttribute("src", "/api/live/alarms/a2/image.jpg");
+  await expect(modal.getByAltText("Olay resmi")).toHaveAttribute("src", "/api/live/alarms/a2/image.jpg");
   await expect(modal.getByTestId("alarm-video")).toHaveCount(0);
   await expect(modal.getByRole("link", { name: "Kamerayı aç" })).toHaveAttribute("href", "/live?s=abc123");
 
@@ -535,7 +542,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   // "Kaydı izle": pencere o alarmda açılır; deneme alarmında süre/"devam ediyor" ve (oturumsuz) "Kamerayı aç" yok
   await banner.getByRole("button", { name: "Kaydı izle: Deneme alarmı — Kasa" }).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
-  await expect(modal.getByTestId("alarm-counter")).toHaveText("2 / 2");
+  await expect(items.nth(1)).toHaveAttribute("aria-current", "true");
   await expect(modal.getByTestId("alarm-status")).toHaveCount(0);
   await expect(modal.getByRole("link", { name: "Kamerayı aç" })).toHaveCount(0);
   await expect(modal.getByTestId("clip-caption")).toHaveText("Bu alarmın kaydı yok.");   // kamerasız: beklenmez
@@ -555,7 +562,8 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   });
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
-  await expect(modal.getByTestId("alarm-counter")).toHaveCount(0);            // tek alarm: sayaç yok
+  await expect(modal.getByTestId("alarm-counter")).toHaveCount(0);            // tek alarm: sayaç ve liste yok
+  await expect(modal.getByTestId("alarm-queue")).toHaveCount(0);
   await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();  // odak yine Gördüm'de
   expect(await modal.evaluate((el) => { const d = el as Marked; return [d.izli, d.kapandi, d.open]; })).toEqual([1, 0, true]);
   await expect.poll(() => calls.acks).toEqual(["a2"]);
@@ -571,8 +579,9 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
 });
 
-test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekleri; kayıt hazır olunca video ve zaman çizelgesi; Yanlış alarm", async ({ page }) => {
+test("alarm penceresi (sahte API): dar ekranda 3 alarmda ‹ › gezinme; resim/simge yedekleri; kayıt hazır olunca video ve zaman çizelgesi; Yanlış alarm", async ({ page }) => {
   await login(page);
+  await page.setViewportSize({ width: 700, height: 900 });                    // < 768 px: liste gizli, ‹ › var
   const now = Date.now() / 1000;
   // Liste boş başlar, sayfa açıldıktan SONRA dolar: login'den kalan sayfanın yoklaması dolu listeyi görürse alarmlar o sayfada
   // "gösterildi" sayılır (oturum belleği, sayfa yenilense de) ve goto sonrası pencere açılmazdı
@@ -608,13 +617,13 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   await expect(modal.getByTestId("alarm-status")).toHaveText("Süre: 40 sn");
   // 20 sn'den eski, kaydı ve resmi yok: simge
   await expect(modal.getByTestId("clip-caption")).toHaveText("Bu alarmın kaydı yok.");
-  await expect(modal.locator("img")).toHaveCount(0);
+  await expect(modal.getByAltText("Olay resmi")).toHaveCount(0);
   await next.click();
   await expect(counter).toHaveText("3 / 3");
   await expect(next).toBeDisabled();
   // kayıt alınamadı (sunucu clipFailed): olay resmine düşülür ve nedeni yazılır
   await expect(modal.getByTestId("clip-caption")).toHaveText("Kayıt alınamadı; olay resmi gösteriliyor.");
-  await expect(modal.locator("img")).toHaveAttribute("src", "/api/live/alarms/b1/image.jpg");
+  await expect(modal.getByAltText("Olay resmi")).toHaveAttribute("src", "/api/live/alarms/b1/image.jpg");
   await prev.click();
   await prev.click();
   await expect(counter).toHaveText("1 / 3");
@@ -642,7 +651,7 @@ test("alarm penceresi (sahte API): 3 alarmda ‹ › gezinme; resim/simge yedekl
   await expect.poll(() => release !== null).toBe(true);
   release!(404);
   await expect(modal.getByTestId("clip-caption")).toHaveText("Kayıt oynatılamadı; olay resmi gösteriliyor.");
-  await expect(modal.locator("img")).toHaveAttribute("src", "/api/live/alarms/b3/image.jpg");
+  await expect(modal.getByAltText("Olay resmi")).toHaveAttribute("src", "/api/live/alarms/b3/image.jpg");
 
   // Yanlış alarm: onay sorulur; vazgeçilirse istek yok; onaylanınca işaretlenir ve pencere kalan alarma geçer
   page.once("dialog", (d) => d.dismiss());
@@ -685,20 +694,21 @@ test("alarm penceresi (sahte API): kayıt cihazı kanalındaki alarmda \"Kayıt 
   );
   const modal = modalOf(page);
   const watch = modal.getByRole("link", { name: "Kayıt cihazında izle" });
-  await expect(modal.getByTestId("alarm-counter")).toHaveText("1 / 3");
+  const items = modal.getByTestId("queue-item");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
   const t = Math.floor(now - 30.4 - 10);
   await expect(watch).toHaveAttribute("href", `/archive?source=nvr&channel=kanal%203&t=${t}`);
   // eski kayıt (sourceId yok) ve kamera kaynağı (kanal dolu olsa da kind "camera"): düğme yok
-  await modal.getByRole("button", { name: "Sonraki alarm" }).click();
+  await items.nth(1).click();
   await expect(modal).toContainText("Eski kayıt");
   await expect(watch).toHaveCount(0);
-  await modal.getByRole("button", { name: "Sonraki alarm" }).click();
+  await items.nth(2).click();
   await expect(modal).toContainText("Kapı");
   await expect(watch).toHaveCount(0);
   expect(sourceAsks).toBe(1);                                                  // kaynaklar bir kez istenir
   // tıklayınca aynı sekmede kayıttan izleme açılır; etkin pencere küçülür (alarm şeritte kalır)
-  await modal.getByRole("button", { name: "Önceki alarm" }).click();
-  await modal.getByRole("button", { name: "Önceki alarm" }).click();
+  await items.nth(0).click();
   await watch.click();
   await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(`/archive?source=nvr&channel=kanal%203&t=${t}`);
   await expect(page.getByRole("heading", { name: "Kayıttan izleme" })).toBeVisible();

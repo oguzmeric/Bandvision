@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { desktopReady, playBeep, readPref } from "@/lib/attention";
 import { ALARM_LABELS, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm, type LiveSession } from "@/lib/live";
+import { sortAlarms } from "@/lib/alarmPopup.mjs";
 import { problemOf, type Problem } from "@/lib/views";
 import AlarmViewer from "./AlarmViewer";
 
@@ -19,6 +20,9 @@ export const TITLE_FLASH_MS = 1000;
 /** Arka plandaki sekmede aynı anda en çok bu kadar masaüstü bildirimi */
 const MAX_NOTIFICATIONS = 3;
 
+/** Canlı oturumu olmayan çağıranlar için (alarm merkezi yoksa) boş küme */
+export const NO_LIVE_SESSIONS: ReadonlySet<string> = new Set();
+
 /** İzlenmeyen kamera; `fire`: yangın/duman kamerası (şerit "Yangın/duman kamerası izlenmiyor" der) */
 export interface Unwatched { id: string; name: string; reason: string; fire: boolean }
 
@@ -31,6 +35,8 @@ interface AlarmCenterValue {
   unwatched: Unwatched[];
   /** Son alınan canlı oturum listesi (panel genelinde tek yoklama; ör. Canlı izleme kamera listesinin durum noktaları) */
   sessions: LiveSession[];
+  /** `sessions`'ın kimlikleri: alarm penceresi alarmın oturumu hâlâ açıksa onun işaretli canlı akışını gösterir */
+  liveSessionIds: ReadonlySet<string>;
   /** "Gördüm"ü kaydedilemeyen alarm */
   ackFailed: string | null;
   ack: (a: Alarm) => Promise<boolean>;
@@ -83,8 +89,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const seq = useRef(0);
   const refreshRef = useRef<() => void>(() => undefined);
   const shown = useRef<Set<string> | null>(null);
+  /** Pencerenin sırası: kritikler üstte, grup içinde yeniden eskiye (şerit ve sekme başlığı sunucunun sırasını kullanır) */
+  const ordered = useMemo(() => sortAlarms(alarms), [alarms]);
   const latest = useRef<Alarm[]>([]);
-  useEffect(() => { latest.current = alarms; }, [alarms]);
+  useEffect(() => { latest.current = ordered; }, [ordered]);
+  const liveSessionIds = useMemo<ReadonlySet<string>>(() => new Set(sessions.map((s) => s.id)), [sessions]);
 
   useEffect(() => {
     let alive = true;
@@ -172,13 +181,13 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   useEffect(() => {
     setViewer((v) => {
       if (!v) return v;
-      const i = alarms.findIndex((a) => a.id === v.id);
+      const i = ordered.findIndex((a) => a.id === v.id);
       if (i >= 0) return i === v.index ? v : { id: v.id, index: i };
-      if (alarms.length === 0) return null;
-      const j = Math.min(v.index, alarms.length - 1);
-      return { id: alarms[j].id, index: j };
+      if (ordered.length === 0) return null;
+      const j = Math.min(v.index, ordered.length - 1);
+      return { id: ordered[j].id, index: j };
     });
-  }, [alarms]);
+  }, [ordered]);
 
   // Bu sekmede ilk kez görülen onaylanmamış alarm: pencere en yenisinde açılır, ses ve masaüstü bildirimi
   useEffect(() => {
@@ -189,7 +198,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     for (const a of fresh) seen.add(a.id);
     saveShown(seen);
     const newest = fresh[0];
-    setViewer({ id: newest.id, index: alarms.indexOf(newest) });
+    setViewer({ id: newest.id, index: ordered.indexOf(newest) });
     if (readPref("sound")) playBeep();
     if (document.hidden && desktopReady()) {
       for (const a of fresh.slice(0, MAX_NOTIFICATIONS)) {
@@ -204,7 +213,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
         }
       }
     }
-  }, [alarms, open]);
+  }, [alarms, ordered, open]);
 
   // Sekme başlığı: onaylanmamış alarm varken her saniye "🚨 ALARM — <kamera>" ↔ sayfa başlığı; alarm bitince geri
   const flashCamera = alarms[0]?.camera ?? null;
@@ -256,18 +265,19 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
 
   const close = useCallback(() => setViewer(null), []);
   const refresh = useCallback(() => refreshRef.current(), []);
-  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, ackFailed, ack, markFalse, open, refresh }),
-    [alarms, problem, unwatched, sessions, ackFailed, ack, markFalse, open, refresh]);
+  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh }),
+    [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh]);
   const showing = viewer === null ? null
-    : alarms.some((a) => a.id === viewer.id) ? viewer.id
-    : alarms.length > 0 ? alarms[Math.min(viewer.index, alarms.length - 1)].id
+    : ordered.some((a) => a.id === viewer.id) ? viewer.id
+    : ordered.length > 0 ? ordered[Math.min(viewer.index, ordered.length - 1)].id
     : null;
 
   return (
     <Ctx.Provider value={value}>
       {children}
       {showing && (
-        <AlarmViewer alarms={alarms} id={showing} mode="active" onSelect={open} onClose={close} onAck={ack} onFalseAlarm={markFalse} />
+        <AlarmViewer alarms={ordered} id={showing} mode="active" liveSessionIds={liveSessionIds} onSelect={open} onClose={close}
+                     onAck={ack} onFalseAlarm={markFalse} />
       )}
     </Ctx.Provider>
   );
