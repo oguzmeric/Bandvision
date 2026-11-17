@@ -151,8 +151,12 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
   const archiveHref = a.sourceId && a.channelId && recorders?.has(a.sourceId)
     ? `/archive?source=${encodeURIComponent(a.sourceId)}&channel=${encodeURIComponent(a.channelId)}&t=${Math.max(0, Math.floor(a.firedAt - ARCHIVE_LEAD_S))}`
     : null;
+  // Başlıktaki küçük yazılar (ikinci satır, süre çipi, sayaç) koyu yarı saydam zemin üstünde: beyaz yazı yangın turuncusunda
+  // (#e2531f, 3,8:1) tek başına 4,5:1'i tutmaz; %25 siyah zeminle ≥6:1 (kırmızıda ≥6,4:1, gri-mavide ≥8:1). Sarıda koyu
+  // yazı zaten ≥6:1; %10 siyah yalnız görünüm birliği için (≥5,6:1)
+  const shade = onWarn ? "bg-black/10" : "bg-black/25";
   const navBtn = `grid h-7 w-7 place-items-center rounded-[2px] border text-base disabled:opacity-40 ${onWarn
-    ? "border-black/25 bg-black/10 hover:bg-black/15" : "border-white/40 bg-white/15 hover:bg-white/25"}`;
+    ? "border-black/25 bg-black/10 hover:bg-black/15" : "border-white/40 bg-black/25 hover:bg-black/35"}`;
   const term = "text-[11.5px] text-pl-faint";
   const desc = "truncate font-semibold tabular-nums";
 
@@ -174,8 +178,10 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
             </span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[22px] font-bold uppercase leading-tight tracking-wide md:text-[26px]" data-testid="alarm-title">{ALARM_TITLES[a.type]}</p>
-              <p className={`truncate text-[13.5px] font-medium ${onWarn ? "text-alert-warn-ink/85" : "text-white/90"}`}>
-                <span title={a.camera}>{a.camera}</span> · <span className="tabular-nums" data-testid="alarm-time">{new Date(a.firedAt * 1000).toLocaleString("tr-TR")}</span>
+              <p className="mt-0.5 flex min-w-0">
+                <span className={`truncate rounded-[2px] px-1.5 py-px text-[13.5px] font-medium ${shade}`} data-testid="alarm-subtitle">
+                  <span title={a.camera}>{a.camera}</span> · <span className="tabular-nums" data-testid="alarm-time">{new Date(a.firedAt * 1000).toLocaleString("tr-TR")}</span>
+                </span>
               </p>
             </div>
             {ongoing ? (
@@ -183,7 +189,7 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
                 <span className="h-2 w-2 animate-pulse rounded-full bg-nok-600 motion-reduce:animate-none" aria-hidden="true" />devam ediyor
               </span>
             ) : a.endedAt !== null && (
-              <span className={`rounded-[2px] px-2 py-0.5 text-[12px] font-semibold ${onWarn ? "bg-black/10" : "bg-white/20"}`} data-testid="alarm-status">
+              <span className={`rounded-[2px] px-2 py-0.5 text-[12px] font-semibold ${shade}`} data-testid="alarm-status">
                 Süre: {Math.max(0, Math.round(a.endedAt - a.startedAt))} sn
               </span>
             )}
@@ -192,7 +198,7 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
               <div className={`flex items-center gap-1 text-[13px] font-semibold ${queue ? "md:hidden" : ""}`}>
                 <button type="button" aria-label="Önceki alarm" disabled={index === 0} onClick={() => onSelect(alarms[index - 1].id)}
                         className={navBtn}>‹</button>
-                <span data-testid="alarm-counter" className="min-w-12 text-center tabular-nums">{index + 1} / {alarms.length}</span>
+                <span data-testid="alarm-counter" className={`min-w-12 rounded-[2px] px-1 py-0.5 text-center tabular-nums ${shade}`}>{index + 1} / {alarms.length}</span>
                 <button type="button" aria-label="Sonraki alarm" disabled={index === alarms.length - 1} onClick={() => onSelect(alarms[index + 1].id)}
                         className={navBtn}>›</button>
               </div>

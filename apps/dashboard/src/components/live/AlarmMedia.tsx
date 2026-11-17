@@ -46,6 +46,9 @@ export default function AlarmMedia({ alarm: a, liveUrl, initial, size }: Props) 
   const [duration, setDuration] = useState<{ id: string; sec: number } | null>(null);
   /** Hata veren canlı adres (ilk kare gelince silinir; başka adrese geçilince geçersiz) */
   const [liveFailed, setLiveFailed] = useState<string | null>(null);
+  /** Olay resminin en/boy oranı (yüklenince; 4:3 alt akışlar da var). Köşe penceresi bu oranda çizilir: `insetCrop`
+   * yüzdeleri resmin kendi oranındaki kutuya göredir, 16:9 kutuda 4:3 resim (ve kişiler) yatay gerilirdi */
+  const [imageRatio, setImageRatio] = useState<{ id: string; r: number } | null>(null);
   const [, setTick] = useState(0);
   const video = useRef<HTMLVideoElement>(null);
   const { streamKey, onError: retryStream, visible } = useStreamKey();
@@ -59,7 +62,8 @@ export default function AlarmMedia({ alarm: a, liveUrl, initial, size }: Props) 
   // kayıt yakalanıyor/yazılıyor: sunucunun clipPending'i (eski sunucuda: kameralı alarmda ilk 20 sn); bayat bayrağa
   // karşı en çok 2 dakika
   const pending = !a.clip && (a.clipPending ?? (a.sessionId !== null && age < CLIP_PENDING_S)) && age < CLIP_PENDING_MAX_S;
-  // kayıt hazırlanırken ekran kendiliğinden yenilensin (süre dolunca resim/simgeye geçilir)
+  // kayıt hazırlanırken ekran kendiliğinden yenilensin (süre dolunca resim/simgeye geçilir). Ortadaki pencere zaten saniyede
+  // bir yenilenir; bu sayaç köşedeki uyarı kartı ("compact") gibi kendini yenilemeyen çağıranlar için de gerekir
   useEffect(() => {
     if (!pending) return;
     const t = setTimeout(() => setTick((x) => x + 1), 1000);
@@ -97,8 +101,11 @@ export default function AlarmMedia({ alarm: a, liveUrl, initial, size }: Props) 
         {view === "live" ? (
           <>
             {visible && liveSrc && (
+              // akış hata verdiyse görünmez (tarayıcının kırık resim simgesi ve alt yazısı "Canlı görüntü alınamıyor"un arkasında
+              // görünmesin); yeniden deneme sürer, ilk kare gelince görünür
               // eslint-disable-next-line @next/next/no-img-element -- MJPEG canlı akış (analiz sunucusundan, vekil üzerinden)
-              <img src={liveSrc} alt="Canlı görüntü" data-testid="alarm-live" className="h-full w-full object-contain"
+              <img src={liveSrc} alt="Canlı görüntü" data-testid="alarm-live"
+                   className={`h-full w-full object-contain ${liveFailed !== null && liveFailed === liveUrl ? "invisible" : ""}`}
                    onLoad={() => setLiveFailed(null)}
                    onError={() => { setLiveFailed(liveUrl); retryStream(); }} />
             )}
@@ -112,9 +119,14 @@ export default function AlarmMedia({ alarm: a, liveUrl, initial, size }: Props) 
               <button type="button" data-testid="alarm-inset" data-side={side} onClick={() => select("clip")}
                       title="Alarm kaydını izle"
                       className={`absolute bottom-3 ${side === "left" ? "left-3" : "right-3"} ${compact ? "w-[40%]" : "w-[30%]"} overflow-hidden rounded-[2px] border-2 border-white/85 bg-black text-left outline-offset-2 hover:border-white`}>
-                <span className="relative block aspect-video overflow-hidden">
+                <span className="relative block overflow-hidden" data-testid="inset-frame"
+                      style={{ aspectRatio: imageRatio?.id === a.id ? imageRatio.r : 16 / 9 }}>
                   {/* eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi (analiz sunucusundan, vekil üzerinden) */}
                   <img src={alarmImageUrl(a.id)} alt=""
+                       onLoad={(e) => {
+                         const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+                         if (w > 0 && h > 0) setImageRatio({ id: a.id, r: w / h });
+                       }}
                        className={crop ? "absolute max-w-none" : "h-full w-full object-contain"}
                        style={crop ? { width: pct(crop.scale), height: pct(crop.scale), left: `${crop.left}%`, top: `${crop.top}%` } : undefined} />
                 </span>

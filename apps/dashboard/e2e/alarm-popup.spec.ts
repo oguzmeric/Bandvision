@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
  * Ortadaki alarm penceresi (kritik alarm), SAHTE API ile (page.route): varsayılan canlı görüntü (oturumun işaretli akışı),
@@ -14,6 +14,8 @@ async function login(page: Page) {
 
 /** 1x1 saydam GIF: sahte canlı akış ve olay resmi (gerçek analiz sunucusuna istek gitmesin) */
 const GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+/** 4:3'e yakın (704×576) olay resmi: bazı kameraların alt akışı */
+const SVG_704x576 = '<svg xmlns="http://www.w3.org/2000/svg" width="704" height="576"><rect width="704" height="576" fill="#456"/></svg>';
 
 interface FakeAlarm {
   id: string; sessionId: string | null; camera: string; type: string; startedAt: number; firedAt: number;
@@ -42,7 +44,7 @@ function fakeSession(id = "abc123", name = "Tezgah kamerası") {
  * doldurulmalı (login'den kalan sayfanın yoklaması alarmları "gösterildi" saymasın).
  */
 async function fake(page: Page, list: FakeAlarm[], stream: "ok" | "404" = "ok") {
-  const calls = { polls: 0, streams: 0 };
+  const calls = { polls: 0, streams: 0, acks: [] as string[] };
   await page.route("**/api/live/sessions", (route) =>
     route.request().method() === "GET" ? route.fulfill({ json: [fakeSession()] }) : route.continue());
   await page.route("**/api/live/sessions/abc123/stream*", (route) => {
@@ -54,6 +56,14 @@ async function fake(page: Page, list: FakeAlarm[], stream: "ok" | "404" = "ok") 
     calls.polls += 1;
     return route.fulfill({ json: list.filter((a) => !a.acked) });
   });
+  await page.route(/\/api\/live\/alarms\/[^/]+\/ack$/, (route) => {
+    const id = route.request().url().split("/").at(-2)!;
+    const a = list.find((x) => x.id === id);
+    if (!a) return route.fulfill({ status: 404, json: { detail: "Alarm bulunamadı." } });
+    a.acked = true;
+    calls.acks.push(id);
+    return route.fulfill({ json: a });
+  });
   await page.route(/\/api\/live\/alarms\/[^/]+\/image\.jpg$/, (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
   await page.route(/\/api\/live\/alarms\/[^/]+\/clip\.webm$/, (route) => route.fulfill({ status: 404, json: { detail: "Olay kaydı yok." } }));
   await page.goto("/notifications");
@@ -62,6 +72,33 @@ async function fake(page: Page, list: FakeAlarm[], stream: "ok" | "404" = "ok") 
 }
 
 const modalOf = (page: Page) => page.getByRole("alertdialog", { name: "Alarm", exact: true });
+
+/** Pencerenin metninde emoji var mı (başlık, bilgi satırı, liste satırları, açıklamalar dahil) */
+const hasEmoji = (modal: Locator) => modal.evaluate((el) => /\p{Extended_Pictographic}/u.test(el.textContent ?? ""));
+
+/**
+ * Öğenin yazı rengiyle görünen zemini arasındaki kontrast oranı (WCAG). Zemin, öğeden yukarı doğru yarı saydam katmanlar
+ * beyaz üstüne 1×1 tuvalde boyanarak bulunur (Tailwind v4 renkleri oklab/color-mix olarak gelir; tuval hepsini çözer).
+ */
+const contrastOf = (loc: Locator) => loc.evaluate((node) => {
+  const layers: string[] = [];
+  for (let el: Element | null = node; el; el = el.parentElement) layers.push(getComputedStyle(el).backgroundColor);
+  const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+  ctx.canvas.width = ctx.canvas.height = 1;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, 1, 1);
+  for (const c of layers.reverse()) { ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); }
+  const bg = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  ctx.fillStyle = getComputedStyle(node).color;
+  ctx.fillRect(0, 0, 1, 1);
+  const fg = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  const lum = (rgb: number[]) => {
+    const [r, g, b] = rgb.map((v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+});
 
 function alarm(over: Partial<FakeAlarm> & Pick<FakeAlarm, "id" | "type">): FakeAlarm {
   const now = Date.now() / 1000;
@@ -84,7 +121,7 @@ test("critical alarm opens centre window on live view with alarm-moment inset", 
   // emoji yok: başlıkta türün çizgi simgesi; ikinci satır "<kamera> · <tarih-saat>"
   await expect(modal.getByTestId("alarm-header").locator('svg[data-icon="fire"]')).toBeVisible();
   await expect(modal.getByTestId("alarm-header")).toContainText(/Mutfak kamerası · \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}/);
-  expect(await modal.evaluate((el) => /\p{Extended_Pictographic}/u.test(el.textContent ?? ""))).toBe(false);
+  expect(await hasEmoji(modal)).toBe(false);
   // bilgi satırı: kamera, saat, geçen süre (canlı sayaç), bildirim
   await expect(modal.getByTestId("alarm-time")).toHaveText(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}$/);
   await expect(modal.getByTestId("alarm-ago")).toHaveText(/^\d+ sn önce$/);
@@ -140,12 +177,16 @@ test("alarm without live source opens on clip and disables live", async ({ page 
 test("broken live stream shows error and clip still works", async ({ page }) => {
   await login(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list, "404");
+  const calls = await fake(page, list, "404");
   list.push(alarm({ id: "h1", type: "hands_up", box: [0.1, 0.2, 0.3, 0.6] }));
   const modal = modalOf(page);
   await expect(modal.getByTestId("alarm-header")).toHaveCSS("background-color", "rgb(217, 58, 74)");
   await expect(modal.getByTestId("media-live")).toHaveAttribute("aria-pressed", "true");
   await expect(modal.getByTestId("live-error")).toHaveText("Canlı görüntü alınamıyor");
+  // kırık resim (tarayıcının simgesi, alt yazısı) yazının arkasında görünmez; akış kendiliğinden yeniden denenir (≈2 sn)
+  await expect(modal.getByTestId("alarm-live")).toBeHidden();
+  await expect.poll(() => calls.streams, { timeout: 10_000 }).toBeGreaterThan(1);
+  await expect(modal.getByTestId("live-error")).toBeVisible();
   await expect(modal.getByTestId("alarm-inset")).toHaveAttribute("data-side", "right");   // kutu sol yarıda
   await modal.getByTestId("media-clip").click();
   await expect(modal.getByTestId("media-clip")).toHaveAttribute("aria-pressed", "true");
@@ -159,6 +200,8 @@ test("old record without box shows whole image; no image no inset", async ({ pag
   const list: FakeAlarm[] = [];
   await fake(page, list);
   const now = Date.now() / 1000;
+  // o1'in olay resmi 704×576 (4:3'e yakın alt akış): köşe penceresi resmin kendi oranında, gerilmez
+  await page.route(/\/api\/live\/alarms\/o1\/image\.jpg$/, (route) => route.fulfill({ contentType: "image/svg+xml", body: SVG_704x576 }));
   list.push(
     alarm({ id: "o1", type: "lying", firedAt: now - 5 }),                         // eski kayıt: box alanı yok
     alarm({ id: "o2", type: "hands_up", firedAt: now - 30, image: false, box: [0.6, 0.5, 0.8, 0.9] }),
@@ -170,6 +213,10 @@ test("old record without box shows whole image; no image no inset", async ({ pag
   await expect(inset).toBeVisible();
   await expect(inset).toHaveAttribute("data-side", "right");
   expect(await inset.locator("img").evaluate((el: HTMLImageElement) => el.style.width)).toBe("");   // resmin tamamı
+  await expect.poll(async () => {
+    const b = (await modal.getByTestId("inset-frame").boundingBox())!;
+    return b.width / b.height;
+  }).toBeCloseTo(704 / 576, 1);
   await modal.getByTestId("queue-item").nth(1).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
   await expect(modal.getByTestId("alarm-live")).toBeVisible();
@@ -202,6 +249,12 @@ test("queue lists critical first and selects on click", async ({ page }) => {
   await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
   await expect(items.nth(1)).toHaveAttribute("aria-current", "true");
   await expect(items.nth(0)).not.toHaveAttribute("aria-current", "true");
+  // emoji yok: liste satırları, başlık ve görüntü alanı (canlı ve kayıt açıklaması) dahil
+  expect(await hasEmoji(modal)).toBe(false);
+  await modal.getByTestId("media-clip").click();
+  await expect(modal.getByTestId("clip-caption")).toBeVisible();
+  expect(await hasEmoji(modal)).toBe(false);
+  await modal.getByTestId("media-live").click();
   // liste satırları canlı değil: yalnız gösterilen alarm canlı akar
   await expect(modal.getByTestId("alarm-live")).toHaveCount(1);
   await expect(queue.locator("img")).toHaveCount(3);
@@ -216,4 +269,100 @@ test("queue lists critical first and selects on click", async ({ page }) => {
   await expect(modal.getByTestId("alarm-title")).toHaveText("TELEFON KULLANIMI");
   await expect(modal).toHaveAttribute("data-severity", "warning");
   await expect(modal.getByTestId("alarm-header")).toHaveCSS("background-color", "rgb(216, 154, 30)");
+});
+
+test("Gördüm moves to the alarm at the same place in the sorted list, not the server order", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  const now = Date.now() / 1000;
+  // sunucu sırası (yeniden eskiye): telefon, yangın, yerde yatan; pencerenin sırası: yangın, yerde yatan, telefon
+  list.push(
+    alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 2 }),
+    alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 10 }),
+    alarm({ id: "l1", type: "lying", camera: "Depo", firedAt: now - 20 }),
+  );
+  const modal = modalOf(page);
+  const items = modal.getByTestId("queue-item");
+  await expect(items).toHaveCount(3);
+  await items.nth(0).click();
+  await expect(modal.getByTestId("alarm-title")).toHaveText("Yangın");
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["f1"]);
+  // aynı yerdeki (ilk) alarm artık yerde yatan kişi (sunucu sırasında ilk olan telefon değil)
+  await expect(modal.getByTestId("alarm-title")).toHaveText("YERDE YATAN KİŞİ");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(modal.getByRole("button", { name: "Gördüm", exact: true })).toBeFocused();
+  await page.setViewportSize({ width: 700, height: 900 });
+  await expect(modal.getByTestId("alarm-counter")).toHaveText("1 / 2");
+});
+
+test("browse mode opens on clip; Canlı is enabled while the alarm's session is live", async ({ page }) => {
+  await login(page);
+  const now = Date.now() / 1000;
+  const history = [
+    { ...alarm({ id: "h1", type: "hands_up", firedAt: now - 120 }), acked: true, endedAt: now - 110, clipPending: false },
+  ];
+  await page.route("**/api/live/sessions", (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: [fakeSession()] }) : route.continue());
+  let streams = 0;
+  await page.route("**/api/live/sessions/abc123/stream*", (route) => { streams += 1; return route.fulfill({ contentType: "image/gif", body: GIF }); });
+  // Alarmlar sayfası geçmişi ister; onaylanmamış alarm yok (etkin pencere açılmaz)
+  await page.route(/\/api\/live\/alarms\?/, (route) =>
+    route.fulfill({ json: new URL(route.request().url()).searchParams.get("active") === "1" ? [] : history }));
+  await page.route(/\/api\/live\/alarms\/[^/]+\/image\.jpg$/, (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  // oturum listesi (alarm merkezinin yoklaması) gelmeden satıra tıklanmasın: "Canlı" o listeye bakar
+  const sessionsSeen = page.waitForResponse((r) => /\/api\/live\/sessions$/.test(r.url()));
+  await page.goto("/alarms");
+  await sessionsSeen;
+  await page.getByTestId("alarm-row").first().click();
+  const modal = modalOf(page);
+  await expect(modal.getByTestId("alarm-state")).toContainText("Onaylandı");
+  await expect(modal.getByTestId("media-clip")).toHaveAttribute("aria-pressed", "true");     // geçmiş alarm: kayıtta açılır
+  await expect(modal.getByTestId("alarm-live")).toHaveCount(0);
+  expect(streams).toBe(0);
+  await expect(modal.getByTestId("media-live")).toBeEnabled();
+  await modal.getByTestId("media-live").click();
+  await expect(modal.getByTestId("media-live")).toHaveAttribute("aria-pressed", "true");
+  await expect(modal.getByTestId("alarm-live")).toBeVisible();
+  await expect(modal.getByTestId("alarm-live")).toHaveAttribute("src", /\/api\/live\/sessions\/abc123\/stream/);
+  await expect(modal.getByTestId("alarm-queue")).toHaveCount(0);                          // göz atmada liste yok
+});
+
+test("header small text keeps at least 4.5:1 contrast on every alarm colour", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(
+    alarm({ id: "c1", type: "fire", camera: "Mutfak", firedAt: now - 5, endedAt: now - 1 }),        // Süre çipi
+    alarm({ id: "c2", type: "hands_up", camera: "Kasa", firedAt: now - 10 }),                      // devam ediyor
+    alarm({ id: "c3", type: "test", camera: "Deneme", firedAt: now - 15, sessionId: null }),
+    alarm({ id: "c4", type: "phone", camera: "Depo", firedAt: now - 20, endedAt: now - 3 }),         // sarıda Süre çipi
+  );
+  const modal = modalOf(page);
+  const items = modal.getByTestId("queue-item");
+  await expect(items).toHaveCount(4);
+  const kinds = ["fire", "hands_up", "test", "phone"];
+  for (const [i, kind] of kinds.entries()) {
+    await items.nth(i).click();
+    await expect(modal).toHaveAttribute("data-kind", kind);
+    expect(await contrastOf(modal.getByTestId("alarm-subtitle")), `${kind} ikinci satır`).toBeGreaterThanOrEqual(4.5);
+    // büyük kalın başlık (>= 18,66 px kalın) için 3:1 yeter; yangın turuncusunda beyaz 3,8:1 (ölçüm başlık rengini görüyor)
+    const title = await contrastOf(modal.getByTestId("alarm-title"));
+    expect(title, `${kind} başlık`).toBeGreaterThanOrEqual(3);
+    if (kind === "fire") expect(title).toBeLessThan(4.5);
+    const status = modal.getByTestId("alarm-status");
+    if (await status.count()) expect(await contrastOf(status), `${kind} durum çipi`).toBeGreaterThanOrEqual(4.5);
+  }
+  // dar ekranda başlıktaki sayaç da (ilk alarmdan başlayıp ‹ › ile)
+  await items.nth(0).click();
+  await page.setViewportSize({ width: 700, height: 900 });
+  for (const [i, kind] of kinds.entries()) {
+    await expect(modal).toHaveAttribute("data-kind", kind);
+    await expect(modal.getByTestId("alarm-counter")).toHaveText(`${i + 1} / 4`);
+    expect(await contrastOf(modal.getByTestId("alarm-counter")), `${kind} sayaç`).toBeGreaterThanOrEqual(4.5);
+    if (i < kinds.length - 1) await modal.getByRole("button", { name: "Sonraki alarm" }).click();
+  }
 });
