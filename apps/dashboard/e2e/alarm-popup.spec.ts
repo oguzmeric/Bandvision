@@ -23,6 +23,8 @@ interface FakeAlarm {
   endedAt: number | null; acked: boolean; notify: string; image: boolean;
   clip?: boolean; clipStartedAt?: number | null; clipPending?: boolean; clipFailed?: boolean;
   sourceId?: string | null; channelId?: string | null; box?: [number, number, number, number] | null;
+  /** Alarmın analiz alanının adı (alan yoksa null; eski kayıtta yok) */
+  area?: string | null;
 }
 
 /** Canlı güvenlik oturumu (alarmın oturumu hâlâ açık: pencere oturumun işaretli akışını gösterir) */
@@ -614,4 +616,49 @@ test("three warnings show two cards and more", async ({ page }) => {
   await expect(items).toHaveCount(2);
   await expect(items.nth(1)).toContainText("Kapı");
   await expect(more).toHaveCount(0);
+});
+
+test("alarm in a named area shows Alan in the window info row and on the corner card; no area no row", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  const now = Date.now() / 1000;
+  // uyarı (telefon) alanlı: köşe kartının bilgi satırında kameranın yanında "Alan: <ad>"
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 4, area: "Masa 3" }));
+  const toast = toastsOf(page).getByTestId("alarm-toast");
+  await expect(toast).toHaveCount(1);
+  await expect(toast.getByTestId("toast-meta")).toContainText(/^Kasa · Alan: Masa 3 · \d{2}:\d{2}:\d{2}/);
+  await toast.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p1"]);
+  // alansız uyarı (area: null): satırda "Alan" yok
+  list.push(alarm({ id: "p2", type: "phone", camera: "Kasa", firedAt: now - 3, area: null }));
+  await expect(toast).toHaveCount(1);
+  await expect(toast.getByTestId("toast-meta")).toContainText(/^Kasa · \d{2}:\d{2}:\d{2}/);
+  await expect(toast.getByTestId("toast-meta")).not.toContainText("Alan");
+  // küçük kartta da: ikinci uyarı alanlı gelir, ilk (en yeni) tam kart olur
+  list.push(alarm({ id: "p3", type: "phone", camera: "Depo", firedAt: now - 1, area: "Kapı önü" }));
+  await expect(toast).toHaveCount(2);
+  await expect(toast.first().getByTestId("toast-meta")).toContainText("Depo · Alan: Kapı önü ·");
+  await expect(toast.nth(1)).not.toContainText("Alan");
+  await toast.first().getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p1", "p3"]);
+  await expect(toast).toHaveCount(1);
+  await toast.first().getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p1", "p3", "p2"]);
+
+  // kritik alarm alanlı: pencerenin bilgi satırında "Alan" başlığı altında "Masa 3" (satırın öteki öğeleri gibi)
+  list.push(alarm({ id: "h1", type: "hands_up", camera: "Tezgah kamerası", firedAt: now - 2, area: "Masa 3" }));
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  const area = modal.getByTestId("alarm-area");
+  await expect(area).toHaveText("Masa 3");
+  await expect(area).toHaveAttribute("title", "Masa 3");
+  await expect(modal.getByRole("term").filter({ hasText: /^Alan$/ })).toBeVisible();
+  // alansız kritik alarm: satır yok
+  list.push(alarm({ id: "h2", type: "lying", camera: "Tezgah kamerası", firedAt: now - 1, area: null }));
+  await expect(modal.getByTestId("queue-item")).toHaveCount(2);
+  await modal.getByTestId("queue-item").filter({ hasText: "Yerde yatan kişi" }).click();
+  await expect(modal).toHaveAttribute("data-kind", "lying");
+  await expect(modal.getByTestId("alarm-area")).toHaveCount(0);
+  await expect(modal).not.toContainText("Alan:");
 });

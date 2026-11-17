@@ -9,20 +9,32 @@ type Handle = { kind: "vertex"; z: number; i: number } | { kind: "midpoint"; z: 
 type Pt = [number, number];
 
 const RED = "#ef4444";
+/** Analiz alanı: analiz sunucusunun çizdiği açık mavi; etiket zemini beyaz yazının okunacağı koyulukta */
+const BLUE = "#38bdf8";
+const BLUE_LABEL = "#0369a1";
+/** Alan etiketinde adın en çok bu kadar karakteri (fazlası "…"; tam ad üstüne gelince) */
+const LABEL_CHARS = 18;
 
 /**
- * Görüntü üstünde çoklu çokgen düzenleyici (yangın/duman "Hariç bölgeler"): RoiEditor'ın çokgen tutamaçlarıyla aynı —
- * köşeyi sürükle, kenar ortasındaki "+" ile köşe ekle, köşeye çift tıklayınca sil (en az 3), bölgenin içinden tutup taşı.
- * Bölge ekleme/silme yan paneldedir (FireSettings). Köşeler normalize `[x, y]`; sınırlar src/lib/fireAlarms.mjs'de.
+ * Görüntü üstünde çoklu çokgen düzenleyici (yangın/duman "Hariç bölgeler", güvenlik "Analiz alanları"): RoiEditor'ın
+ * çokgen tutamaçlarıyla aynı — köşeyi sürükle, kenar ortasındaki "+" ile köşe ekle, köşeye çift tıklayınca sil (en az 3),
+ * bölgenin içinden tutup taşı. Bölge ekleme/silme yan paneldedir (FireSettings, SafetyAreas). Köşeler normalize `[x, y]`;
+ * sınırlar src/lib/fireAlarms.mjs'de. `tone`: "exclude" kırmızı kesik çizgi ve "HARİÇ N" (varsayılan), "area" açık mavi
+ * çizgi ve `labels`taki ad.
  */
-export default function ZonesEditor({ src, aspect, zones, onChange, editable = true }: {
+export default function ZonesEditor({ src, aspect, zones, onChange, editable = true, tone = "exclude", labels }: {
   src: string | null;
   /** görüntü genişliği / yüksekliği */
   aspect: number;
   zones: Zone[];
   onChange: (zones: Zone[]) => void;
   editable?: boolean;
+  tone?: "exclude" | "area";
+  /** `tone="area"`: her çokgenin üstünde yazan ad (sıra `zones` ile aynı) */
+  labels?: string[];
 }) {
+  const area = tone === "area";
+  const color = area ? BLUE : RED;
   const box = useRef<HTMLDivElement>(null);
   const [widthPx, setWidthPx] = useState(600);
   const drag = useRef<{ h: Handle; start: Pt; z0: Zone[] } | null>(null);
@@ -122,15 +134,21 @@ export default function ZonesEditor({ src, aspect, zones, onChange, editable = t
            onPointerDown={onPointerDown} onPointerMove={onPointerMove}
            onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
            onDoubleClick={onDoubleClick}
-           role="img" aria-label={zones.length ? `Hariç bölgeler: ${zones.length}` : "Hariç bölge yok"}>
+           role="img" aria-label={area ? (zones.length ? `Analiz alanları: ${zones.length}` : "Analiz alanı yok")
+             : zones.length ? `Hariç bölgeler: ${zones.length}` : "Hariç bölge yok"}>
         {zones.map((z, zi) => {
           const c = P(z.reduce<Pt>((s, q) => [s[0] + q[0] / z.length, s[1] + q[1] / z.length], [0, 0]));
+          const name = labels?.[zi] ?? `Alan ${zi + 1}`;
+          const text = !area ? `HARİÇ ${zi + 1}` : name.length > LABEL_CHARS ? `${name.slice(0, LABEL_CHARS - 1)}…` : name;
+          const w = area ? Math.max(40, text.length * 7 + 14) : 68;          // ≈7 birim / karakter (11,5 kalın yazı)
           return (
             <g key={zi} data-zone={zi}>
-              <path d={path(z)} fill={RED} fillOpacity={0.22} stroke={RED} strokeWidth={2.5} strokeDasharray="8 5" vectorEffect="non-scaling-stroke" />
+              <path d={path(z)} fill={color} fillOpacity={area ? 0.16 : 0.22} stroke={color} strokeWidth={2.5}
+                    strokeDasharray={area ? undefined : "8 5"} vectorEffect="non-scaling-stroke" />
               <g transform={`translate(${c.x},${c.y}) scale(${u})`}>
-                <rect x={-34} y={-10} width={68} height={20} rx={3} fill={RED} />
-                <text x={0} y={4.5} textAnchor="middle" fontSize={11.5} fontWeight={800} fill="white">HARİÇ {zi + 1}</text>
+                {area && text !== name && <title>{name}</title>}
+                <rect x={-w / 2} y={-10} width={w} height={20} rx={3} fill={area ? BLUE_LABEL : RED} />
+                <text x={0} y={4.5} textAnchor="middle" fontSize={11.5} fontWeight={800} fill="white">{text}</text>
               </g>
             </g>
           );
@@ -139,7 +157,7 @@ export default function ZonesEditor({ src, aspect, zones, onChange, editable = t
           <>
             {midpoints().map(([h, q]) => (
               <g key={`m${(h as { z: number }).z}-${(h as { i: number }).i}`} transform={`translate(${q.x},${q.y}) scale(${u})`}>
-                <circle r={7} fill={RED} fillOpacity={0.85} />
+                <circle r={7} fill={area ? BLUE_LABEL : RED} fillOpacity={0.85} />
                 <text y={4} textAnchor="middle" fontSize={12} fontWeight={800} fill="white">+</text>
               </g>
             ))}

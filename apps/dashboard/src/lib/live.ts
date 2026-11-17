@@ -38,6 +38,17 @@ export interface Channel {
 /** Personel üniforma rengi (CIE Lab, D65; sözleşme `staffColors`) */
 export interface LabColor { L: number; a: number; b: number }
 
+/** Alanda seçilebilen güvenlik kuralı (sözleşme `safety.areas[].rules`) */
+export type SafetyRuleKey = "handsUp" | "lying" | "phone";
+
+/** Analiz alanı (sözleşme `safety.areas[]`): ad 1–40 karakter (kırpılmış), 3–12 köşe (normalize `[x, y]`), bu alanda
+ * bakılan kurallar (boş olamaz; kamerada kapalı kurala yine bakılmaz). Kişinin kutu merkezi alanın içindeyse bakılır. */
+export interface SafetyArea {
+  name: string;
+  points: Array<[number, number]>;
+  rules: SafetyRuleKey[];
+}
+
 /** Poz güvenlik alarmı ayarları (sözleşme `safety`) */
 export interface SafetyConfig {
   handsUp: { enabled: boolean; seconds: number };
@@ -45,6 +56,8 @@ export interface SafetyConfig {
   /** Telefon kullanımı (10–600 sn, varsayılan kapalı/15); eski kayıtlı profilde yoktur */
   phone?: { enabled: boolean; seconds: number };
   sendImage: boolean;
+  /** Analiz alanları (en çok 16); yoksa bütün görüntü ve bütün açık kurallar (boş liste yazılmaz) */
+  areas?: SafetyArea[];
 }
 
 /** Yangın/duman ayarları (sözleşme `fire`): alev 2–10 sn, duman 5–30 sn; hariç bölgeler en çok 8 çokgen × 3–12 köşe,
@@ -226,6 +239,12 @@ export interface Alarm {
   channelId?: string | null;
   /** İhlal eden kişinin/nesnenin normalize (0–1) kutusu [x1, y1, x2, y2]; eski kayıtta yok ya da null */
   box?: [number, number, number, number] | null;
+  /** Alarmın analiz alanının adı (güvenlik kamerasında alan varsa); alan yoksa null, eski kayıtta yok */
+  area?: string | null;
+}
+/** Alarm penceresinde ve köşe kartında gösterilecek alan adı: yalnız boş olmayan dizgiyse, yoksa null */
+export function alarmArea(a: Pick<Alarm, "area">): string | null {
+  return typeof a.area === "string" && a.area.trim() ? a.area.trim() : null;
 }
 /**
  * "Yanlış alarm" düğmesi iki yönlüdür: işaretli değilse işaretler (gövdesiz istek; alarm onaylanır), işaretliyse geri

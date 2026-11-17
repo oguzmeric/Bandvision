@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ALARM_LABELS, alarmImageUrl, type Alarm } from "@/lib/live";
+import { ALARM_LABELS, alarmArea, alarmImageUrl, type Alarm } from "@/lib/live";
 import { agoText, liveStreamUrl } from "@/lib/alarmPopup.mjs";
 import AlarmIcon from "./AlarmIcon";
 import AlarmMedia from "./AlarmMedia";
@@ -36,9 +36,9 @@ function HideIcon() {
 /**
  * Sağ altta uyarı (telefon kullanımı) kartları: modal değildir, sayfayı kilitlemez ve odak çalmaz. En yeni uyarı tam kart
  * (tür renginde başlık, görüntü alanı — `AlarmMedia` "compact": canlı varsa Canlı ve alarm anı köşe penceresi —, kamera ·
- * saat · geçen süre, Gördüm / Kamerayı aç / Yanlış alarm / ×); ikincisi küçük kart (olay resmi küçüğü — canlı değil: yalnız
- * gösterilen alarm canlı akar —, kamera · saat, aynı düğmeler); fazlası "+N uyarı daha". Bölge `aria-live="assertive"`:
- * yeni uyarı ekran okuyucuda okunur. Ortadaki pencere açıkken çağıran boş liste verir (uyarılar pencerenin listesinde).
+ * (analiz alanı varsa) "Alan: <ad>" · saat · geçen süre, Gördüm / Kamerayı aç / Yanlış alarm / ×); ikincisi küçük kart
+ * (olay resmi küçüğü — canlı değil: yalnız gösterilen alarm canlı akar —, kamera · (varsa) alan · saat, aynı düğmeler);
+ * fazlası "+N uyarı daha". Bölge `aria-live="assertive"`: yeni uyarı ekran okuyucuda okunur. Ortadaki pencere açıkken çağıran boş liste verir (uyarılar pencerenin listesinde).
  */
 export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAlarm, onHide, onOpenAll }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -93,6 +93,11 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
     </button>
   );
   const clock = (a: Alarm) => new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR");
+  // analiz alanı (yalnız alarmın alanı varsa): kamera adının yanında " · Alan: <ad>"
+  const areaPart = (a: Alarm) => {
+    const area = alarmArea(a);
+    return area && <> · <span title={area} data-testid="toast-area">Alan: {area}</span></>;
+  };
   // geçen süre saniyede bir değişir: duyuru bölgesinin içinde olduğu için ekran okuyucudan gizli (yoksa her saniye yeniden
   // okunurdu); saat okunur
   const ago = (a: Alarm) => <span aria-hidden="true" data-testid="toast-ago"> · {agoText(now - a.firedAt)}</span>;
@@ -121,7 +126,7 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
               <AlarmMedia alarm={a} liveUrl={liveUrl} initial={liveUrl ? "live" : "clip"} size="compact" />
               <div className="grid gap-2 px-2.5 py-2">
                 <p data-testid="toast-meta" className="truncate text-[12.5px] tabular-nums text-pl-muted">
-                  <b className="font-semibold text-pl-ink" title={a.camera}>{a.camera}</b> · {clock(a)}{ago(a)}
+                  <b className="font-semibold text-pl-ink" title={a.camera}>{a.camera}</b>{areaPart(a)} · {clock(a)}{ago(a)}
                 </p>
                 {errorLine(a)}
                 {buttons(a, false)}
@@ -145,7 +150,7 @@ export default function AlarmToast({ warnings, liveSessionIds, onAck, onFalseAla
                     <AlarmIcon type={a.type} className={`h-3.5 w-3.5 shrink-0 ${tone.icon}`} />{label}
                   </span>
                   <span className="block truncate tabular-nums text-pl-muted">
-                    <span title={a.camera}>{a.camera}</span> · {clock(a)}{ago(a)}
+                    <span title={a.camera}>{a.camera}</span>{areaPart(a)} · {clock(a)}{ago(a)}
                   </span>
                 </p>
                 {hide(a, "-mr-1 -mt-1 text-pl-muted hover:bg-pl-head")}

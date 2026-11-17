@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ALARM_LABELS, ALARM_TITLES, ARCHIVE_LEAD_S, NOTIFY_LABELS, alarmImageUrl, api, type Alarm, type AlarmType, type Source,
+  ALARM_LABELS, ALARM_TITLES, ARCHIVE_LEAD_S, NOTIFY_LABELS, alarmArea, alarmImageUrl, api, type Alarm, type AlarmType, type Source,
 } from "@/lib/live";
 import { agoText, alarmSeverity, liveStreamUrl } from "@/lib/alarmPopup.mjs";
 import AlarmIcon from "./AlarmIcon";
@@ -152,6 +152,7 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
     ? "border-black/25 bg-black/10 hover:bg-black/15" : "border-white/40 bg-black/25 hover:bg-black/35"}`;
   const term = "text-[11.5px] text-pl-faint";
   const desc = "truncate font-semibold tabular-nums";
+  const area = alarmArea(a);
 
   return (
     <dialog ref={dialog} role="alertdialog" aria-modal="true" aria-label="Alarm" onKeyDown={trap}
@@ -199,8 +200,11 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
           </header>
 
           <div className="overflow-auto">
-            {/* kamera ve tarih-saat başlığın ikinci satırında; burada yinelenmez */}
+            {/* kamera ve tarih-saat başlığın ikinci satırında; burada yinelenmez. Alan: yalnız alarmın analiz alanı varsa */}
             <dl className="flex flex-wrap gap-x-8 gap-y-1.5 border-b border-pl-line-soft bg-pl-side px-4 py-2 text-[13px]">
+              {area && (
+                <div className="min-w-0 max-w-full"><dt className={term}>Alan</dt><dd className={desc} data-testid="alarm-area" title={area}>{area}</dd></div>
+              )}
               <div className="min-w-0"><dt className={term}>Geçen süre</dt><dd className={desc} data-testid="alarm-ago">{agoText(now - a.firedAt)}</dd></div>
               <div className="min-w-0"><dt className={term}>Bildirim</dt><dd className={desc}>{NOTIFY_LABELS[a.notify]}</dd></div>
             </dl>

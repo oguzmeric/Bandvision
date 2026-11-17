@@ -132,13 +132,14 @@ async function openSafetySettings(page: Page, safety: Record<string, unknown>) {
   await login(page);
   const session = fakeSession({ state: "live", message: "", model: "ready", lastAlarmAt: null, healthy: true });
   session.profile.safety = safety as typeof session.profile.safety;
-  const puts: Array<{ url: string; body: { safety?: Record<string, { enabled: boolean; seconds: number }> } }> = [];
+  const puts: Array<{ url: string; body: { safety?: Record<string, unknown> } }> = [];
   await page.route("**/api/live/sessions", (route) => route.request().method() === "GET" ? route.fulfill({ json: [session] }) : route.continue());
   await page.route("**/api/live/sessions/abc123/profile*", (route) => {
     puts.push({ url: route.request().url(), body: route.request().postDataJSON() });
     return route.fulfill({ json: session });
   });
   await page.route("**/api/live/sessions/abc123/stream*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route("**/api/live/sessions/abc123/frame.jpg*", (route) => route.fulfill({ contentType: "image/gif", body: GIF }));
   await page.goto("/live?s=abc123");
   await page.getByRole("button", { name: "Ayarla", exact: true }).click();
   const group = page.getByRole("group", { name: "Güvenlik kuralları" });
@@ -191,6 +192,140 @@ test("Ayarla paneli (sahte API): phone alanı olmayan kayıtlı profil kapalı/1
   const saved = puts.filter((p) => p.url.includes("save=true"))[1].body;
   expect(saved.safety?.phone).toEqual({ enabled: false, seconds: 15 });
   expect(saved.safety?.handsUp).toEqual({ enabled: true, seconds: 4 });
+});
+
+type AreaBody = { name: string; points: Array<[number, number]>; rules: string[] };
+/** Son profil isteğindeki analiz alanları (`safety.areas`; yoksa undefined) */
+const lastAreas = (puts: Array<{ body: { safety?: Record<string, unknown> } }>) =>
+  puts.at(-1)?.body.safety?.areas as AreaBody[] | undefined;
+const AREA_HELP = "Boş bırakırsanız bütün görüntü izlenir.";
+
+test("Analiz alanları (sahte API): Ayarla'da çokgen düzenleyici; alan ekle/adlandır/kural kaldır profil isteğine gider; en çok 16 alan", async ({ page }) => {
+  const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
+                                                          phone: { enabled: false, seconds: 15 }, sendImage: false });
+  const areas = page.getByRole("group", { name: "Analiz alanları" });
+  const rows = areas.getByTestId("safety-area");
+  const add = areas.getByRole("button", { name: "Alan ekle" });
+  const editor = page.getByTestId("zones-editor");
+  await expect(areas).toBeVisible();
+  await expect(areas.getByText(AREA_HELP)).toBeVisible();
+  await expect(rows).toHaveCount(0);
+  // görüntü üstünde çokgen düzenleyici (işaretsiz kare); alan yokken çokgen yok
+  await expect(editor).toBeVisible();
+  await expect(editor.locator("img")).toHaveAttribute("src", /\/api\/live\/sessions\/abc123\/frame\.jpg/);
+  await expect(editor.locator("[data-zone]")).toHaveCount(0);
+  await expect(group.getByRole("checkbox")).toHaveCount(4);          // kural kutucukları alan listesine karışmaz
+
+  // yeni alan: "Alan 1", kameradaki açık kurallar (eller yukarı, yerde yatan), görüntünün içinde bir dörtgen
+  await add.click();
+  await expect(rows).toHaveCount(1);
+  await expect.poll(() => lastAreas(puts)?.length).toBe(1);
+  const first = lastAreas(puts)![0];
+  expect(first.name).toBe("Alan 1");
+  expect(first.rules).toEqual(["handsUp", "lying"]);
+  expect(first.points.length).toBe(4);
+  for (const [x, y] of first.points) {
+    expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThanOrEqual(1);
+    expect(y).toBeGreaterThanOrEqual(0); expect(y).toBeLessThanOrEqual(1);
+  }
+  await expect(editor.locator("[data-zone]")).toHaveCount(1);
+  await expect(editor.locator("[data-zone]")).toContainText("Alan 1");          // çokgenin üstünde adı
+  const row = rows.first();
+  const name = row.getByRole("textbox", { name: "Alan adı" });
+  await expect(name).toHaveValue("Alan 1");
+  await expect(name).toHaveAttribute("maxlength", "40");
+  // yalnız kamerada açık kurallar seçilebilir: telefon kapalı → kutucuğu devre dışı ve boş
+  await expect(row.getByRole("checkbox", { name: "Eller yukarı" })).toBeChecked();
+  await expect(row.getByRole("checkbox", { name: "Yerde yatan kişi" })).toBeChecked();
+  await expect(row.getByRole("checkbox", { name: "Telefon kullanımı" })).not.toBeChecked();
+  await expect(row.getByRole("checkbox", { name: "Telefon kullanımı" })).toBeDisabled();
+
+  // ad değişir (boşluklar kırpılır), bir kural kaldırılır: istek güncel
+  await name.fill("  Masa 3 ");
+  await row.getByRole("checkbox", { name: "Yerde yatan kişi" }).uncheck();
+  await expect.poll(() => lastAreas(puts)?.[0]).toEqual({ name: "Masa 3", points: first.points, rules: ["handsUp"] });
+  await expect(editor.locator("[data-zone]")).toContainText("Masa 3");
+  // son kural kaldırılamaz (alanın en az bir kuralı olmalı)
+  await expect(row.getByRole("checkbox", { name: "Eller yukarı" })).toBeDisabled();
+  // ad boşaltılırsa istek boş ad taşımaz (eski ad kalır); kutudan çıkınca ad geri gelir
+  await name.fill("");
+  await page.waitForTimeout(400);
+  expect(lastAreas(puts)?.[0].name).toBe("Masa 3");
+  await name.blur();
+  await expect(name).toHaveValue("Masa 3");
+
+  // 16 alana kadar: yeni adlar ilk boş numara ("Alan 1" boşaldı), 16'da "Alan ekle" devre dışı
+  for (let i = 0; i < 15; i++) await add.click();
+  await expect(rows).toHaveCount(16);
+  await expect(add).toBeDisabled();
+  await expect(editor.locator("[data-zone]")).toHaveCount(16);
+  await expect.poll(() => lastAreas(puts)?.length).toBe(16);
+  const names = lastAreas(puts)!.map((a) => a.name);
+  expect(names).toEqual(["Masa 3", ...Array.from({ length: 15 }, (_, i) => `Alan ${i + 1}`)]);
+  // köşeler birbirinin tam üstüne binmez
+  expect(new Set(lastAreas(puts)!.map((a) => JSON.stringify(a.points))).size).toBe(16);
+  // Sil: biri gider, ekleme yeniden açılır
+  await rows.nth(1).getByRole("button", { name: "Sil" }).click();
+  await expect(rows).toHaveCount(15);
+  await expect(add).toBeEnabled();
+  await expect(rows.nth(1).getByRole("textbox", { name: "Alan adı" })).toHaveValue("Alan 2");
+
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
+  const saved = puts.find((p) => p.url.includes("save=true"))!.body.safety as { areas: AreaBody[] };
+  expect(saved.areas.length).toBe(15);
+  expect(saved.areas[0]).toEqual({ name: "Masa 3", points: first.points, rules: ["handsUp"] });
+  expect(saved.areas.map((a) => a.name)).not.toContain("Alan 1");
+  // düzenleyici kapanınca görüntü yine işaretli canlı akış
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("img", { name: "İşaretli canlı görüntü" })).toBeVisible();
+});
+
+test("Analiz alanları (sahte API): kaydedilmiş alanlı profil listede açılır; kamerada açılan kural seçilebilir; hepsi silinince areas gönderilmez", async ({ page }) => {
+  const saved: AreaBody[] = [
+    { name: "Kasa önü", points: [[0.1, 0.1], [0.4, 0.1], [0.4, 0.5], [0.1, 0.5]], rules: ["handsUp"] },
+    { name: "Masa 3", points: [[0.5, 0.5], [0.9, 0.5], [0.95, 0.7], [0.9, 0.9], [0.5, 0.9]], rules: ["lying", "handsUp"] },
+  ];
+  const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
+                                                          phone: { enabled: false, seconds: 15 }, sendImage: false, areas: saved });
+  const areas = page.getByRole("group", { name: "Analiz alanları" });
+  const rows = areas.getByTestId("safety-area");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByRole("textbox", { name: "Alan adı" })).toHaveValue("Kasa önü");
+  await expect(rows.nth(1).getByRole("textbox", { name: "Alan adı" })).toHaveValue("Masa 3");
+  await expect(rows.nth(0).getByRole("checkbox", { name: "Yerde yatan kişi" })).not.toBeChecked();
+  await expect(rows.nth(1).getByRole("checkbox", { name: "Yerde yatan kişi" })).toBeChecked();
+  await expect(rows.nth(1).getByRole("checkbox", { name: "Eller yukarı" })).toBeChecked();
+  const editor = page.getByTestId("zones-editor");
+  await expect(editor.locator("[data-zone]")).toHaveCount(2);
+  await expect(editor.locator('[data-zone="1"]')).toContainText("Masa 3");
+  await expect(editor.locator("[data-handle=vertex]")).toHaveCount(9);
+
+  // kamerada telefon kuralı açılınca alanda da seçilebilir; yeni alan açık üç kuralla gelir
+  await group.getByRole("checkbox", { name: "Telefon kullanımı" }).check();
+  const phone = rows.nth(0).getByRole("checkbox", { name: "Telefon kullanımı" });
+  await expect(phone).toBeEnabled();
+  await phone.check();
+  await expect.poll(() => lastAreas(puts)?.[0].rules).toEqual(["handsUp", "phone"]);
+  await areas.getByRole("button", { name: "Alan ekle" }).click();
+  await expect.poll(() => lastAreas(puts)?.length).toBe(3);
+  expect(lastAreas(puts)![2]).toMatchObject({ name: "Alan 1", rules: ["handsUp", "lying", "phone"] });
+  // kamerada kapatılan kural alanda seçili kalır ama değiştirilemez; o alanda açık kural kalmazsa uyarı
+  await group.getByRole("checkbox", { name: "Eller yukarı" }).uncheck();
+  await group.getByRole("checkbox", { name: "Telefon kullanımı" }).uncheck();
+  await expect(rows.nth(0).getByRole("checkbox", { name: "Eller yukarı" })).toBeChecked();
+  await expect(rows.nth(0).getByRole("checkbox", { name: "Eller yukarı" })).toBeDisabled();
+  await expect(rows.nth(0)).toContainText("Bu alanda kamerada açık kural yok.");
+  await expect(rows.nth(1)).not.toContainText("Bu alanda kamerada açık kural yok.");
+
+  // hepsi silinince alan listesi boş: istekte `areas` yok (bütün görüntü izlenir)
+  for (let i = 0; i < 3; i++) await rows.first().getByRole("button", { name: "Sil" }).click();
+  await expect(rows).toHaveCount(0);
+  await expect(areas.getByText(AREA_HELP)).toBeVisible();
+  await expect.poll(() => { const s = puts.at(-1)?.body.safety; return !!s && !("areas" in s); }).toBe(true);
+  await page.getByRole("button", { name: "Kaydet", exact: true }).click();
+  await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
+  expect(puts.find((p) => p.url.includes("save=true"))!.body.safety).not.toHaveProperty("areas");
 });
 
 interface FakeAlarm {

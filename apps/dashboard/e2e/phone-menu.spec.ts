@@ -110,3 +110,33 @@ test("Telefon kullanımı (sahte API): başlatma penceresi yalnız telefon kural
   await expect(dialog.getByRole("button", { name: "+ Kuyumcu güvenliği profili ekle" })).toHaveCount(0);
   await expect(dialog.getByText("Yumurta")).toHaveCount(0);
 });
+
+test("Telefon kullanımı (sahte API): Ayarla'da da Analiz alanları; yeni alan yalnız kamerada açık telefon kuralıyla gelir", async ({ page }) => {
+  await login(page);
+  const sessions = [session("t1", "Ofis kamerası", safetyProfile("pt", "Telefon kullanımı", true))];
+  const puts: Array<Record<string, unknown>> = [];
+  await page.route("**/api/live/sessions", (r) => r.request().method() === "GET" ? r.fulfill({ json: sessions }) : r.continue());
+  await page.route("**/api/live/sessions/*/stream*", (r) => r.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route("**/api/live/sessions/*/frame.jpg*", (r) => r.fulfill({ contentType: "image/gif", body: GIF }));
+  await page.route(/\/api\/live\/alarms\?/, (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/live/sessions/t1/profile*", (r) => {
+    const body = r.request().postDataJSON() as Record<string, unknown>;
+    puts.push(body);
+    sessions[0] = { ...sessions[0], profile: body };
+    return r.fulfill({ json: body });
+  });
+  await page.goto("/live?tur=telefon");
+  await page.getByRole("button", { name: "Ayarla", exact: true }).click();
+  const areas = page.getByRole("group", { name: "Analiz alanları" });
+  await expect(areas).toBeVisible();
+  await expect(areas.getByText("Boş bırakırsanız bütün görüntü izlenir.")).toBeVisible();
+  await expect(page.getByTestId("zones-editor")).toBeVisible();
+  await areas.getByRole("button", { name: "Alan ekle" }).click();
+  const row = areas.getByTestId("safety-area");
+  await expect(row).toHaveCount(1);
+  await expect(row.getByRole("checkbox", { name: "Telefon kullanımı" })).toBeChecked();
+  await expect(row.getByRole("checkbox", { name: "Eller yukarı" })).toBeDisabled();
+  await expect(row.getByRole("checkbox", { name: "Yerde yatan kişi" })).toBeDisabled();
+  await expect.poll(() => ((puts.at(-1)?.safety as { areas?: Array<{ name: string; rules: string[] }> } | undefined)?.areas ?? [])
+    .map((a) => [a.name, a.rules])).toEqual([["Alan 1", ["phone"]]]);
+});

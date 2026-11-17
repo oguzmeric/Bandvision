@@ -10,7 +10,9 @@ import { int, num } from "@/lib/format";
 import { flip, geometryOf, withGeometry, type Geometry } from "@/lib/geometry";
 import { StreamChoice } from "./StartSessionDialog";
 import StaffColors from "./StaffColors";
-import { SafetyPanel, SafetySettings } from "./SafetyPanel";
+import { SAFETY_DEFAULTS, SafetyPanel, SafetySettings } from "./SafetyPanel";
+import { SafetyAreas } from "./SafetyAreas";
+import { safetyAreas, withAreaPoints, withAreas } from "@/lib/safetyAreas.mjs";
 import { FireSettings } from "./FireSettings";
 import { MAX_STAFF_COLORS } from "@/lib/staff";
 import { api, isWatchMode, safetyHealth, STATE_LABELS, stateDot, watchStatus, type LabColor, type LiveSession, type Profile } from "@/lib/live";
@@ -139,7 +141,7 @@ export default function LiveView() {
   // kalibrasyonda düzenleyicinin arka planı: işaretsiz son işlenen kare (~1,5/sn). Personel rengi öğretirken görüntü
   // donar: sunucu, en son verdiği kareyi (ve o karenin kişi kutularını) örnekler — tıklanan kare ile aynı.
   useEffect(() => {
-    if (!draft || teaching || draft.countMode === "safety") return;   // güvenlikte alan yok: düzenleyici açılmaz (yangında hariç bölgeler var)
+    if (!draft || teaching) return;          // güvenlikte analiz alanları, yangında hariç bölgeler de bu kare üstünde çizilir
     const t = setInterval(() => setFrameTick((x) => x + 1), 650);
     return () => clearInterval(t);
   }, [draft, teaching]);
@@ -325,8 +327,16 @@ export default function LiveView() {
             <ZonesEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
                          zones={fireConfig(p.fire).ignoreZones}
                          onChange={(z) => edit({ ...p, fire: { ...fireConfig(p.fire), ignoreZones: z } })} />
-          ) : draft && !safety ? (
-            // güvenlikte alan kısıtı yok (kullanıcı kararı, 2026-10-07): Ayarla'da da iskeletli canlı görüntü kalır
+          ) : draft && safety ? (
+            // güvenlik ve telefon: sayım alanı ve çizgi yok; görüntü üstünde analiz alanları çizilir (kullanıcı 2026-11-17'de
+            // 2026-10-07'deki "güvenlikte alan kısıtı yok" kararını değiştirdi). Alan yoksa bütün görüntü izlenir
+            <ZonesEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect} tone="area"
+                         zones={safetyAreas(p.safety).map((a) => a.points)} labels={safetyAreas(p.safety).map((a) => a.name)}
+                         onChange={(z) => {
+                           const sf = p.safety ?? SAFETY_DEFAULTS;
+                           edit({ ...p, safety: withAreas(sf, withAreaPoints(safetyAreas(sf), z)) });
+                         }} />
+          ) : draft ? (
             <RoiEditor src={`/api/live/sessions/${session.id}/frame.jpg?t=${frameTick}`} aspect={aspect}
                        value={g} onChange={(ng: Geometry) => edit(withGeometry(p, ng))} twoWay={twoWay} editable={!teaching}>
               {teaching && (
@@ -410,7 +420,10 @@ export default function LiveView() {
               )}
               <div className="mt-3 grid gap-3">
                 {safety ? (
-                  <SafetySettings value={p.safety} onChange={(sf) => edit({ ...p, safety: sf })} />
+                  <>
+                    <SafetySettings value={p.safety} onChange={(sf) => edit({ ...p, safety: sf })} />
+                    <SafetyAreas value={p.safety} onChange={(sf) => edit({ ...p, safety: sf })} />
+                  </>
                 ) : fire ? (
                   <FireSettings value={p.fire} status={session.fire ?? null} onChange={(f) => edit({ ...p, fire: f })} />
                 ) : twoWay ? (
@@ -491,7 +504,7 @@ export default function LiveView() {
                         className={`${btn} pl-btn-primary flex-1`}>Kaydet</button>
               </div>
               <p className="mt-2 text-[11.5px] text-pl-faint">
-                {safety ? "Kurallar yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez. Kural görüntüdeki herkese uygulanır."
+                {safety ? "Kurallar ve analiz alanları yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."
                   : fire ? "Kurallar ve hariç bölgeler yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."
                   : "Alan, çizgi ve yön yalnızca bu kamera için kaydedilir; diğer kameralar etkilenmez."}
               </p>
