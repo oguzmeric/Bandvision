@@ -365,7 +365,7 @@ test("izleme: tek kamerada Esc üstteki alarm penceresini kapatır, tek kameray�
   await expect(page.getByTestId("watch-tile").nth(0)).toContainText("Kapı");
   await page.getByTestId("watch-tile").nth(0).dblclick();
   await expect(page.getByRole("heading", { name: "Kapı" })).toBeVisible();
-  await page.getByRole("button", { name: /^Kaydı izle/ }).click();     // alarm şeridi: pencere tek kameranın üstünde açılır
+  await page.getByRole("button", { name: "Alarmları göster" }).click();     // alarm çubuğu: pencere tek kameranın üstünde açılır
   await expect(dlg).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dlg).toBeHidden();

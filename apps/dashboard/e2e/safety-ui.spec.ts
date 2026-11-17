@@ -203,7 +203,7 @@ interface FakeAlarm {
 /** Alarm penceresi (yeni onaylanmamış alarmda açılır) */
 const modalOf = (page: Page) => page.getByRole("alertdialog", { name: "Alarm", exact: true });
 
-test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, tarih, Gördüm hatası", async ({ page }) => {
+test("alarm çubuğu (sahte API): akış kopunca uyarı satırı, alarm sayacı, Gördüm hatası; bayat yoklama onaylananı geri getirmez", async ({ page }) => {
   await login(page);
   await page.clock.install();                                 // 2 sn'lik yoklama beklenmez: saat ileri sarılır
   const now = Date.now() / 1000;
@@ -264,26 +264,31 @@ test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, 
   await nextPoll();
   await expect(warning).toHaveText("Alarmlar alınamıyor — analiz sunucusuna ulaşılamıyor.");
 
-  // akış düzelir: uyarı kalkar; 5 alarmdan 3'ü + "+2 alarm daha"; üç günlük alarmda tarih de görünür
+  // akış düzelir: uyarı kalkar; ince çubukta sayaç (5 kritik alarm; uyarı yok) ve son alarm
   feed = "ok";
   await nextPoll();
   const banner = page.getByRole("alert", { name: "Alarm", exact: true });
   await expect(banner).toBeVisible();
   await expect(warning).toHaveCount(0);
-  // yeni alarmlar alarm penceresini açar; küçültülünce şerit kalır
-  await expect(modalOf(page)).toBeVisible();
-  await modalOf(page).getByRole("button", { name: "Küçült" }).click();
-  await expect(modalOf(page)).toHaveCount(0);
-  await expect(banner).toContainText("+2 alarm daha");
-  await expect(banner.getByRole("button", { name: /^Gördüm/ })).toHaveCount(3);
-  await expect(banner.getByText(/— Kamera 1 · \d{2}:\d{2}:\d{2}$/)).toBeVisible();            // bugün: yalnızca saat
-  await expect(banner.getByText(/— Kamera 3 · \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}$/)).toBeVisible();   // eski: tarih + saat
+  // yeni alarmlar alarm penceresini açar; küçültülünce çubuk kalır
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  const count = page.getByTestId("alarm-count-critical");
+  await expect(count).toHaveText("5 kritik alarm");
+  await expect(page.getByTestId("alarm-count-warning")).toHaveCount(0);
+  await expect(banner).toContainText("Son: Deneme alarmı — Kamera 1");
+  // "Alarmları göster": pencere ilk alarmda (en yeni: Kamera 1) açılır
+  await banner.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modal.getByTestId("alarm-subtitle")).toContainText("Kamera 1 ·");
 
-  // Gördüm sunucuda başarısız: alarm kalır, kısa hata görünür
-  const ack1 = banner.getByRole("button", { name: "Gördüm: Deneme alarmı — Kamera 1" });
+  // Gördüm sunucuda başarısız: alarm kalır, kısa hata görünür (çubukta da)
+  const ack1 = modal.getByRole("button", { name: "Gördüm", exact: true });
   await ack1.click();
   await expect(banner).toContainText("Gördüm kaydedilemedi");
-  await expect(ack1).toBeVisible();
+  await expect(modal).toContainText("Gördüm kaydedilemedi");
+  await expect(count).toHaveText("5 kritik alarm");
 
   // başarılı: alarm kapanır, sıradaki görünür, hata kalkar. Onaydan ÖNCE başlayıp SONRA dönen (bayat) yoklama
   // cevabı alarmı geri getirmez; panel hemen yeni bir yoklama yapar (o da tutulurken liste doğru kalır)
@@ -299,16 +304,17 @@ test("alarm şeridi (sahte API): akış kopunca uyarı satırı, +N alarm daha, 
   const before = polls;
   await nextPoll();                                                  // bu yoklama tutuluyor
   await ack1.click();
-  await expect(ack1).toHaveCount(0);
-  await expect(banner).toContainText("+1 alarm daha");
+  await expect(count).toHaveText("4 kritik alarm");
+  await expect(modal.getByTestId("alarm-subtitle")).toContainText("Kamera 2 ·");   // pencere sıradakine geçti
   await expect(banner).not.toContainText("Gördüm kaydedilemedi");
   stale.release();                                                   // bayat cevap şimdi gelir: yok sayılır
   await expect.poll(() => polls).toBeGreaterThanOrEqual(before + 2); // yenisi hemen istendi (tutuluyor)
-  await expect(ack1).toHaveCount(0);                                 // bayat liste alarmı geri getirmedi
+  await expect(count).toHaveText("4 kritik alarm");                  // bayat liste alarmı geri getirmedi
   fresh.release();
-  await expect(ack1).toHaveCount(0);
+  await expect(count).toHaveText("4 kritik alarm");
   await nextPoll();                                                  // sonraki yoklamalar da getirmez
-  await expect(ack1).toHaveCount(0);
+  await expect(count).toHaveText("4 kritik alarm");
+  await expect(modal.getByTestId("queue-item")).toHaveCount(4);
 });
 
 test("izlenmeyen güvenlik kamerası (sahte API): 60 sn sonra şeritte uyarı; şerit kaydırınca da görünür", async ({ page }) => {
@@ -382,7 +388,7 @@ test("alarm şeridi yapışkan: canlı sayfada aşağı kaydırınca alarm gör�
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
   await expect(banner).toBeInViewport();
-  await expect(banner.getByRole("button", { name: /^Gördüm/ })).toBeInViewport();
+  await expect(banner.getByRole("button", { name: "Alarmları göster" })).toBeInViewport();
   // zemin düz: arkadaki içerik görünmez
   const bg = await page.getByTestId("alarm-banner").evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(bg).not.toBe("rgba(0, 0, 0, 0)");
@@ -482,7 +488,7 @@ async function fakeFeed(page: Page, list: FakeAlarm[]) {
   return calls;
 }
 
-test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Küçült şeridi bırakır; Kaydı izle; Gördüm onaylayıp sonrakine geçer", async ({ page }) => {
+test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Küçült çubuğu bırakır; Alarmları göster; Gördüm onaylayıp sonrakine geçer", async ({ page }) => {
   await login(page);
   const now = Date.now() / 1000;
   const list: FakeAlarm[] = [];
@@ -523,7 +529,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect(modal.getByTestId("alarm-video")).toHaveCount(0);
   await expect(modal.getByRole("link", { name: "Kamerayı aç" })).toHaveAttribute("href", "/live?s=abc123");
 
-  // Esc = Küçült (asla Gördüm değil): pencere kapanır, şerit kalır, onay isteği yok
+  // Esc = Küçült (asla Gördüm değil): pencere kapanır, çubuk kalır, onay isteği yok
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
   const banner = page.getByRole("alert", { name: "Alarm", exact: true });
@@ -539,20 +545,24 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(m + 1);
   await expect(modal).toHaveCount(0);
 
-  // "Kaydı izle": pencere o alarmda açılır; deneme alarmında süre/"devam ediyor" ve (oturumsuz) "Kamerayı aç" yok
-  await banner.getByRole("button", { name: "Kaydı izle: Deneme alarmı — Kasa" }).click();
+  // "Alarmları göster": pencere ilk alarmda açılır; listeden deneme alarmı seçilir: süre/"devam ediyor" ve (oturumsuz)
+  // "Kamerayı aç" yok
+  await banner.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
+  await items.nth(1).click();
   await expect(modal.getByTestId("alarm-title")).toHaveText("DENEME ALARMI");
   await expect(items.nth(1)).toHaveAttribute("aria-current", "true");
   await expect(modal.getByTestId("alarm-status")).toHaveCount(0);
   await expect(modal.getByRole("link", { name: "Kamerayı aç" })).toHaveCount(0);
   await expect(modal.getByTestId("clip-caption")).toHaveText("Bu alarmın kaydı yok.");   // kamerasız: beklenmez
-  await modal.getByRole("button", { name: "Küçült" }).click();               // Küçült: şerit kalır
+  await modal.getByRole("button", { name: "Küçült" }).click();               // Küçült: çubuk kalır
   await expect(modal).toHaveCount(0);
   await expect(banner).toBeVisible();
 
   // Gördüm: onaylanır, pencere kalan alarma geçer — kapanıp açılmadan (aynı öğe, hep açık: perde yanıp sönmez,
-  // odak sayfaya kaçmaz); son alarm da onaylanınca pencere ve şerit kapanır
-  await banner.getByRole("button", { name: "Kaydı izle: Eller yukarı — Tezgah kamerası" }).click();
+  // odak sayfaya kaçmaz); son alarm da onaylanınca pencere ve çubuk kapanır
+  await banner.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modal.getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
   type Marked = HTMLDialogElement & { izli?: number; kapandi?: number };
   await modal.evaluate((el) => {
     const d = el as Marked;
@@ -799,7 +809,7 @@ test("sekme başlığı: onaylanmamış alarm varken her saniye yanıp söner, a
   const list: FakeAlarm[] = [];
   const calls = await fakeFeed(page, list);
   await page.goto("/notifications");
-  const BASE = "Bildirimler · BandVision", ALARM = "🚨 ALARM — Tezgah kamerası";
+  const BASE = "Bildirimler · BandVision", ALARM = "ALARM — Tezgah kamerası";
   await expect(page).toHaveTitle(BASE);
   await expect.poll(() => calls.polls).toBeGreaterThan(0);
   list.push({ id: "c1", sessionId: null, camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 3, firedAt: now,

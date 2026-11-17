@@ -6,6 +6,7 @@ import {
   type SafetyConfig,
 } from "@/lib/live";
 import { NO_LIVE_SESSIONS, useAlarmCenter } from "./AlarmCenter";
+import AlarmIcon from "./AlarmIcon";
 import AlarmViewer from "./AlarmViewer";
 import { FireWarning } from "./FireSettings";
 
@@ -89,7 +90,7 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
                   {a.image
                     // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
                     ? <img src={alarmImageUrl(a.id)} alt="" className="h-12 w-16 rounded-[2px] object-cover" />
-                    : <span className="grid h-12 w-16 place-items-center rounded-[2px] bg-pl-side text-lg" aria-hidden="true">🚨</span>}
+                    : <span className="grid h-12 w-16 place-items-center rounded-[2px] bg-pl-side text-pl-muted"><AlarmIcon type={a.type} className="h-5 w-5" /></span>}
                   {a.clip && <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] text-white" aria-hidden="true">▶</span>}
                 </span>
                 <span className="min-w-0 text-[13px]">

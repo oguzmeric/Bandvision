@@ -25,6 +25,12 @@
   --color-alert-warn: #d89a1e;
   --color-alert-warn-ink: #2b1d00;
   --color-alert-test: #4a5f7d;
+  /* Onaylanmamış kritik alarmda ekran kenarı: saniyede bir yanıp söner (motion-safe: hareket azaltma tercihinde sabit) */
+  --animate-alarm-edge: alarm-edge 1s ease-in-out infinite;
+  @keyframes alarm-edge {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
 
   /* Sade arayüz (TRASSIR'a yakın gri-mavi; taslak duzen.html): menü, durum şeridi ve .pl-* sınıfları */
   --color-pl-bg: #ffffff;

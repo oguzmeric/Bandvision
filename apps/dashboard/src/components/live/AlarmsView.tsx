@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ALARM_LABELS, ALARM_LIST_LIMIT, NOTIFY_LABELS, alarmImageUrl, api, toggleFalseAlarm, type Alarm, type AlarmType } from "@/lib/live";
 import { alarmCounts } from "@/lib/safetyAlarms.mjs";
 import { NO_LIVE_SESSIONS, useAlarmCenter } from "./AlarmCenter";
+import AlarmIcon from "./AlarmIcon";
 import AlarmViewer from "./AlarmViewer";
 
 const POLL_MS = 5000;
@@ -157,7 +158,7 @@ export default function AlarmsView() {
                         {a.image
                           // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
                           ? <img src={alarmImageUrl(a.id)} alt="" className="h-full w-full object-cover" />
-                          : <span className="grid h-full place-items-center text-lg" aria-hidden="true">🚨</span>}
+                          : <span className="grid h-full place-items-center text-pl-muted"><AlarmIcon type={a.type} className="h-5 w-5" /></span>}
                         {a.clip && <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] text-white" aria-hidden="true">▶</span>}
                       </button>
                     </td>

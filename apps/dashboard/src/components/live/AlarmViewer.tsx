@@ -251,7 +251,7 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
                 {mode === "active" ? "Küçült" : "Kapat"}
               </button>
             </div>
-            {mode === "active" && <p className="text-[11.5px] text-pl-faint">Küçültünce alarm sayfanın üstündeki şeritte kalır; Gördüm deyince kapanır.</p>}
+            {mode === "active" && <p className="text-[11.5px] text-pl-faint">Küçültünce alarm sayfanın üstündeki alarm çubuğunda kalır; Gördüm deyince kapanır.</p>}
           </footer>
         </div>
 

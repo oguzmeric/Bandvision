@@ -3,8 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { desktopReady, playBeep, readPref } from "@/lib/attention";
 import { ALARM_LABELS, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm, type LiveSession } from "@/lib/live";
-import { sortAlarms } from "@/lib/alarmPopup.mjs";
+import { alarmSeverity, sortAlarms } from "@/lib/alarmPopup.mjs";
 import { problemOf, type Problem } from "@/lib/views";
+import AlarmToast from "./AlarmToast";
 import AlarmViewer from "./AlarmViewer";
 
 const POLL_MS = 2000;
@@ -14,8 +15,10 @@ const SESSIONS_POLL_MS = 5000;
 export const FAILS_BEFORE_WARNING = 3;
 /** Bu sekmede gösterilmiş alarmlar (pencere aynı alarm için yeniden açılmasın; sayfa yenilense de) */
 const SHOWN_KEY = "bv.alarm.shown";
+/** Bu sekmede köşe kartı × ile gizlenmiş uyarılar (sayfa yenilense de gizli kalır; alarm üstteki çubukta durur) */
+const HIDDEN_KEY = "bv.alarm.hidden";
 const SHOWN_MAX = 200;
-/** Onaylanmamış alarm varken sekme başlığı bu aralıkla "🚨 ALARM — <kamera>" ile sayfa başlığı arasında gidip gelir */
+/** Onaylanmamış alarm varken sekme başlığı bu aralıkla "ALARM — <kamera>" ile sayfa başlığı arasında gidip gelir */
 export const TITLE_FLASH_MS = 1000;
 /** Arka plandaki sekmede aynı anda en çok bu kadar masaüstü bildirimi */
 const MAX_NOTIFICATIONS = 3;
@@ -41,7 +44,7 @@ interface AlarmCenterValue {
   ackFailed: string | null;
   ack: (a: Alarm) => Promise<boolean>;
   markFalse: (a: Alarm) => Promise<boolean>;
-  /** Alarm penceresini bu alarmda açar (şeritteki "Kaydı izle", masaüstü bildirimi) */
+  /** Alarm penceresini bu alarmda açar (çubuktaki "Alarmları göster", köşedeki "+N uyarı daha", masaüstü bildirimi) */
   open: (id: string) => void;
   /** Alarm listesini hemen yeniden ister (başka yerde onaylandı) */
   refresh: () => void;
@@ -54,18 +57,21 @@ export function useAlarmCenter(): AlarmCenterValue | null {
   return useContext(Ctx);
 }
 
-function loadShown(): Set<string> {
+/** Pencere açıkken köşe kartlarına verilen boş liste (sabit: her çizimde yeni dizi olmasın) */
+const NO_ALARMS: Alarm[] = [];
+
+function loadIds(key: string): Set<string> {
   try {
-    const v: unknown = JSON.parse(window.sessionStorage.getItem(SHOWN_KEY) ?? "[]");
+    const v: unknown = JSON.parse(window.sessionStorage.getItem(key) ?? "[]");
     return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   } catch {
     return new Set();
   }
 }
 
-function saveShown(shown: Set<string>): void {
+function saveIds(key: string, ids: Set<string>): void {
   try {
-    window.sessionStorage.setItem(SHOWN_KEY, JSON.stringify([...shown].slice(-SHOWN_MAX)));
+    window.sessionStorage.setItem(key, JSON.stringify([...ids].slice(-SHOWN_MAX)));
   } catch {
     // depolama yok: yalnızca bu sayfa açıkken hatırlanır
   }
@@ -73,9 +79,12 @@ function saveShown(shown: Set<string>): void {
 
 /**
  * Her panel sayfasında alarmların tek kaynağı (tek yoklama): onaylanmamış alarmlar (2 sn'de bir), izlenmeyen güvenlik
- * kameraları (5 sn'de bir), alarm penceresi ve dikkat çekme. Bu sekmede henüz gösterilmemiş onaylanmamış alarm gelince
- * alarm penceresi açılır (en yenisinde); ayar açıksa sesli uyarı ve (sekme arka plandaysa) masaüstü bildirimi. Alarm
- * varken sekme başlığı yanıp söner. Şerit (`AlarmBanner`) bu verinin görünümüdür.
+ * kameraları (5 sn'de bir), alarm penceresi, köşe kartları ve dikkat çekme. Bu sekmede henüz gösterilmemiş onaylanmamış
+ * alarmlar arasında kritik varsa ortadaki pencere en yeni kritikte açılır; yalnız uyarı (telefon) geldiyse pencere açılmaz,
+ * uyarı sağ altta köşe kartında görünür (kartlar yalnız pencere kapalıyken çizilir; × ile gizlenen kart gizli kalır). Her
+ * yeni alarmda ayar açıksa sesli uyarı ve (sekme arka plandaysa) masaüstü bildirimi. Alarm varken sekme başlığı yanıp söner;
+ * onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma tercihinde sabit). Üstteki çubuk
+ * (`AlarmBanner`) bu verinin görünümüdür.
  */
 export default function AlarmCenter({ children }: { children: React.ReactNode }) {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
@@ -85,6 +94,8 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const [sessions, setSessions] = useState<LiveSession[]>([]);
   /** Açık alarm penceresi: gösterilen alarm ve listedeki yeri (alarm onaylanınca aynı yerdeki sonrakine geçilir) */
   const [viewer, setViewer] = useState<{ id: string; index: number } | null>(null);
+  /** × ile gizlenen köşe kartları (bu sekmede; alarm çubukta ve pencerenin listesinde kalır) */
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   /** Cevap yalnızca istek ile cevap arasında sıra değişmediyse uygulanır (onaydan önce başlayan istek geri getirmesin) */
   const seq = useRef(0);
   const refreshRef = useRef<() => void>(() => undefined);
@@ -94,6 +105,12 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const latest = useRef<Alarm[]>([]);
   useEffect(() => { latest.current = ordered; }, [ordered]);
   const liveSessionIds = useMemo<ReadonlySet<string>>(() => new Set(sessions.map((s) => s.id)), [sessions]);
+  /** Köşe kartlarındaki uyarılar: gizlenmemiş, yeniden eskiye */
+  const warnings = useMemo(() => ordered.filter((a) => alarmSeverity(a.type) === "warning" && !hidden.has(a.id)), [ordered, hidden]);
+  const critical = ordered.some((a) => alarmSeverity(a.type) === "critical");
+
+  // gizlenen kartlar sayfa yenilense de gizli kalır (oturum belleği; sunucu çiziminde pencere nesnesi yok)
+  useEffect(() => { setHidden(loadIds(HIDDEN_KEY)); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -189,16 +206,17 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     });
   }, [ordered]);
 
-  // Bu sekmede ilk kez görülen onaylanmamış alarm: pencere en yenisinde açılır, ses ve masaüstü bildirimi
+  // Bu sekmede ilk kez görülen onaylanmamış alarmlar: aralarında kritik varsa pencere en yeni kritikte açılır (yalnız uyarı:
+  // pencere açılmaz, köşe kartı çıkar; küçültülmüş pencere de kapalı kalır); her durumda ses ve masaüstü bildirimi
   useEffect(() => {
-    shown.current ??= loadShown();
+    shown.current ??= loadIds(SHOWN_KEY);
     const seen = shown.current;
     const fresh = alarms.filter((a) => !seen.has(a.id));
     if (fresh.length === 0) return;
     for (const a of fresh) seen.add(a.id);
-    saveShown(seen);
-    const newest = fresh[0];
-    setViewer({ id: newest.id, index: ordered.indexOf(newest) });
+    saveIds(SHOWN_KEY, seen);
+    const newest = sortAlarms(fresh)[0];                // kritikler önde, grup içinde en yeni
+    if (alarmSeverity(newest.type) === "critical") setViewer({ id: newest.id, index: ordered.indexOf(newest) });
     if (readPref("sound")) playBeep();
     if (document.hidden && desktopReady()) {
       for (const a of fresh.slice(0, MAX_NOTIFICATIONS)) {
@@ -215,11 +233,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     }
   }, [alarms, ordered, open]);
 
-  // Sekme başlığı: onaylanmamış alarm varken her saniye "🚨 ALARM — <kamera>" ↔ sayfa başlığı; alarm bitince geri
+  // Sekme başlığı: onaylanmamış alarm varken her saniye "ALARM — <kamera>" ↔ sayfa başlığı (emoji yok); alarm bitince geri
   const flashCamera = alarms[0]?.camera ?? null;
   useEffect(() => {
     if (flashCamera === null) return;
-    const text = `🚨 ALARM — ${flashCamera}`;
+    const text = `ALARM — ${flashCamera}`;
     let base = document.title;
     let alarmNext = true;
     const tick = () => {
@@ -264,6 +282,13 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   }, []);
 
   const close = useCallback(() => setViewer(null), []);
+  const hide = useCallback((id: string) => {
+    setHidden((h) => {
+      const next = new Set(h).add(id);
+      saveIds(HIDDEN_KEY, next);
+      return next;
+    });
+  }, []);
   const refresh = useCallback(() => refreshRef.current(), []);
   const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh }),
     [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, refresh]);
@@ -275,6 +300,14 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   return (
     <Ctx.Provider value={value}>
       {children}
+      {critical && (
+        // onaylanmamış kritik alarm: ekranın kenarı kırmızı yanıp söner (hareket azaltma tercihinde sabit); tıklanamaz, sayfa
+        // kullanılmaya devam eder; ekran okuyucudan gizli (alarm çubukta ve pencerede yazılı)
+        <div data-testid="alarm-edge" aria-hidden="true"
+             className="pointer-events-none fixed inset-0 z-[60] border-[5px] border-nok-600 motion-safe:animate-alarm-edge" />
+      )}
+      <AlarmToast warnings={showing ? NO_ALARMS : warnings} liveSessionIds={liveSessionIds} onAck={ack} onFalseAlarm={markFalse}
+                  onHide={hide} onOpenAll={open} />
       {showing && (
         <AlarmViewer alarms={ordered} id={showing} mode="active" liveSessionIds={liveSessionIds} onSelect={open} onClose={close}
                      onAck={ack} onFalseAlarm={markFalse} />

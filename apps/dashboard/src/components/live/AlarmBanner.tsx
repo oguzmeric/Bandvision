@@ -4,15 +4,15 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { KEEP_UNSAVED_ATTR } from "@/components/UnsavedGuard";
 import { refusalText } from "@/lib/analyzerRefusal.mjs";
-import { ALARM_LABELS, stamp } from "@/lib/live";
+import { ALARM_LABELS } from "@/lib/live";
+import { alarmSeverity, sortAlarms } from "@/lib/alarmPopup.mjs";
 import { useAlarmCenter } from "./AlarmCenter";
 
-const SHOWN = 3;
-
 /**
- * Her panel sayfasında, sayfa kaydırılsa da üstte (yapışkan): onaylanmamış güvenlik ve yangın/duman alarmları ve 60 sn'den
- * uzun süredir izlenmeyen güvenlik ve yangın/duman kameraları. Veri `AlarmCenter`'ın tek yoklamasından gelir (ikinci yoklama yok). Alarm penceresi
- * küçültülse de alarm burada kalır; "Kaydı izle" pencereyi o alarmda yeniden açar.
+ * Her panel sayfasında, sayfa kaydırılsa da üstte (yapışkan): onaylanmamış alarmların ince sayaç çubuğu ("● N kritik alarm"
+ * kırmızı, "N uyarı" sarı, "Son: <tür> — <kamera>", "Alarmları göster") ve 60 sn'den uzun süredir izlenmeyen güvenlik ve
+ * yangın/duman kameraları. Veri `AlarmCenter`'ın tek yoklamasından gelir (ikinci yoklama yok). Alarm penceresi küçültülse ya da
+ * köşe kartı gizlense de alarm burada sayılır; "Alarmları göster" pencereyi pencerenin sırasındaki ilk alarmda açar.
  * Şerit çoğu zaman tek alarm kanalıdır (Telegram varsayılan kapalı): alarm akışı koparsa (oturum süresi doldu, analiz
  * sunucusu yok, analiz sunucusu panelin anahtarını ya da adresini reddetti) eski liste sessizce kalmaz, sarı uyarı satırı çıkar.
  */
@@ -21,7 +21,7 @@ export default function AlarmBanner() {
   const pathname = usePathname();
   const search = useSearchParams().toString();
   if (!center) return null;
-  const { alarms, problem, unwatched, ackFailed, ack, open } = center;
+  const { alarms, problem, unwatched, ackFailed, open } = center;
 
   const next = pathname + (search ? `?${search}` : "");
   const refused = problem && refusalText(problem);
@@ -37,6 +37,10 @@ export default function AlarmBanner() {
     </p>
   );
   const ackError = ackFailed !== null && alarms.some((a) => a.id === ackFailed);
+  const criticalCount = alarms.filter((a) => alarmSeverity(a.type) === "critical").length;
+  const warningCount = alarms.length - criticalCount;
+  // en son gelen alarm (sunucu sırasından bağımsız: en büyük alarm anı)
+  const last = alarms.reduce<(typeof alarms)[number] | undefined>((x, a) => (!x || a.firedAt > x.firedAt ? a : x), undefined);
 
   if (alarms.length === 0 && !warning && unwatched.length === 0) return null;
   return (
@@ -50,26 +54,26 @@ export default function AlarmBanner() {
           <Link href={`/live?s=${u.id}`} className="font-medium underline">Kamerayı aç</Link>
         </p>
       ))}
-      {alarms.length > 0 && (
-        <div role="alert" aria-label="Alarm" className="grid gap-2">
-          {alarms.slice(0, SHOWN).map((a) => {
-            const label = ALARM_LABELS[a.type];
-            return (
-              <div key={a.id} className="flex flex-wrap items-center gap-3 rounded-[2px] border border-[#b52f3d] bg-nok-600 px-3 py-2 text-white">
-                <span className="text-lg" aria-hidden="true">🚨</span>
-                <p className="min-w-0 flex-1 text-sm font-semibold">
-                  {label} — {a.camera} · {stamp(a.firedAt)}
-                  {a.endedAt === null && a.type !== "test" && <span className="ml-2 rounded-[2px] bg-white/20 px-1.5 py-0.5 text-[11px]">devam ediyor</span>}
-                </p>
-                <button type="button" onClick={() => open(a.id)} aria-label={`Kaydı izle: ${label} — ${a.camera}`}
-                        className="text-[13px] font-semibold underline">Kaydı izle</button>
-                {a.sessionId && <Link href={`/live?s=${a.sessionId}`} className="text-[13px] font-medium underline">Kamerayı aç</Link>}
-                <button type="button" onClick={() => ack(a)} aria-label={`Gördüm: ${label} — ${a.camera}`}
-                        className="h-7 rounded-[2px] bg-white px-3 text-[13px] font-semibold text-nok-ink">Gördüm</button>
-              </div>
-            );
-          })}
-          {alarms.length > SHOWN && <p className="px-1 text-[13px] font-semibold text-nok-ink">+{alarms.length - SHOWN} alarm daha</p>}
+      {last && (
+        <div role="alert" aria-label="Alarm" className="grid gap-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[2px] border border-pl-line bg-pl-side px-3 py-1 text-[13px]">
+            {criticalCount > 0 && (
+              <span data-testid="alarm-count-critical" className="inline-flex items-center gap-1.5 font-bold text-nok-ink">
+                <span className="h-2.5 w-2.5 rounded-full bg-nok-600" aria-hidden="true" />{criticalCount} kritik alarm
+              </span>
+            )}
+            {warningCount > 0 && (
+              <span data-testid="alarm-count-warning" className="rounded-[2px] bg-alert-warn px-1.5 py-px font-semibold text-alert-warn-ink">
+                {warningCount} uyarı
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-pl-muted">
+              Son: <b className="font-semibold text-pl-ink">{ALARM_LABELS[last.type]} — {last.camera}</b>
+            </span>
+            <button type="button" onClick={() => open(sortAlarms(alarms)[0].id)} className="pl-btn h-7 text-[12.5px] font-semibold">
+              Alarmları göster
+            </button>
+          </div>
           {ackError && <p className="px-1 text-[13px] font-medium text-nok-ink">Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.</p>}
         </div>
       )}

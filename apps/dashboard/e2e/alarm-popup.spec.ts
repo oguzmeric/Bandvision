@@ -3,7 +3,8 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 /**
  * Ortadaki alarm penceresi (kritik alarm), SAHTE API ile (page.route): varsayılan canlı görüntü (oturumun işaretli akışı),
  * alarm anının yakın planı (köşe penceresi), "Alarm kaydı"na geçiş, canlı kaynağı olmayan / akışı kırık alarm, kutusu ya da
- * resmi olmayan eski kayıt ve açık alarmlar listesi (kritikler üstte; dar ekranda ‹ ›).
+ * resmi olmayan eski kayıt ve açık alarmlar listesi (kritikler üstte; dar ekranda ‹ ›). Uyarı (telefon kullanımı): sağ altta
+ * köşe kartları (modal değil); üstte ince alarm çubuğu (sayaçlar, "Alarmları göster"); kritik alarmda yanıp sönen ekran kenarı.
  */
 async function login(page: Page) {
   await page.goto("/notifications");
@@ -44,7 +45,8 @@ function fakeSession(id = "abc123", name = "Tezgah kamerası") {
  * doldurulmalı (login'den kalan sayfanın yoklaması alarmları "gösterildi" saymasın).
  */
 async function fake(page: Page, list: FakeAlarm[], stream: "ok" | "404" = "ok") {
-  const calls = { polls: 0, streams: 0, acks: [] as string[] };
+  /** `ackFails`: test açarsa "Gördüm" isteği 500 döner (alarm açık kalır) */
+  const calls = { polls: 0, streams: 0, acks: [] as string[], ackFails: false };
   await page.route("**/api/live/sessions", (route) =>
     route.request().method() === "GET" ? route.fulfill({ json: [fakeSession()] }) : route.continue());
   await page.route("**/api/live/sessions/abc123/stream*", (route) => {
@@ -57,6 +59,7 @@ async function fake(page: Page, list: FakeAlarm[], stream: "ok" | "404" = "ok") 
     return route.fulfill({ json: list.filter((a) => !a.acked) });
   });
   await page.route(/\/api\/live\/alarms\/[^/]+\/ack$/, (route) => {
+    if (calls.ackFails) return route.fulfill({ status: 500, json: { detail: "Sunucu hatası." } });
     const id = route.request().url().split("/").at(-2)!;
     const a = list.find((x) => x.id === id);
     if (!a) return route.fulfill({ status: 404, json: { detail: "Alarm bulunamadı." } });
@@ -365,4 +368,198 @@ test("header small text keeps at least 4.5:1 contrast on every alarm colour", as
     expect(await contrastOf(modal.getByTestId("alarm-counter")), `${kind} sayaç`).toBeGreaterThanOrEqual(4.5);
     if (i < kinds.length - 1) await modal.getByRole("button", { name: "Sonraki alarm" }).click();
   }
+});
+
+// ------------------------------------------------------------------ köşe kartları (uyarı), alarm çubuğu, ekran kenarı
+
+const toastsOf = (page: Page) => page.getByTestId("alarm-toasts");
+/** Sekme başlığı yanıp sönerken alarm hâlini bekler (her saniye sayfa başlığıyla değişir) */
+const alarmTitle = async (page: Page, text: string) => {
+  await expect.poll(() => page.title(), { intervals: [100] }).toBe(text);
+  return page.title();
+};
+
+test("phone alarm shows corner card without modal", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa", box: [0.1, 0.2, 0.3, 0.6] }));
+  const toasts = toastsOf(page);
+  const toast = toasts.getByTestId("alarm-toast");
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toBeVisible();
+  await expect(toasts).toHaveAttribute("aria-live", "assertive");
+  await expect(toast).not.toHaveAttribute("data-compact", "true");
+  await expect(toast).toHaveAttribute("data-kind", "phone");
+  await expect(toast.getByTestId("toast-title")).toHaveText("Telefon kullanımı");
+  await expect(toast.locator('svg[data-icon="phone"]')).toBeVisible();
+  await expect(toast.getByTestId("toast-meta")).toContainText(/Kasa · \d{2}:\d{2}:\d{2} · \d+ sn önce/);
+  // tam kart: canlı görüntü (oturumun işaretli akışı) ve alarm anı köşe penceresi
+  await expect(toast.getByTestId("media-live")).toHaveAttribute("aria-pressed", "true");
+  await expect(toast.getByTestId("alarm-live")).toHaveAttribute("src", /\/api\/live\/sessions\/abc123\/stream/);
+  await expect(toast.getByTestId("alarm-inset")).toHaveAttribute("data-side", "right");
+  await expect(toast.getByRole("link", { name: "Kamerayı aç" })).toHaveAttribute("href", "/live?s=abc123");
+  await expect(toast.getByRole("button", { name: "Yanlış alarm" })).toBeVisible();
+  // modal değil, ekran kenarı yok (yalnız kritikte); çubukta "1 uyarı", kritik sayacı yok
+  await expect(modalOf(page)).toHaveCount(0);
+  await expect(page.getByTestId("alarm-edge")).toHaveCount(0);
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  await expect(page.getByTestId("alarm-count-critical")).toHaveCount(0);
+  await expect(page.getByTestId("alarm-banner")).toContainText("Son: Telefon kullanımı — Kasa");
+  // kart odak çalmaz; sayfa kullanılmaya devam eder
+  expect(await toast.evaluate((el) => el.contains(document.activeElement))).toBe(false);
+  await page.getByRole("heading", { name: "Bildirimler" }).click();
+  // emoji yok (kartta ve sekme başlığında); küçük yazılar ≥4,5:1
+  expect(await hasEmoji(toasts)).toBe(false);
+  const title = await alarmTitle(page, "ALARM — Kasa");
+  expect(/\p{Extended_Pictographic}/u.test(title)).toBe(false);
+  expect(await contrastOf(toast.getByTestId("toast-title")), "kart başlığı").toBeGreaterThanOrEqual(4.5);
+  expect(await contrastOf(toast.getByTestId("toast-meta")), "kart bilgi satırı").toBeGreaterThanOrEqual(4.5);
+
+  await toast.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p1"]);
+  await expect(toast).toHaveCount(0);
+  await expect(page.getByTestId("alarm-banner")).toHaveCount(0);
+});
+
+test("critical arrives while card shown opens window and hides cards", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 10 }));
+  const toasts = toastsOf(page);
+  await expect(toasts.getByTestId("alarm-toast")).toHaveCount(1);
+  list.push(alarm({ id: "s1", type: "smoke", camera: "Depo", firedAt: now - 1 }));
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect(modal).toHaveAttribute("data-kind", "smoke");                 // en yeni kritikte açılır
+  await expect(toasts.getByTestId("alarm-toast")).toHaveCount(0);           // pencere açıkken kart çizilmez
+  // ince çubuk: iki sayaç ve son alarm
+  await expect(page.getByTestId("alarm-count-critical")).toHaveText("1 kritik alarm");
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  await expect(page.getByTestId("alarm-banner")).toContainText("Son: Duman — Depo");
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(toasts.getByTestId("alarm-toast")).toHaveCount(1);
+  await expect(toasts.getByTestId("alarm-toast")).toContainText("Kasa");
+  // onaylanmamış kritik: ekranın kenarı yanıp söner; tıklanamaz (altındaki sayfa kullanılır)
+  const edge = page.getByTestId("alarm-edge");
+  await expect(edge).toBeVisible();
+  await expect(edge).toHaveCSS("pointer-events", "none");
+  await expect(edge).toHaveCSS("position", "fixed");
+  expect(await edge.evaluate((el) => getComputedStyle(el).animationName)).not.toBe("none");
+  // hareket azaltma tercihinde yanıp sönmez, sabit kalır
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => edge.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
+  await expect(edge).toBeVisible();
+  // "Alarmları göster": pencere pencerenin sırasındaki ilk alarmda (kritik) açılır
+  await page.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modal).toHaveAttribute("data-kind", "smoke");
+  await expect(modal.getByTestId("queue-item").nth(0)).toHaveAttribute("aria-current", "true");
+});
+
+test("minimized window plus new warning shows card only", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 10 }));
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 1 }));
+  await expect(toastsOf(page).getByTestId("alarm-toast")).toHaveCount(1);
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  await expect(page.getByTestId("alarm-count-critical")).toHaveText("1 kritik alarm");
+  // sonraki yoklamalarda da pencere kapalı kalır (yalnız uyarı geldi)
+  const n = calls.polls;
+  await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(n + 1);
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByTestId("alarm-edge")).toBeVisible();
+});
+
+test("card hide keeps alarm in bar", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  const toast = toastsOf(page).getByTestId("alarm-toast");
+  await expect(toast).toHaveCount(1);
+  await toast.getByRole("button", { name: "Gizle: Telefon kullanımı — Kasa" }).click();
+  await expect(toast).toHaveCount(0);
+  expect(calls.acks).toEqual([]);                                           // × onay değildir
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  // sonraki yoklamalar gizlenen kartı geri getirmez
+  const n = calls.polls;
+  await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(n + 1);
+  await expect(toast).toHaveCount(0);
+  await page.getByRole("button", { name: "Alarmları göster" }).click();
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect(modal).toHaveAttribute("data-kind", "phone");
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(toast).toHaveCount(0);                                       // gizli kalır
+});
+
+test("ack failure on card shows error", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  calls.ackFails = true;
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  const toast = toastsOf(page).getByTestId("alarm-toast");
+  await toast.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(toast.getByTestId("toast-error")).toHaveText("Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.");
+  await expect(toast).toHaveCount(1);
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
+  // ikinci deneme başarılı: kart kapanır
+  calls.ackFails = false;
+  await toast.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p1"]);
+  await expect(toast).toHaveCount(0);
+});
+
+test("three warnings show two cards and more", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(
+    alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 2 }),
+    alarm({ id: "p2", type: "phone", camera: "Depo", firedAt: now - 10 }),
+    alarm({ id: "p3", type: "phone", camera: "Kapı", firedAt: now - 20 }),
+  );
+  const toasts = toastsOf(page);
+  const items = toasts.getByTestId("alarm-toast");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0)).toContainText("Kasa");                         // en yeni tam kart
+  await expect(items.nth(0)).not.toHaveAttribute("data-compact", "true");
+  await expect(items.nth(1)).toHaveAttribute("data-compact", "true");
+  await expect(items.nth(1)).toContainText("Depo");
+  // küçük kart canlı değil: olay resmi küçüğü (yalnız tam kart canlı akar)
+  await expect(items.nth(1).getByTestId("alarm-live")).toHaveCount(0);
+  await expect(items.nth(1).locator("img")).toHaveAttribute("src", "/api/live/alarms/p2/image.jpg");
+  await expect(page.getByTestId("alarm-live")).toHaveCount(1);
+  await expect(items.nth(1).getByRole("button", { name: "Gördüm", exact: true })).toBeVisible();
+  await expect(items.nth(1).getByRole("button", { name: "Yanlış alarm" })).toBeVisible();
+  await expect(items.nth(1).getByRole("button", { name: "Gizle: Telefon kullanımı — Depo" })).toBeVisible();
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("3 uyarı");
+  const more = toasts.getByTestId("toast-more");
+  await expect(more).toHaveText("+1 uyarı daha");
+  await more.click();
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect(modal.getByTestId("alarm-subtitle")).toContainText("Kapı");  // gösterilmeyen ilk uyarıda açılır
+  await expect(modal.getByTestId("queue-item").nth(2)).toHaveAttribute("aria-current", "true");
+  await expect(items).toHaveCount(0);
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  // küçük karttaki Gördüm: kalan iki uyarı iki kartta, "+N" yok
+  await items.nth(1).getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect.poll(() => calls.acks).toEqual(["p2"]);
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(1)).toContainText("Kapı");
+  await expect(more).toHaveCount(0);
 });

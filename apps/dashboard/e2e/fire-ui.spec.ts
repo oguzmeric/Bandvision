@@ -249,7 +249,8 @@ test("alarm penceresi ve şerit (sahte API): onaylanmamış duman alarmı 'Duman
   await modal.getByRole("button", { name: "Küçült" }).click();
   const banner = page.getByTestId("alarm-banner");
   await expect(banner).toContainText("Duman — Depo kamerası");
-  await expect(banner.getByRole("button", { name: "Gördüm: Duman — Depo kamerası" })).toBeVisible();
+  await expect(banner.getByTestId("alarm-count-critical")).toHaveText("1 kritik alarm");
+  await expect(banner.getByRole("button", { name: "Alarmları göster" })).toBeVisible();
 });
 
 /** Uygulamanın uçtan uca test klibi (içeriği önemli değil: istek sahte) */

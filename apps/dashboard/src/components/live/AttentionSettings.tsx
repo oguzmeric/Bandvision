@@ -74,7 +74,7 @@ export default function AttentionSettings() {
         </label>
         <button type="button" onClick={() => playBeep(true)} className="pl-btn h-7 text-[12.5px]">Dene</button>
       </div>
-      <p className="mt-2 text-[11.5px] text-pl-faint">Onaylanmamış alarm varken sekme başlığı «🚨 ALARM — kamera adı» ile yanıp söner (her zaman açık).
+      <p className="mt-2 text-[11.5px] text-pl-faint">Onaylanmamış alarm varken sekme başlığı «ALARM — kamera adı» ile yanıp söner (her zaman açık).
         Bu ayarlar yalnızca bu tarayıcıda saklanır.</p>
       {msg && <p role="status" className={`mt-2 rounded-[2px] border px-3 py-1.5 text-[13px] ${msg.ok ? "border-ok-line bg-ok-50 text-ok-ink" : "border-nok-line bg-nok-50 text-nok-ink"}`}>{msg.text}</p>}
     </section>
