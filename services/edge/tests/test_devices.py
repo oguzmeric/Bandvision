@@ -573,7 +573,36 @@ def ansi_error(text: str) -> UnicodeDecodeError:
 
 @pytest.fixture
 def cp1254(monkeypatch):
-    monkeypatch.setattr(locale, "getpreferredencoding", lambda do_setlocale=True: "cp1254")
+    monkeypatch.setattr(devices, "_ansi_encoding", lambda: "cp1254")
+
+
+class Builder:
+    """`_gpu_session` yerine denetlenebilir kurucu: her çağrıyı (saatle) kaydeder; `gate` açılana dek bekler."""
+
+    def __init__(self, monkeypatch, clock: Clock, *, blocking: bool = False) -> None:
+        self.real = devices._gpu_session
+        self.clock = clock
+        self.calls: list[float] = []
+        self.threads: list[threading.Thread] = []
+        self.entered = threading.Event()
+        self.gate = threading.Event()
+        if not blocking:
+            self.gate.set()
+        monkeypatch.setattr(devices, "_gpu_session", self)
+
+    def __call__(self, *a: object) -> object:
+        self.calls.append(self.clock.t)
+        self.threads.append(threading.current_thread())
+        self.entered.set()
+        assert self.gate.wait(10)
+        return self.real(*a)
+
+
+def run_settled(s: devices.GuardedSession) -> float:
+    """Bir `run` ve (başladıysa) arka plan yeniden kurmasının bitmesi; dönen değer o çağrının sonucu."""
+    out = float(s.run(None, {})[0][0])
+    assert s.wait_retry(10)
+    return out
 
 
 def test_notes_and_retry_constants():
@@ -582,6 +611,34 @@ def test_notes_and_retry_constants():
                                 "başlatınca ekran kartı yeniden denenir.")
     assert devices.GPU_RETRY_DELAYS_S == (60.0, 300.0, 1800.0)
     assert devices.GPU_FAIL_LIMIT == 3 and devices.GPU_FAIL_WINDOW_S == 3600.0
+
+
+def test_ansi_encoding_uses_windows_code_page(monkeypatch):
+    monkeypatch.setattr(devices, "_is_windows", lambda: True)
+    monkeypatch.setattr(devices, "_get_acp", lambda: 1254)
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda *a: "utf-8")   # UTF-8 kipi yanıltmaz
+    assert devices._ansi_encoding() == "cp1254"
+
+    def no_acp() -> int:
+        raise OSError("kernel32 yok")
+
+    monkeypatch.setattr(devices, "_get_acp", no_acp)
+    assert devices._ansi_encoding() == "utf-8"
+    monkeypatch.setattr(devices, "_is_windows", lambda: False)
+    monkeypatch.setattr(locale, "getencoding", lambda: "iso8859-9")
+    assert devices._ansi_encoding() == "iso8859-9"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="GetACP yalnız Windows'ta")
+def test_real_windows_code_page_is_a_codec():
+    import codecs
+    enc = devices._ansi_encoding()
+    assert enc.startswith("cp") and codecs.lookup(enc)
+
+
+def test_reason_unknown_code_page_falls_back_to_utf8(monkeypatch):
+    monkeypatch.setattr(devices, "_ansi_encoding", lambda: "cp99999")
+    assert devices._reason(ansi_error("80004005 Belirtilmemiş hata")) == "DirectML 80004005: Belirtilmemi� hata"
 
 
 def test_reason_decodes_ansi_directml_message(cp1254):
@@ -608,24 +665,50 @@ def test_runtime_ansi_error_note_is_readable(cp1254):
                            "kullanılıyor, ekran kartı yeniden denenecek.")
 
 
-def test_gpu_retried_after_60s_and_note_clears(caplog):
+def test_gpu_retried_after_60s_and_note_clears(caplog, monkeypatch):
     clock = Clock()
     ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
-    assert float(s.run(None, {})[0][0]) == 3.0
+    builder = Builder(monkeypatch, clock)
+    assert run_settled(s) == 3.0
     assert s.used == devices.cpu_used(devices._n4("DEVICE_REMOVED"))
     ort.run_error = None                                                 # kart düzeldi
     clock.t += 59
-    assert float(s.run(None, {})[0][0]) == 3.0 and len(ort.sessions) == 2   # henüz deneme yok
+    assert run_settled(s) == 3.0 and builder.calls == []                 # henüz deneme yok
     clock.t += 1
     with caplog.at_level(logging.INFO, logger="bantvision.devices"):
-        assert float(s.run(None, {})[0][0]) == 7.0                       # 60. saniyede yeniden kuruldu, kartta
+        assert run_settled(s) == 3.0                                     # deneyi başlatan çağrı işlemcide döner
+    assert builder.calls == [1060.0] and builder.threads[0] is not threading.main_thread()
+    assert builder.threads[0].daemon                                     # kapanışı bekletmez
     gpu_again = ort.sessions[2]
     assert gpu_again.providers == [(DML, {"device_id": 1}), CPU] and gpu_again.so.enable_mem_pattern is False
     assert s.used == devices.Used("gpu", "gpu-10de-28a1", "NVIDIA Laptop GPU", None)
     assert any("Ekran kartına geri dönüldü (NVIDIA Laptop GPU)" in r.getMessage() for r in caplog.records)
+    assert float(s.run(None, {})[0][0]) == 7.0                           # sonraki çağrı kartta
     clock.t += 10**6
-    assert float(s.run(None, {})[0][0]) == 7.0 and len(ort.sessions) == 3
+    assert run_settled(s) == 7.0 and len(ort.sessions) == 3
+
+
+def test_run_does_not_wait_for_slow_rebuild_and_one_rebuild_at_a_time(monkeypatch):
+    """Yeniden kurma sürerken bütün çağrılar beklemeden işlemcide döner; aynı anda tek kurma iş parçacığı; takas
+    kurma bitince olur ve iş parçacığı sonra biter."""
+    clock = Clock(0.0)
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    s.run(None, {})
+    ort.run_error = None
+    builder = Builder(monkeypatch, clock, blocking=True)
+    clock.t = 60.0
+    assert float(s.run(None, {})[0][0]) == 3.0                           # kurma başlatıldı, çağrı beklemedi
+    assert builder.entered.wait(10)
+    for dt in (1, 100, 10**4):                                           # kurma sürerken: işlemci, yeni kurma yok
+        clock.t += dt
+        assert float(s.run(None, {})[0][0]) == 3.0
+    assert len(builder.calls) == 1 and s.used.kind == "cpu" and len(ort.sessions) == 2
+    builder.gate.set()
+    assert s.wait_retry(10)
+    assert not builder.threads[0].is_alive()                             # asılı iş parçacığı kalmaz
+    assert s.used.kind == "gpu" and float(s.run(None, {})[0][0]) == 7.0 and len(builder.calls) == 1
 
 
 def test_failed_rebuild_backs_off_300_then_1800(monkeypatch):
@@ -635,117 +718,77 @@ def test_failed_rebuild_backs_off_300_then_1800(monkeypatch):
     s.run(None, {})                                                      # t=0 düşüş
     ort.run_error = None
     ort.ctor_error = RuntimeError("kart açılmıyor")
-    tries: list[float] = []
-    real_gpu_session = devices._gpu_session
-
-    def counting(*a: object) -> object:
-        tries.append(clock.t)
-        return real_gpu_session(*a)
-
-    monkeypatch.setattr(devices, "_gpu_session", counting)
+    builder = Builder(monkeypatch, clock)
     for t in (59, 60, 359, 360, 2159, 2160, 3959):
         clock.t = float(t)
-        assert float(s.run(None, {})[0][0]) == 3.0
-    assert tries == [60.0, 360.0, 2160.0]                                # 60, +300, +1800
+        assert run_settled(s) == 3.0
+    assert builder.calls == [60.0, 360.0, 2160.0]                        # 60, +300, +1800
     ort.ctor_error, ort.report_cpu = None, True                          # DirectML ilk sağlayıcı değil: başarısız
     clock.t = 3960.0
-    assert float(s.run(None, {})[0][0]) == 3.0
-    assert tries[-1] == 3960.0 and s.used.kind == "cpu"                  # +1800 (son gecikmede kalır)
+    assert run_settled(s) == 3.0
+    assert builder.calls[-1] == 3960.0 and s.used.kind == "cpu"          # +1800 (son gecikmede kalır)
     assert s.used.note == devices._n4("DEVICE_REMOVED")
     ort.report_cpu = False
     clock.t = 5759.0
-    s.run(None, {})
-    assert len(tries) == 4
+    run_settled(s)
+    assert len(builder.calls) == 4
     clock.t = 5760.0
-    assert float(s.run(None, {})[0][0]) == 7.0 and s.used.kind == "gpu" and s.used.note is None
+    run_settled(s)
+    assert s.used.kind == "gpu" and s.used.note is None and float(s.run(None, {})[0][0]) == 7.0
 
 
-def test_three_gpu_failures_in_an_hour_stop_retries():
+def test_three_gpu_failures_in_an_hour_stop_retries(monkeypatch):
     clock = Clock(0.0)
     ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
-    s.run(None, {})                                                      # 1. hata (t=0)
-    clock.t = 60.0
-    assert float(s.run(None, {})[0][0]) == 3.0                           # kart kuruldu, 2. hata (t=60)
-    assert s.used.note == devices._n4("DEVICE_REMOVED")
-    clock.t = 120.0
-    assert float(s.run(None, {})[0][0]) == 3.0                           # 3. hata (t=120): denemeler durur
+    builder = Builder(monkeypatch, clock)
+    run_settled(s)                                                       # 1. hata (t=0)
+    for t in (60.0, 120.0):
+        clock.t = t
+        assert run_settled(s) == 3.0 and s.used.kind == "gpu"            # kart yeniden kuruldu
+        assert float(s.run(None, {})[0][0]) == 3.0                       # 2. / 3. hata
     assert s.used == devices.cpu_used(devices._n5("DEVICE_REMOVED"))
     n = len(ort.sessions)
     assert [x.is_gpu for x in ort.sessions] == [True, False, True, False, True, False]
     for dt in (60, 1800, 3600, 10**6):
         clock.t += dt
-        assert float(s.run(None, {})[0][0]) == 3.0
-    assert len(ort.sessions) == n and s.used.note == devices._n5("DEVICE_REMOVED")
+        assert run_settled(s) == 3.0
+    assert len(ort.sessions) == n and len(builder.calls) == 2 and s.used.note == devices._n5("DEVICE_REMOVED")
 
 
-def test_failures_spread_over_more_than_an_hour_keep_retrying():
+def test_failures_spread_over_more_than_an_hour_keep_retrying(monkeypatch):
     clock = Clock(0.0)
     ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    Builder(monkeypatch, clock)
     s.run(None, {})                                                      # 1. hata (t=0)
     ort.run_error = None
     for t_back, t_fail in ((60.0, 1900.0), (1960.0, 3700.0)):           # 2. ve 3. hata; 1.si artık 1 saatten eski
         clock.t = t_back
-        assert float(s.run(None, {})[0][0]) == 7.0                       # geri dönüldü
+        run_settled(s)
+        assert s.used.kind == "gpu"                                      # geri dönüldü
         clock.t = t_fail
         ort.run_error = RuntimeError("DEVICE_REMOVED")
         assert float(s.run(None, {})[0][0]) == 3.0
         ort.run_error = None
     assert s.used.note == devices._n4("DEVICE_REMOVED")                  # son 1 saatte 2 hata: denemeler sürer
     clock.t = 3760.0
-    assert float(s.run(None, {})[0][0]) == 7.0 and s.used.note is None
+    run_settled(s)
+    assert s.used.kind == "gpu" and s.used.note is None
 
 
 def test_session_opened_on_cpu_never_retries_gpu(monkeypatch):
-    monkeypatch.setattr(devices, "_gpu_session", lambda *a: pytest.fail("ekran kartı denenmemeli"))
     clock = Clock()
     s = devices.open_session("m.onnx", Configure(), "cpu", _ort=FakeOrt(), _gpus=gpus2(), _clock=clock)
-    clock.t += 10**6
-    assert float(s.run(None, {})[0][0]) == 3.0 and s.used == devices.cpu_used()
-    monkeypatch.undo()
     ort = FakeOrt(ctor_error=RuntimeError("açılmadı"))                   # açılış düşüşü (N3)
-    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    s3 = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
     ort.ctor_error = None
-    monkeypatch.setattr(devices, "_gpu_session", lambda *a: pytest.fail("ekran kartı denenmemeli"))
+    builder = Builder(monkeypatch, clock)
     for _ in range(2):
         clock.t += 10**6
-        assert float(s.run(None, {})[0][0]) == 3.0
-    assert s.used.note == "Ekran kartında açılamadı (açılmadı); işlemci kullanılıyor."
-
-
-def test_concurrent_runs_rebuild_gpu_once(monkeypatch):
-    """Deneme anında iki çağrı: biri ekran kartı oturumunu kurarken (durum kilidi tutulmadan) öbürü işlemcide sürer;
-    oturum yalnız bir kez kurulur."""
-    clock = Clock(0.0)
-    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
-    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
-    s.run(None, {})
-    ort.run_error = None
-    cpu_s = ort.sessions[1]
-    assert len(cpu_s.runs) == 1
-    clock.t = 60.0
-    real_gpu_session = devices._gpu_session
-    builds: list[int] = []
-
-    def slow_gpu_session(*a: object) -> object:                          # öbür çağrı işlemcide bitene dek bekle
-        builds.append(1)
-        wait_until(lambda: len(cpu_s.runs) == 2)
-        return real_gpu_session(*a)
-
-    monkeypatch.setattr(devices, "_gpu_session", slow_gpu_session)
-    results: list[float] = []
-
-    def call() -> None:
-        results.append(float(s.run(None, {})[0][0]))
-
-    threads = [threading.Thread(target=call) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(15)
-    assert builds == [1] and sorted(results) == [3.0, 7.0]
-    assert len(ort.sessions) == 3 and s.used.kind == "gpu" and s.used.note is None
+        assert run_settled(s) == 3.0 and run_settled(s3) == 3.0
+    assert builder.calls == [] and s.used == devices.cpu_used()
+    assert s3.used.note == "Ekran kartında açılamadı (açılmadı); işlemci kullanılıyor."
 
 
 # --------------------------------------------------------------- 10-11. varsayılan ve regex

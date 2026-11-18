@@ -297,17 +297,32 @@ def _first_line(text: str, e: BaseException) -> str:
     return type(e).__name__
 
 
+def _get_acp() -> int:
+    """Windows'un ANSI kod sayfası (Türkçe Windows'ta 1254); Python'un UTF-8 kipinden etkilenmez."""
+    return int(ctypes.windll.kernel32.GetACP())  # type: ignore[attr-defined]
+
+
+def _ansi_encoding() -> str:
+    """Yerel (işletim sistemi) iletilerinin kod sayfası: Windows'ta `cp<GetACP>`, başka yerde `locale.getencoding()`;
+    sorgu hata verirse "utf-8"."""
+    try:
+        return f"cp{_get_acp()}" if _is_windows() else locale.getencoding()
+    except Exception:  # noqa: BLE001 — kod sayfası sorgulanamadı: UTF-8 (errors="replace" ile çözülür)
+        return "utf-8"
+
+
 def _reason(e: BaseException) -> str:
     """Kullanıcıya gösterilen nota giren neden: hatanın ilk boş olmayan satırından dosya yolları (`_PATH_RE`) atılır,
     boşluklar teke indirilir, en çok 160 karakter. HRESULT ve ileti metni kalır; geriye bir şey kalmazsa hatanın türü.
 
     `UnicodeDecodeError`: Windows yerel iletiyi ANSI kod sayfasıyla (Türkçe Windows'ta cp1254) yazar, ONNX Runtime
-    onu UTF-8 sanıp çözemez ve iletinin yerine çözme hatası gelir. Hatanın taşıdığı baytlar ANSI kod sayfasıyla
-    çözülür; içinde 8 haneli HRESULT varsa neden "DirectML <HRESULT>: <ileti>", yoksa çözülen metnin ilk satırı."""
+    onu UTF-8 sanıp çözemez ve iletinin yerine çözme hatası gelir. Hatanın taşıdığı baytlar `_ansi_encoding()` ile
+    çözülür (bilinmeyen kod sayfasında UTF-8; çözülemeyen bayt "�"); içinde 8 haneli HRESULT varsa neden
+    "DirectML <HRESULT>: <ileti>", yoksa çözülen metnin ilk satırı."""
     if isinstance(e, UnicodeDecodeError) and isinstance(e.object, (bytes, bytearray, memoryview)):
         raw = bytes(e.object)
         try:
-            text = raw.decode(locale.getpreferredencoding(False), errors="replace")
+            text = raw.decode(_ansi_encoding(), errors="replace")
         except LookupError:                                   # bilinmeyen kod sayfası adı
             text = raw.decode("utf-8", errors="replace")
         m = _HRESULT_RE.search(text)
@@ -353,7 +368,9 @@ class GuardedSession:
 
     Geri dönüş: düşüşten sonra ekran kartı `GPU_RETRY_DELAYS_S` (1 / 5 / 30 dk; başarısız her yeniden kurmada bir
     sonraki, sonra 30 dk'da kalır) sonra yeniden denenir: deneme zamanı geldikten sonraki ilk `run` kart oturumunu
-    yeniden kurar ve DirectML ilk sağlayıcıysa karta geçer (not kalkar). Son `GPU_FAIL_WINDOW_S` içinde
+    arka plan iş parçacığında (daemon, aynı anda en çok bir) kurmaya başlatır ve beklemeden işlemcide döner; kurma
+    sürerken bütün çağrılar işlemcide sürer. Kurma bitince DirectML ilk sağlayıcıysa durum `_lock` altında karta
+    geçer (not kalkar); değilse ya da kurma hata verirse sonraki gecikme planlanır. Son `GPU_FAIL_WINDOW_S` içinde
     `GPU_FAIL_LIMIT` çalışma hatası olduysa denemeler durur (N5; yeniden başlatmaya dek işlemci). Baştan işlemcide
     açılan oturum (`gpu` yok: "cpu" seçimi ya da açılış düşüşü N3) hiç denemez.
 
@@ -361,8 +378,8 @@ class GuardedSession:
     `_run_lock` ile sıraya girer. İşlemci oturumu (baştan ya da düşüşten sonra) kilitsiz çalışır. İki kilit hiç iç içe
     tutulmaz: `_run_lock` yalnız ekran kartı çağrısını sarar ve hata dışarı çıkarken bırakılır; düşüş `_lock`'u (durum
     kilidi) ondan sonra alır. Kilidi beklerken oturum işlemciye düştüyse çağrı yeni durumda (kilitsiz) çalışır. Yeniden
-    deneme `_lock` altında yalnız sahiplenilir (`_retrying`) ve kart oturumu kilitsiz kurulur: aynı anda tek çağrı
-    dener, öbürleri işlemcide sürer; yeniden deneme `_run_lock`'u hiç almaz."""
+    kurma `_lock` altında yalnız sahiplenilir (`_rebuilding`) ve kart oturumu kilitsiz kurulur; yeniden kurma
+    `_run_lock`'u hiç almaz."""
 
     def __init__(self, ort: Any, path: str, configure: Callable[[Any], None], session: Any, used: Used,
                  gpu: Gpu | None = None, _clock: Callable[[], float] = time.monotonic) -> None:
@@ -378,7 +395,8 @@ class GuardedSession:
         self._failures: list[float] = []                      # çalışma hatası zamanları (son GPU_FAIL_WINDOW_S)
         self._retry_at: float | None = None                   # sonraki kart denemesi; None: deneme yok
         self._retry_n = 0                                     # bu düşüşten beri başarısız yeniden kurma sayısı
-        self._retrying = False                                # bir çağrı şu an kart oturumunu kuruyor
+        self._rebuilding = False                              # arka planda kart oturumu kuruluyor
+        self._rebuilder: threading.Thread | None = None       # son yeniden kurma iş parçacığı
 
     @property
     def used(self) -> Used:
@@ -400,39 +418,60 @@ class GuardedSession:
         return RuntimeError(f"Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı "
                             f"({self._broken})")
 
-    def _maybe_restore(self) -> None:
-        """Deneme zamanı geldiyse (ve başka çağrı denemiyorsa) kart oturumunu yeniden kurar; kurulamazsa ya da DirectML
-        ilk sağlayıcı değilse bir sonraki gecikmeyi planlar. Kurulum `_lock` dışında yapılır."""
-        gpu = self._gpu
+    def wait_retry(self, timeout: float | None = None) -> bool:
+        """Süren arka plan yeniden kurmasını bekler; bittiyse (ya da hiç yoksa) True. Test ve kapanış içindir."""
+        t = self._rebuilder
+        if t is None:
+            return True
+        t.join(timeout)
+        return not t.is_alive()
+
+    def _maybe_start_retry(self) -> None:
+        """Deneme zamanı geldiyse ve süren kurma yoksa kart oturumunu arka planda kurmaya başlatır (beklemez)."""
         retry_at = self._retry_at
-        if gpu is None or retry_at is None or self._clock() < retry_at:
+        if self._gpu is None or retry_at is None or self._clock() < retry_at:
             return
         with self._lock:
-            if self._retrying or self._retry_at is None or self._clock() < self._retry_at:
+            if self._rebuilding or self._retry_at is None or self._clock() < self._retry_at:
                 return
-            self._retrying = True
+            self._rebuilding = True
+            thread = threading.Thread(target=self._rebuild, name="bantvision-gpu-yeniden-kurma", daemon=True)
+            self._rebuilder = thread
         try:
-            try:
-                session = _gpu_session(self._ort, self._path, self._configure, gpu)
-                providers = list(session.get_providers())
-                if not providers or providers[0] != DML:
-                    raise RuntimeError(f"DirectML etkinleşmedi (sağlayıcılar: {providers})")
-            except Exception as e:  # noqa: BLE001 — kart hâlâ açılmıyor: işlemcide sür, sonra yine dene
-                with self._lock:
-                    self._retry_n += 1
-                    delay = GPU_RETRY_DELAYS_S[min(self._retry_n, len(GPU_RETRY_DELAYS_S) - 1)]
-                    self._retry_at = self._clock() + delay
-                log.warning("Ekran kartı yeniden kurulamadı (%s): %s; %d sn sonra yeniden denenecek",
-                            gpu.name, _reason(e), int(delay))
-                return
-            with self._lock:
-                self._state = (session, Used("gpu", gpu.id, gpu.name, None))
-                self._retry_at = None
-                self._retry_n = 0
-            log.info("Ekran kartına geri dönüldü (%s)", gpu.name)
-        finally:
-            with self._lock:
-                self._retrying = False
+            thread.start()
+        except RuntimeError as e:                             # iş parçacığı açılamadı: sonraki gecikmede yine dene
+            self._schedule_next(e)
+
+    def _schedule_next(self, e: BaseException) -> None:
+        """Başarısız yeniden kurma: sonraki gecikmeyi planlar ve sahipliği bırakır."""
+        assert self._gpu is not None
+        with self._lock:
+            self._retry_n += 1
+            delay = GPU_RETRY_DELAYS_S[min(self._retry_n, len(GPU_RETRY_DELAYS_S) - 1)]
+            self._retry_at = self._clock() + delay
+            self._rebuilding = False
+        log.warning("Ekran kartı yeniden kurulamadı (%s): %s; %d sn sonra yeniden denenecek",
+                    self._gpu.name, _reason(e), int(delay))
+
+    def _rebuild(self) -> None:
+        """Arka plan iş parçacığı: kart oturumunu kurar; DirectML ilk sağlayıcıysa durumu `_lock` altında karta geçirir,
+        değilse sonraki gecikmeyi planlar."""
+        gpu = self._gpu
+        assert gpu is not None
+        try:
+            session = _gpu_session(self._ort, self._path, self._configure, gpu)
+            providers = list(session.get_providers())
+            if not providers or providers[0] != DML:
+                raise RuntimeError(f"DirectML etkinleşmedi (sağlayıcılar: {providers})")
+        except BaseException as e:  # noqa: BLE001 — kart hâlâ açılmıyor: işlemcide sür, sonra yine dene
+            self._schedule_next(e)
+            return
+        with self._lock:
+            self._state = (session, Used("gpu", gpu.id, gpu.name, None))
+            self._retry_at = None
+            self._retry_n = 0
+            self._rebuilding = False
+        log.info("Ekran kartına geri dönüldü (%s)", gpu.name)
 
     def _fall_note(self, reason: str) -> str:
         """`_lock` altında: çalışma hatasını kaydeder; sonraki denemeyi planlar (N4) ya da denemeleri durdurur (N5)."""
@@ -450,11 +489,11 @@ class GuardedSession:
     def run(self, output_names: Any, feeds: Mapping[str, Any]) -> Any:
         if self._broken is not None:                          # kalıcı hata: yeniden deneme ve günlük seli yok
             raise self._broken_error()
-        if self._retry_at is not None and self._state[1].kind != "gpu":
-            self._maybe_restore()
         state = self._state
         session, used = state
         if used.kind != "gpu":
+            if self._retry_at is not None:                    # beklemez: kurma arka planda, bu çağrı işlemcide
+                self._maybe_start_retry()
             return session.run(output_names, feeds)           # işlemci: kilitsiz, hatalar aynen yayılır
         try:
             with self._run_lock:
