@@ -101,11 +101,14 @@ def test_draw_safety_smoke() -> None:
 def test_progress_bar_sits_under_the_label_on_the_box_top() -> None:
     """Süre çubuğu (onaylı tasarım §10): etiketin hemen altında, etiket ile kutunun üst kenarı arasında; dolu kısım
     sarı, kalanı koyu. Kutunun altında çubuk yok."""
+    # Kutu, etiketten belirgin geniş: etiketin genişliği yazı tipine bağlı (Windows Segoe, Linux DejaVu daha geniş);
+    # geniş kutuda "etiket kutu kadar geniş değil" denetimi hangi yazı tipiyle de geçerli.
+    box = (0.3, 0.3, 0.8, 0.9)
     img = draw_safety(np.zeros((360, 640, 3), np.uint8), _profile(),
-                      SafetyResult(tracks=[_track(1)], active=[(1, "phone", 9.0, False)]))
+                      SafetyResult(tracks=[_track(1, box)], active=[(1, "phone", 9.0, False)]))
     px = lambda x, y: tuple(int(v) for v in img[y, x])
     yellow = (30, 190, 245)
-    x1, y1, x2, y2 = int(0.3 * 640), int(0.3 * 360), int(0.5 * 640), int(0.9 * 360)
+    x1, y1, x2, y2 = int(box[0] * 640), int(box[1] * 360), int(box[2] * 640), int(box[3] * 360)
     filled = x1 + int((x2 - x1) * 9 / 15)
     bar = [y for y in range(y1 - 12, y1) if px(x2 - 3, y) == DARK]       # çubuğun dolmamış kısmı
     assert bar and max(bar) == y1 - 1                                     # kutunun üst kenarına dayalı
