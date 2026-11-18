@@ -89,8 +89,8 @@ function saveIds(key: string, ids: Set<string>): void {
  * uyarı sağ altta köşe kartında görünür (kartlar yalnız pencere kapalıyken çizilir; × ile gizlenen kart gizli kalır). Her
  * yeni alarmda (sekme arka plandaysa) masaüstü bildirimi. "Sesli uyarı" açıksa: her yeni kritik alarm çalanlar kümesine
  * girer ve ses hemen başlar; pencere açıkken kümede onaylanmamış alarm kaldıkça grubun sesi 3 sn'de bir çalar (gösterilen
- * alarm kümedeyse onun grubu, değilse kümenin en yenisininki). Gördüm / Yanlış alarm yalnız O alarmı kümeden çıkarır (uyarıyı
- * onaylamak kritik sesi susturmaz); Küçült ya da pencerenin kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz).
+ * alarm kümedeyse onun grubu, değilse kümenin en yenisininki). Gördüm / Yanlış alarm kaydedilince yalnız O alarmı kümeden
+ * çıkarır (kaydedilemezse alarm açık kalır, ses sürer; uyarıyı onaylamak kritik sesi susturmaz); Küçült ya da pencerenin kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz).
  * Yalnız uyarı geldiyse ses bir kez çalar. Tarayıcı izin vermezse çubukta tıklama ipucu çıkar. Alarm
  * varken sekme başlığı yanıp söner; onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma
  * tercihinde sabit). Üstteki çubuk (`AlarmBanner`) bu verinin görünümüdür.
@@ -101,7 +101,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const [ackFailed, setAckFailed] = useState<string | null>(null);
   const [unwatched, setUnwatched] = useState<Unwatched[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
-  /** Sesi çalan kritik alarmlar: bu sekmede yeni gelen, henüz Gördüm / Yanlış alarm denmemiş; Küçült ya da kapanış boşaltır */
+  /** Sesi çalan kritik alarmlar: bu sekmede yeni gelen, Gördüm / Yanlış alarm henüz kaydedilmemiş; Küçült ya da kapanış boşaltır */
   const [ringing, setRinging] = useState<ReadonlySet<string>>(() => new Set());
   /** Yeni kritik alarm kümeye her girişte artar: ses (aynı grup olsa da) 3 sn'yi beklemeden hemen yeniden başlar */
   const [ringStart, setRingStart] = useState(0);
@@ -293,11 +293,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
 
   const ack = useCallback(async (a: Alarm) => {
     setAckFailed(null);
-    unring(a.id);                                       // Gördüm o alarmın sesini susturur (kaydedilemese de: operatör gördü)
     seq.current += 1;
     try {
       await api(`alarms/${a.id}/ack`, { method: "POST" });
       seq.current += 1;                                 // onaydan önce başlamış istekler geçersiz
+      unring(a.id);                                     // yalnız kaydedilince: kaydedilemezse alarm açık kalır ve ses sürer
       setAlarms((x) => x.filter((y) => y.id !== a.id));
       refreshRef.current();
       return true;
@@ -308,11 +308,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   }, [unring]);
 
   const markFalse = useCallback(async (a: Alarm) => {
-    unring(a.id);
     seq.current += 1;
     try {
       await toggleFalseAlarm(a);
       seq.current += 1;
+      unring(a.id);                                     // yalnız kaydedilince
       if (!a.falseAlarm) setAlarms((x) => x.filter((y) => y.id !== a.id));   // işaretlenen alarm onaylanır, şeritten kalkar
       refreshRef.current();
       return true;

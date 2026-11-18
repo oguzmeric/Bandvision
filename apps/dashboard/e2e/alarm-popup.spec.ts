@@ -693,6 +693,47 @@ const soundOn = (page: Page) => page.evaluate(() => { document.cookie = "bv_alar
 const soundCookies = async (page: Page) => Object.fromEntries((await page.context().cookies())
   .filter((c) => c.name.startsWith("bv_alarm_sound_") || c.name === "bv_alarm_volume").map((c) => [c.name, c.value]));
 
+/**
+ * Zamanlı ses testleri sahte saatle (page.clock) koşar: ses tekrarı (3 sn) ve alarm yoklaması (2 sn) gerçek beklemeyle değil
+ * runFor ile ilerler; çalınan seslerin `at`'i de bu sahte saattir. Saat `install` sonrası kendiliğinden akar: sahte API
+ * kurulunca `fakeFrozen` onu durdurur (pauseAt; sahte API'nin cevapları saatten bağımsız gelir, safety-ui'deki sekme başlığı
+ * testi de böyle), sonra yalnız runFor ilerletir. Bir sesin tekrar etkisi sesle aynı anda kurulur: sıradaki tekrar tam
+ * `at + 3000`'dedir. `runTo`: sahte saati verilen ana dek ilerletir (oradaysa ya da geçtiyse bir şey yapmaz).
+ */
+const REPEAT_MS = 3000;
+const fakeNow = (page: Page) => page.evaluate(() => performance.now());
+async function runTo(page: Page, t: number) {
+  const now = await fakeNow(page);
+  if (t > now) await page.clock.runFor(t - now);
+}
+const playCount = async (page: Page) => (await playsOf(page)).length;
+
+/**
+ * Listeye eklenen alarmı sıradaki yoklamayla getirir: saat, yoklama istenene dek 250 ms'lik adımlarla ilerler (önceki yoklamanın
+ * cevabı yolda olsa da kaçmaz). Zaman ölçümleri bundan sonraki ilk sese göredir; adımın taşması ölçümü etkilemez.
+ */
+async function deliver(page: Page, calls: { polls: number }) {
+  const n = calls.polls;
+  await expect.poll(async () => { await page.clock.runFor(250); return calls.polls; }, { intervals: [50] }).toBeGreaterThan(n);
+}
+
+/** `fake` + saati durdurur (sayfanın sahte saati gerçek saatle birlikte akıyordu: 1 sn ileride durur) */
+async function fakeFrozen(page: Page, list: FakeAlarm[]) {
+  const calls = await fake(page, list);
+  const pageNow = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(new Date(pageNow + 1000));
+  return calls;
+}
+
+/** Sahte saat + sahte play() + giriş (+ "Sesli uyarı" açık) */
+async function soundSetup(page: Page, opts: { on?: boolean; cookies?: string[] } = {}) {
+  await page.clock.install();
+  await stubPlay(page);
+  await login(page);
+  if (opts.on ?? true) await soundOn(page);
+  for (const c of opts.cookies ?? []) await page.evaluate((x) => { document.cookie = `${x}; Path=/`; }, c);
+}
+
 test("sound settings: three group choices with defaults, Dinle plays the chosen file at the set volume, kept in cookies", async ({ page }) => {
   await stubPlay(page, "spy");
   await login(page);
@@ -738,69 +779,66 @@ test("sound settings: three group choices with defaults, Dinle plays the chosen 
 });
 
 test("critical alarm with sound on repeats its group sound every 3 s; Gördüm stops it", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
+  await soundSetup(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak" }));
+  await deliver(page, calls);
   const modal = modalOf(page);
   await expect(modal).toBeVisible();
-  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
-  await expect.poll(async () => (await playsOf(page)).length, { timeout: 6_000 }).toBe(2);
+  await expect.poll(() => playCount(page)).toBe(1);
+  const [first] = await playsOf(page);
+  expect(first).toEqual(expect.objectContaining({ path: "/sounds/alarm-02.wav", volume: 0.8 }));   // yangın: Siren
+  await runTo(page, first.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(1);                                    // 3 sn dolmadan tekrar yok
+  await page.clock.runFor(100);
   const plays = await playsOf(page);
-  expect(plays.map((p) => p.path)).toEqual(["/sounds/alarm-02.wav", "/sounds/alarm-02.wav"]);   // yangın: Siren
-  expect(plays[0].volume).toBe(0.8);
-  expect(plays[1].at - plays[0].at).toBeGreaterThan(2_500);
-  expect(plays[1].at - plays[0].at).toBeLessThan(4_500);
+  expect(plays.map((x) => x.path)).toEqual(["/sounds/alarm-02.wav", "/sounds/alarm-02.wav"]);
+  expect(plays[1].at - plays[0].at).toBe(REPEAT_MS);
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveCount(0);
-  const n = (await playsOf(page)).length;
-  await page.waitForTimeout(3_500);
-  expect((await playsOf(page)).length).toBe(n);
+  await page.clock.runFor(3 * REPEAT_MS);
+  expect(await playCount(page)).toBe(2);
 });
 
 test("person alarm plays the chosen person sound; Küçült stops it and reopening from the bar stays quiet", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
-  await page.evaluate(() => { document.cookie = "bv_alarm_sound_person=alarm-08; Path=/"; document.cookie = "bv_alarm_volume=0.5; Path=/"; });
+  await soundSetup(page, { cookies: ["bv_alarm_sound_person=alarm-08", "bv_alarm_volume=0.5"] });
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   list.push(alarm({ id: "h1", type: "hands_up", camera: "Kasa" }));
+  await deliver(page, calls);
   const modal = modalOf(page);
   await expect(modal).toBeVisible();
-  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+  await expect.poll(() => playCount(page)).toBe(1);
   expect(await playsOf(page)).toEqual([expect.objectContaining({ path: "/sounds/alarm-08.wav", volume: 0.5 })]);
   await modal.getByRole("button", { name: "Küçült" }).click();
   await expect(modal).toHaveCount(0);
   await page.getByRole("button", { name: "Alarmları göster" }).click();
   await expect(modal).toBeVisible();
-  await page.waitForTimeout(3_500);
-  expect((await playsOf(page)).length).toBe(1);
+  await page.clock.runFor(3 * REPEAT_MS);
+  expect(await playCount(page)).toBe(1);
 });
 
 test("phone warning plays the phone sound once", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
+  await soundSetup(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  await deliver(page, calls);
   await expect(toastsOf(page).getByTestId("alarm-toast")).toHaveCount(1);
-  await expect.poll(async () => (await playsOf(page)).map((p) => p.path)).toEqual(["/sounds/alarm-01.wav"]);   // Klasik bip
-  await page.waitForTimeout(3_500);
-  expect((await playsOf(page)).length).toBe(1);
+  await expect.poll(async () => (await playsOf(page)).map((x) => x.path)).toEqual(["/sounds/alarm-01.wav"]);   // Klasik bip
+  await page.clock.runFor(3 * REPEAT_MS);
+  expect(await playCount(page)).toBe(1);
 });
 
 test("sound off: alarms play nothing", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
+  await soundSetup(page, { on: false });
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   list.push(alarm({ id: "f1", type: "smoke", camera: "Depo" }), alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  await deliver(page, calls);
   await expect(modalOf(page)).toBeVisible();
-  await page.waitForTimeout(3_500);
+  await page.clock.runFor(3 * REPEAT_MS);
   expect(await playsOf(page)).toEqual([]);
 });
 
@@ -838,68 +876,107 @@ for (const mode of ["abort", "unsupported"] as const) {
 }
 
 test("two criticals: Gördüm on the first keeps the sound (next alarm's group), Gördüm on the second stops it", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
+  await soundSetup(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   const now = Date.now() / 1000;
   list.push(alarm({ id: "h1", type: "hands_up", camera: "Kasa", firedAt: now - 1 }),
             alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }),
             alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now }));
+  await deliver(page, calls);
   const modal = modalOf(page);
   await expect(modal).toHaveAttribute("data-kind", "hands_up");             // en yeni kritik
-  await expect.poll(async () => (await playsOf(page))[0]?.path).toBe("/sounds/alarm-03.wav");
+  await expect.poll(async () => (await playsOf(page)).map((x) => x.path)).toEqual(["/sounds/alarm-03.wav"]);
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveAttribute("data-kind", "fire");
-  // sıradaki kritik hâlâ çalar: hemen yangın sesi, sonra 3 sn arayla
-  await expect.poll(async () => (await playsOf(page)).filter((p) => p.path === "/sounds/alarm-02.wav").length).toBe(1);
-  await expect.poll(async () => (await playsOf(page)).filter((p) => p.path === "/sounds/alarm-02.wav").length,
-    { timeout: 6_000 }).toBe(2);
+  // sıradaki kritik hâlâ çalar: hemen (saat ilerlemeden) yangın sesi, sonra 3 sn arayla
+  await expect.poll(() => playCount(page)).toBe(2);
+  const restart = (await playsOf(page))[1];
+  expect(restart.path).toBe("/sounds/alarm-02.wav");
+  await runTo(page, restart.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(2);
+  await page.clock.runFor(100);
+  expect((await playsOf(page)).map((x) => x.path)).toEqual(["/sounds/alarm-03.wav", "/sounds/alarm-02.wav", "/sounds/alarm-02.wav"]);
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveAttribute("data-kind", "phone");                // pencere açık kalır (uyarı)
-  const n = (await playsOf(page)).length;
-  await page.waitForTimeout(3_500);
-  expect((await playsOf(page)).length).toBe(n);
+  await page.clock.runFor(3 * REPEAT_MS);
+  expect(await playCount(page)).toBe(3);
 });
 
 test("Gördüm on a phone warning picked from the queue does not stop the critical sound", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
+  await soundSetup(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   const now = Date.now() / 1000;
   list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }),
             alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 1 }));
+  await deliver(page, calls);
   const modal = modalOf(page);
   await expect(modal).toHaveAttribute("data-kind", "fire");
-  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+  await expect.poll(() => playCount(page)).toBe(1);
+  const [first] = await playsOf(page);
   await modal.getByTestId("queue-item").filter({ hasText: "Telefon kullanımı" }).click();
   await expect(modal).toHaveAttribute("data-kind", "phone");
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toHaveAttribute("data-kind", "fire");
-  const n = (await playsOf(page)).length;
-  await expect.poll(async () => (await playsOf(page)).length, { timeout: 4_500 }).toBeGreaterThan(n);
-  expect((await playsOf(page)).every((p) => p.path === "/sounds/alarm-02.wav")).toBe(true);
+  await expect.poll(() => calls.acks).toEqual(["p1"]);
+  expect(await playCount(page)).toBe(1);                                    // ne yeniden başladı ne sustu
+  await runTo(page, first.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(1);
+  await page.clock.runFor(100);
+  expect((await playsOf(page)).map((x) => x.path)).toEqual(["/sounds/alarm-02.wav", "/sounds/alarm-02.wav"]);
 });
 
 test("a new critical of the same group restarts the sound at once", async ({ page }) => {
-  await stubPlay(page);
-  await login(page);
-  await soundOn(page);
+  await soundSetup(page);
   const list: FakeAlarm[] = [];
-  await fake(page, list);
+  const calls = await fakeFrozen(page, list);
   const now = Date.now() / 1000;
   list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }));
+  await deliver(page, calls);
   const modal = modalOf(page);
   await expect(modal).toHaveAttribute("data-kind", "fire");
-  await expect.poll(async () => (await playsOf(page)).length, { timeout: 6_000 }).toBe(2);   // 0 sn ve 3 sn
-  list.push(alarm({ id: "s1", type: "smoke", camera: "Depo", firedAt: now }));             // aynı grup (yangın/duman)
+  await expect.poll(() => playCount(page)).toBe(1);
+  const [first] = await playsOf(page);
+  // ikinci alarm (aynı grup: yangın/duman) sıradaki yoklamayla gelir: yoklama ilk sesten en geç 2 sn sonra, tekrar ise 3 sn
+  // sonradır; saat 2 sn'yi az geçecek kadar ilerler, sonra durur
+  list.push(alarm({ id: "s1", type: "smoke", camera: "Depo", firedAt: now }));
+  const n = calls.polls;
+  await runTo(page, first.at + 2000 + 10);
+  await expect.poll(() => calls.polls).toBeGreaterThan(n);
   await expect(modal).toHaveAttribute("data-kind", "smoke");
-  await expect.poll(async () => (await playsOf(page)).length, { timeout: 2_500 }).toBe(3);
+  await expect.poll(() => playCount(page)).toBe(2);                         // 3 sn'lik tekrarı beklemeden
+  const restart = (await playsOf(page))[1];
+  expect(restart.at - first.at).toBeLessThanOrEqual(2010);
+  expect(restart.path).toBe("/sounds/alarm-02.wav");
+  // tekrar sırası yeni sesten başlar: sonraki ses yeniden tam 3 sn sonra
+  await runTo(page, restart.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(2);
+  await page.clock.runFor(100);
   const plays = await playsOf(page);
-  // yeni alarm 3 sn'lik sırayı beklemez: sonraki tekrar 6. sn'de olurdu, yeni ses 3. sn'den hemen sonra (yoklamayla) çalar
-  expect(plays[2].at - plays[1].at).toBeLessThan(2_700);
-  expect(plays.every((p) => p.path === "/sounds/alarm-02.wav")).toBe(true);
+  expect(plays).toHaveLength(3);
+  expect(plays[2].at - restart.at).toBe(REPEAT_MS);
+});
+
+test("Gördüm that cannot be saved keeps the alarm open and the sound repeating", async ({ page }) => {
+  await soundSetup(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fakeFrozen(page, list);
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak" }));
+  await deliver(page, calls);
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect.poll(() => playCount(page)).toBe(1);
+  const [first] = await playsOf(page);
+  calls.ackFails = true;
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(page.getByTestId("alarm-modal")).toContainText("Gördüm kaydedilemedi");
+  await runTo(page, first.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(1);
+  await page.clock.runFor(100);
+  expect(await playCount(page)).toBe(2);                                    // alarm açık: ses sürer
+  await page.clock.runFor(REPEAT_MS);
+  expect(await playCount(page)).toBe(3);
+  await expect(modal).toBeVisible();
+  expect(calls.acks).toEqual([]);
 });
