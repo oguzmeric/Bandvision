@@ -25,7 +25,7 @@ from bantvision.live.devices_store import DeviceSettings
 DEFAULTS = {"detector": "auto", "pose": "auto", "video": "auto", "fire": "auto"}
 NVIDIA = Gpu("gpu-10de-28a1", "NVIDIA Laptop GPU", 5920, 0, "0x00000000_0x0000a1b2")
 INTEL = Gpu("gpu-8086-a7a0", "Intel Graphics", 128, 1, "0x00000000_0x0000c3d4")
-N4 = "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); işlemci kullanılıyor."
+N4 = "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); işlemci kullanılıyor, ekran kartı yeniden denenecek."
 SWAP_FAILED = ("Seçilen cihaza geçilemedi: Kişi tanıma modeli yüklenemedi: Model indirilemedi (bağlantı hatası); "
                "önceki cihazda çalışmaya devam ediyor.")
 

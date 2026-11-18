@@ -5,12 +5,14 @@
 - Kart kimliği `gpu-<satıcı>-<aygıt>` (aynı karttan ikincisi `-2`, ...): DXGI sırası değişse de kayıtlı seçim geçerli
   kalır; oturum açılırken o anki DXGI sırasına çevrilir.
 - Seçim "auto" | "cpu" | kart kimliği. Bulunamayan kart / eksik DirectML / açılış ya da çalışma hatası sessizce işlemciye
-  düşer; kullanıcıya gösterilecek Türkçe not `Used.note` içindedir (hiçbir düşüş gizlenmez).
+  düşer; kullanıcıya gösterilecek Türkçe not `Used.note` içindedir (hiçbir düşüş gizlenmez). Çalışırken hata verip
+  işlemciye düşen oturum ekran kartını 1 / 5 / 30 dk sonra yeniden dener (son 1 saatte 3 hatada durur).
 - onnxruntime yalnız işlevlerin içinde içe aktarılır (kurulu olmayan ortamda modül yine yüklenir).
 """
 from __future__ import annotations
 
 import ctypes
+import locale
 import logging
 import os
 import re
@@ -34,12 +36,18 @@ DXGI_FLAG_SOFTWARE = 2
 VENDOR_MICROSOFT = 0x1414
 CACHE_TTL_S = 30.0
 REASON_MAX = 160
+GPU_RETRY_DELAYS_S = (60.0, 300.0, 1800.0)  # çalışma hatasından sonra kartı yeniden deneme gecikmeleri (sonuncuda kalır)
+GPU_FAIL_LIMIT = 3                          # son GPU_FAIL_WINDOW_S içinde bu kadar çalışma hatasında denemeler durur
+GPU_FAIL_WINDOW_S = 3600.0
 AUTO_MIN_MEMORY_MB = 1024   # "auto" yalnız bu kadar ayrılmış belleği olan kartı seçer (tümleşik kartlar ~128 MB bildirir)
 
 # Kullanıcıya gösterilen nedenden atılan dosya yolları: Windows yolu (DirectML iletileri derleme sunucusunun kaynak
 # yoluyla başlar, örn. "D:\a\_work\...\x.cpp(123)\...") ve boşluktan sonra başlayan, en az iki bileşenli mutlak POSIX
 # yolu ("/onnxruntime_src/.../x.h:560"). Tırnak içindeki düğüm adları ('/model.0/conv/Conv') yol sayılmaz.
 _PATH_RE = re.compile(r"[A-Za-z]:\\\S+|(?<!\S)/(?:[^\s/]+/)+[^\s/]+")
+
+# Windows yerel iletisindeki HRESULT ve ardından gelen ileti ("... 80004005 Belirtilmemiş hata").
+_HRESULT_RE = re.compile(r"\b([0-9A-Fa-f]{8})\s+(\S[^\r\n]*)")
 
 # DXGI ham satırı: (dizin, açıklama, satıcı, aygıt, ayrılmış bellek bayt, bayraklar, luid_high, luid_low)
 DxgiRow = tuple[int, str, int, int, int, int, int, int]
@@ -276,14 +284,39 @@ def set_default_choice(choice: str) -> None:
 
 # ---------------------------------------------------------------- oturum
 
+def _clean(line: str) -> str:
+    """Dosya yolları (`_PATH_RE`) atılır, boşluklar teke indirilir."""
+    return " ".join(_PATH_RE.sub(" ", line).split())
+
+
+def _first_line(text: str, e: BaseException) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            cleaned = _clean(line)
+            return cleaned[:REASON_MAX] if cleaned else type(e).__name__
+    return type(e).__name__
+
+
 def _reason(e: BaseException) -> str:
     """Kullanıcıya gösterilen nota giren neden: hatanın ilk boş olmayan satırından dosya yolları (`_PATH_RE`) atılır,
-    boşluklar teke indirilir, en çok 160 karakter. HRESULT ve ileti metni kalır; geriye bir şey kalmazsa hatanın türü."""
-    for line in str(e).splitlines():
-        if line.strip():
-            text = " ".join(_PATH_RE.sub(" ", line).split())
-            return text[:REASON_MAX] if text else type(e).__name__
-    return type(e).__name__
+    boşluklar teke indirilir, en çok 160 karakter. HRESULT ve ileti metni kalır; geriye bir şey kalmazsa hatanın türü.
+
+    `UnicodeDecodeError`: Windows yerel iletiyi ANSI kod sayfasıyla (Türkçe Windows'ta cp1254) yazar, ONNX Runtime
+    onu UTF-8 sanıp çözemez ve iletinin yerine çözme hatası gelir. Hatanın taşıdığı baytlar ANSI kod sayfasıyla
+    çözülür; içinde 8 haneli HRESULT varsa neden "DirectML <HRESULT>: <ileti>", yoksa çözülen metnin ilk satırı."""
+    if isinstance(e, UnicodeDecodeError) and isinstance(e.object, (bytes, bytearray, memoryview)):
+        raw = bytes(e.object)
+        try:
+            text = raw.decode(locale.getpreferredencoding(False), errors="replace")
+        except LookupError:                                   # bilinmeyen kod sayfası adı
+            text = raw.decode("utf-8", errors="replace")
+        m = _HRESULT_RE.search(text)
+        if m:
+            message = _clean(m.group(2))
+            if message:
+                return f"DirectML {m.group(1).upper()}: {message}"[:REASON_MAX]
+        return _first_line(text, e)
+    return _first_line(str(e), e)
 
 
 def _n3(reason: str) -> str:
@@ -291,7 +324,12 @@ def _n3(reason: str) -> str:
 
 
 def _n4(reason: str) -> str:
-    return f"Ekran kartı çalışırken hata verdi ({reason}); işlemci kullanılıyor."
+    return f"Ekran kartı çalışırken hata verdi ({reason}); işlemci kullanılıyor, ekran kartı yeniden denenecek."
+
+
+def _n5(reason: str) -> str:
+    return (f"Ekran kartı tekrar tekrar hata verdi ({reason}); işlemci kullanılıyor. Programı yeniden başlatınca ekran "
+            f"kartı yeniden denenir.")
 
 
 def _cpu_session(ort: Any, path: str, configure: Callable[[Any], None]) -> Any:
@@ -310,22 +348,37 @@ def _gpu_session(ort: Any, path: str, configure: Callable[[Any], None], gpu: Gpu
 
 class GuardedSession:
     """ONNX oturumu sarmalayıcısı: ekran kartında çalışırken hata çıkarsa (sürücü sıfırlanması, kart kapanması)
-    aynı model işlemcide yeniden kurulur, aynı çağrı yeniden denenir ve `used` N4 notunu alır. Düştükten sonra
-    kendiliğinden ekran kartına dönmez. İşlemci oturumunun hataları aynen yayılır.
+    aynı model işlemcide yeniden kurulur, aynı çağrı yeniden denenir ve `used` N4 notunu alır. İşlemci oturumunun
+    hataları aynen yayılır.
+
+    Geri dönüş: düşüşten sonra ekran kartı `GPU_RETRY_DELAYS_S` (1 / 5 / 30 dk; başarısız her yeniden kurmada bir
+    sonraki, sonra 30 dk'da kalır) sonra yeniden denenir: deneme zamanı geldikten sonraki ilk `run` kart oturumunu
+    yeniden kurar ve DirectML ilk sağlayıcıysa karta geçer (not kalkar). Son `GPU_FAIL_WINDOW_S` içinde
+    `GPU_FAIL_LIMIT` çalışma hatası olduysa denemeler durur (N5; yeniden başlatmaya dek işlemci). Baştan işlemcide
+    açılan oturum (`gpu` yok: "cpu" seçimi ya da açılış düşüşü N3) hiç denemez.
 
     Eşzamanlılık: DirectML bir oturumda eşzamanlı `Run`'a izin vermez; oturum ekran kartındayken `run` çağrıları
     `_run_lock` ile sıraya girer. İşlemci oturumu (baştan ya da düşüşten sonra) kilitsiz çalışır. İki kilit hiç iç içe
     tutulmaz: `_run_lock` yalnız ekran kartı çağrısını sarar ve hata dışarı çıkarken bırakılır; düşüş `_lock`'u (durum
-    kilidi) ondan sonra alır. Kilidi beklerken oturum işlemciye düştüyse çağrı yeni durumda (kilitsiz) çalışır."""
+    kilidi) ondan sonra alır. Kilidi beklerken oturum işlemciye düştüyse çağrı yeni durumda (kilitsiz) çalışır. Yeniden
+    deneme `_lock` altında yalnız sahiplenilir (`_retrying`) ve kart oturumu kilitsiz kurulur: aynı anda tek çağrı
+    dener, öbürleri işlemcide sürer; yeniden deneme `_run_lock`'u hiç almaz."""
 
-    def __init__(self, ort: Any, path: str, configure: Callable[[Any], None], session: Any, used: Used) -> None:
+    def __init__(self, ort: Any, path: str, configure: Callable[[Any], None], session: Any, used: Used,
+                 gpu: Gpu | None = None, _clock: Callable[[], float] = time.monotonic) -> None:
         self._ort = ort
         self._path = path
         self._configure = configure
-        self._lock = threading.Lock()                         # durum kilidi: işlemciye düşüş
+        self._gpu = gpu                                       # yeniden denenecek kart; baştan işlemcide None
+        self._clock = _clock
+        self._lock = threading.Lock()                         # durum kilidi: düşüş ve yeniden deneme
         self._run_lock = threading.Lock()                     # ekran kartı çağrıları sırayla (DirectML şartı)
         self._broken: str | None = None                       # işlemci yeniden kurulumu da başarısız: kalıcı hata
         self._state: tuple[Any, Used] = (session, used)       # tek atamayla değişir: oturum ve used birlikte
+        self._failures: list[float] = []                      # çalışma hatası zamanları (son GPU_FAIL_WINDOW_S)
+        self._retry_at: float | None = None                   # sonraki kart denemesi; None: deneme yok
+        self._retry_n = 0                                     # bu düşüşten beri başarısız yeniden kurma sayısı
+        self._retrying = False                                # bir çağrı şu an kart oturumunu kuruyor
 
     @property
     def used(self) -> Used:
@@ -347,9 +400,58 @@ class GuardedSession:
         return RuntimeError(f"Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı "
                             f"({self._broken})")
 
+    def _maybe_restore(self) -> None:
+        """Deneme zamanı geldiyse (ve başka çağrı denemiyorsa) kart oturumunu yeniden kurar; kurulamazsa ya da DirectML
+        ilk sağlayıcı değilse bir sonraki gecikmeyi planlar. Kurulum `_lock` dışında yapılır."""
+        gpu = self._gpu
+        retry_at = self._retry_at
+        if gpu is None or retry_at is None or self._clock() < retry_at:
+            return
+        with self._lock:
+            if self._retrying or self._retry_at is None or self._clock() < self._retry_at:
+                return
+            self._retrying = True
+        try:
+            try:
+                session = _gpu_session(self._ort, self._path, self._configure, gpu)
+                providers = list(session.get_providers())
+                if not providers or providers[0] != DML:
+                    raise RuntimeError(f"DirectML etkinleşmedi (sağlayıcılar: {providers})")
+            except Exception as e:  # noqa: BLE001 — kart hâlâ açılmıyor: işlemcide sür, sonra yine dene
+                with self._lock:
+                    self._retry_n += 1
+                    delay = GPU_RETRY_DELAYS_S[min(self._retry_n, len(GPU_RETRY_DELAYS_S) - 1)]
+                    self._retry_at = self._clock() + delay
+                log.warning("Ekran kartı yeniden kurulamadı (%s): %s; %d sn sonra yeniden denenecek",
+                            gpu.name, _reason(e), int(delay))
+                return
+            with self._lock:
+                self._state = (session, Used("gpu", gpu.id, gpu.name, None))
+                self._retry_at = None
+                self._retry_n = 0
+            log.info("Ekran kartına geri dönüldü (%s)", gpu.name)
+        finally:
+            with self._lock:
+                self._retrying = False
+
+    def _fall_note(self, reason: str) -> str:
+        """`_lock` altında: çalışma hatasını kaydeder; sonraki denemeyi planlar (N4) ya da denemeleri durdurur (N5)."""
+        now = self._clock()
+        self._failures = [t for t in self._failures if now - t < GPU_FAIL_WINDOW_S] + [now]
+        self._retry_n = 0
+        if len(self._failures) >= GPU_FAIL_LIMIT:
+            self._retry_at = None
+            log.warning("Ekran kartı son %d dk içinde %d kez hata verdi; program yeniden başlatılana dek "
+                        "denenmeyecek", int(GPU_FAIL_WINDOW_S // 60), len(self._failures))
+            return _n5(reason)
+        self._retry_at = now + GPU_RETRY_DELAYS_S[0] if self._gpu is not None else None
+        return _n4(reason)
+
     def run(self, output_names: Any, feeds: Mapping[str, Any]) -> Any:
         if self._broken is not None:                          # kalıcı hata: yeniden deneme ve günlük seli yok
             raise self._broken_error()
+        if self._retry_at is not None and self._state[1].kind != "gpu":
+            self._maybe_restore()
         state = self._state
         session, used = state
         if used.kind != "gpu":
@@ -364,7 +466,7 @@ class GuardedSession:
             log.exception("Ekran kartında çalışırken hata; işlemciye geçiliyor (%s)", used.name)
             reason = _reason(e)
         else:                                                 # kilidi beklerken başka bir çağrı işlemciye düşürdü:
-            return self.run(output_names, feeds)              # yeni durumda (durum yalnız kart → işlemci değişir)
+            return self.run(output_names, feeds)              # yeni durumda
         with self._lock:
             if self._broken is not None:
                 raise self._broken_error()
@@ -375,16 +477,18 @@ class GuardedSession:
                     self._broken = _reason(e2)
                     log.exception("İşlemci oturumu kurulamadı; model kullanılamıyor")
                     raise
-                self._state = (cpu, cpu_used(_n4(reason)))
+                self._state = (cpu, cpu_used(self._fall_note(reason)))
             session = self._state[0]
         return session.run(output_names, feeds)
 
 
 def open_session(model_path: str | os.PathLike[str], configure: Callable[[Any], None], choice: str, *,
-                 _ort: Any = None, _gpus: Sequence[Gpu] | None = None) -> GuardedSession:
+                 _ort: Any = None, _gpus: Sequence[Gpu] | None = None,
+                 _clock: Callable[[], float] = time.monotonic) -> GuardedSession:
     """Seçimi çözüp oturumu açar. `configure(so)` çağıranın kendi seçeneklerini taze bir `SessionOptions`'a uygular;
-    her deneme (işlemciye düşüş dahil) için yeni seçenek kurulur. Ekran kartı oturumu açılamazsa ya da ONNX Runtime
-    sessizce işlemciye düşerse (get_providers()[0] DirectML değil) işlemci oturumu + N3 notu döner."""
+    her deneme (işlemciye düşüş ve karta geri dönüş dahil) için yeni seçenek kurulur. Ekran kartı oturumu açılamazsa
+    ya da ONNX Runtime sessizce işlemciye düşerse (get_providers()[0] DirectML değil) işlemci oturumu + N3 notu döner
+    (bu oturum ekran kartını yeniden denemez). `_clock` yalnız test içindir."""
     ort = _ort if _ort is not None else _import_ort()
     path = os.fspath(model_path)
     if _gpus is not None:
@@ -393,7 +497,8 @@ def open_session(model_path: str | os.PathLike[str], configure: Callable[[Any], 
         gpus = [] if choice == CPU_ID else list_gpus()        # "cpu" iken DXGI hiç sorgulanmaz
     gpu, note = resolve(choice, gpus, _ort=ort)
     if gpu is None:
-        return GuardedSession(ort, path, configure, _cpu_session(ort, path, configure), cpu_used(note))
+        return GuardedSession(ort, path, configure, _cpu_session(ort, path, configure), cpu_used(note),
+                              _clock=_clock)
     providers: list[str] | None = None
     try:
         session = _gpu_session(ort, path, configure, gpu)
@@ -404,5 +509,6 @@ def open_session(model_path: str | os.PathLike[str], configure: Callable[[Any], 
         log.exception("Ekran kartı oturumu açılamadı (%s); işlemci kullanılıyor (ONNX Runtime'ın bildirdiği "
                       "sağlayıcılar: %s)", gpu.name, providers)
         cpu = _cpu_session(ort, path, configure)
-        return GuardedSession(ort, path, configure, cpu, cpu_used(_n3(_reason(e))))
-    return GuardedSession(ort, path, configure, session, Used("gpu", gpu.id, gpu.name, None))
+        return GuardedSession(ort, path, configure, cpu, cpu_used(_n3(_reason(e))), _clock=_clock)
+    return GuardedSession(ort, path, configure, session, Used("gpu", gpu.id, gpu.name, None), gpu=gpu,
+                          _clock=_clock)

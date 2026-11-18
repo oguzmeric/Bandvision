@@ -146,7 +146,7 @@ class FakeDetector:
         return []
 
 
-DROP_NOTE = "Ekran kartı çalışırken hata verdi (örnek); işlemci kullanılıyor."
+DROP_NOTE = "Ekran kartı çalışırken hata verdi (örnek); işlemci kullanılıyor, ekran kartı yeniden denenecek."
 
 
 def test_detect_mode_records_device_and_sets_default(tmp_path: pathlib.Path,
