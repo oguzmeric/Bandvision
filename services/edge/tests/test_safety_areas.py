@@ -262,9 +262,9 @@ def test_bad_template_does_not_block_camera_with_valid_own_setting(
 
 
 def test_bad_template_without_own_setting_still_gives_turkish_422(
-        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Şablon başka biçimde de bozuksa (eksik/yanlış türde alan: KeyError/TypeError/ValueError) 500 değil aynı Türkçe
-    422."""
+    422; hatanın türü ve iletisi günlüğe yazılır (kullanıcıya gitmez)."""
     pytest.importorskip("fastapi")
     from conftest import local_client
     from test_live import _app_with_fakes, _safety_session_with_fake
@@ -284,6 +284,9 @@ def test_bad_template_without_own_setting_still_gives_turkish_422(
         assert r.status_code == 422, r.text
         assert r.json()["detail"].startswith("Profil okunamadı: ")
         assert r.json()["detail"].endswith("Profili panelde düzeltip yeniden kaydedin.")
+        assert "Error" not in r.json()["detail"]                 # hatanın türü kullanıcıya gitmez
+        assert any("Profil şablonu okunamadı; kamera açılmadı: kayıt bozuk (" in m and "Error: " in m for m in caplog.messages), \
+            caplog.messages
 
 
 def test_snapshot_only_camera_with_bad_areas_keeps_watching_whole_frame(

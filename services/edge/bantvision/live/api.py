@@ -750,7 +750,8 @@ class LiveManager:
         if from_snapshot:
             profile = fallback                               # kaydedilmeden o yönteme geçilmişti: çalışan profil (adıyla)
         if profile is None and template_error is not None:
-            raise HTTPException(422, f"Profil okunamadı: {_broken_text(template_error, detail=False)} Profili "
+            _LOG.warning("Profil şablonu okunamadı; kamera açılmadı: %s", _broken_text(template_error))
+            raise HTTPException(422,f"Profil okunamadı: {_broken_text(template_error, detail=False)} Profili "
                                      f"panelde düzeltip yeniden kaydedin.") from template_error
         if profile is None or (template is None and template_error is None and fallback is None):
             raise HTTPException(404, "Profil bulunamadı.")
