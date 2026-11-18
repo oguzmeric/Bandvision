@@ -531,10 +531,22 @@ class RunResult:
     alarms: list[dict[str, object]] = field(default_factory=list)   # güvenlik: alarm listesi (`total` = gerçek sayı)
 
 
-def _job_device(model: Any) -> devices.Used | None:
+def _job_device(model: Any, *others: tuple[str, Any]) -> devices.Used | None:
     """İş sonu cihazı (`devices.job_device`): iş sırasında ekran kartından işlemciye düşüp geri dönüldüyse not bunu
-    söyler. `fell_back` bildirmeyen model (test sahtesi) için yalnız `used`."""
-    return devices.job_device(model.used, getattr(model, "fell_back", None))
+    söyler. Cihaz `model`inkidir; `others` ((ad, model) — ör. güvenlikte poz modeli) kendi oturumlarında düştüyse ya da
+    not taşıyorsa notları "<ad>: <not>" olarak eklenir (gizli düşüş yok; aynı not bir kez). `used` / `fell_back`
+    bildirmeyen model (test sahtesi) için yalnız bildirdiği."""
+    used = devices.job_device(getattr(model, "used", None), getattr(model, "fell_back", None))
+    if used is None:
+        return None
+    notes = [used.note] if used.note else []
+    seen = set(notes)
+    for label, other in others:
+        u = devices.job_device(getattr(other, "used", None), getattr(other, "fell_back", None))
+        if u is not None and u.note and u.note not in seen:
+            seen.add(u.note)
+            notes.append(f"{label}: {u.note}")
+    return devices.Used(used.kind, used.id, used.name, " ".join(notes) or None)
 
 
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
@@ -756,7 +768,8 @@ def count_safety(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_p
         progress(1.0, total)
     elif progress:
         print(f"\r  işleniyor %100  alarm={total}          ")
-    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=_job_device(an.dc), alarms=alarms)
+    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=_job_device(an.dc, ("Poz modeli", an.pose)),
+                     alarms=alarms)
 
 
 def count_fire(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_path: pathlib.Path | None,

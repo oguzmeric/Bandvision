@@ -286,6 +286,70 @@ def test_bad_template_without_own_setting_still_gives_turkish_422(
         assert r.json()["detail"].endswith("Profili panelde düzeltip yeniden kaydedin.")
 
 
+def test_snapshot_only_camera_with_bad_areas_keeps_watching_whole_frame(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Kaydedilmeden güvenliğe geçirilmiş kamera (şablon sayım profili; çalışan profil yalnız `watch.json`'da): anlık
+    görüntünün alanı bozuksa profil alansız (bütün görüntü) yeniden okunur ve kamera güvenlikte izlenmeye devam eder;
+    alanların yok sayıldığı uyarısı yazılır, kamera listeden çıkmaz."""
+    pytest.importorskip("fastapi")
+    import logging
+
+    from conftest import local_client
+    from test_live import CLIP, _app_with_fakes, _watch, camera
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with local_client(_app_with_fakes(tmp_path)) as c:
+        src = c.post("/api/v1/live/sources", json=camera(brand="custom", customUrl=str(CLIP), password="",
+                                                         name="Tezgah")).json()
+        egg = next(p for p in c.get("/api/v1/live/profiles").json() if p["name"] == "Yumurta")
+    snap = Profile.jeweler().to_dict()
+    snap = {**snap, "id": egg["id"], "name": "Kasa izleme",
+            "safety": {**snap["safety"], "areas": [_area(points=SQUARE[:2])]}}
+    record = {"sourceId": src["id"], "channelId": None, "profileId": egg["id"], "name": "Tezgah", "profile": snap}
+    (tmp_path / "live" / "watch.json").write_text(json.dumps([record]), encoding="utf-8")
+    with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
+        (got,) = c.get("/api/v1/live/sessions").json()
+        assert got["profile"]["countMode"] == "safety" and "areas" not in got["profile"]["safety"]
+        assert got["profile"]["name"] == "Kasa izleme"
+        (w,) = _watch(tmp_path)
+        assert w["profile"]["countMode"] == "safety" and "areas" not in w["profile"]["safety"]
+    assert "alanlar yok sayılıyor" in caplog.text and "Tezgah" in caplog.text
+    assert "listeden çıkarıldı" not in caplog.text
+
+
+def test_camera_setting_with_other_corruption_opens_with_template_and_restore_keeps_watching(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Kamera ayarı alan dışında da bozuksa (ör. `"handsUp": "bozuk"`: AttributeError) oturum şablonla açılır ve Türkçe
+    uyarı yazılır (500 yok); yeniden başlatmada kamera izlenmeye devam eder."""
+    pytest.importorskip("fastapi")
+    import logging
+
+    from conftest import local_client
+    from test_live import _app_with_fakes, _safety_session_with_fake
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with local_client(_app_with_fakes(tmp_path)) as c:
+        sess, sid = _safety_session_with_fake(c, monkeypatch)
+        src_id, prof_id = sess.source_id, sess.profile_id
+        prof = c.get(f"/api/v1/live/sessions/{sid}").json()["profile"]
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile?save=true", json=prof).status_code == 200
+        f = tmp_path / "live" / "camera_profiles.json"
+        items = json.loads(f.read_text(encoding="utf-8"))
+        (key,) = items
+        items[key]["safety"]["handsUp"] = "bozuk"
+        f.write_text(json.dumps(items), encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
+        assert r.status_code == 201, r.text
+        assert r.json()["profile"]["safety"]["handsUp"]["enabled"] is True          # şablon
+        assert "Kameranın kayıtlı ayarı okunamadı" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
+        (got,) = c.get("/api/v1/live/sessions").json()
+        assert got["profile"]["countMode"] == "safety"
+    assert "Kameranın kayıtlı ayarı okunamadı" in caplog.text and "yeniden açılamadı" not in caplog.text
+
+
 # ---------------------------------------------------------------- area_rules
 
 def test_area_polygon_is_built_once_per_area() -> None:

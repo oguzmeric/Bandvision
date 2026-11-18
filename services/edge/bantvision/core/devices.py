@@ -463,25 +463,32 @@ class GuardedSession:
                     self._rebuilder = None
             self._schedule_next(e)
 
+    def _backoff(self) -> float:
+        """`_lock` altında: başarısız yeniden kurma sayısını artırır, sonraki gecikmeyi döndürür (sonuncuda kalır)."""
+        self._retry_n += 1
+        return GPU_RETRY_DELAYS_S[min(self._retry_n, len(GPU_RETRY_DELAYS_S) - 1)]
+
     def _schedule_next(self, e: BaseException) -> None:
         """Başarısız yeniden kurma: sonraki gecikmeyi planlar ve sahipliği bırakır."""
         assert self._gpu is not None
         with self._lock:
-            self._retry_n += 1
-            delay = GPU_RETRY_DELAYS_S[min(self._retry_n, len(GPU_RETRY_DELAYS_S) - 1)]
+            delay = self._backoff()
             self._retry_at = self._clock() + delay
             self._rebuilding = False
         log.warning("Ekran kartı yeniden kurulamadı (%s): %s; %d sn sonra yeniden denenecek",
                     self._gpu.name, _reason(e), int(delay))
 
     def _rebuild(self) -> None:
-        """Arka plan iş parçacığı (`_try_gpu`): beklenmeyen hata günlüğe yazılır; ne olursa olsun bu iş parçacığı hâlâ
-        sahipse sahiplik (`_rebuilding`) bırakılır: denemeler kilitli kalmaz (deneme zamanı geçmişse sonraki çağrı yine
-        dener)."""
+        """Arka plan iş parçacığı (`_try_gpu`): beklenmeyen hata günlüğe yazılır ve (deneme hâlâ planlıysa) sonraki
+        deneme bir sonraki gecikmeye ertelenir: arka arkaya kurma iş parçacığı açılmaz. Ne olursa olsun bu iş parçacığı
+        hâlâ sahipse sahiplik (`_rebuilding`) bırakılır: denemeler kilitli kalmaz."""
         try:
             self._try_gpu()
         except Exception:                                     # iş parçacığı sessizce ölüp sahipliği tutmasın
-            log.exception("Ekran kartı yeniden kurulurken beklenmeyen hata; sonraki denemede yine denenecek")
+            log.exception("Ekran kartı yeniden kurulurken beklenmeyen hata; bir sonraki gecikmede yine denenecek")
+            with self._lock:
+                if self._rebuilder is threading.current_thread() and self._retry_at is not None:
+                    self._retry_at = self._clock() + self._backoff()
         finally:
             with self._lock:
                 if self._rebuilder is threading.current_thread():

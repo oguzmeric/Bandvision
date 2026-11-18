@@ -490,6 +490,26 @@ class ActionIn(_Strict):
     action: Literal["start", "stop", "reset", "learnBackground", "learnSample", "cancelCalibration"]
 
 
+# Diskteki elle bozulmuş profil kaydının `Profile.from_dict`'te verebileceği hatalar (alan, eksik/yanlış türde ayar)
+_BROKEN_PROFILE = (AreaError, KeyError, TypeError, ValueError, AttributeError)
+
+
+def _broken_text(e: Exception, detail: bool = True) -> str:
+    """Bozuk profil hatasının Türkçe metni: analiz alanı hatası kendi tümcesi; öteki hatalar "kayıt bozuk." (günlükte
+    `detail` ile hatanın türü ve iletisi de; kullanıcıya İngilizce ileti gitmez)."""
+    if isinstance(e, AreaError):
+        return str(e)
+    return f"kayıt bozuk ({type(e).__name__}: {e})." if detail else "kayıt bozuk."
+
+
+def _without_areas(d: dict[str, Any]) -> dict[str, Any]:
+    """Profil sözlüğü, `safety.areas` olmadan (bozuk alanlı anlık görüntü bütün görüntüyle okunur)."""
+    safety = d.get("safety")
+    if not isinstance(safety, dict):
+        return d
+    return {**d, "safety": {k: v for k, v in safety.items() if k != "areas"}}
+
+
 class NotSafetyProfile(LookupError):
     """Geri yüklemede: kameranın çözülen profili artık alarm yöntemi (güvenlik/yangın) değil (kayıt listeden çıkar)."""
 
@@ -715,14 +735,14 @@ class LiveManager:
         # geri yüklemede bu kamera günlüğe yazılır, diğerleri açılır); kamera ayarı sağlamsa onunla açılır.
         try:
             own = self.store.camera_profile(source_id, channel_id, profile_id)
-        except AreaError as e:
-            _LOG.warning("Kameranın kayıtlı ayarı okunamadı (%s): %s Şablon profille açılıyor; Ayarla'dan alanları "
-                         "yeniden kaydedin.", camera, e)
+        except _BROKEN_PROFILE as e:
+            _LOG.warning("Kameranın kayıtlı ayarı okunamadı (%s): %s Şablon profille açılıyor; Ayarla'dan yeniden "
+                         "kaydedin.", camera, _broken_text(e))
             own = None
         template_error: Exception | None = None
         try:
             template = self.store.profile(profile_id)
-        except (AreaError, KeyError, TypeError, ValueError, AttributeError) as e:
+        except _BROKEN_PROFILE as e:
             template, template_error = None, e
         profile = own or template                            # kamera ayarı ya da şablon
         from_snapshot = (fallback is not None and fallback.countMode in ALARM_MODES
@@ -730,13 +750,13 @@ class LiveManager:
         if from_snapshot:
             profile = fallback                               # kaydedilmeden o yönteme geçilmişti: çalışan profil (adıyla)
         if profile is None and template_error is not None:
-            raise HTTPException(422, f"Profil okunamadı: {template_error} Profili panelde düzeltip yeniden "
-                                     f"kaydedin.") from template_error
+            raise HTTPException(422, f"Profil okunamadı: {_broken_text(template_error, detail=False)} Profili "
+                                     f"panelde düzeltip yeniden kaydedin.") from template_error
         if profile is None or (template is None and template_error is None and fallback is None):
             raise HTTPException(404, "Profil bulunamadı.")
         if template_error is not None:
             _LOG.warning("Şablon profil okunamadı (%s): %s Kamera kendi kayıtlı ayarıyla açılıyor; şablonu panelde "
-                         "düzeltip yeniden kaydedin.", camera, template_error)
+                         "düzeltip yeniden kaydedin.", camera, _broken_text(template_error))
         if safety_only and profile.countMode not in ALARM_MODES:
             raise NotSafetyProfile("profil güvenlik/yangın değil")
         if template is not None and not from_snapshot:
@@ -763,6 +783,23 @@ class LiveManager:
         if profile.countMode in ALARM_MODES:
             self.watch(s)
         return s
+
+    @staticmethod
+    def _snapshot_profile(r: dict[str, Any], label: str) -> Profile | None:
+        """İzleme kaydındaki çalışan profil (yoksa None). Yalnız alanı bozuksa kamera bırakılmaz (güvenlik kamerası
+        sessizce izlenmez olmasın): profil alansız (bütün görüntü) yeniden okunur ve uyarı yazılır; kaydedilmeden
+        güvenliğe geçirilmiş kamerada çalışan profil yalnız burada durur. İzleme kaydı kamera açılınca sağlam profille
+        yenilenir. Başka bozukluk hatası (`KeyError`, `TypeError`, `ValueError`, `AttributeError`) çağırana gider."""
+        raw = r.get("profile")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return Profile.from_dict(raw)
+        except AreaError as e:
+            _LOG.warning("İzlenen güvenlik kamerasının kayıttaki profilinde analiz alanı bozuk (%s); alanlar yok "
+                         "sayılıyor (bütün görüntü izlenir), kamera kendi ayarı, şablon ya da kayıttaki profille "
+                         "izlenmeye devam ediyor; alanları Ayarla'dan yeniden kaydedin: %s", e, label)
+        return Profile.from_dict(_without_areas(raw))
 
     @staticmethod
     def _valid_watch(data: Any) -> list[dict[str, Any]]:
@@ -913,13 +950,7 @@ class LiveManager:
                     self.unwatch(r["sourceId"], r.get("channelId"))
                     continue
                 try:
-                    fallback = Profile.from_dict(r["profile"]) if isinstance(r.get("profile"), dict) else None
-                except AreaError as e:
-                    # Yalnız alanı bozuk: kamera bırakılmaz (güvenlik kamerası sessizce izlenmez olmasın), anlık
-                    # görüntü yok sayılır ve kamera kendi ayarı ya da şablonla açılır; izleme kaydı açılınca yenilenir.
-                    _LOG.warning("İzlenen güvenlik kamerasının kayıttaki profilinde analiz alanı bozuk (%s); kamera "
-                                 "kendi ayarı ya da şablon profille izlenmeye devam ediyor: %s", e, label)
-                    fallback = None
+                    fallback = self._snapshot_profile(r, label)
                 except (KeyError, TypeError, ValueError, AttributeError) as e:
                     _LOG.warning("İzlenen güvenlik kamerasının kaydı bozuk; listeden çıkarıldı: %s (%s: %s)",
                                  label, type(e).__name__, e)

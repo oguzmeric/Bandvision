@@ -866,8 +866,8 @@ def test_thread_start_failure_clears_rebuilder_and_backs_off(monkeypatch):
 
 
 def test_unexpected_error_in_rebuild_releases_ownership(monkeypatch, caplog):
-    """Yeniden kurma iş parçacığında beklenmeyen hata: günlüğe yazılır, sahiplik (`_rebuilding`) bırakılır; denemeler
-    kilitli kalmaz."""
+    """Yeniden kurma iş parçacığında beklenmeyen hata: günlüğe yazılır, sahiplik (`_rebuilding`) bırakılır ve sonraki
+    deneme bir sonraki gecikmeye ertelenir (arka arkaya kurma iş parçacığı açılmaz); denemeler kilitli kalmaz."""
     clock = Clock(0.0)
     ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
     s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
@@ -887,10 +887,14 @@ def test_unexpected_error_in_rebuild_releases_ownership(monkeypatch, caplog):
     monkeypatch.undo()                                                   # kurucu ve _schedule_next eski haline
     again = Builder(monkeypatch, clock)
     ort.ctor_error = None
-    clock.t = 61.0
+    for t in (61.0, 359.0):                                              # hemen yeniden kurma yok: +300 sn
+        clock.t = t
+        assert run_settled(s) == 3.0 and s.used.kind == "cpu"
+    assert again.calls == []
+    clock.t = 360.0
     run_settled(s)
     assert s.used.kind == "gpu"                                          # denemeler sürüyor
-    assert builder.calls == [60.0] and again.calls == [61.0]
+    assert builder.calls == [60.0] and again.calls == [360.0]
 
 
 def test_fell_back_remembers_runtime_fallback_after_recovery(monkeypatch):

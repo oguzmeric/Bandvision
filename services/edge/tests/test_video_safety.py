@@ -366,6 +366,28 @@ def test_device_note_tells_gpu_fallback_recovered_during_the_job(fakes: None, sr
                                    "işlemcide çalıştı."}
 
 
+def test_device_note_also_tells_pose_model_fallback(fakes: None, src: pathlib.Path, tmp_path: pathlib.Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Poz modeli de kendi oturumunda düşebilir: iş sonucu tanıyıcının notuna poz modelininkini ekler (gizli düşüş yok);
+    tanıyıcı sorunsuzsa not yalnız poz modelinindir, ikisi aynı notu verirse bir kez yazılır."""
+    pose = video.PoseEstimator
+    monkeypatch.setattr(pose, "used", devices.Used("gpu", "gpu-10de-28a1", "NVIDIA Laptop GPU", None), raising=False)
+    monkeypatch.setattr(pose, "fell_back", "DEVICE_REMOVED", raising=False)
+    s, _ = run(src, tmp_path)
+    assert s["device"] == {"kind": "gpu", "name": "NVIDIA Laptop GPU",
+                           "note": "Poz modeli: Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); iş sırasında bir "
+                                   "süre işlemcide çalıştı."}
+    monkeypatch.setattr(OnePerson, "fell_back", "TDR", raising=False)
+    s, _ = run(src, tmp_path / "b")
+    assert s["device"]["note"] == ("Ekran kartı çalışırken hata verdi (TDR); iş sırasında bir süre işlemcide çalıştı. "
+                                   "Poz modeli: Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); iş sırasında bir "
+                                   "süre işlemcide çalıştı.")
+    monkeypatch.setattr(OnePerson, "fell_back", "DEVICE_REMOVED", raising=False)
+    s, _ = run(src, tmp_path / "c")
+    assert s["device"]["note"] == ("Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); iş sırasında bir süre işlemcide "
+                                   "çalıştı.")
+
+
 def test_marked_video_and_progress_json(fakes: None, src: pathlib.Path, tmp_path: pathlib.Path,
                                         capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "o"
