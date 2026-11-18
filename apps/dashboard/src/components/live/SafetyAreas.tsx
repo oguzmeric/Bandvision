@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
-  addArea, AREA_NAME_MAX, AREA_RULE_LABELS, AREA_RULES, AREAS_HELP, areaWatches, enabledRules, MAX_AREAS, removeArea, renameArea,
-  safetyAreas, toggleAreaRule, withAreas,
+  addArea, addAreaBlocked, AREA_NAME_MAX, AREA_RULE_LABELS, AREA_RULES, AREAS_HELP, areaWatches, duplicateAreaNames, enabledRules,
+  MAX_AREAS, removeArea, renameArea, safetyAreas, toggleAreaRule, withAreas,
 } from "@/lib/safetyAreas.mjs";
 import type { SafetyArea, SafetyConfig } from "@/lib/live";
 import { SAFETY_DEFAULTS } from "./SafetyPanel";
@@ -29,13 +29,17 @@ function AreaName({ name, onRename }: { name: string; onRename: (raw: string) =>
 /**
  * Ayarla panelinde güvenlik (poz) ve telefon kameralarının "Analiz alanları": ad, bu alanda bakılan kurallar (yalnız
  * kamerada açık kurallar seçilebilir; en az biri kalır), Sil; "Alan ekle" (en çok 16; yeni alan "Alan N" ve kamerada açık
- * kurallarla). Çokgenler görüntü üstünde ZonesEditor'da çizilir. Liste boşsa `areas` profile hiç yazılmaz.
+ * kurallarla; kapalıysa nedeni altında yazar). Aynı adı taşıyan alanlarda uyarı (izin verilir: alarmda ayırt edilemez).
+ * Çokgenler görüntü üstünde ZonesEditor'da çizilir. Liste boşsa `areas` profile hiç yazılmaz.
  */
 export function SafetyAreas({ value, onChange }: { value: SafetyConfig | undefined; onChange: (v: SafetyConfig) => void }) {
   const base = value ?? SAFETY_DEFAULTS;
   const areas = safetyAreas(base);
   const on = enabledRules(base);
   const set = (next: SafetyArea[]) => { if (next !== areas) onChange(withAreas(base, next)); };
+  const dupes = duplicateAreaNames(areas);
+  const blocked = addAreaBlocked(areas, on);
+  const blockedId = useId();
   return (
     <div role="group" aria-label="Analiz alanları" className="grid gap-1.5">
       <p className="text-xs font-medium text-pl-muted">Analiz alanları</p>
@@ -64,12 +68,16 @@ export function SafetyAreas({ value, onChange }: { value: SafetyConfig | undefin
                 })}
               </div>
               {!areaWatches(a, base) && <p className="text-[11.5px] text-warn-ink">Bu alanda kamerada açık kural yok.</p>}
+              {dupes.has(i) && (
+                <p className="text-[11.5px] text-warn-ink">Aynı adda başka alan var; alarmda hangisi olduğu ayırt edilemez.</p>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <button type="button" onClick={() => set(addArea(areas, on))} disabled={areas.length >= MAX_AREAS || on.length === 0}
-              className="pl-btn h-8 w-full justify-center">+ Alan ekle</button>
+      <button type="button" onClick={() => set(addArea(areas, on))} disabled={blocked !== null} title={blocked ?? undefined}
+              aria-describedby={blocked ? blockedId : undefined} className="pl-btn h-8 w-full justify-center">+ Alan ekle</button>
+      {blocked && <p id={blockedId} className="text-[11.5px] text-warn-ink">{blocked}</p>}
       <p className="text-[11.5px] text-pl-faint">{AREAS_HELP}</p>
       <p className="text-[11.5px] text-pl-faint">
         En çok {MAX_AREAS} alan. Kişinin kutusunun ortası alanın içindeyse o alanda işaretli kurallara bakılır; hiçbir alanda

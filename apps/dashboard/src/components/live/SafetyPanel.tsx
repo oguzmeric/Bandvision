@@ -6,7 +6,7 @@ import {
   type SafetyConfig,
 } from "@/lib/live";
 import { NO_LIVE_SESSIONS, useAlarmCenter } from "./AlarmCenter";
-import AlarmIcon from "./AlarmIcon";
+import AlarmIcon, { PlayMark } from "./AlarmIcon";
 import AlarmViewer from "./AlarmViewer";
 import { FireWarning } from "./FireSettings";
 
@@ -91,7 +91,11 @@ export function SafetyPanel({ session }: { session: LiveSession }) {
                     // eslint-disable-next-line @next/next/no-img-element -- yerel olay resmi
                     ? <img src={alarmImageUrl(a.id)} alt="" className="h-12 w-16 rounded-[2px] object-cover" />
                     : <span className="grid h-12 w-16 place-items-center rounded-[2px] bg-pl-side text-pl-muted"><AlarmIcon type={a.type} className="h-5 w-5" /></span>}
-                  {a.clip && <span className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 text-[10px] text-white" aria-hidden="true">▶</span>}
+                  {a.clip && (
+                    <span data-testid="clip-mark" className="absolute bottom-0.5 right-0.5 rounded bg-black/70 px-1 py-[3px] text-white" aria-hidden="true">
+                      <PlayMark className="block h-2 w-2" />
+                    </span>
+                  )}
                 </span>
                 <span className="min-w-0 text-[13px]">
                   <b>{ALARM_LABELS[a.type]}</b> · {new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}

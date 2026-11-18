@@ -94,7 +94,7 @@ export default function AttentionSettings() {
         <input id="alarm-sound" type="checkbox" aria-label="Sesli uyarı" className="mt-0.5 h-4 w-4 accent-pl-accent" checked={sound}
                onChange={(e) => toggleSound(e.target.checked)} />
         <label htmlFor="alarm-sound" className="flex-1">Sesli uyarı
-          <span className="block text-[11.5px] text-pl-faint">Kritik alarmda seçilen ses, alarm penceresi açıkken 3 saniyede bir yinelenir; Gördüm ya da Küçült susturur. Telefon uyarısında bir kez çalar. Alarm varsayılan olarak sessizdir.</span>
+          <span className="block text-[11.5px] text-pl-faint">Kritik alarmda seçilen ses, alarm penceresi açıkken 3 saniyede bir yinelenir; Gördüm o alarmın sesini, Küçült tüm sesi susturur. Telefon uyarısında bir kez çalar. Alarm varsayılan olarak sessizdir.</span>
         </label>
       </div>
       <div className="grid gap-1.5 border-b border-pl-head pb-2 pl-6">

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  addArea, AREA_NAME_MAX, areaSlot, areaWatches, enabledRules, MAX_AREAS, nextAreaName, removeArea, renameArea, safetyAreas,
-  toggleAreaRule, withAreaPoints, withAreas,
+  addArea, addAreaBlocked, AREA_NAME_MAX, areaSlot, areaWatches, duplicateAreaNames, enabledRules, MAX_AREAS, nextAreaName,
+  removeArea, renameArea, safetyAreas, toggleAreaRule, withAreaPoints, withAreas,
 } from "./safetyAreas.mjs";
 
 const SAFETY = { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 }, phone: { enabled: false, seconds: 15 }, sendImage: false };
@@ -79,4 +79,19 @@ test("areaWatches: alanın kurallarından en az biri kamerada açık mı", () =>
   const area = { name: "Kasa", points: [], rules: ["phone"] };
   assert.equal(areaWatches(area, SAFETY), false);
   assert.equal(areaWatches(area, { ...SAFETY, phone: { enabled: true, seconds: 15 } }), true);
+});
+
+test("duplicateAreaNames: aynı (kırpılmış) adı taşıyan alanların sırası", () => {
+  const a = (name) => ({ name, points: [], rules: ["handsUp"] });
+  assert.deepEqual([...duplicateAreaNames([a("Masa 3"), a("Kasa"), a(" Masa 3 "), a("masa 3")])], [0, 2]);
+  assert.equal(duplicateAreaNames([a("Masa 3"), a("Kasa")]).size, 0);
+  assert.equal(duplicateAreaNames([]).size, 0);
+});
+
+test("addAreaBlocked: Alan ekle neden kapalı (16 alan / kamerada açık kural yok); açıksa null", () => {
+  const one = { name: "Alan 1", points: [], rules: ["handsUp"] };
+  assert.equal(addAreaBlocked([], ["handsUp"]), null);
+  assert.equal(addAreaBlocked(Array.from({ length: MAX_AREAS }, () => one), ["handsUp"]), "En çok 16 alan eklenebilir.");
+  assert.equal(addAreaBlocked([], []), "Önce kamerada bir kuralı açın.");
+  assert.equal(addAreaBlocked(Array.from({ length: MAX_AREAS }, () => one), []), "En çok 16 alan eklenebilir.");
 });

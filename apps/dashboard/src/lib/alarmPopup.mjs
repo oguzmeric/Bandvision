@@ -62,9 +62,9 @@ export function insetSide(box) {
   return b && (b[0] + b[2]) / 2 > 0.5 ? "left" : "right";
 }
 
-/** "38 sn önce" / "9 dk önce" / "2 sa önce" */
+/** "38 sn önce" / "9 dk önce" / "2 sa önce"; sayı olmayan ya da sonsuz süre (bozuk zaman) 0 sayılır */
 export function agoText(seconds) {
-  const s = Math.max(0, seconds);
+  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   if (s < 60) return `${Math.floor(s)} sn önce`;
   if (s < 3600) return `${Math.floor(s / 60)} dk önce`;
   return `${Math.floor(s / 3600)} sa önce`;

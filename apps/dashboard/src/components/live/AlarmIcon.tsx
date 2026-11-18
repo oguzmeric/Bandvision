@@ -14,6 +14,15 @@ export default function AlarmIcon({ type, className = "h-5 w-5" }: { type: Alarm
   );
 }
 
+/** Oynatma işareti (kayıt var): ▶ (U+25B6) bazı sistemlerde renkli emoji çizildiği için çizgi simgesi; süsleme */
+export function PlayMark({ className = "h-2 w-2" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 10 10" className={className} fill="currentColor" aria-hidden="true" focusable="false" data-icon="play">
+      <path d="M2 1l7 4-7 4z" />
+    </svg>
+  );
+}
+
 const PATHS: Record<AlarmType, React.ReactNode> = {
   fire: (
     <>

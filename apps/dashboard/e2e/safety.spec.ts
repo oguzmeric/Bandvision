@@ -22,7 +22,7 @@ test("güvenlik: deneme alarmı şeritte görünür ve Gördüm ile kapanır; ay
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
 
   await page.getByRole("button", { name: "Deneme alarmı" }).click();
-  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
+  const banner = page.getByRole("status", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Deneme alarmı", { timeout: 10_000 });
   // alarm penceresi açılır (kamerasız deneme alarmı: kayıt ve resim yok); Gördüm ile pencere ve şerit kapanır
   const modal = page.getByRole("alertdialog", { name: "Alarm", exact: true });
@@ -85,7 +85,7 @@ test("güvenlik: kuyumcu profiliyle kamera başlar, izleniyor ve ayarlar görün
   await expect(modal.getByTestId("alarm-timeline").getByRole("button", { name: /^Alarm anı · 0:0\d$/ })).toBeVisible();
   await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
   await expect(modal).toBeHidden();
-  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toBeHidden();
+  await expect(page.getByRole("status", { name: "Alarm", exact: true })).toBeHidden();
   await page.getByRole("button", { name: "Ayarla", exact: true }).click();
   await expect(page.getByRole("group", { name: "Güvenlik kuralları" })).toBeVisible();
   await expect(page.getByLabel("Eller yukarı süresi")).toHaveValue("3");

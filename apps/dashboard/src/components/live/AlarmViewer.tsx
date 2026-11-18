@@ -273,7 +273,9 @@ export default function AlarmViewer({ alarms, id, mode, liveSessionIds, onSelect
                         </span>
                         <span className="min-w-0">
                           <span className="block truncate font-semibold">{ALARM_LABELS[x.type]}</span>
-                          <span className="block truncate text-pl-muted">{x.camera}</span>
+                          <span className="block truncate text-pl-muted">
+                            {x.camera}{alarmArea(x) && ` · Alan: ${alarmArea(x)}`}
+                          </span>
                           <span className="block text-[11.5px] tabular-nums text-pl-faint">{agoText(now - x.firedAt)}</span>
                         </span>
                       </button>

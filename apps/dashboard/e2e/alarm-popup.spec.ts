@@ -228,6 +228,32 @@ test("old record without box shows whole image; no image no inset", async ({ pag
   await expect(modal.getByTestId("alarm-inset")).toHaveCount(0);               // resim yok: köşe penceresi yok
 });
 
+test("inset crops a non-16:9 image to the box in the image's own ratio", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  await page.route(/\/api\/live\/alarms\/k1\/image\.jpg$/, (route) => route.fulfill({ contentType: "image/svg+xml", body: SVG_704x576 }));
+  // dar ve uzun kişi kutusu (boy 0,4): ölçek 1 / (1,6 × 0,4) = 1,5625; merkez (0,45; 0,5)
+  list.push(alarm({ id: "k1", type: "hands_up", box: [0.4, 0.3, 0.5, 0.7] }));
+  const modal = modalOf(page);
+  const inset = modal.getByTestId("alarm-inset");
+  await expect(inset).toBeVisible();
+  await expect(inset).toHaveAttribute("data-side", "right");                 // merkez sol yarıda
+  // pencere resmin kendi oranında (704×576), 16:9'a gerilmez; kırpım yüzdeleri o kutuya göre
+  await expect.poll(async () => {
+    const b = (await modal.getByTestId("inset-frame").boundingBox())!;
+    return b.width / b.height;
+  }).toBeCloseTo(704 / 576, 1);
+  const style = await inset.locator("img").evaluate((el: HTMLImageElement) =>
+    ({ width: el.style.width, height: el.style.height, left: el.style.left, top: el.style.top }));
+  expect(style).toEqual({ width: "156.3%", height: "156.3%", left: "-20.31%", top: "-28.12%" });
+  // kutunun merkezi pencerenin ortasına düşer: resim pencereyi taşar, kutu ortada
+  const frame = (await modal.getByTestId("inset-frame").boundingBox())!;
+  const img = (await inset.locator("img").boundingBox())!;
+  expect(img.x + 0.45 * img.width).toBeCloseTo(frame.x + frame.width / 2, 0);
+  expect(img.y + 0.5 * img.height).toBeCloseTo(frame.y + frame.height / 2, 0);
+});
+
 test("queue lists critical first and selects on click", async ({ page }) => {
   await login(page);
   const list: FakeAlarm[] = [];
@@ -354,10 +380,8 @@ test("header small text keeps at least 4.5:1 contrast on every alarm colour", as
     await items.nth(i).click();
     await expect(modal).toHaveAttribute("data-kind", kind);
     expect(await contrastOf(modal.getByTestId("alarm-subtitle")), `${kind} ikinci satır`).toBeGreaterThanOrEqual(4.5);
-    // büyük kalın başlık (>= 18,66 px kalın) için 3:1 yeter; yangın turuncusunda beyaz 3,8:1 (ölçüm başlık rengini görüyor)
-    const title = await contrastOf(modal.getByTestId("alarm-title"));
-    expect(title, `${kind} başlık`).toBeGreaterThanOrEqual(3);
-    if (kind === "fire") expect(title).toBeLessThan(4.5);
+    // büyük kalın başlık (>= 18,66 px kalın) için 3:1 yeter
+    expect(await contrastOf(modal.getByTestId("alarm-title")), `${kind} başlık`).toBeGreaterThanOrEqual(3);
     const status = modal.getByTestId("alarm-status");
     if (await status.count()) expect(await contrastOf(status), `${kind} durum çipi`).toBeGreaterThanOrEqual(4.5);
   }
@@ -656,11 +680,15 @@ test("alarm in a named area shows Alan in the window info row and on the corner 
   await expect(modal.getByRole("term").filter({ hasText: /^Alan$/ })).toBeVisible();
   // alansız kritik alarm: satır yok
   list.push(alarm({ id: "h2", type: "lying", camera: "Tezgah kamerası", firedAt: now - 1, area: null }));
-  await expect(modal.getByTestId("queue-item")).toHaveCount(2);
-  await modal.getByTestId("queue-item").filter({ hasText: "Yerde yatan kişi" }).click();
+  const items = modal.getByTestId("queue-item");
+  await expect(items).toHaveCount(2);
+  // açık alarmlar listesinde de: alanlı satırda kameranın yanında "· Alan: <ad>", alansızda yok
+  await expect(items.filter({ hasText: "Eller yukarı" })).toContainText("Tezgah kamerası · Alan: Masa 3");
+  await expect(items.filter({ hasText: "Yerde yatan kişi" })).not.toContainText("Alan");
+  await items.filter({ hasText: "Yerde yatan kişi" }).click();
   await expect(modal).toHaveAttribute("data-kind", "lying");
   await expect(modal.getByTestId("alarm-area")).toHaveCount(0);
-  await expect(modal).not.toContainText("Alan:");
+  await expect(modal.getByRole("term").filter({ hasText: /^Alan$/ })).toHaveCount(0);
 });
 
 /**
@@ -979,4 +1007,57 @@ test("Gördüm that cannot be saved keeps the alarm open and the sound repeating
   expect(await playCount(page)).toBe(3);
   await expect(modal).toBeVisible();
   expect(calls.acks).toEqual([]);
+});
+
+test("Yanlış alarm that cannot be saved keeps the alarm open, shows the error and the sound repeating", async ({ page }) => {
+  await soundSetup(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fakeFrozen(page, list);
+  let falseCalls = 0;
+  await page.route(/\/api\/live\/alarms\/[^/]+\/false-alarm$/, (route) => {
+    falseCalls += 1;
+    return route.fulfill({ status: 500, json: { detail: "Sunucu hatası." } });
+  });
+  page.on("dialog", (d) => void d.accept());
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak" }));
+  await deliver(page, calls);
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect.poll(() => playCount(page)).toBe(1);
+  const [first] = await playsOf(page);
+  await modal.getByRole("button", { name: "Yanlış alarm", exact: true }).click();
+  await expect(modal).toContainText("Yanlış alarm kaydedilemedi. Tekrar deneyin.");
+  expect(falseCalls).toBe(1);
+  await runTo(page, first.at + REPEAT_MS - 50);
+  expect(await playCount(page)).toBe(1);
+  await page.clock.runFor(100);
+  expect(await playCount(page)).toBe(2);                                    // alarm açık: ses sürer
+  await page.clock.runFor(REPEAT_MS);
+  expect(await playCount(page)).toBe(3);
+  await expect(modal).toBeVisible();
+  await expect(modal.getByTestId("alarm-title")).toHaveText("Yangın");
+});
+
+test("hidden corner cards are forgotten once their alarm is gone (not before the first poll)", async ({ page }) => {
+  await login(page);
+  const list: FakeAlarm[] = [];
+  const calls = await fake(page, list);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }), alarm({ id: "p2", type: "phone", camera: "Depo" }));
+  const toast = toastsOf(page).getByTestId("alarm-toast");
+  await expect(toast).toHaveCount(2);
+  await toast.getByRole("button", { name: "Gizle: Telefon kullanımı — Kasa" }).click();
+  await toast.getByRole("button", { name: "Gizle: Telefon kullanımı — Depo" }).click();
+  const hidden = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("bv.alarm.hidden") ?? "[]") as string[]);
+  await expect.poll(async () => (await hidden()).sort()).toEqual(["p1", "p2"]);
+  // yenileyince ilk yoklamadan önce (liste boşken) budanmaz: ikisi de gizli kalır
+  await page.reload();
+  const n = calls.polls;
+  await expect.poll(() => calls.polls, { timeout: 10_000 }).toBeGreaterThan(n + 1);
+  await expect(toast).toHaveCount(0);
+  expect((await hidden()).sort()).toEqual(["p1", "p2"]);
+  // başka yerde onaylanan alarm listeden düşünce gizlenenlerden de silinir; öteki gizli kalır
+  list.find((a) => a.id === "p1")!.acked = true;
+  await expect.poll(hidden, { timeout: 10_000 }).toEqual(["p2"]);
+  await expect(toast).toHaveCount(0);
+  await expect(page.getByTestId("alarm-count-warning")).toHaveText("1 uyarı");
 });

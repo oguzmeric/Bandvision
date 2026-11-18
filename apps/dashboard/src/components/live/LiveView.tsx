@@ -99,6 +99,9 @@ export default function LiveView() {
   const params = useSearchParams();
   const [all, setSessions] = useState<LiveSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Ayar gönderimi (taslak, Kaydet, giriş yönü) reddedildi (ör. analiz alanında Türkçe 422): 1 sn'lik oturum yoklaması
+   * silmez; sonraki başarılı gönderimde, "Kapat"la ya da başka kameraya geçince kalkar */
+  const [editError, setEditError] = useState<string | null>(null);
   // ?tur= ile süzülmüş görünüm (yoksa ya da geçersizse tüm oturumlar); süzme profilin sayım yöntemine göre (telefon:
   // telefon kuralı açık güvenlik kameraları). Bu türde gösterilen kamera, kuralı Ayarla'da kapatılsa da listeden
   // düşmez (taslak sunucuya anında uygulanır; panel elden gitmesin); tür değişince ya da sayfa yenilenince düşer.
@@ -123,11 +126,13 @@ export default function LiveView() {
   const draftRef = useRef<Profile | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pushSeq = useRef(0);
 
   // taslak kapanınca (Kaydet/İptal/oturum sekmesi değişimi) öğretme modu da kapanır
   useEffect(() => { if (!draft) setTeaching(false); }, [draft]);
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { sessionIdRef.current = session?.id ?? null; }, [session?.id]);
+  useEffect(() => { setEditError(null); }, [session?.id]);
 
   const load = useCallback(() => {
     api<LiveSession[]>("sessions").then((s) => { setSessions(s); setError(null); }).catch((e: Error) => setError(e.message));
@@ -168,8 +173,12 @@ export default function LiveView() {
 
   function pushProfile(p: Profile, save = false) {
     if (!session) return Promise.resolve();
-    return api(`sessions/${session.id}/profile${save ? "?save=true" : ""}`, { method: "PUT", json: p })
-      .catch((e: Error) => setError(e.message));
+    const sid = session.id;
+    const mine = ++pushSeq.current;                             // yalnız son gönderimin sonucu hatayı belirler
+    const current = () => pushSeq.current === mine && sessionIdRef.current === sid;
+    return api(`sessions/${sid}/profile${save ? "?save=true" : ""}`, { method: "PUT", json: p })
+      .then(() => { if (current()) setEditError(null); })
+      .catch((e: Error) => { if (current()) setEditError(e.message); });
   }
 
   function edit(p: Profile) {
@@ -309,6 +318,15 @@ export default function LiveView() {
         </Link>
       </div>
       {error && <p role="alert" className="mb-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">{error}</p>}
+      {editError && (
+        <div role="alert" data-testid="edit-error"
+             className="mb-3 flex items-start gap-3 rounded-[2px] border border-nok-line bg-nok-50 px-3 py-2 text-[13px] text-nok-ink">
+          <span className="min-w-0 flex-1">{editError}</span>
+          <button type="button" onClick={() => setEditError(null)} aria-label="Hatayı kapat" className="font-medium hover:underline">
+            Kapat
+          </button>
+        </div>
+      )}
 
       <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="pl-section mb-0 min-w-0 pb-2.5" aria-label="Canlı görüntü">

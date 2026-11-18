@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CLIP_PENDING_MAX_S, CLIP_PENDING_S, alarmClipUrl, alarmImageUrl, type Alarm } from "@/lib/live";
 import { insetCrop, insetSide } from "@/lib/alarmPopup.mjs";
 import { useStreamKey } from "@/components/watch/useStreamKey";
-import AlarmIcon from "./AlarmIcon";
+import AlarmIcon, { PlayMark } from "./AlarmIcon";
 
 /** Görüntü alanının iki görünümü: kameranın şu anki canlı görüntüsü ya da alarmın kaydı */
 export type MediaView = "live" | "clip";
@@ -132,7 +132,7 @@ export default function AlarmMedia({ alarm: a, liveUrl, initial, size }: Props) 
                 </span>
                 <span className={`block bg-black/80 px-1.5 py-0.5 font-semibold text-white ${compact ? "text-[10.5px]" : "text-[11.5px]"}`}>
                   Alarm anı · {new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}
-                  <svg viewBox="0 0 10 10" className="ml-1 inline h-2 w-2 align-baseline" fill="currentColor" aria-hidden="true"><path d="M2 1l7 4-7 4z" /></svg>
+                  <PlayMark className="ml-1 inline h-2 w-2 align-baseline" />
                 </span>
               </button>
             )}

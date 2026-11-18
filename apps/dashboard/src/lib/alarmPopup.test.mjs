@@ -42,10 +42,18 @@ test("insetCrop", () => {
   assert.ok(!Object.is(insetCrop([0, 0, 1, 1]).left, -0));
 });
 
+test("insetCrop: dikdörtgen kutuda büyütmeyi uzun kenar belirler", () => {
+  // dar ve uzun kişi kutusu: boy (0,4) belirler, en (0,1) değil
+  assert.deepEqual(insetCrop([0.4, 0.3, 0.5, 0.7]), { scale: 1.563, left: -20.31, top: -28.12 });
+  // yatık (geniş) kutu: aynı uzun kenar, aynı büyütme
+  assert.equal(insetCrop([0.3, 0.4, 0.7, 0.5]).scale, 1.563);
+});
+
 test("insetSide", () => {
   assert.equal(insetSide([0.6, 0, 0.9, 0.5]), "left");
   assert.equal(insetSide([0.1, 0, 0.3, 0.5]), "right");
   assert.equal(insetSide(null), "right");
+  assert.equal(insetSide([0.4, 0, 0.6, 0.5]), "right");              // merkez tam ortada (0,5): sağda kalır
 });
 
 test("agoText", () => {
@@ -54,4 +62,5 @@ test("agoText", () => {
   assert.equal(agoText(60), "1 dk önce");
   assert.equal(agoText(599), "9 dk önce");
   assert.equal(agoText(7200), "2 sa önce");
+  for (const bad of [NaN, Infinity, -Infinity]) assert.equal(agoText(bad), "0 sn önce");   // bozuk zaman: "NaN sa" yok
 });

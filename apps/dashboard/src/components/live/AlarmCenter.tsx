@@ -2,7 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { desktopReady, playAlarmSound, readPref, readSound, readVolume, stopAlarmSounds } from "@/lib/attention";
-import { ALARM_LABELS, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm, type LiveSession } from "@/lib/live";
+import {
+  ALARM_LABELS, alarmArea, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm,
+  type LiveSession,
+} from "@/lib/live";
 import { alarmSeverity, sortAlarms } from "@/lib/alarmPopup.mjs";
 import { SOUND_REPEAT_MS, soundGroup, type SoundGroup } from "@/lib/alarmSounds.mjs";
 import { problemOf, type Problem } from "@/lib/views";
@@ -90,8 +93,8 @@ function saveIds(key: string, ids: Set<string>): void {
  * yeni alarmda (sekme arka plandaysa) masaüstü bildirimi. "Sesli uyarı" açıksa: her yeni kritik alarm çalanlar kümesine
  * girer ve ses hemen başlar; pencere açıkken kümede onaylanmamış alarm kaldıkça grubun sesi 3 sn'de bir çalar (gösterilen
  * alarm kümedeyse onun grubu, değilse kümenin en yenisininki). Gördüm / Yanlış alarm kaydedilince yalnız O alarmı kümeden
- * çıkarır (kaydedilemezse alarm açık kalır, ses sürer; uyarıyı onaylamak kritik sesi susturmaz); Küçült ya da pencerenin kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz).
- * Yalnız uyarı geldiyse ses bir kez çalar. Tarayıcı izin vermezse çubukta tıklama ipucu çıkar. Alarm
+ * çıkarır (kaydedilemezse alarm açık kalır, ses sürer; uyarıyı onaylamak kritik sesi susturmaz); Küçült ya da pencerenin
+ * kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz). Yalnız uyarı geldiyse ses bir kez çalar. Tarayıcı izin vermezse çubukta tıklama ipucu çıkar. Alarm
  * varken sekme başlığı yanıp söner; onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma
  * tercihinde sabit). Üstteki çubuk (`AlarmBanner`) bu verinin görünümüdür.
  */
@@ -117,16 +120,30 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const seq = useRef(0);
   const refreshRef = useRef<() => void>(() => undefined);
   const shown = useRef<Set<string> | null>(null);
+  /** İlk yoklama cevabı uygulandı: o zamana dek `alarms` boş başlangıç değeridir (gizlenen kartlar budanmaz) */
+  const [loaded, setLoaded] = useState(false);
   /** Pencerenin sırası: kritikler üstte, grup içinde yeniden eskiye (şerit ve sekme başlığı sunucunun sırasını kullanır) */
   const ordered = useMemo(() => sortAlarms(alarms), [alarms]);
-  const latest = useRef<Alarm[]>([]);
-  useEffect(() => { latest.current = ordered; }, [ordered]);
+  /** Sıranın son hâli: geri çağrılar (`open`, `openFirst`; masaüstü bildirimi sonradan tıklanır) bir çizim geriden
+   * gelmesin diye çizim sırasında atanır */
+  const latest = useRef<Alarm[]>(ordered);
+  latest.current = ordered;
   const liveSessionIds = useMemo<ReadonlySet<string>>(() => new Set(sessions.map((s) => s.id)), [sessions]);
   /** Köşe kartlarındaki uyarılar: gizlenmemiş, yeniden eskiye */
   const warnings = useMemo(() => ordered.filter((a) => alarmSeverity(a.type) === "warning" && !hidden.has(a.id)), [ordered, hidden]);
   const critical = ordered.some((a) => alarmSeverity(a.type) === "critical");
 
   useEffect(() => { saveIds(HIDDEN_KEY, hidden); }, [hidden]);
+  // Gizlenen kartlar artık olmayan (onaylanmış, silinmiş) alarmlardan budanır; ilk yoklamadan önce değil (liste o zaman
+  // yalnız boş başlangıç değeridir, sayfa yenilenince gizlenenler kaybolurdu)
+  useEffect(() => {
+    if (!loaded) return;
+    setHidden((h) => {
+      const ids = new Set(alarms.map((a) => a.id));
+      const kept = [...h].filter((id) => ids.has(id));
+      return kept.length === h.size ? h : new Set(kept);
+    });
+  }, [alarms, loaded]);
 
   useEffect(() => {
     let alive = true;
@@ -144,8 +161,10 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
         if (!alive) return;
         fails = 0;
         setProblem(null);
-        if (mine === seq.current) setAlarms(list);
-        else again = true;                              // bayat cevap: hemen yenisi
+        if (mine === seq.current) {
+          setAlarms(list);
+          setLoaded(true);
+        } else again = true;                            // bayat cevap: hemen yenisi
       } catch (e) {
         if (!alive) return;
         fails += 1;
@@ -250,7 +269,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
       for (const a of fresh.slice(0, MAX_NOTIFICATIONS)) {
         try {
           const n = new Notification(ALARM_LABELS[a.type], {
-            body: `${a.camera} · ${new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}`,
+            body: `${a.camera}${alarmArea(a) ? ` · Alan: ${alarmArea(a)}` : ""} · ${new Date(a.firedAt * 1000).toLocaleTimeString("tr-TR")}`,
             tag: a.id, requireInteraction: true,
           });
           n.onclick = () => { window.focus(); open(a.id); n.close(); };

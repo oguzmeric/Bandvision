@@ -199,6 +199,7 @@ type AreaBody = { name: string; points: Array<[number, number]>; rules: string[]
 const lastAreas = (puts: Array<{ body: { safety?: Record<string, unknown> } }>) =>
   puts.at(-1)?.body.safety?.areas as AreaBody[] | undefined;
 const AREA_HELP = "Boş bırakırsanız bütün görüntü izlenir.";
+const DUP = "Aynı adda başka alan var; alarmda hangisi olduğu ayırt edilemez.";
 
 test("Analiz alanları (sahte API): Ayarla'da çokgen düzenleyici; alan ekle/adlandır/kural kaldır profil isteğine gider; en çok 16 alan", async ({ page }) => {
   const { group, puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
@@ -255,9 +256,14 @@ test("Analiz alanları (sahte API): Ayarla'da çokgen düzenleyici; alan ekle/ad
   await expect(name).toHaveValue("Masa 3");
 
   // 16 alana kadar: yeni adlar ilk boş numara ("Alan 1" boşaldı), 16'da "Alan ekle" devre dışı
+  await expect(areas.getByText("En çok 16 alan eklenebilir.")).toHaveCount(0);
   for (let i = 0; i < 15; i++) await add.click();
   await expect(rows).toHaveCount(16);
   await expect(add).toBeDisabled();
+  // neden yazılı (düğmenin ipucu ve altında, düğmenin açıklaması olarak)
+  await expect(add).toHaveAttribute("title", "En çok 16 alan eklenebilir.");
+  await expect(add).toHaveAccessibleDescription("En çok 16 alan eklenebilir.");
+  await expect(areas.getByText("En çok 16 alan eklenebilir.")).toBeVisible();
   await expect(editor.locator("[data-zone]")).toHaveCount(16);
   await expect.poll(() => lastAreas(puts)?.length).toBe(16);
   const names = lastAreas(puts)!.map((a) => a.name);
@@ -269,6 +275,17 @@ test("Analiz alanları (sahte API): Ayarla'da çokgen düzenleyici; alan ekle/ad
   await expect(rows).toHaveCount(15);
   await expect(add).toBeEnabled();
   await expect(rows.nth(1).getByRole("textbox", { name: "Alan adı" })).toHaveValue("Alan 2");
+  await expect(areas.getByText("En çok 16 alan eklenebilir.")).toHaveCount(0);
+  // aynı ad verilebilir ama iki satırda da uyarı çıkar (alarm yalnız adı taşır); ad değişince uyarı kalkar
+  await expect(areas.getByText(DUP)).toHaveCount(0);
+  await rows.nth(1).getByRole("textbox", { name: "Alan adı" }).fill("Masa 3 ");
+  await expect(rows.nth(0)).toContainText(DUP);
+  await expect(rows.nth(1)).toContainText(DUP);
+  await expect(areas.getByText(DUP)).toHaveCount(2);
+  await expect.poll(() => lastAreas(puts)?.[1].name).toBe("Masa 3");
+  await rows.nth(1).getByRole("textbox", { name: "Alan adı" }).fill("Alan 2");
+  await expect(areas.getByText(DUP)).toHaveCount(0);
+  await expect.poll(() => lastAreas(puts)?.[1].name).toBe("Alan 2");
 
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
@@ -300,6 +317,18 @@ test("Analiz alanları (sahte API): kaydedilmiş alanlı profil listede açılı
   await expect(editor.locator("[data-zone]")).toHaveCount(2);
   await expect(editor.locator('[data-zone="1"]')).toContainText("Masa 3");
   await expect(editor.locator("[data-handle=vertex]")).toHaveCount(9);
+  // "Kasa önü"nün ilk köşesini (0,1; 0,1) görüntü üstünde (0,2; 0,15)'e sürükle: istekte o alanın köşesi değişir
+  const box = (await editor.boundingBox())!;
+  await page.mouse.move(box.x + 0.1 * box.width, box.y + 0.1 * box.height);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 0.2 * box.width, box.y + 0.15 * box.height, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(() => lastAreas(puts)?.[0].points[0][0] ?? 0).toBeCloseTo(0.2, 1);
+  const moved = lastAreas(puts)!;
+  expect(moved[0].points[0][1]).toBeCloseTo(0.15, 1);
+  expect(moved[0].points.slice(1)).toEqual(saved[0].points.slice(1));      // öteki köşeler yerinde
+  expect(moved[1]).toEqual(saved[1]);                                      // öteki alan değişmez
+  expect(moved[0]).toMatchObject({ name: "Kasa önü", rules: ["handsUp"] });
 
   // kamerada telefon kuralı açılınca alanda da seçilebilir; yeni alan açık üç kuralla gelir
   await group.getByRole("checkbox", { name: "Telefon kullanımı" }).check();
@@ -326,6 +355,38 @@ test("Analiz alanları (sahte API): kaydedilmiş alanlı profil listede açılı
   await page.getByRole("button", { name: "Kaydet", exact: true }).click();
   await expect.poll(() => puts.filter((p) => p.url.includes("save=true")).length).toBe(1);
   expect(puts.find((p) => p.url.includes("save=true"))!.body.safety).not.toHaveProperty("areas");
+});
+
+test("Analiz alanları (sahte API): reddedilen düzenlemenin hatası yoklamada kaybolmaz; sonraki başarılı düzenleme ya da Kapat kaldırır", async ({ page }) => {
+  const { puts } = await openSafetySettings(page, { handsUp: { enabled: true, seconds: 3 }, lying: { enabled: true, seconds: 10 },
+                                                   phone: { enabled: false, seconds: 15 }, sendImage: false });
+  const detail = "Güvenlik ayarı geçersiz: 1. alan adı 1–40 karakter olmalı.";
+  let fail = true;
+  let sessionPolls = 0;
+  page.on("request", (r) => { if (/\/api\/live\/sessions$/.test(r.url()) && r.method() === "GET") sessionPolls += 1; });
+  await page.route("**/api/live/sessions/abc123/profile*", (route) =>
+    fail ? route.fulfill({ status: 422, json: { detail } }) : route.fallback());
+  const areas = page.getByRole("group", { name: "Analiz alanları" });
+  const error = page.getByTestId("edit-error");
+  await areas.getByRole("button", { name: "Alan ekle" }).click();
+  await expect(error).toContainText(detail);
+  await expect(error).toHaveAttribute("role", "alert");
+  // oturum listesi (1 sn'de bir) yoklanırken hata durur
+  const n = sessionPolls;
+  await expect.poll(() => sessionPolls, { timeout: 10_000 }).toBeGreaterThan(n + 2);
+  await expect(error).toContainText(detail);
+  // sonraki başarılı gönderim hatayı kaldırır
+  fail = false;
+  const sent = puts.length;
+  await areas.getByTestId("safety-area").first().getByRole("textbox", { name: "Alan adı" }).fill("Masa 3");
+  await expect.poll(() => puts.length).toBeGreaterThan(sent);
+  await expect(error).toHaveCount(0);
+  // yeniden reddedilir; Kapat ile kapatılır
+  fail = true;
+  await areas.getByTestId("safety-area").first().getByRole("textbox", { name: "Alan adı" }).fill("Masa 4");
+  await expect(error).toContainText(detail);
+  await error.getByRole("button", { name: "Hatayı kapat" }).click();
+  await expect(error).toHaveCount(0);
 });
 
 interface FakeAlarm {
@@ -392,7 +453,7 @@ test("alarm çubuğu (sahte API): akış kopunca uyarı satırı, alarm sayacı,
   await expect(warning.getByRole("link", { name: "Giriş yap" })).toHaveAttribute("href", "/login?next=%2Fnotifications");
   expect(warnedBeforePoll.slice(0, 3)).toEqual([false, false, false]);
   expect(polls).toBeGreaterThanOrEqual(3);
-  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("status", { name: "Alarm", exact: true })).toHaveCount(0);
 
   // analiz sunucusu yok (502): ileti değişir
   feed = "502";
@@ -402,7 +463,7 @@ test("alarm çubuğu (sahte API): akış kopunca uyarı satırı, alarm sayacı,
   // akış düzelir: uyarı kalkar; ince çubukta sayaç (5 kritik alarm; uyarı yok) ve son alarm
   feed = "ok";
   await nextPoll();
-  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
+  const banner = page.getByRole("status", { name: "Alarm", exact: true });
   await expect(banner).toBeVisible();
   await expect(warning).toHaveCount(0);
   // yeni alarmlar alarm penceresini açar; küçültülünce çubuk kalır
@@ -487,7 +548,7 @@ test("izlenmeyen güvenlik kamerası (sahte API): 60 sn sonra şeritte uyarı; �
   await expect(page.getByText("Güvenlik kamerası izlenmiyor: Tezgah kamerası")).toBeVisible();
   await expect(page.getByTestId("alarm-banner")).toContainText("Kamera bağlantısı yok");
   // uyarı sarı (alarm kırmızısı değil) ve alarm şeridi rolü yok
-  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("status", { name: "Alarm", exact: true })).toHaveCount(0);
   await expect(warnings.first()).toHaveClass(/bg-warn-50/);
 
   // şerit yapışkan: kısa pencerede sayfanın en altına inilince de görünür
@@ -516,7 +577,7 @@ test("alarm şeridi yapışkan: canlı sayfada aşağı kaydırınca alarm gör�
     id: "z1", sessionId: "abc123", camera: "Tezgah kamerası", type: "hands_up", startedAt: now - 3, firedAt: now,
     endedAt: null, acked: false, notify: "disabled", image: false }] }));
   await page.goto("/live?s=abc123");
-  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
+  const banner = page.getByRole("status", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Eller yukarı — Tezgah kamerası");
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();                 // pencere küçültülür, şerit kalır
   await expect(modalOf(page)).toHaveCount(0);
@@ -667,7 +728,7 @@ test("alarm penceresi (sahte API): yeni alarmda açılır, odak içinde; Esc/Kü
   // Esc = Küçült (asla Gördüm değil): pencere kapanır, çubuk kalır, onay isteği yok
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
-  const banner = page.getByRole("alert", { name: "Alarm", exact: true });
+  const banner = page.getByRole("status", { name: "Alarm", exact: true });
   await expect(banner).toContainText("Eller yukarı — Tezgah kamerası");
   expect(calls.acks).toEqual([]);
   // aynı alarmlar sonraki yoklamalarda pencereyi yeniden açmaz (bu sekmede gösterildi; sayfa yenilense de)
@@ -858,7 +919,7 @@ test("alarm penceresi (sahte API): kayıt cihazı kanalındaki alarmda \"Kayıt 
   await expect.poll(() => new URL(page.url()).pathname + new URL(page.url()).search).toBe(`/archive?source=nvr&channel=kanal%203&t=${t}`);
   await expect(page.getByRole("heading", { name: "Kayıttan izleme" })).toBeVisible();
   await expect(modal).toHaveCount(0);
-  await expect(page.getByRole("alert", { name: "Alarm", exact: true })).toBeVisible();
+  await expect(page.getByRole("status", { name: "Alarm", exact: true })).toBeVisible();
 });
 
 test("alarm penceresi açık başka bir pencerenin (Canlı sayımı başlat) üstünde açılır, tıklanır; Esc onaylamaz, alttakini kapatmaz", async ({ page }) => {

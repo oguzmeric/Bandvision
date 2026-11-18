@@ -3,11 +3,8 @@
 // düşmesi. Saf; `node --test` ile sınanır. Sözleşme: contracts/product-profile.schema.json `safety.areas` (en çok 16 alan;
 // ad 1–40 karakter, kırpılmış; 3–12 köşe, 0–1; kurallar `handsUp`/`lying`/`phone`ın boş olmayan alt kümesi; boşsa yazılmaz).
 
-import { MAX_ZONE_POINTS, MIN_ZONE_POINTS } from "./fireAlarms.mjs";
-
 export const MAX_AREAS = 16;
 export const AREA_NAME_MAX = 40;
-export { MIN_ZONE_POINTS as MIN_AREA_POINTS, MAX_ZONE_POINTS as MAX_AREA_POINTS };
 /** Alanda seçilebilen kurallar, sırasıyla; adları Ayarla panelindeki kural adlarıyla aynı */
 export const AREA_RULES = ["handsUp", "lying", "phone"];
 export const AREA_RULE_LABELS = { handsUp: "Eller yukarı", lying: "Yerde yatan kişi", phone: "Telefon kullanımı" };
@@ -103,6 +100,21 @@ export function withAreas(safety, areas) {
   const rest = { ...safety };
   delete rest.areas;
   return areas.length ? { ...rest, areas } : rest;
+}
+
+/** Adı (kırpılmış) başka bir alanınkiyle aynı olan alanların sırası: alarm yalnız adı taşıdığından hangisi olduğu
+ * ayırt edilemez (izin verilir, panel uyarır) */
+export function duplicateAreaNames(areas) {
+  const count = new Map();
+  for (const a of areas) count.set(a.name.trim(), (count.get(a.name.trim()) ?? 0) + 1);
+  return new Set(areas.flatMap((a, i) => (count.get(a.name.trim()) > 1 ? [i] : [])));
+}
+
+/** "+ Alan ekle" neden kapalı (düğmenin yanında yazılır); eklenebiliyorsa null */
+export function addAreaBlocked(areas, rules) {
+  if (areas.length >= MAX_AREAS) return `En çok ${MAX_AREAS} alan eklenebilir.`;
+  if (!AREA_RULES.some((k) => rules.includes(k))) return "Önce kamerada bir kuralı açın.";
+  return null;
 }
 
 /** Alanın kamerada açık bir kuralı var mı (yoksa alan bir şey izlemez) */

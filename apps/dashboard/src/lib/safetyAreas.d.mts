@@ -2,8 +2,6 @@ import type { SafetyArea, SafetyConfig, SafetyRuleKey } from "./live";
 
 export const MAX_AREAS: number;
 export const AREA_NAME_MAX: number;
-export const MIN_AREA_POINTS: number;
-export const MAX_AREA_POINTS: number;
 export const AREA_RULES: SafetyRuleKey[];
 export const AREA_RULE_LABELS: Record<SafetyRuleKey, string>;
 export const AREAS_HELP: string;
@@ -18,4 +16,6 @@ export function renameArea(areas: SafetyArea[], i: number, raw: string): SafetyA
 export function toggleAreaRule(areas: SafetyArea[], i: number, rule: SafetyRuleKey, on: boolean): SafetyArea[];
 export function withAreaPoints(areas: SafetyArea[], zones: Array<Array<[number, number]>>): SafetyArea[];
 export function withAreas<T extends { areas?: SafetyArea[] }>(safety: T, areas: SafetyArea[]): T;
+export function duplicateAreaNames(areas: SafetyArea[]): Set<number>;
+export function addAreaBlocked(areas: SafetyArea[], rules: SafetyRuleKey[]): string | null;
 export function areaWatches(area: SafetyArea, safety: Partial<SafetyConfig> | undefined | null): boolean;

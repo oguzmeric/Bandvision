@@ -62,7 +62,8 @@ export default function AlarmBanner() {
         </p>
       ))}
       {last && (
-        <div role="alert" aria-label="Alarm" className="grid gap-1">
+        // kibar bölge: yeni uyarıyı köşe kartının bölgesi zaten hemen okur (iki kez duyurulmasın); Gördüm hatası acil
+        <div role="status" aria-label="Alarm" className="grid gap-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[2px] border border-pl-line bg-pl-side px-3 py-1 text-[13px]">
             {criticalCount > 0 && (
               <span data-testid="alarm-count-critical" className="inline-flex items-center gap-1.5 font-bold text-nok-ink">
@@ -81,7 +82,7 @@ export default function AlarmBanner() {
               Alarmları göster
             </button>
           </div>
-          {ackError && <p className="px-1 text-[13px] font-medium text-nok-ink">Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.</p>}
+          {ackError && <p role="alert" className="px-1 text-[13px] font-medium text-nok-ink">Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.</p>}
         </div>
       )}
     </div>
