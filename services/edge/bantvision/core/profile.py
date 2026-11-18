@@ -73,36 +73,41 @@ def _unit(v: Any) -> bool:
     return not isinstance(v, bool) and isinstance(v, int | float) and 0.0 <= v <= 1.0
 
 
+class AreaError(ValueError):
+    """Aykırı analiz alanı (`safety.areas`); iletisi Türkçe tümcedir (canlı API 422, kayıtlı profil okunamadı)."""
+
+
 @dataclass
 class SafetyArea:
-    """Güvenlik analiz alanı (sözleşme `safety.areas` öğesi; algoritma §4.11): ad (kırpılmış, 1–40 karakter), 3–12 köşe
-    (normalize 0–1) ve bu alanda açık kurallar (`SAFETY_RULES` alt kümesi, boş değil, tekrarsız)."""
+    """Güvenlik analiz alanı (sözleşme `safety.areas` öğesi; algoritma §4.11): ad (en çok 40 karakter, kırpılır, boş
+    olamaz), 3–12 köşe (normalize 0–1) ve bu alanda açık kurallar (`SAFETY_RULES` alt kümesi, boş değil, tekrarsız)."""
     name: str
     points: list[tuple[float, float]]
     rules: list[str]
 
     @classmethod
     def from_dict(cls, d: Any) -> SafetyArea:
-        """Sözleşme biçimindeki alan; aykırısı Türkçe iletili `ValueError` (canlı API bunu 422 yapar)."""
+        """Sözleşme biçimindeki alan; aykırısı `AreaError`. Ad sınırı şemadaki gibi ham metne uygulanır (kırpmadan
+        önce en çok 40 karakter), kırpılmış ad boş olamaz."""
         if not isinstance(d, dict):
-            raise ValueError("alan bir nesne olmalı.")  # noqa: TRY004 — tüm aykırılıklar tek tür (API 422)
+            raise AreaError("alan bir nesne olmalı.")
         extra = set(d) - _AREA_KEYS
         if extra:
-            raise ValueError(f"alanda bilinmeyen ayar: {', '.join(sorted(map(str, extra)))}.")
+            raise AreaError(f"alanda bilinmeyen ayar var: {', '.join(sorted(map(str, extra)))}.")
         name = d.get("name")
-        if not isinstance(name, str) or not 1 <= len(name.strip()) <= AREA_NAME_MAX:
-            raise ValueError(f"alan adı 1–{AREA_NAME_MAX} karakter olmalı.")
+        if not isinstance(name, str) or len(name) > AREA_NAME_MAX or not name.strip():
+            raise AreaError(f"alan adı 1–{AREA_NAME_MAX} karakter olmalı.")
         lo, hi = AREA_POINTS
         pts = d.get("points")
         if not isinstance(pts, list) or not lo <= len(pts) <= hi:
-            raise ValueError(f"alan {lo}–{hi} köşeli bir çokgen olmalı.")
+            raise AreaError(f"alan {lo}–{hi} köşeli bir çokgen olmalı.")
         if not all(isinstance(p, list | tuple) and len(p) == 2 and _unit(p[0]) and _unit(p[1]) for p in pts):
-            raise ValueError("alan köşeleri 0–1 arasında [x, y] olmalı.")
+            raise AreaError("alan köşeleri 0–1 arasında [x, y] olmalı.")
         rules = d.get("rules")
         if (not isinstance(rules, list) or not rules or not all(isinstance(r, str) and r in SAFETY_RULES for r in rules)
                 or len(set(rules)) != len(rules)):
-            raise ValueError("alan kuralları eller yukarı, yerde yatma ve telefon kullanımından en az biri olmalı "
-                             "(handsUp, lying, phone; tekrarsız).")
+            raise AreaError("alan kuralları eller yukarı, yerde yatma ve telefon kullanımından en az biri olmalı ve "
+                            "tekrar etmemeli.")
         return cls(name.strip(), [(float(x), float(y)) for x, y in pts], list(rules))
 
     def to_dict(self) -> dict[str, Any]:
@@ -110,15 +115,15 @@ class SafetyArea:
 
 
 def parse_areas(raw: Any) -> list[SafetyArea]:
-    """`safety.areas` listesi (en çok `MAX_SAFETY_AREAS`); aykırısı "<n>. alan: …" iletili `ValueError`."""
+    """`safety.areas` listesi (en çok `MAX_SAFETY_AREAS`); aykırısı "<n>. alan …" iletili `AreaError`."""
     if not isinstance(raw, list) or len(raw) > MAX_SAFETY_AREAS:
-        raise ValueError(f"analiz alanları en çok {MAX_SAFETY_AREAS} alandan oluşan bir liste olmalı.")
+        raise AreaError(f"analiz alanları en çok {MAX_SAFETY_AREAS} alandan oluşan bir liste olmalı.")
     out: list[SafetyArea] = []
     for i, a in enumerate(raw, 1):
         try:
             out.append(SafetyArea.from_dict(a))
-        except ValueError as e:
-            raise ValueError(f"{i}. {e}") from None
+        except AreaError as e:
+            raise AreaError(f"{i}. {e}") from None
     return out
 
 

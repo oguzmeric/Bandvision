@@ -28,7 +28,7 @@ from ..core.detector import USER_CLASSES
 from ..core.fire_model import FireModelMissing
 from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
-from ..core.profile import parse_areas
+from ..core.profile import AreaError, parse_areas
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import open_gate
 from . import recorders as rec
@@ -707,13 +707,20 @@ class LiveManager:
         olmazsa yeniden dener (kayıt cihazı bilgisayardan geç açılabilir; açılış beklemez); `safety_only` çözülen profil
         bir alarm yöntemi (güvenlik/yangın) değilse `NotSafetyProfile`. Kayıttaki profil kullanılırsa adı da korunur (şablonun adı yazılmaz)."""
         src = self.source_or_404(source_id)
+        # Diskte elle bozulmuş analiz alanı (`AreaError`): şablonda 500 değil Türkçe 422 (şablon PUT /profiles ile
+        # düzeltilir; geri yüklemede bu kamera günlüğe yazılır, diğerleri açılır). Kamera ayarında ise kamera şablonla
+        # açılır ve uyarı yazılır: kişi izlenmeye devam eder, Ayarla'dan kaydetmek (save=true) bozuk kaydın üstüne yazar.
         try:
             template = self.store.profile(profile_id)
-            profile = self.store.camera_profile(source_id, channel_id, profile_id) or template  # kamera ayarı ya da şablon
-        except (KeyError, TypeError, ValueError, AttributeError) as e:
-            # diskteki profil bozuk (ör. elle düzenlenmiş aykırı analiz alanı): 500 değil, Türkçe neden; geri yüklemede
-            # bu kamera günlüğe yazılır, diğerleri açılır
-            raise HTTPException(422, f"Kayıtlı profil okunamadı: {e}") from e
+        except AreaError as e:
+            raise HTTPException(422, f"Profil okunamadı: {e} Profili panelde düzeltip yeniden kaydedin.") from e
+        try:
+            own = self.store.camera_profile(source_id, channel_id, profile_id)
+        except AreaError as e:
+            _LOG.warning("Kameranın kayıtlı ayarı okunamadı (%s): %s Şablon profille açılıyor; Ayarla'dan alanları "
+                         "yeniden kaydedin.", source_id if channel_id is None else f"{source_id}/{channel_id}", e)
+            own = None
+        profile = own or template                            # kamera ayarı ya da şablon
         from_snapshot = (fallback is not None and fallback.countMode in ALARM_MODES
                          and (profile is None or profile.countMode != fallback.countMode))
         if from_snapshot:
@@ -1885,7 +1892,7 @@ def _check_safety(sf: Any) -> None:
     if "areas" in sf:
         try:
             parse_areas(sf["areas"])
-        except ValueError as e:
+        except AreaError as e:
             raise bad(str(e)) from None
 
 

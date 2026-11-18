@@ -71,10 +71,15 @@ def test_empty_areas_not_written_and_missing_reads_empty(validator: Draft202012V
     assert [e.message for e in validator.iter_errors(_jeweler_dict([]))] == []
 
 
-def test_area_name_is_trimmed() -> None:
-    p = Profile.from_dict(_jeweler_dict([_area("  Kasa önü  ")]))
-    assert p.safety.areas[0].name == "Kasa önü"
-    assert Profile.from_dict(_jeweler_dict([_area(" " + "a" * 40 + " ")])).safety.areas[0].name == "a" * 40
+def test_area_name_is_trimmed_and_length_checked_like_schema(validator: Draft202012Validator) -> None:
+    """Şemadaki gibi: ham ad en çok 40 karakter (kırpmadan önce), kırpılmış ad boş olamaz; saklanan ad kırpılmıştır."""
+    p = Profile.from_dict(_jeweler_dict([_area(" Masa 3 ")]))
+    assert p.safety.areas[0].name == "Masa 3"
+    assert Profile.from_dict(_jeweler_dict([_area("a" * 40)])).safety.areas[0].name == "a" * 40
+    raw = _jeweler_dict([_area(" " + "a" * 39 + " ")])                  # ham 41, kırpılmış 39: ikisi de reddeder
+    with pytest.raises(ValueError, match="alan adı 1–40 karakter"):
+        Profile.from_dict(raw)
+    assert list(validator.iter_errors(raw))
 
 
 BAD_AREAS: list[tuple[str, Any]] = [
@@ -86,6 +91,7 @@ BAD_AREAS: list[tuple[str, Any]] = [
     ("boş ad", [_area("")]),
     ("boşluk ad", [_area("   ")]),
     ("41 karakter ad", [_area("a" * 41)]),
+    ("kırpınca 40 ama ham 42 ad", [_area(" " + "a" * 40 + " ")]),
     ("boş rules", [_area(rules=[])]),
     ("bilinmeyen kural", [_area(rules=["fire"])]),
     ("çekirdek adı kural", [_area(rules=["hands_up"])]),
@@ -133,8 +139,9 @@ def test_live_api_rejects_invalid_areas_with_422(tmp_path: pathlib.Path) -> None
 
 def test_stored_profile_with_bad_areas_gives_turkish_error_not_crash(
         tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Diskte elle bozulmuş alanlı profil: oturum açma 500 değil Türkçe 422 verir, profil PUT ile düzeltilebilir;
-    yeniden başlatmada izlenen kameranın bozuk anlık görüntüsü "kaydı bozuk" diye günlüğe yazılır, sunucu açılır."""
+    """Diskte elle bozulmuş alanlı şablon profil: oturum açma 500 değil, nasıl düzeltileceğini söyleyen Türkçe 422;
+    profil PUT ile düzeltilebilir. Yeniden başlatmada izlenen kameranın bozuk anlık görüntüsü "kaydı bozuk" diye
+    günlüğe yazılır, sunucu açılır."""
     pytest.importorskip("fastapi")
     import logging
 
@@ -152,7 +159,10 @@ def test_stored_profile_with_bad_areas_gives_turkish_error_not_crash(
         bad = {**good, "safety": {**good["safety"], "areas": [_area(rules=[])]}}
         f.write_text(json.dumps([bad if p["id"] == prof_id else p for p in items]), encoding="utf-8")
         r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
-        assert r.status_code == 422 and r.json()["detail"].startswith("Kayıtlı profil okunamadı: 1. alan kuralları")
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"] == ("Profil okunamadı: 1. alan kuralları eller yukarı, yerde yatma ve telefon "
+                                      "kullanımından en az biri olmalı ve tekrar etmemeli. Profili panelde düzeltip "
+                                      "yeniden kaydedin.")
         r = c.put(f"/api/v1/live/profiles/{prof_id}", json=good)      # düzeltilebilir (404/500 değil)
         assert r.status_code == 200, r.text
         assert c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id}).status_code < 300
@@ -163,6 +173,41 @@ def test_stored_profile_with_bad_areas_gives_turkish_error_not_crash(
     with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
         assert len(c.get("/api/v1/live/sessions").json()) == 1      # sağlam kamera açıldı
     assert "kaydı bozuk" in caplog.text and "Bozuk alan" in caplog.text
+
+
+def test_bad_camera_setting_opens_with_template_and_is_fixed_by_saving(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Bu kameraya kaydedilmiş ayar bozuksa kamera şablonla açılır (izleme kesilmez) ve uyarı günlüğe yazılır;
+    panelin Ayarla → Kaydet yolu (`PUT sessions/{id}/profile?save=true`) bozuk kaydın üstüne yazar."""
+    pytest.importorskip("fastapi")
+    import logging
+
+    from conftest import local_client
+    from test_live import _app_with_fakes, _safety_session_with_fake
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with local_client(_app_with_fakes(tmp_path)) as c:
+        sess, sid = _safety_session_with_fake(c, monkeypatch)
+        src_id, prof_id = sess.source_id, sess.profile_id
+        prof = c.get(f"/api/v1/live/sessions/{sid}").json()["profile"]
+        mine = {**prof, "safety": {**prof["safety"], "areas": [_area()]}}
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile?save=true", json=mine).status_code == 200
+        c.delete(f"/api/v1/live/sessions/{sid}")
+        f = tmp_path / "live" / "camera_profiles.json"
+        items = json.loads(f.read_text(encoding="utf-8"))
+        (key,) = items
+        items[key]["safety"]["areas"] = [_area(points=SQUARE[:2])]
+        f.write_text(json.dumps(items), encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
+        assert r.status_code == 201, r.text
+        assert "areas" not in r.json()["profile"]["safety"]                # şablon: bütün kare
+        assert "Kameranın kayıtlı ayarı okunamadı" in caplog.text and "yeniden kaydedin" in caplog.text
+        sid = r.json()["id"]
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile?save=true", json=mine).status_code == 200
+        c.delete(f"/api/v1/live/sessions/{sid}")
+        r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
+        assert r.status_code == 201 and r.json()["profile"]["safety"]["areas"] == [_area()]
 
 
 # ---------------------------------------------------------------- area_rules
@@ -235,6 +280,28 @@ def test_area_rules_limit_alarms_to_allowed_rules() -> None:
     assert [(a.kind, a.area) for a in fired] == [("phone", "Masa 3")]
     assert not any(a[1] == "hands_up" for r in res for a in r.active)
     assert all(len(r.tracks) == 1 for r in res if r.tracks) and any(r.poses for r in res)
+
+
+def test_area_without_phone_rule_never_searches_phones() -> None:
+    """Kamerada telefon açık ama kişinin alanı yalnız eller yukarıya izin veriyor: kırpıntıda telefon hiç aranmaz."""
+    p = _profile([SafetyArea("Kasa", SQUARE, ["handsUp"])])
+    an, det, _pose = _analyzer()
+    fired = [a for r in _feed(an, p, 0, 130) for a in r.fired]
+    assert det.phone_calls == 0
+    assert [(a.kind, a.area) for a in fired] == [("hands_up", "Kasa")]
+
+
+def test_person_walking_out_of_area_ends_episode_without_alarm() -> None:
+    """Kişi süre dolmadan alandan çıkar: iz sonuçtan düşer, bölüm biter, sonradan alarm doğmaz."""
+    p = _profile([SafetyArea("Kasa", SQUARE, ["handsUp"])], phone=False)
+    an, det, _pose = _analyzer(phones=[])
+    inside = _feed(an, p, 0, 20)                                     # 2 sn eller yukarı (eşik 3 sn)
+    assert any(a[1] == "hands_up" for a in inside[-1].active)
+    det.boxes = [(20, 20, 100, 100)]                                # merkez (0,09, 0,125): alanın dışında
+    out = _feed(an, p, 20, 80)
+    assert not any(r.fired for r in inside + out)
+    assert any(k == "hands_up" for r in out for _t, k, _f in r.ended)
+    assert not out[-1].active and not out[-1].tracks and not out[-1].poses
 
 
 def test_alarm_area_is_first_area_with_that_rule() -> None:
@@ -358,6 +425,29 @@ def test_draw_safety_draws_area_blue_and_hides_outside_person() -> None:
     b, g, red = inside[..., 0].astype(int), inside[..., 1].astype(int), inside[..., 2].astype(int)
     assert ((b > 150) & (g > 150) & (red < 80)).any()              # alandaki kişinin iskeleti (CYAN) çizilir
     assert CYAN == (255, 255, 0)
+
+
+def test_clip_frames_keep_area_outlines_when_nobody_is_inside() -> None:
+    """Olay kaydı: alanı olan profilde "kişi yok" sonucu da kareye eşlenir; alanlar (sayı 0) çizilir, önceki karenin
+    iskeleti gelmez. Alansız profilde eski davranış: işaretsiz kare."""
+    from bantvision.live import clips
+    from bantvision.overlay import AREA
+
+    p = _profile([SafetyArea("Masa 3", SQUARE, ["phone"])])
+    busy = clips.ClipOverlay.from_result(SafetyResult(tracks=[_track(1, BOX_IN)], poses={1: _kp(BOX_IN)}),
+                                         (360, 640, 3), p)
+    nobody = clips.ClipOverlay.from_result(SafetyResult(), (360, 640, 3), p)
+    assert not nobody.empty
+    frames = [(0.0, 0.0, b"", None), (0.5, 0.5, b"", None)]
+    matched = clips._match(frames, [(0.0, busy), (0.5, nobody)])
+    assert matched[0][3] is busy and matched[1][3] is nobody
+    img = clips.annotate(np.zeros((360, 640, 3), np.uint8), matched[1][3])
+    edge_x = int(0.7 * 640)
+    assert AREA in {tuple(int(v) for v in img[250, x]) for x in range(edge_x - 2, edge_x + 3)}
+    inside = img[int(0.45 * 360):int(0.65 * 360), int(0.42 * 640):int(0.58 * 640)]
+    assert not inside.any()                                         # iskelet ya da kişi kutusu yok
+    plain = clips.ClipOverlay.from_result(SafetyResult(), (360, 640, 3), _profile([]))
+    assert plain.empty and clips._match(frames[1:], [(0.5, plain)])[0][3] is None
 
 
 def test_area_with_active_alarm_drawn_red() -> None:

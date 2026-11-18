@@ -97,10 +97,11 @@ class ClipOverlay:
 
     @property
     def empty(self) -> bool:
-        """Çizilecek bir şey yok (güvenlikte gözlenen iz ve alarmlı kutu yok; yangında kutu yok)."""
+        """Çizilecek bir şey yok (güvenlikte gözlenen iz, alarmlı kutu ve analiz alanı yok; yangında kutu yok). Analiz
+        alanı olan profilde "kişi yok" sonucu da çizilir: alanlar (sayı 0) her karede kalır, eski iskelet gelmez."""
         if self.kind == "fire":
             return not self.fire_boxes
-        return not self.tracks and not self.boxes
+        return not self.tracks and not self.boxes and not self.profile.safety.areas
 
     def result(self, w: int, h: int) -> SafetyResult:
         """`w`×`h` kayıt karesine çizilecek `SafetyResult`: eklemler kaynak boyuttan bu boyuta ölçeklenir."""
@@ -341,7 +342,7 @@ def _match(frames: Sequence[Frame], overlays: Sequence[tuple[float, ClipOverlay]
         i = bisect_left(times, f[0])
         j = min((k for k in (i - 1, i) if 0 <= k < len(times)), key=lambda k: abs(times[k] - f[0]))
         ov = overlays[j][1] if abs(times[j] - f[0]) <= OVERLAY_MAX_AGE_S else None
-        if ov is not None and ov.empty:                 # en yakın sonuç "kişi yok": eski iskelet çizilmez
+        if ov is not None and ov.empty:                 # en yakın sonuç "kişi yok" (alansız): eski iskelet çizilmez
             ov = None
         out.append((f[0], f[1], f[2], ov))
     return tuple(out)
