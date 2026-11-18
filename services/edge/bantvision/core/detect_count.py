@@ -155,6 +155,11 @@ class DetectCounter:
         """Tanıyıcı gerçekten kurulduysa çalıştığı cihaz (`devices.Used`), kurulmadıysa None."""
         return getattr(self._detector, "used", None) if self._detector is not None else None
 
+    @property
+    def fell_back(self) -> str | None:
+        """Tanıyıcı çalışırken ekran kartından işlemciye düştüyse son nedeni (`devices.GuardedSession.fell_back`)."""
+        return getattr(self._detector, "fell_back", None) if self._detector is not None else None
+
     def reset(self) -> None:
         self.tracker.reset()
         if self.motion is not None:

@@ -80,6 +80,11 @@ class PoseEstimator:
         return self._session.used
 
     @property
+    def fell_back(self) -> str | None:
+        """Çalışırken ekran kartından işlemciye düştüyse son nedeni (bkz. `devices.GuardedSession.fell_back`)."""
+        return self._session.fell_back
+
+    @property
     def broken(self) -> str | None:
         """Oturum kalıcı olarak kullanılamıyorsa Türkçe hata iletisi (bkz. `devices.GuardedSession.broken`), yoksa None."""
         return self._session.broken

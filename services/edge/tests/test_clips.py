@@ -599,7 +599,8 @@ def test_overlay_keypoints_are_scaled_to_the_clip_frame(monkeypatch: pytest.Monk
                        SafetyResult(tracks=full.tracks, poses={1: kp}, active=full.active, boxes=full.boxes))
     assert np.array_equal(img, want)
     assert not np.array_equal(img[60, 160], raw[60, 160])        # omuz çizgisi y = 240/4 = 60
-    assert np.array_equal(img[120, 250:300], raw[120, 250:300])  # (x = 240 artık etiket kutusu kenarı) ölçeksiz omuz çizgisi y = 120, x = 192…448 olurdu
+    # ölçeksiz omuz çizgisi y = 120, x = 192…448 olurdu (x = 240 artık etiket kutusu kenarı): orada çizim yok
+    assert np.array_equal(img[120, 250:300], raw[120, 250:300])
 
 
 def test_test_alarm_clip_stays_raw(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
@@ -776,3 +777,35 @@ def test_empty_fire_result_clears_the_old_box() -> None:
     by_t = {round(f[0], 3): f[3] for f in jobs[0].frames}
     assert by_t[1.0] is flame and by_t[1.1] is flame
     assert by_t[1.3] is None and by_t[1.4] is None and by_t[1.6] is None            # alev söndü: eski kutu çizilmez
+
+
+def test_live_safety_session_stores_empty_results_for_clips() -> None:
+    """Canlı güvenlik oturumu kişi olmayan karenin sonucunu da ("kişi yok", boş işaret) karenin yakalama saatiyle ön
+    kayda bırakır: kişi çıktıktan sonraki karelere eski iskelet eşlenmez (session.py işleyicisi)."""
+    from fakes_safety import FakeDetector, FakePose, hands_up_kp
+    from test_live_fire import _inject
+
+    from bantvision.core import Profile
+    from bantvision.live.session import LiveSession
+
+    s = LiveSession("t", lambda: "yok.mp4", Profile.jeweler(), detector=FakeDetector([]), pose=FakePose(hands_up_kp()),
+                    clip_sink=lambda _j: None)
+    buf = s._clips
+    assert buf is not None
+    ovs: list[tuple[float, Any]] = []
+    publish = buf.publish_overlay
+    buf.publish_overlay = lambda data, t: (ovs.append((t, data)), publish(data, t))[-1]   # type: ignore[method-assign]
+    try:
+        for i in range(3):
+            seq = _inject(s, 100.0 + i * 0.2, np.full((240, 320, 3), 40, np.uint8))
+            s.jpeg(after=seq, timeout=5.0)
+            assert s._jpeg_seq > seq
+            deadline = time.monotonic() + 5.0
+            while len(ovs) < i + 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.12)                                     # önizleme ≤ 12/sn: sonraki kare de işlensin
+    finally:
+        s.stop()
+    assert len(ovs) == 3 and all(o.empty for _t, o in ovs)
+    assert [o for _t, o in list(buf._overlays)] == [o for _t, o in ovs]                   # boş sonuçlar saklandı
+    assert [t for t, _o in ovs] == sorted(t for t, _o in ovs)

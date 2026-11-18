@@ -707,26 +707,36 @@ class LiveManager:
         olmazsa yeniden dener (kayıt cihazı bilgisayardan geç açılabilir; açılış beklemez); `safety_only` çözülen profil
         bir alarm yöntemi (güvenlik/yangın) değilse `NotSafetyProfile`. Kayıttaki profil kullanılırsa adı da korunur (şablonun adı yazılmaz)."""
         src = self.source_or_404(source_id)
-        # Diskte elle bozulmuş analiz alanı (`AreaError`): şablonda 500 değil Türkçe 422 (şablon PUT /profiles ile
-        # düzeltilir; geri yüklemede bu kamera günlüğe yazılır, diğerleri açılır). Kamera ayarında ise kamera şablonla
-        # açılır ve uyarı yazılır: kişi izlenmeye devam eder, Ayarla'dan kaydetmek (save=true) bozuk kaydın üstüne yazar.
-        try:
-            template = self.store.profile(profile_id)
-        except AreaError as e:
-            raise HTTPException(422, f"Profil okunamadı: {e} Profili panelde düzeltip yeniden kaydedin.") from e
+        camera = source_id if channel_id is None else f"{source_id}/{channel_id}"
+        # Önce kameranın kendi ayarı, sonra şablon; bozuk kayıt (diskte elle bozulmuş analiz alanı ya da ayar) kendi
+        # başına oturumu engellemez. Kamera ayarı bozuksa kamera şablonla açılır ve uyarı yazılır: kişi izlenmeye devam
+        # eder, Ayarla'dan kaydetmek (save=true) bozuk kaydın üstüne yazar. Şablon bozuksa yalnız ona gerçekten
+        # gerekince (kamera ayarı ve kayıttaki profil yok) 500 değil Türkçe 422 (şablon PUT /profiles ile düzeltilir;
+        # geri yüklemede bu kamera günlüğe yazılır, diğerleri açılır); kamera ayarı sağlamsa onunla açılır.
         try:
             own = self.store.camera_profile(source_id, channel_id, profile_id)
         except AreaError as e:
             _LOG.warning("Kameranın kayıtlı ayarı okunamadı (%s): %s Şablon profille açılıyor; Ayarla'dan alanları "
-                         "yeniden kaydedin.", source_id if channel_id is None else f"{source_id}/{channel_id}", e)
+                         "yeniden kaydedin.", camera, e)
             own = None
+        template_error: Exception | None = None
+        try:
+            template = self.store.profile(profile_id)
+        except (AreaError, KeyError, TypeError, ValueError, AttributeError) as e:
+            template, template_error = None, e
         profile = own or template                            # kamera ayarı ya da şablon
         from_snapshot = (fallback is not None and fallback.countMode in ALARM_MODES
                          and (profile is None or profile.countMode != fallback.countMode))
         if from_snapshot:
             profile = fallback                               # kaydedilmeden o yönteme geçilmişti: çalışan profil (adıyla)
-        if profile is None or (template is None and fallback is None):
+        if profile is None and template_error is not None:
+            raise HTTPException(422, f"Profil okunamadı: {template_error} Profili panelde düzeltip yeniden "
+                                     f"kaydedin.") from template_error
+        if profile is None or (template is None and template_error is None and fallback is None):
             raise HTTPException(404, "Profil bulunamadı.")
+        if template_error is not None:
+            _LOG.warning("Şablon profil okunamadı (%s): %s Kamera kendi kayıtlı ayarıyla açılıyor; şablonu panelde "
+                         "düzeltip yeniden kaydedin.", camera, template_error)
         if safety_only and profile.countMode not in ALARM_MODES:
             raise NotSafetyProfile("profil güvenlik/yangın değil")
         if template is not None and not from_snapshot:
@@ -904,6 +914,12 @@ class LiveManager:
                     continue
                 try:
                     fallback = Profile.from_dict(r["profile"]) if isinstance(r.get("profile"), dict) else None
+                except AreaError as e:
+                    # Yalnız alanı bozuk: kamera bırakılmaz (güvenlik kamerası sessizce izlenmez olmasın), anlık
+                    # görüntü yok sayılır ve kamera kendi ayarı ya da şablonla açılır; izleme kaydı açılınca yenilenir.
+                    _LOG.warning("İzlenen güvenlik kamerasının kayıttaki profilinde analiz alanı bozuk (%s); kamera "
+                                 "kendi ayarı ya da şablon profille izlenmeye devam ediyor: %s", e, label)
+                    fallback = None
                 except (KeyError, TypeError, ValueError, AttributeError) as e:
                     _LOG.warning("İzlenen güvenlik kamerasının kaydı bozuk; listeden çıkarıldı: %s (%s: %s)",
                                  label, type(e).__name__, e)

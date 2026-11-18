@@ -354,6 +354,18 @@ def test_device_is_the_detectors_used(fakes: None, src: pathlib.Path, tmp_path: 
     assert s["device"] == {"kind": "gpu", "name": "NVIDIA Laptop GPU", "note": None}
 
 
+def test_device_note_tells_gpu_fallback_recovered_during_the_job(fakes: None, src: pathlib.Path,
+                                                                  tmp_path: pathlib.Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """İş sırasında kart hata verip işlemciye düştü, sonra karta geri dönüldü: canlı `used` notsuz olsa da iş sonucu
+    düşüşü söyler."""
+    monkeypatch.setattr(OnePerson, "fell_back", "DEVICE_REMOVED", raising=False)
+    s, _ = run(src, tmp_path)
+    assert s["device"] == {"kind": "gpu", "name": "NVIDIA Laptop GPU",
+                           "note": "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); iş sırasında bir süre "
+                                   "işlemcide çalıştı."}
+
+
 def test_marked_video_and_progress_json(fakes: None, src: pathlib.Path, tmp_path: pathlib.Path,
                                         capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "o"

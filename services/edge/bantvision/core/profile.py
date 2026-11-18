@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import uuid
 from dataclasses import asdict, dataclass, field
+from functools import cached_property
 from typing import Any
 
 
@@ -112,6 +113,15 @@ class SafetyArea:
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "points": [[x, y] for x, y in self.points], "rules": list(self.rules)}
+
+    @cached_property
+    def polygon(self) -> Any:
+        """Köşeler OpenCV çokgeni olarak (float32 N×1×2 numpy dizisi; `safety.in_area`). İlk kullanımda bir kez kurulur,
+        her karede değil. Köşeler sonradan değiştirilmez: profil düzenlemesi yeni alan nesnesi kurar."""
+        # profil numpy'siz de okunabilsin (sözleşme denetimi): numpy yalnız çizim/analizde
+        import numpy as np
+
+        return np.array(self.points, np.float32).reshape(-1, 1, 2)
 
 
 def parse_areas(raw: Any) -> list[SafetyArea]:

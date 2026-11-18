@@ -176,8 +176,13 @@ def _in_areas(profile: Profile, r: SafetyResult) -> dict[int, set[str] | None]:
 def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
     """Çizilecek etiketler (sıra: person, counting, alarm). Analiz alanı içinde gözlenen her kişi (alan yoksa herkes)
     bir etiket alır: alarm vermiş bölümü varsa alarm; yoksa kamerada açık ve alanında izinli kuralı sayan en dolu bölüm
-    varsa counting; yoksa person. Alarmlı iz gözlenmese de `r.boxes` kutusuyla çıkar."""
-    allowed = _in_areas(profile, r)
+    varsa counting (yazıdaki saniye eşiği geçmez: dilimli telefon kanıtı eşikten sonra da sayabilir); yoksa person.
+    Alarmlı iz gözlenmese de `r.boxes` kutusuyla çıkar."""
+    return _safety_tags(profile, r, _in_areas(profile, r))
+
+
+def _safety_tags(profile: Profile, r: SafetyResult, allowed: dict[int, set[str] | None]) -> list[SafetyTag]:
+    """`safety_tags`; `allowed` = `_in_areas(profile, r)` (çizim bir kez hesaplayıp iskeletlerle paylaşır)."""
     people = len(allowed) <= _MAX_NAMED_PEOPLE
     obs = {t.id: tuple(float(v) for v in t.box) for t in r.tracks if t.id in allowed}
     person: list[SafetyTag] = []
@@ -205,7 +210,8 @@ def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
                 best = (prog, kind, sec, rule.seconds)
         if best is not None:
             prog, kind, sec, thr = best
-            counting.append(SafetyTag(box, "counting", f"{_SAFETY_LABELS[kind]} {int(sec)} / {thr:g} sn", prog))
+            shown_s = min(int(sec), int(thr))
+            counting.append(SafetyTag(box, "counting", f"{_SAFETY_LABELS[kind]} {shown_s} / {thr:g} sn", prog))
         elif tid in obs:
             person.append(SafetyTag(box, "person", "Kişi" if people else "", None))
     return person + counting + alarm
@@ -223,7 +229,14 @@ class AreaTag:
     alarm: bool
 
 
-def _area_tags(profile: Profile, r: SafetyResult, tags: list[SafetyTag]) -> list[AreaTag]:
+def _area_tags(profile: Profile, r: SafetyResult, tags: list[SafetyTag] | None = None) -> list[AreaTag]:
+    """Çizilecek analiz alanları (profil sırasıyla; alan yoksa boş). Kişi sayısı: kutu merkezi alanda olan gözlenen
+    izler. Alarm: alarm etiketi (`safety_tags`; gözlenmeyen alarmlı izin son kutusu dahil) merkezi alanda. `tags`
+    verilmezse `safety_tags` ile hesaplanır."""
+    if not profile.safety.areas:
+        return []
+    if tags is None:
+        tags = safety_tags(profile, r)
     alarms = [t.box for t in tags if t.state == "alarm"]
     obs = [tuple(float(v) for v in t.box) for t in r.tracks]
     out: list[AreaTag] = []
@@ -233,24 +246,19 @@ def _area_tags(profile: Profile, r: SafetyResult, tags: list[SafetyTag]) -> list
     return out
 
 
-def area_tags(profile: Profile, r: SafetyResult) -> list[AreaTag]:
-    """Çizilecek analiz alanları (profil sırasıyla; alan yoksa boş). Kişi sayısı: kutu merkezi alanda olan gözlenen
-    izler. Alarm: alarm etiketi (`safety_tags`; gözlenmeyen alarmlı izin son kutusu dahil) merkezi alanda."""
-    return _area_tags(profile, r, safety_tags(profile, r))
-
-
 def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:
-    """Poz güvenlik: analiz alanları (`area_tags`: ince açık mavi çizgi, ilk köşede "<ad>: <kişi sayısı>"; içinde alarmı
-    süren kişi olan alan kalın kırmızı), iskeletler ve kişi üstü etiketler (`safety_tags`): ince gri "Kişi", süresi
-    dolan kural için sarı kutu ve ilerleme çubuğu, alarm veren iz için kalın kırmızı kutu ve süre. Alarmlı iz bu karede
-    gözlenmese de (tanıma bir kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir. Alan dışındaki kişiye etiket ve
-    iskelet çizilmez."""
+    """Poz güvenlik: analiz alanları (`_area_tags`: ince açık mavi çizgi, ilk köşede "<ad>: <kişi sayısı>"; içinde
+    alarmı süren kişi olan alan kalın kırmızı), iskeletler ve kişi üstü etiketler (`safety_tags`): ince gri "Kişi",
+    süresi dolan kural için sarı kutu ve etiketin hemen altında (etiket ile kutunun üst kenarı arasında) süre çubuğu,
+    alarm veren iz için kalın kırmızı kutu ve süre. Alarmlı iz bu karede gözlenmese de (tanıma bir kare kaçırdı) son
+    bilinen kutusu (`r.boxes`) çizilir. Alan dışındaki kişiye etiket ve iskelet çizilmez."""
     if r is None:
         return frame
     h, w = frame.shape[:2]
     s = max(0.6, w / 960)
     th = max(1, round(2 * s))
-    tags = safety_tags(profile, r)
+    shown = _in_areas(profile, r)                                # bir kez: etiketler ve iskeletler paylaşır
+    tags = _safety_tags(profile, r, shown)
     for at in _area_tags(profile, r, tags):
         pts = np.array([(int(x * w), int(y * h)) for x, y in at.points], np.int32)
         col, ink = (RED, WHITE) if at.alarm else (AREA, DARK)
@@ -263,7 +271,6 @@ def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> 
         ty = y0 - lh if y0 - lh >= 0 else y0                     # köşenin üstünde yer yoksa altında
         cv2.rectangle(frame, (x0, ty), (x0 + lw, ty + lh), col, -1)
         put_text(frame, at.text, (x0 + int(4 * s), ty + int(2 * s)), size, ink)
-    shown = _in_areas(profile, r)
     for t in r.tracks:
         kp = r.poses.get(t.id) if t.id in shown else None
         if kp is not None:
@@ -276,18 +283,23 @@ def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> 
         x1, y1, x2, y2 = (int(tag.box[0] * w), int(tag.box[1] * h), int(tag.box[2] * w), int(tag.box[3] * h))
         cv2.rectangle(frame, (x1, y1), (x2, y2), col, {"person": 1, "counting": th * 2, "alarm": th * 3}[tag.state],
                       cv2.LINE_AA)
+        # Süre çubuğu (yalnız counting) etiketin hemen altında: etiket, çubuk, kutunun üst kenarı. Üstte ikisine yer
+        # yoksa ikisi de kutunun içinde, üst kenarda (etiket, altında çubuk).
+        bh = max(3, int(5 * s)) if tag.progress is not None else 0
+        tw = lh = 0
+        size = int(18 * s)
         if tag.text:
-            size = int(18 * s)
             tw, tht = text_size(tag.text, size)
             lh = tht + int(8 * s)
-            ty = y1 - lh if y1 - lh >= 0 else y1                 # üstte yer yoksa kutunun içinde, üst kenarda
-            cv2.rectangle(frame, (x1, ty), (x1 + tw + int(8 * s), ty + lh), col, -1)
+        ty = y1 - bh - lh if y1 - bh - lh >= 0 else y1           # etiketin üst kenarı
+        if tag.text:
+            cv2.rectangle(frame, (x1, ty), (x1 + tw + int(8 * s), ty + lh - 1), col, -1)
             put_text(frame, tag.text, (x1 + int(4 * s), ty + int(2 * s)), size, ink)
         if tag.progress is not None:
-            bh = max(3, int(5 * s))
-            by2 = min(h - 1, y2)
-            cv2.rectangle(frame, (x1, by2 - bh), (x2, by2), DARK, -1)
-            cv2.rectangle(frame, (x1, by2 - bh), (x1 + int((x2 - x1) * tag.progress), by2), col, -1)
+            by1 = ty + lh                                        # etiketin hemen altı
+            by2 = min(h - 1, by1 + bh - 1)
+            cv2.rectangle(frame, (x1, by1), (x2, by2), DARK, -1)
+            cv2.rectangle(frame, (x1, by1), (x1 + int((x2 - x1) * tag.progress), by2), col, -1)
     return frame
 
 

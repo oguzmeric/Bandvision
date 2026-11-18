@@ -15,9 +15,16 @@ from jsonschema import Draft202012Validator
 from bantvision.core import Profile
 from bantvision.core.people_track import MotTrack
 from bantvision.core.profile import SafetyArea
-from bantvision.core.safety import RULE_OF_KIND, SafetyAlarm, SafetyAnalyzer, SafetyResult, area_rules
+from bantvision.core.safety import (
+    RULE_OF_KIND,
+    SafetyAlarm,
+    SafetyAnalyzer,
+    SafetyResult,
+    area_rules,
+    in_area,
+)
 from bantvision.live.alarms import AlarmStore
-from bantvision.overlay import CYAN, RED, AreaTag, SafetyTag, area_tags, draw_safety, safety_tags
+from bantvision.overlay import CYAN, RED, AreaTag, SafetyTag, _area_tags, draw_safety, safety_tags
 
 CONTRACTS = pathlib.Path(__file__).resolve().parents[3] / "contracts"
 FRAME = np.zeros((480, 640, 3), np.uint8)
@@ -140,8 +147,9 @@ def test_live_api_rejects_invalid_areas_with_422(tmp_path: pathlib.Path) -> None
 def test_stored_profile_with_bad_areas_gives_turkish_error_not_crash(
         tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Diskte elle bozulmuş alanlı şablon profil: oturum açma 500 değil, nasıl düzeltileceğini söyleyen Türkçe 422;
-    profil PUT ile düzeltilebilir. Yeniden başlatmada izlenen kameranın bozuk anlık görüntüsü "kaydı bozuk" diye
-    günlüğe yazılır, sunucu açılır."""
+    profil PUT ile düzeltilebilir. Yeniden başlatmada izlenen kameranın anlık görüntüsünde alan bozuksa kamera
+    bırakılmaz (güvenlik kamerası sessizce izlenmez olmasın): anlık görüntü yok sayılır, kamera şablonla açılır,
+    uyarı günlüğe yazılır ve izleme kaydı sağlam profille yenilenir."""
     pytest.importorskip("fastapi")
     import logging
 
@@ -171,8 +179,14 @@ def test_stored_profile_with_bad_areas_gives_turkish_error_not_crash(
               "profile": {**snap["profile"], "safety": {**snap["profile"]["safety"], "areas": [_area("a" * 41)]}}}
     (tmp_path / "live" / "watch.json").write_text(json.dumps([broken, snap]), encoding="utf-8")
     with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
-        assert len(c.get("/api/v1/live/sessions").json()) == 1      # sağlam kamera açıldı
-    assert "kaydı bozuk" in caplog.text and "Bozuk alan" in caplog.text
+        got = c.get("/api/v1/live/sessions").json()
+        assert len(got) == 2                                         # ikisi de izleniyor
+        assert all("areas" not in s["profile"]["safety"] for s in got)          # bozuk kamera şablonla
+        watched = {w["channelId"]: w for w in _watch(tmp_path)}
+        assert set(watched) == {None, "9"}
+        assert "areas" not in watched["9"]["profile"]["safety"]      # izleme kaydı sağlam profille yenilendi
+    assert "kaydı bozuk" not in caplog.text
+    assert "analiz alanı bozuk" in caplog.text and "Bozuk alan" in caplog.text and "şablon" in caplog.text
 
 
 def test_bad_camera_setting_opens_with_template_and_is_fixed_by_saving(
@@ -210,7 +224,79 @@ def test_bad_camera_setting_opens_with_template_and_is_fixed_by_saving(
         assert r.status_code == 201 and r.json()["profile"]["safety"]["areas"] == [_area()]
 
 
+def test_bad_template_does_not_block_camera_with_valid_own_setting(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Şablonun alanları diskte bozuk ama bu kameranın kendi kayıtlı ayarı sağlam: oturum kameranın ayarıyla açılır
+    (şablon yalnız gerektiğinde okunur), şablon uyarısı günlüğe yazılır. Geri yüklemede de kamera izlenmeye devam
+    eder."""
+    pytest.importorskip("fastapi")
+    import logging
+
+    from conftest import local_client
+    from test_live import _app_with_fakes, _safety_session_with_fake
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with local_client(_app_with_fakes(tmp_path)) as c:
+        sess, sid = _safety_session_with_fake(c, monkeypatch)
+        src_id, prof_id = sess.source_id, sess.profile_id
+        prof = c.get(f"/api/v1/live/sessions/{sid}").json()["profile"]
+        mine = {**prof, "safety": {**prof["safety"], "areas": [_area()]}}
+        assert c.put(f"/api/v1/live/sessions/{sid}/profile?save=true", json=mine).status_code == 200
+        c.delete(f"/api/v1/live/sessions/{sid}")
+        f = tmp_path / "live" / "profiles.json"
+        items = json.loads(f.read_text(encoding="utf-8"))
+        for p in items:
+            if p["id"] == prof_id:
+                p["safety"]["areas"] = [_area(rules=[])]
+        f.write_text(json.dumps(items), encoding="utf-8")
+        with caplog.at_level(logging.WARNING):
+            r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
+        assert r.status_code == 201, r.text
+        assert r.json()["profile"]["safety"]["areas"] == [_area()]
+        assert "Şablon profil okunamadı" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING), local_client(_app_with_fakes(tmp_path)) as c:
+        (got,) = c.get("/api/v1/live/sessions").json()               # yeniden başlatmada da izleniyor
+        assert got["profile"]["safety"]["areas"] == [_area()]
+    assert "yeniden açılamadı" not in caplog.text
+
+
+def test_bad_template_without_own_setting_still_gives_turkish_422(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Şablon başka biçimde de bozuksa (eksik/yanlış türde alan: KeyError/TypeError/ValueError) 500 değil aynı Türkçe
+    422."""
+    pytest.importorskip("fastapi")
+    from conftest import local_client
+    from test_live import _app_with_fakes, _safety_session_with_fake
+
+    monkeypatch.setenv("ANALYZER_ALLOW_FILE_SOURCES", "1")
+    with local_client(_app_with_fakes(tmp_path)) as c:
+        sess, sid = _safety_session_with_fake(c, monkeypatch)
+        src_id, prof_id = sess.source_id, sess.profile_id
+        c.delete(f"/api/v1/live/sessions/{sid}")
+        f = tmp_path / "live" / "profiles.json"
+        items = json.loads(f.read_text(encoding="utf-8"))
+        for p in items:
+            if p["id"] == prof_id:
+                p["safety"]["handsUp"] = "bozuk"
+        f.write_text(json.dumps(items), encoding="utf-8")
+        r = c.post("/api/v1/live/sessions", json={"sourceId": src_id, "profileId": prof_id})
+        assert r.status_code == 422, r.text
+        assert r.json()["detail"].startswith("Profil okunamadı: ")
+        assert r.json()["detail"].endswith("Profili panelde düzeltip yeniden kaydedin.")
+
+
 # ---------------------------------------------------------------- area_rules
+
+def test_area_polygon_is_built_once_per_area() -> None:
+    """Her karede her kişi için çokgen dizisi yeniden kurulmaz: alan başına bir kez (önbellek), eşitlik ve sözleşme
+    biçimi etkilenmez."""
+    a = SafetyArea("Masa 3", SQUARE, ["phone"])
+    poly = a.polygon
+    assert poly is a.polygon and poly.dtype == np.float32 and poly.shape == (4, 1, 2)
+    assert in_area((0.4, 0.4, 0.6, 0.6), a) and a.polygon is poly
+    assert a == SafetyArea("Masa 3", SQUARE, ["phone"]) and a.to_dict() == _area(rules=["phone"])
+
 
 def test_area_rules_without_areas_is_none() -> None:
     assert area_rules((0.4, 0.4, 0.6, 0.6), []) is None
@@ -406,9 +492,9 @@ def test_counting_only_for_rules_allowed_in_area() -> None:
 def test_area_tags_count_people_by_box_centre() -> None:
     p = _profile([SafetyArea("Masa 3", SQUARE, ["phone"]), SafetyArea("Köşe", CORNER, ["handsUp"])])
     r = SafetyResult(tracks=[_track(1, BOX_IN), _track(2, (0.25, 0.25, 0.45, 0.45))])   # 2: merkez (0,35, 0,35)
-    assert area_tags(p, r) == [AreaTag("Masa 3", tuple(SQUARE), "Masa 3: 2", False),
+    assert _area_tags(p, r) == [AreaTag("Masa 3", tuple(SQUARE), "Masa 3: 2", False),
                                AreaTag("Köşe", tuple(CORNER), "Köşe: 0", False)]
-    assert area_tags(_profile([]), r) == []
+    assert _area_tags(_profile([]), r) == []
 
 
 def test_draw_safety_draws_area_blue_and_hides_outside_person() -> None:
@@ -453,10 +539,10 @@ def test_clip_frames_keep_area_outlines_when_nobody_is_inside() -> None:
 def test_area_with_active_alarm_drawn_red() -> None:
     p = _profile([SafetyArea("Masa 3", SQUARE, ["phone"]), SafetyArea("Köşe", CORNER, ["phone"])])
     r = SafetyResult(tracks=[_track(1, BOX_IN)], active=[(1, "phone", 30.0, True)])
-    tags = area_tags(p, r)
+    tags = _area_tags(p, r)
     assert [(t.name, t.text, t.alarm) for t in tags] == [("Masa 3", "Masa 3: 1", True), ("Köşe", "Köşe: 0", False)]
     gone = SafetyResult(active=[(1, "phone", 30.0, True)], boxes={1: BOX_IN})   # alarmlı kişi bu karede görülmedi
-    assert [t.alarm for t in area_tags(p, gone)] == [True, False]
+    assert [t.alarm for t in _area_tags(p, gone)] == [True, False]
     img = draw_safety(np.zeros((360, 640, 3), np.uint8), p, r)
     edge_x = int(0.7 * 640)
     row = [tuple(int(v) for v in img[250, x]) for x in range(edge_x - 4, edge_x + 5)]

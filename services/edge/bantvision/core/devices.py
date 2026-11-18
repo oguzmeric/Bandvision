@@ -46,8 +46,9 @@ AUTO_MIN_MEMORY_MB = 1024   # "auto" yalnız bu kadar ayrılmış belleği olan 
 # yolu ("/onnxruntime_src/.../x.h:560"). Tırnak içindeki düğüm adları ('/model.0/conv/Conv') yol sayılmaz.
 _PATH_RE = re.compile(r"[A-Za-z]:\\\S+|(?<!\S)/(?:[^\s/]+/)+[^\s/]+")
 
-# Windows yerel iletisindeki HRESULT ve ardından gelen ileti ("... 80004005 Belirtilmemiş hata").
-_HRESULT_RE = re.compile(r"\b([0-9A-Fa-f]{8})\s+(\S[^\r\n]*)")
+# Windows yerel iletisindeki HRESULT ve ardından gelen ileti ("... 80004005 Belirtilmemiş hata"). Hata kodları 8 ile
+# başlar (önem biti); "16777216 bytes" gibi 8 haneli ondalık sayılar kod sanılmaz.
+_HRESULT_RE = re.compile(r"\b(8[0-9A-Fa-f]{7})\s+(\S[^\r\n]*)")
 
 # DXGI ham satırı: (dizin, açıklama, satıcı, aygıt, ayrılmış bellek bayt, bayraklar, luid_high, luid_low)
 DxgiRow = tuple[int, str, int, int, int, int, int, int]
@@ -76,6 +77,16 @@ class Used:
 
 def cpu_used(note: str | None = None) -> Used:
     return Used("cpu", CPU_ID, CPU_NAME, note)
+
+
+def job_device(used: Used | None, fell_back: str | None) -> Used | None:
+    """Bir işin (video analizi) sonunda gösterilecek cihaz: iş ekran kartında bittiyse ama sırasında kart hata verip bir
+    süre işlemcide çalıştıysa (`GuardedSession.fell_back`) not bunu söyler; canlı `used` geri dönüşte notu kaldırır,
+    iş özeti düşüşü gizlemesin. Diğer durumlarda `used` aynen."""
+    if used is None or fell_back is None or used.kind != "gpu":
+        return used
+    return Used(used.kind, used.id, used.name,
+                f"Ekran kartı çalışırken hata verdi ({fell_back}); iş sırasında bir süre işlemcide çalıştı.")
 
 
 def valid_choice(choice: object) -> bool:
@@ -397,10 +408,17 @@ class GuardedSession:
         self._retry_n = 0                                     # bu düşüşten beri başarısız yeniden kurma sayısı
         self._rebuilding = False                              # arka planda kart oturumu kuruluyor
         self._rebuilder: threading.Thread | None = None       # son yeniden kurma iş parçacığı
+        self._fell_back: str | None = None                    # son çalışma düşüşünün nedeni (geri dönülse de kalır)
 
     @property
     def used(self) -> Used:
         return self._state[1]
+
+    @property
+    def fell_back(self) -> str | None:
+        """Bu oturum çalışırken ekran kartından işlemciye düştüyse son düşüşün nedeni (karta geri dönülse de kalır;
+        `job_device`), hiç düşmediyse ya da baştan işlemcide açıldıysa None."""
+        return self._fell_back
 
     @property
     def broken(self) -> str | None:
@@ -418,7 +436,7 @@ class GuardedSession:
         return RuntimeError(f"Model kullanılamıyor: ekran kartı hata verdi ve işlemci oturumu kurulamadı "
                             f"({self._broken})")
 
-    def wait_retry(self, timeout: float | None = None) -> bool:
+    def _wait_retry(self, timeout: float | None = None) -> bool:
         """Süren arka plan yeniden kurmasını bekler; bittiyse (ya da hiç yoksa) True. Test ve kapanış içindir."""
         t = self._rebuilder
         if t is None:
@@ -440,6 +458,9 @@ class GuardedSession:
         try:
             thread.start()
         except RuntimeError as e:                             # iş parçacığı açılamadı: sonraki gecikmede yine dene
+            with self._lock:
+                if self._rebuilder is thread:                 # başlamamış iş parçacığı beklenmesin (join hatası)
+                    self._rebuilder = None
             self._schedule_next(e)
 
     def _schedule_next(self, e: BaseException) -> None:
@@ -454,8 +475,21 @@ class GuardedSession:
                     self._gpu.name, _reason(e), int(delay))
 
     def _rebuild(self) -> None:
-        """Arka plan iş parçacığı: kart oturumunu kurar; DirectML ilk sağlayıcıysa durumu `_lock` altında karta geçirir,
-        değilse sonraki gecikmeyi planlar."""
+        """Arka plan iş parçacığı (`_try_gpu`): beklenmeyen hata günlüğe yazılır; ne olursa olsun bu iş parçacığı hâlâ
+        sahipse sahiplik (`_rebuilding`) bırakılır: denemeler kilitli kalmaz (deneme zamanı geçmişse sonraki çağrı yine
+        dener)."""
+        try:
+            self._try_gpu()
+        except Exception:                                     # iş parçacığı sessizce ölüp sahipliği tutmasın
+            log.exception("Ekran kartı yeniden kurulurken beklenmeyen hata; sonraki denemede yine denenecek")
+        finally:
+            with self._lock:
+                if self._rebuilder is threading.current_thread():
+                    self._rebuilding = False
+
+    def _try_gpu(self) -> None:
+        """Kart oturumunu kurar; DirectML ilk sağlayıcıysa durumu `_lock` altında karta geçirir, değilse sonraki
+        gecikmeyi planlar."""
         gpu = self._gpu
         assert gpu is not None
         try:
@@ -517,6 +551,7 @@ class GuardedSession:
                     log.exception("İşlemci oturumu kurulamadı; model kullanılamıyor")
                     raise
                 self._state = (cpu, cpu_used(self._fall_note(reason)))
+                self._fell_back = reason
             session = self._state[0]
         return session.run(output_names, feeds)
 

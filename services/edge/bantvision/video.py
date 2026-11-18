@@ -531,6 +531,12 @@ class RunResult:
     alarms: list[dict[str, object]] = field(default_factory=list)   # güvenlik: alarm listesi (`total` = gerçek sayı)
 
 
+def _job_device(model: Any) -> devices.Used | None:
+    """İş sonu cihazı (`devices.job_device`): iş sırasında ekran kartından işlemciye düşüp geri dönüldüyse not bunu
+    söyler. `fell_back` bildirmeyen model (test sahtesi) için yalnız `used`."""
+    return devices.job_device(model.used, getattr(model, "fell_back", None))
+
+
 def count(info: VideoInfo, profile: Profile, cal: Calibration, out_path: pathlib.Path | None,
           out_width: int, progress: bool | Callable[[float, int], None] = True,
           start: float = 0.0, end: float | None = None) -> RunResult:
@@ -664,7 +670,7 @@ def count_detect(info: VideoInfo, profile: Profile, out_path: pathlib.Path | Non
         print(f"\r  işleniyor %100  giriş={pipe.total}  çıkış={pipe.total_out}          ")
     return RunResult(pipe.total, per_min, [(c[0], c[1], 1, c[3]) for c in crossings if c[2] == "giris"], n,
                      time.perf_counter() - t0, total_out=pipe.total_out, per_minute_out=per_min_out,
-                     crossings=crossings, device=pipe.detect.used)
+                     crossings=crossings, device=_job_device(pipe.detect))
 
 
 def _alarm_jpeg(img: np.ndarray) -> bytes | None:
@@ -750,7 +756,7 @@ def count_safety(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_p
         progress(1.0, total)
     elif progress:
         print(f"\r  işleniyor %100  alarm={total}          ")
-    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=an.dc.used, alarms=alarms)
+    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=_job_device(an.dc), alarms=alarms)
 
 
 def count_fire(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_path: pathlib.Path | None,
@@ -837,7 +843,7 @@ def count_fire(info: VideoInfo, profile: Profile, out_dir: pathlib.Path, out_pat
         progress(1.0, total)
     elif progress:
         print(f"\r  işleniyor %100  alarm={total}          ")
-    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=an.detector.used, alarms=alarms)
+    return RunResult(total, {}, [], n, time.perf_counter() - t0, device=_job_device(an.detector), alarms=alarms)
 
 
 # ---------------------------------------------------------------- CLI

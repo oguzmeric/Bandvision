@@ -34,6 +34,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from ..core.profile import AREA_NAME_MAX
 from .hard_negatives import HardNegatives
 from .jsonfile import quarantine, read_json, write_json_atomic
 
@@ -44,7 +45,6 @@ _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "start
                              "clipStartedAt": None, "clipPending": False, "clipFailed": False,
                              "falseAlarm": False, "sourceId": None, "channelId": None,
                              "box": None, "area": None}
-AREA_NAME_MAX = 40                  # alan adı sınırı (profil sözleşmesi `safety.areas[].name`)
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
@@ -154,6 +154,10 @@ class AlarmStore:
              "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False,
              "sourceId": source_id, "channelId": channel_id,
              "box": _valid_box(list(box) if box is not None else None), "area": _valid_area(area)}
+        if box is not None and a["box"] is None:
+            _LOG.debug("Alarm kutusu geçersiz, kayda yazılmadı (%s): %r", kind, box)
+        if area is not None and a["area"] is None:
+            _LOG.debug("Alarm alan adı geçersiz, kayda yazılmadı (%s): %r", kind, area)
         with self._lock:
             if jpeg is not None:
                 try:

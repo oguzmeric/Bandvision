@@ -59,6 +59,11 @@ class FireDetector:
         return self.session.used
 
     @property
+    def fell_back(self) -> str | None:
+        """Çalışırken ekran kartından işlemciye düştüyse son nedeni (bkz. `devices.GuardedSession.fell_back`)."""
+        return self.session.fell_back
+
+    @property
     def broken(self) -> str | None:
         return self.session.broken
 

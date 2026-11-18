@@ -601,7 +601,7 @@ class Builder:
 def run_settled(s: devices.GuardedSession) -> float:
     """Bir `run` ve (başladıysa) arka plan yeniden kurmasının bitmesi; dönen değer o çağrının sonucu."""
     out = float(s.run(None, {})[0][0])
-    assert s.wait_retry(10)
+    assert s._wait_retry(10)
     return out
 
 
@@ -706,7 +706,7 @@ def test_run_does_not_wait_for_slow_rebuild_and_one_rebuild_at_a_time(monkeypatc
         assert float(s.run(None, {})[0][0]) == 3.0
     assert len(builder.calls) == 1 and s.used.kind == "cpu" and len(ort.sessions) == 2
     builder.gate.set()
-    assert s.wait_retry(10)
+    assert s._wait_retry(10)
     assert not builder.threads[0].is_alive()                             # asılı iş parçacığı kalmaz
     assert s.used.kind == "gpu" and float(s.run(None, {})[0][0]) == 7.0 and len(builder.calls) == 1
 
@@ -824,3 +824,96 @@ def test_real_dxgi_enumeration():
         assert "microsoft" not in g.name.lower() and g.name == g.name.strip() and g.name
         assert g.memory_mb >= 0 and g.index >= 0 and g.luid.startswith("0x")
     assert len({g.id for g in gpus}) == len(gpus)
+
+
+# --------------------------------------------------------------- son inceleme düzeltmeleri
+
+def test_hresult_regex_ignores_decimal_numbers_before_the_code(cp1254):
+    """8 haneli ondalık sayı (bayt sayısı vb.) HRESULT sanılmaz: kod 8 ile başlayan 8 onaltılık hanedir."""
+    e = ansi_error("16777216 bytes ayrılamadı; tid(1a2c) 80004005 Belirtilmemiş hata")
+    assert devices._reason(e) == "DirectML 80004005: Belirtilmemiş hata"
+    assert devices._HRESULT_RE.search("12345678 sayı") is None
+
+
+def test_thread_start_failure_clears_rebuilder_and_backs_off(monkeypatch):
+    """İş parçacığı açılamazsa (`start` RuntimeError) sahiplik ve iş parçacığı kaydı temizlenir: beklemek (`_wait_retry`)
+    başlamamış iş parçacığını join etmeye kalkmaz, sonraki deneme bir sonraki gecikmede yapılır."""
+    clock = Clock(0.0)
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    s.run(None, {})                                                      # t=0 düşüş
+    ort.run_error = None
+    builder = Builder(monkeypatch, clock)
+    real_start = threading.Thread.start
+    fail = {"n": 1}
+
+    def start(self: threading.Thread) -> None:
+        if fail["n"]:
+            fail["n"] -= 1
+            raise RuntimeError("can't start new thread")
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+    clock.t = 60.0
+    assert float(s.run(None, {})[0][0]) == 3.0
+    assert s._rebuilder is None and not s._rebuilding and s._wait_retry(1)
+    assert builder.calls == []
+    clock.t = 359.0
+    assert run_settled(s) == 3.0 and builder.calls == []                 # sonraki gecikme: +300 sn
+    clock.t = 360.0
+    run_settled(s)
+    assert builder.calls == [360.0] and s.used.kind == "gpu"
+
+
+def test_unexpected_error_in_rebuild_releases_ownership(monkeypatch, caplog):
+    """Yeniden kurma iş parçacığında beklenmeyen hata: günlüğe yazılır, sahiplik (`_rebuilding`) bırakılır; denemeler
+    kilitli kalmaz."""
+    clock = Clock(0.0)
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    s.run(None, {})
+    ort.run_error = None
+    ort.ctor_error = RuntimeError("kart açılmıyor")
+    builder = Builder(monkeypatch, clock)
+
+    def boom(self: devices.GuardedSession, e: BaseException) -> None:
+        raise ValueError("beklenmedik")
+
+    monkeypatch.setattr(devices.GuardedSession, "_schedule_next", boom)
+    clock.t = 60.0
+    with caplog.at_level(logging.ERROR, logger="bantvision.devices"):
+        assert run_settled(s) == 3.0
+    assert not s._rebuilding and "beklenmeyen hata" in caplog.text
+    monkeypatch.undo()                                                   # kurucu ve _schedule_next eski haline
+    again = Builder(monkeypatch, clock)
+    ort.ctor_error = None
+    clock.t = 61.0
+    run_settled(s)
+    assert s.used.kind == "gpu"                                          # denemeler sürüyor
+    assert builder.calls == [60.0] and again.calls == [61.0]
+
+
+def test_fell_back_remembers_runtime_fallback_after_recovery(monkeypatch):
+    """Kart çalışırken düşüp sonra geri dönen oturum `fell_back`'te nedeni saklar (iş sonu özeti için); `used` canlı
+    durumu gösterir (not yok). Açılış düşüşü (N3) ve hiç düşmeyen oturum None."""
+    clock = Clock(0.0)
+    ort = FakeOrt(run_error=RuntimeError("DEVICE_REMOVED"))
+    s = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=ort, _gpus=gpus2(), _clock=clock)
+    assert s.fell_back is None
+    Builder(monkeypatch, clock)
+    run_settled(s)
+    assert s.fell_back == "DEVICE_REMOVED"
+    ort.run_error = None
+    clock.t = 60.0
+    run_settled(s)
+    assert s.used.kind == "gpu" and s.used.note is None and s.fell_back == "DEVICE_REMOVED"
+    job = devices.job_device(s.used, s.fell_back)
+    assert job == devices.Used("gpu", "gpu-10de-28a1", "NVIDIA Laptop GPU",
+                               "Ekran kartı çalışırken hata verdi (DEVICE_REMOVED); iş sırasında bir süre işlemcide "
+                               "çalıştı.")
+    n3 = devices.open_session("m.onnx", Configure(), "gpu-10de-28a1", _ort=FakeOrt(ctor_error=RuntimeError("x")),
+                              _gpus=gpus2(), _clock=clock)
+    assert n3.fell_back is None and devices.job_device(n3.used, n3.fell_back) == n3.used
+    cpu = devices.cpu_used(devices._n4("DEVICE_REMOVED"))
+    assert devices.job_device(cpu, "DEVICE_REMOVED") == cpu             # işlemcide bitti: canlı not yeterli
+    assert devices.job_device(None, "x") is None

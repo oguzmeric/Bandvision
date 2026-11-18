@@ -523,3 +523,18 @@ def test_invalid_box_is_none(tmp_path: pathlib.Path, bad: object) -> None:
     _write(tmp_path, [_rec("b" * 32, box=bad)])
     got = AlarmStore(tmp_path).get("b" * 32)
     assert got is not None and got["box"] is None
+
+
+def test_add_logs_dropped_invalid_box_and_area(tmp_path: pathlib.Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Geçersiz kutu/alan adı kayda None yazılır ama sessizce değil: hata ayıklama günlüğüne bir satır düşer."""
+    st = AlarmStore(tmp_path)
+    with caplog.at_level(logging.DEBUG, logger="bantvision.live.alarms"):
+        a = st.add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled", box=(0.5, 0.5, 0.4, 0.6), area="a" * 41)
+    assert a["box"] is None and a["area"] is None
+    assert "kutu" in caplog.text and "alan" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="bantvision.live.alarms"):
+        st.add("s", "Tezgah", "lying", 1.0, 2.0, None, "disabled", box=(0.1, 0.2, 0.3, 0.4), area="Masa 3")
+        st.add("s", "Tezgah", "test", 1.0, 2.0, None, "disabled")          # verilmeyen kutu/alan: günlük yok
+    assert caplog.text == ""
+

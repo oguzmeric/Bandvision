@@ -38,10 +38,10 @@ RULE_OF_KIND: dict[str, str] = {"hands_up": "handsUp", "lying": "lying", "phone"
 
 
 def in_area(box: Sequence[float], area: SafetyArea) -> bool:
-    """Normalize kutunun (x1, y1, x2, y2) merkezi alan çokgeninin içinde mi (kenar dahil)."""
-    poly = np.array(area.points, np.float32).reshape(-1, 1, 2)
+    """Normalize kutunun (x1, y1, x2, y2) merkezi alan çokgeninin içinde mi (kenar dahil). Çokgen dizisi alan başına
+    bir kez kurulur (`SafetyArea.polygon`)."""
     centre = ((float(box[0]) + float(box[2])) / 2, (float(box[1]) + float(box[3])) / 2)
-    return bool(cv2.pointPolygonTest(poly, centre, False) >= 0)
+    return bool(cv2.pointPolygonTest(area.polygon, centre, False) >= 0)
 
 
 def area_rules(box: Sequence[float], areas: list[SafetyArea]) -> tuple[set[str], dict[str, str]] | None:
