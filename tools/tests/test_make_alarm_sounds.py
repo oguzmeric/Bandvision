@@ -64,8 +64,20 @@ def test_sounds_are_distinct() -> None:
             assert similarity < 0.9, (mas.SOUNDS[i].name, mas.SOUNDS[j].name, similarity)
 
 
+def _pcm(data: bytes) -> tuple[tuple[int, int, int, int], np.ndarray]:
+    with wave.open(io.BytesIO(data)) as w:
+        params = (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes())
+        return params, np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.int32)
+
+
 def test_committed_files_match_generator() -> None:
-    """Panelle gelen WAV'lar betiğin bugünkü çıktısıdır (betik değişip dosyalar unutulmasın)"""
+    """Panelle gelen WAV'lar betiğin bugünkü çıktısıdır (betik değişip dosyalar unutulmasın). Biçim ve uzunluk birebir;
+    örnekler en çok 1 LSB farklı olabilir: numpy'nin sin/exp gibi işlevleri platforma (Windows/Linux, SIMD yolu) göre son
+    basamakta ayrılabilir, 16 bite yuvarlama bunu en çok bir adıma taşır."""
     out = TOOLS.parent / "apps" / "dashboard" / "public" / "sounds"
     for s in mas.SOUNDS:
-        assert (out / f"{s.id}.wav").read_bytes() == mas.wav_bytes(mas.synth(s.id)), s.id
+        committed, generated = (out / f"{s.id}.wav").read_bytes(), mas.wav_bytes(mas.synth(s.id))
+        assert len(committed) == len(generated) and committed[:44] == generated[:44], s.id
+        (p1, a), (p2, b) = _pcm(committed), _pcm(generated)
+        assert p1 == p2, s.id
+        assert int(np.abs(a - b).max()) <= 1, s.id
