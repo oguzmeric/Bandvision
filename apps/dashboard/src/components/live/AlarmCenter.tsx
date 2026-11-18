@@ -94,9 +94,10 @@ function saveIds(key: string, ids: Set<string>): void {
  * girer ve ses hemen başlar; pencere açıkken kümede onaylanmamış alarm kaldıkça grubun sesi 3 sn'de bir çalar (gösterilen
  * alarm kümedeyse onun grubu, değilse kümenin en yenisininki). Gördüm / Yanlış alarm kaydedilince yalnız O alarmı kümeden
  * çıkarır (kaydedilemezse alarm açık kalır, ses sürer; uyarıyı onaylamak kritik sesi susturmaz); Küçült ya da pencerenin
- * kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz). Yalnız uyarı geldiyse ses bir kez çalar. Tarayıcı izin vermezse çubukta tıklama ipucu çıkar. Alarm
- * varken sekme başlığı yanıp söner; onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma
- * tercihinde sabit). Üstteki çubuk (`AlarmBanner`) bu verinin görünümüdür.
+ * kapanması kümeyi boşaltır (pencere elle yeniden açılınca çalmaz). Yalnız uyarı geldiyse ses bir kez çalar. Tarayıcı
+ * izin vermezse çubukta tıklama ipucu çıkar. Alarm varken sekme başlığı yanıp söner; onaylanmamış kritik alarm varken
+ * ekranın kenarı kırmızı yanıp söner (hareket azaltma tercihinde sabit). Üstteki çubuk (`AlarmBanner`) bu verinin
+ * görünümüdür.
  */
 export default function AlarmCenter({ children }: { children: React.ReactNode }) {
   const [alarms, setAlarms] = useState<Alarm[]>([]);

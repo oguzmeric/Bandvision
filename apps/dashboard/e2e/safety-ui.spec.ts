@@ -482,7 +482,10 @@ test("alarm çubuğu (sahte API): akış kopunca uyarı satırı, alarm sayacı,
   // Gördüm sunucuda başarısız: alarm kalır, kısa hata görünür (çubukta da)
   const ack1 = modal.getByRole("button", { name: "Gördüm", exact: true });
   await ack1.click();
-  await expect(banner).toContainText("Gördüm kaydedilemedi");
+  const ackError = page.getByTestId("alarm-ack-error");
+  await expect(ackError).toHaveText("Gördüm kaydedilemedi; alarm açık kalıyor. Tekrar deneyin.");
+  await expect(ackError).toHaveAttribute("role", "alert");
+  await expect(banner.getByTestId("alarm-ack-error")).toHaveCount(0);        // kibar sayaç bölgesinin dışında
   await expect(modal).toContainText("Gördüm kaydedilemedi");
   await expect(count).toHaveText("5 kritik alarm");
 
@@ -502,7 +505,7 @@ test("alarm çubuğu (sahte API): akış kopunca uyarı satırı, alarm sayacı,
   await ack1.click();
   await expect(count).toHaveText("4 kritik alarm");
   await expect(modal.getByTestId("alarm-subtitle")).toContainText("Kamera 2 ·");   // pencere sıradakine geçti
-  await expect(banner).not.toContainText("Gördüm kaydedilemedi");
+  await expect(ackError).toHaveCount(0);
   stale.release();                                                   // bayat cevap şimdi gelir: yok sayılır
   await expect.poll(() => polls).toBeGreaterThanOrEqual(before + 2); // yenisi hemen istendi (tutuluyor)
   await expect(count).toHaveText("4 kritik alarm");                  // bayat liste alarmı geri getirmedi
