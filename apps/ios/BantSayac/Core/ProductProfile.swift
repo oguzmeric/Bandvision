@@ -114,8 +114,18 @@ struct SafetyConfig: Codable, Equatable, Sendable {
     var sendImage: Bool
     /// Telefon kullanımı kuralı (varsayılan kapalı, 15 sn): iPhone yalnızca taşır; bu cihazda işlenmez.
     var phone: Rule = SafetyConfig.defaultPhone
+    /// Analiz alanları (sözleşme `safety.areas`, en çok 16): iPhone yalnızca okur ve geri yazar (kaydedilince
+    /// kaybolmasın); bu cihazda işlenmez. Boşsa JSON'a yazılmaz (Python ile aynı).
+    var areas: [Area] = []
 
-    enum CodingKeys: String, CodingKey { case handsUp, lying, sendImage, phone }
+    /// Analiz alanı: ad, `[x, y]` köşeleri (0–1) ve bu alanda açık kurallar (`handsUp` / `lying` / `phone`)
+    struct Area: Codable, Equatable, Sendable {
+        var name: String
+        var points: [[Double]]
+        var rules: [String]
+    }
+
+    enum CodingKeys: String, CodingKey { case handsUp, lying, sendImage, phone, areas }
 }
 
 extension SafetyConfig {
@@ -132,6 +142,19 @@ extension SafetyConfig {
         lying = try c.decodeIfPresent(Rule.self, forKey: .lying) ?? Self.defaultLying
         sendImage = try c.decodeIfPresent(Bool.self, forKey: .sendImage) ?? false
         phone = try c.decodeIfPresent(Rule.self, forKey: .phone) ?? Self.defaultPhone
+        areas = try c.decodeIfPresent([Area].self, forKey: .areas) ?? []
+    }
+
+    /// Boş `areas` yazılmaz (Python `to_dict` ile aynı); öteki alanlar her zaman yazılır.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(handsUp, forKey: .handsUp)
+        try c.encode(lying, forKey: .lying)
+        try c.encode(sendImage, forKey: .sendImage)
+        try c.encode(phone, forKey: .phone)
+        if !areas.isEmpty {
+            try c.encode(areas, forKey: .areas)
+        }
     }
 }
 

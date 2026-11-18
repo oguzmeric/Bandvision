@@ -28,6 +28,7 @@ from ..core.detector import USER_CLASSES
 from ..core.fire_model import FireModelMissing
 from ..core.model_download import failure_reason
 from ..core.pose_rules import COOLDOWN_S
+from ..core.profile import parse_areas
 from ..core.staff_color import MAX_COLORS, is_achromatic
 from . import open_gate
 from . import recorders as rec
@@ -585,8 +586,10 @@ class LiveManager:
         "hands_up": "safety", "lying": "safety", "phone": "safety", "fire": "fire", "smoke": "fire"}
     _CHECK_LINE: ClassVar[str] = "Görüntüyü hemen kontrol edin."
 
-    def _text(self, kind: str, camera: str, ts: float) -> str:
-        text = f"{self._TITLES[kind]} — {camera} · {time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(ts))}"
+    def _text(self, kind: str, camera: str, ts: float, area: str | None = None) -> str:
+        """Telegram metni: başlık — kamera (· Alan: <ad>, güvenlik analiz alanı varsa) · tarih-saat."""
+        where = f"{camera} · Alan: {area}" if area else camera
+        text = f"{self._TITLES[kind]} — {where} · {time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(ts))}"
         return f"{text}\n{self._CHECK_LINE}" if self._MODE_OF.get(kind) == "fire" else text
 
     @classmethod
@@ -651,7 +654,8 @@ class LiveManager:
                                        clip_pending=clip_pending and in_mode,
                                        source_id=getattr(s, "source_id", None) or None,
                                        channel_id=getattr(s, "channel_id", None) or None,
-                                       raw_jpeg=raw_jpeg, box=getattr(a, "box", None))
+                                       raw_jpeg=raw_jpeg, box=getattr(a, "box", None),
+                                       area=getattr(a, "area", None))
                 new_ids.append(rec_["id"])
                 old = self._alarm_of.pop((s.id, a.track_id, a.kind), None)
                 if old:
@@ -662,7 +666,7 @@ class LiveManager:
                     self.alarms.end(rec_["id"], now)
                 if notify == "queued":
                     self._last_sent[(cam_key, a.kind)] = mono
-                    self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now),
+                    self.notifier.enqueue(rec_["id"], self._text(a.kind, camera, now, rec_["area"]),
                                           jpeg if self._send_image(s.profile, a.kind) else None)
 
     def _ended_at(self, alarm_id: str, now: float, ago: float | None) -> float:
@@ -703,8 +707,13 @@ class LiveManager:
         olmazsa yeniden dener (kayıt cihazı bilgisayardan geç açılabilir; açılış beklemez); `safety_only` çözülen profil
         bir alarm yöntemi (güvenlik/yangın) değilse `NotSafetyProfile`. Kayıttaki profil kullanılırsa adı da korunur (şablonun adı yazılmaz)."""
         src = self.source_or_404(source_id)
-        template = self.store.profile(profile_id)
-        profile = self.store.camera_profile(source_id, channel_id, profile_id) or template  # kamera ayarı ya da şablon
+        try:
+            template = self.store.profile(profile_id)
+            profile = self.store.camera_profile(source_id, channel_id, profile_id) or template  # kamera ayarı ya da şablon
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            # diskteki profil bozuk (ör. elle düzenlenmiş aykırı analiz alanı): 500 değil, Türkçe neden; geri yüklemede
+            # bu kamera günlüğe yazılır, diğerleri açılır
+            raise HTTPException(422, f"Kayıtlı profil okunamadı: {e}") from e
         from_snapshot = (fallback is not None and fallback.countMode in ALARM_MODES
                          and (profile is None or profile.countMode != fallback.countMode))
         if from_snapshot:
@@ -1305,7 +1314,7 @@ def make_router(manager: LiveManager, auth: Any) -> APIRouter:
 
     @r.put("/profiles/{profile_id}")
     def update_profile(profile_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        if store.profile(profile_id) is None:
+        if not any(x.get("id") == profile_id for x in store.profiles()):   # ayrıştırmadan: bozuk kayıt düzeltilebilsin
             raise HTTPException(404, "Profil bulunamadı.")
         p = _profile_from(body)
         p.id = profile_id
@@ -1848,8 +1857,10 @@ _SAFETY_RULES = {"handsUp": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma"
 
 
 def _check_safety(sf: Any) -> None:
-    """`safety` bloğu (sözleşme: handsUp 3–5 sn, lying 5–30 sn, phone 10–600 sn, sendImage): yanlış tür ya da aralık dışı 422 olur.
-    Eksik alanlar varsayılana düşer; `bool("false")` gibi sessiz dönüşümlere izin verilmez."""
+    """`safety` bloğu (sözleşme: handsUp 3–5 sn, lying 5–30 sn, phone 10–600 sn, sendImage, areas): yanlış tür ya da aralık
+    dışı 422 olur. Eksik alanlar varsayılana düşer; `bool("false")` gibi sessiz dönüşümlere izin verilmez. Analiz
+    alanları profil okumasıyla aynı denetimden geçer (`core.profile.parse_areas`: en çok 16, ad 1–40, 3–12 köşe 0–1,
+    kurallar boş olmayan handsUp/lying/phone)."""
     def bad(msg: str) -> HTTPException:
         return HTTPException(422, f"Güvenlik ayarı geçersiz: {msg}")
 
@@ -1871,6 +1882,11 @@ def _check_safety(sf: Any) -> None:
             raise bad(f"{title} süresi {lo:g}–{hi:g} sn arasında bir sayı olmalı.")
     if "sendImage" in sf and not isinstance(sf["sendImage"], bool):
         raise bad("olay resmi gönderimi doğru ya da yanlış olmalı.")
+    if "areas" in sf:
+        try:
+            parse_areas(sf["areas"])
+        except ValueError as e:
+            raise bad(str(e)) from None
 
 
 _FIRE_RULES = {"fire": ("Yangın", 2.0, 10.0), "smoke": ("Duman", 5.0, 30.0)}   # ad, en az, en çok (sn)

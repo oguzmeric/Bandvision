@@ -1,9 +1,11 @@
 """Poz güvenlik çözümleyicisi: kişi tanıma + izleyici (detect_count.DetectCounter) + poz (MoveNet) + kurallar.
 
-Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır. **Alan kısıtı yok** (kullanıcı kararı,
-2026-10-07): kural karedeki her kişiye uygulanır; profilde çizili bir alan (ROI / çokgen) varsa yok sayılır, tanıma ve
-izleme her zaman tam karede çalışır. Kurallar ve süreler pose_rules.py'de; tasarım
-docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md. Kopma toleransı kare hızına uyar: yavaş akışta (örn. 1 kare/sn)
+Yalnızca onaylı ve bu karede tanımayla gözlenen izlerin pozuna bakılır. Tanıma ve izleme her zaman tam karede çalışır;
+profildeki sayım alanı (ROI / çokgen) ve sayım çizgisi yok sayılır. **Analiz alanları** (`safety.areas`, tasarım
+docs/superpowers/specs/2026-11-17-alarm-penceresi-design.md §11): alan yoksa kural karedeki herkese uygulanır; varsa
+kutu merkezi hiçbir alanda olmayan iz izlemeden sonra süzülür (sonuçta yok: iz, poz, bölüm, alarm), alandaki ize
+yalnız alanlarının izin verdiği kurallar işletilir (`area_rules`); izni kalkan kuralın bölümü görünmeyen kişininki gibi
+toleransla biter. Kurallar ve süreler pose_rules.py'de; tasarım docs/superpowers/specs/2026-10-06-poz-guvenlik-design.md. Kopma toleransı kare hızına uyar: yavaş akışta (örn. 1 kare/sn)
 sabit 0,5 sn tolerans bölümü sürekli koparırdı.
 
 Üçüncü kural telefon kullanımı (phone_rules.py; tasarım docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md):
@@ -15,18 +17,47 @@ karar çıkamayacak izde arama yapılmaz) + dilimli kanıt penceresi; kendi böl
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import cv2
 import numpy as np
 
 from .detect_count import DetectCounter
 from .people_track import MotTrack
 from .phone_rules import PHONE_FPS, PHONE_MAX_PER_FRAME, PhoneEvidence, find_phones, phone_hit, phone_possible
 from .pose_rules import GRACE_S, EpisodeTracker, hands_up, lying
-from .profile import Profile, Roi
+from .profile import Profile, Roi, SafetyArea
 
 Box = tuple[float, float, float, float]
+
+# Çekirdek alarm türü → sözleşmedeki kural adı (profil `safety.<ad>`, alan `rules`, video işi `alarms[].kind`).
+# Eşlemenin tek yeri: bindirme ve video işi buradan okur.
+RULE_OF_KIND: dict[str, str] = {"hands_up": "handsUp", "lying": "lying", "phone": "phone"}
+
+
+def in_area(box: Sequence[float], area: SafetyArea) -> bool:
+    """Normalize kutunun (x1, y1, x2, y2) merkezi alan çokgeninin içinde mi (kenar dahil)."""
+    poly = np.array(area.points, np.float32).reshape(-1, 1, 2)
+    centre = ((float(box[0]) + float(box[2])) / 2, (float(box[1]) + float(box[3])) / 2)
+    return bool(cv2.pointPolygonTest(poly, centre, False) >= 0)
+
+
+def area_rules(box: Sequence[float], areas: list[SafetyArea]) -> tuple[set[str], dict[str, str]] | None:
+    """Alan yoksa None (bütün kare, bütün kurallar serbest). Varsa: kutu merkezinin içinde olduğu alanların kural
+    birleşimi (sözleşme adları) ve kural → listede ilk gelen ve o kuralı içeren alanın adı. Hiçbir alanda değilse
+    `(set(), {})`."""
+    if not areas:
+        return None
+    rules: set[str] = set()
+    first: dict[str, str] = {}
+    for a in areas:
+        if in_area(box, a):
+            for r in a.rules:
+                rules.add(r)
+                first.setdefault(r, a.name)
+    return rules, first
 
 
 @dataclass
@@ -36,11 +67,12 @@ class SafetyAlarm:
     box: Box                                    # normalize
     started: float                              # olayın başladığı zaman (bölüm başlangıcı)
     ts: float                                   # alarmın doğduğu zaman
+    area: str | None = None                     # alarmın analiz alanı (kuralı içeren ilk alan); alan yoksa None
 
 
 @dataclass
 class SafetyResult:
-    tracks: list[MotTrack] = field(default_factory=list)                    # bu karede gözlenen onaylı izler
+    tracks: list[MotTrack] = field(default_factory=list)                    # gözlenen onaylı izler (alan içinde)
     poses: dict[int, np.ndarray] = field(default_factory=dict)              # iz → eklemler (17×3, piksel)
     active: list[tuple[int, str, float, bool]] = field(default_factory=list)    # (iz, tür, süre sn, alarm verdi mi)
     fired: list[SafetyAlarm] = field(default_factory=list)                  # bu karede doğan alarmlar
@@ -120,17 +152,29 @@ class SafetyAnalyzer:
 
     def process(self, bgr: np.ndarray, profile: Profile, fps: float, ts: float) -> SafetyResult:
         h, w = bgr.shape[:2]
-        # Tanıma ve izleyici tam karede (alan kısıtı yok, sayım çizgisi önemsiz); profildeki alan yok sayılır.
+        # Tanıma ve izleyici tam karede (sayım çizgisi önemsiz); profildeki sayım alanı yok sayılır.
         full = replace(profile, roi=Roi(0.0, 0.0, 1.0, 1.0), roiPolygon=None, countLine=None)
         r = self.dc.process(bgr, full, fps)
-        res = SafetyResult(tracks=r.tracks)
-        grace = grace_for(fps)
         sf = profile.safety
+        # Analiz alanı süzgeci (izlemeden sonra, kurallardan önce): hiçbir alanda olmayan iz sonuca girmez; alandaki iz
+        # için izinli kurallar ve kural → alan adı. Alan yoksa `allowed` None (her şey serbest).
+        seen: list[tuple[MotTrack, tuple[set[str], dict[str, str]] | None]] = []
+        for t in r.tracks:
+            allowed = area_rules(t.box, sf.areas)
+            if allowed is None or allowed[0]:
+                seen.append((t, allowed))
+        res = SafetyResult(tracks=[t for t, _ in seen])
+        grace = grace_for(fps)
         rules = [(k, fn, rule) for k, fn, rule in (("hands_up", hands_up, sf.handsUp), ("lying", lying, sf.lying))
                  if rule.enabled]
         phone = sf.phone.enabled
-        due: list[tuple[float, int, Box, tuple[float, float, float, float], np.ndarray]] = []   # aranmak isteyen izler
-        for t in r.tracks if rules or phone else []:                # üç kural da kapalı: poz hiç çalışmaz
+        # aranmak isteyen izler: (son arama, iz, kutu, piksel kutu, eklemler, telefon kuralının alanı)
+        due: list[tuple[float, int, Box, tuple[float, float, float, float], np.ndarray, str | None]] = []
+        for t, allowed in seen if rules or phone else []:          # üç kural da kapalı: poz hiç çalışmaz
+            mine = [x for x in rules if allowed is None or RULE_OF_KIND[x[0]] in allowed[0]]
+            my_phone = phone and (allowed is None or "phone" in allowed[0])
+            if not mine and not my_phone:                           # alanında kamerada açık kural yok: poz yok
+                continue
             x1, y1, x2, y2 = (float(v) for v in t.box)
             box = (x1, y1, x2, y2)
             box_px = (x1 * w, y1 * h, x2 * w, y2 * h)
@@ -139,25 +183,27 @@ class SafetyAnalyzer:
             if kp is None:                                          # poz modeli hazır değil / yüklenemedi: karar yok
                 continue
             res.poses[t.id] = kp
-            for kind, fn, rule in rules:
+            for kind, fn, rule in mine:
                 if self.episodes.update((t.id, kind), fn(kp), ts, rule.seconds, grace_s=grace):
                     # update bölümü az önce yeniledi: etkin listedeki süre = ts − başlangıç
                     dur = next(a[2] for a in self.episodes.active() if a[0] == t.id and a[1] == kind)
-                    res.fired.append(SafetyAlarm(kind, t.id, box, ts - dur, ts))
-            if phone:
+                    area = None if allowed is None else allowed[1][RULE_OF_KIND[kind]]
+                    res.fired.append(SafetyAlarm(kind, t.id, box, ts - dur, ts, area))
+            if my_phone:
                 self.phone.observe(t.id, ts)
                 last = self._phone_last.get(t.id)
                 # Zaman geri gittiyse (video başa sardı) hemen aranır. Eklemlerden karar çıkamayacaksa (ölçek ya da
                 # görünen bilek/baş yok) arama yapılmaz: ne bütçeden yer ne arama sayılır.
                 if (last is None or ts < last or ts - last >= 1.0 / PHONE_FPS - 1e-9) and phone_possible(kp):
-                    due.append((float("-inf") if last is None or ts < last else last, t.id, box, box_px, kp))
+                    area = None if allowed is None else allowed[1]["phone"]
+                    due.append((float("-inf") if last is None or ts < last else last, t.id, box, box_px, kp, area))
         # Kare başına en çok PHONE_MAX_PER_FRAME arama: en uzun süredir aranmamış izler (hiç aranmamış olan önce)
-        for _last, tid, box, box_px, kp in sorted(due, key=lambda d: (d[0], d[1]))[:PHONE_MAX_PER_FRAME]:
+        for _last, tid, box, box_px, kp, area in sorted(due, key=lambda d: (d[0], d[1]))[:PHONE_MAX_PER_FRAME]:
             self._phone_last[tid] = ts
             hit = phone_hit(find_phones(self.dc.detector, bgr, box_px), kp)
             if self.phone.update(tid, ts, hit, sf.phone.seconds):
                 started = self.phone.started(tid)               # bölüm başı; ateşleyen kare ıska olabilir
-                res.fired.append(SafetyAlarm("phone", tid, box, ts if started is None else started, ts))
+                res.fired.append(SafetyAlarm("phone", tid, box, ts if started is None else started, ts, area))
         alive = {t.id for t in self.dc.tracker.tracks}
         # sweep aynı anahtarı iki kez bildirebilir ya da etkin bölümü olan anahtarı bitmiş sayabilir (eski bölümün
         # ertelenmiş sonu): olduğu gibi aktarılır, tekilleştirilmez.

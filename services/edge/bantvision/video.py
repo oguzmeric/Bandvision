@@ -43,7 +43,7 @@ from .core.linescan import LineScanCounter, active_region, flow_profile, frame_m
 from .core.pipeline import FrameResult
 from .core.pose import PoseEstimator
 from .core.profile import Roi
-from .core.safety import SafetyAnalyzer
+from .core.safety import RULE_OF_KIND, SafetyAnalyzer
 from .core.segmenter import downsample, roi_mask
 from .core.tracker import median
 from .overlay import draw_detect, draw_fire, draw_safety, fire_boxes
@@ -70,7 +70,7 @@ MODE_TR = {"blob": "leke (ayrık ürünler)", "linescan": "şerit tarama (tek s�
            "detect": "tanıma (kişi/araç/hayvan; iki yönlü giriş/çıkış)",
            "safety": "güvenlik alarmı (poz: eller yukarı, yerde yatan kişi, telefon kullanımı)",
            "fire": "yangın/duman erken uyarısı (alev ve duman tanıma; hareket doğrulamalı)"}
-SAFETY_KINDS = {"hands_up": "handsUp", "lying": "lying", "phone": "phone"}   # çekirdek adı → sözleşme adı
+SAFETY_KINDS = RULE_OF_KIND                     # çekirdek adı → sözleşme adı (tek kaynak: core/safety.py)
 SAFETY_LABELS_TR = {"handsUp": "Eller yukarı", "lying": "Yerde yatan kişi", "phone": "Telefon kullanımı"}   # alarmlar.csv "tur" sütunu (kullanıcı indirir)
 SAFETY_RANGES = {"hands_up": ("Eller yukarı", 3.0, 5.0), "lying": ("Yerde yatma", 5.0, 30.0),
                  "phone": ("Telefon kullanımı", 10.0, 600.0)}   # ad, en az, en çok (sn)

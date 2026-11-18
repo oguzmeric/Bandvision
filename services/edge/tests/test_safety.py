@@ -62,7 +62,8 @@ def test_disabled_rule_does_not_fire() -> None:
 
 
 def test_person_outside_drawn_area_still_fires() -> None:
-    """Kullanıcı kararı (2026-10-07): güvenlikte alan kısıtı yok; eski profilde çizili alan yok sayılır."""
+    """Güvenlikte sayım alanı (ROI / çokgen) yok sayılır: eski profilde çizili alan kişiyi dışarıda bırakmaz. Analiz
+    alanları (`safety.areas`) ayrı listedir: test_safety_areas.py."""
     q = Profile.jeweler()
     q.set_polygon([(0.0, 0.0), (0.3, 0.0), (0.3, 0.3), (0.0, 0.3)])  # kişi alanın dışında
     fired = [a for r in run(hands_up_kp(), 5.0, profile=q) for a in r.fired]

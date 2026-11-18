@@ -1,5 +1,5 @@
 """Tanıma tabanlı sayım (§4.10) için video bindirmesi: Giriş · Çıkış paneli, giriş oku, kişi kutuları; poz güvenlik
-iskeletleri ve yangın/duman kutuları.
+iskeletleri, kişi etiketleri ve analiz alanları; yangın/duman kutuları.
 
 Türkçe karakterler (ı, ş, ç, ğ, İ) OpenCV yazısında çıkmaz; Pillow ve sistem yazı tipiyle çizilir. Pillow ya da
 yazı tipi yoksa ASCII'ye çevrilip OpenCV ile yazılır (çıktı yine okunur).
@@ -22,13 +22,14 @@ from .core.fire import FireResult
 from .core.fire_rules import KINDS, TRACK_IDS, Box
 from .core.pose_rules import KP_CONF
 from .core.profile import Profile
-from .core.safety import SafetyResult
+from .core.safety import RULE_OF_KIND, SafetyResult, area_rules, in_area
 
 # BGR
 GREEN, RED, ORANGE, WHITE, DARK = (80, 200, 60), (60, 60, 230), (0, 140, 255), (255, 255, 255), (30, 30, 30)
 GRAY = (170, 170, 170)
 CYAN = (255, 255, 0)                            # poz güvenlik: iskelet çizgileri
 SMOKE = (200, 200, 200)                         # yangın/duman: duman kutusu (alev kutusu ORANGE)
+AREA = (250, 200, 130)                          # poz güvenlik: analiz alanı (açık mavi; sarı/kırmızı etiketlerden ayrı)
 
 _FONTS = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -143,8 +144,6 @@ _SKELETON = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12)
              (14, 16), (0, 5), (0, 6)]
 _SAFETY_LABELS = {"hands_up": "ELLER YUKARI", "lying": "YERDE", "phone": "TELEFON"}
 
-
-_SAFETY_RULE_OF = {"hands_up": "handsUp", "lying": "lying", "phone": "phone"}
 _COUNTING = (30, 190, 245)                      # poz güvenlik: süre doluyor (sarı)
 _MAX_NAMED_PEOPLE = 6                           # bundan kalabalıkta "Kişi" yazısı bırakılır (kutular kalır)
 
@@ -163,12 +162,24 @@ def _clock(sec: float) -> str:
     return f"{n // 60}:{n % 60:02d}"
 
 
+def _in_areas(profile: Profile, r: SafetyResult) -> dict[int, set[str] | None]:
+    """Analiz alanı içindeki gözlenen izler → alanlarının izin verdiği kurallar (alan yoksa her iz, None: hepsi).
+    Çözümleyici alan dışındaki izi zaten sonuca koymaz; bindirme aynı kuralı kendisi de uygular."""
+    out: dict[int, set[str] | None] = {}
+    for t in r.tracks:
+        allowed = area_rules(t.box, profile.safety.areas)
+        if allowed is None or allowed[0]:
+            out[t.id] = None if allowed is None else allowed[0]
+    return out
+
+
 def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
-    """Çizilecek etiketler (sıra: person, counting, alarm). Gözlenen her kişi bir etiket alır: alarm vermiş bölümü varsa
-    alarm; yoksa açık kuralı sayan en dolu bölüm varsa counting; yoksa person. Alarmlı iz gözlenmese de `r.boxes`
-    kutusuyla çıkar."""
-    people = len(r.tracks) <= _MAX_NAMED_PEOPLE
-    obs = {t.id: tuple(float(v) for v in t.box) for t in r.tracks}
+    """Çizilecek etiketler (sıra: person, counting, alarm). Analiz alanı içinde gözlenen her kişi (alan yoksa herkes)
+    bir etiket alır: alarm vermiş bölümü varsa alarm; yoksa kamerada açık ve alanında izinli kuralı sayan en dolu bölüm
+    varsa counting; yoksa person. Alarmlı iz gözlenmese de `r.boxes` kutusuyla çıkar."""
+    allowed = _in_areas(profile, r)
+    people = len(allowed) <= _MAX_NAMED_PEOPLE
+    obs = {t.id: tuple(float(v) for v in t.box) for t in r.tracks if t.id in allowed}
     person: list[SafetyTag] = []
     counting: list[SafetyTag] = []
     alarm: list[SafetyTag] = []
@@ -184,8 +195,10 @@ def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
             continue
         best: tuple[float, str, float, float] | None = None              # (ilerleme, tür, sn, eşik)
         for i, kind, sec, f in r.active:
-            rule = getattr(profile.safety, _SAFETY_RULE_OF[kind], None) if i == tid else None
-            if rule is None or not rule.enabled or rule.seconds <= 0:
+            name = RULE_OF_KIND[kind]
+            rule = getattr(profile.safety, name, None) if i == tid else None
+            ok = allowed.get(tid)
+            if rule is None or not rule.enabled or rule.seconds <= 0 or (ok is not None and name not in ok):
                 continue
             prog = min(1.0, max(0.0, sec / rule.seconds))
             if best is None or prog > best[0]:
@@ -201,23 +214,64 @@ def safety_tags(profile: Profile, r: SafetyResult) -> list[SafetyTag]:
 _TAG_STYLE = {"person": (GRAY, DARK), "counting": (_COUNTING, DARK), "alarm": (RED, WHITE)}   # (kutu/zemin, yazı)
 
 
+@dataclass(frozen=True)
+class AreaTag:
+    """Analiz alanı çizimi: ad, köşeler (normalize), yazı "<ad>: <kişi sayısı>", içinde alarmı süren kişi var mı."""
+    name: str
+    points: tuple[tuple[float, float], ...]
+    text: str
+    alarm: bool
+
+
+def _area_tags(profile: Profile, r: SafetyResult, tags: list[SafetyTag]) -> list[AreaTag]:
+    alarms = [t.box for t in tags if t.state == "alarm"]
+    obs = [tuple(float(v) for v in t.box) for t in r.tracks]
+    out: list[AreaTag] = []
+    for a in profile.safety.areas:
+        n = sum(in_area(b, a) for b in obs)
+        out.append(AreaTag(a.name, tuple(a.points), f"{a.name}: {n}", any(in_area(b, a) for b in alarms)))
+    return out
+
+
+def area_tags(profile: Profile, r: SafetyResult) -> list[AreaTag]:
+    """Çizilecek analiz alanları (profil sırasıyla; alan yoksa boş). Kişi sayısı: kutu merkezi alanda olan gözlenen
+    izler. Alarm: alarm etiketi (`safety_tags`; gözlenmeyen alarmlı izin son kutusu dahil) merkezi alanda."""
+    return _area_tags(profile, r, safety_tags(profile, r))
+
+
 def draw_safety(frame: np.ndarray, profile: Profile, r: SafetyResult | None) -> np.ndarray:
-    """Poz güvenlik: iskeletler ve kişi üstü etiketler (`safety_tags`): ince gri "Kişi", süresi dolan kural için sarı kutu
-    ve ilerleme çubuğu, alarm veren iz için kalın kırmızı kutu ve süre. Alarmlı iz bu karede gözlenmese de (tanıma bir
-    kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir."""
+    """Poz güvenlik: analiz alanları (`area_tags`: ince açık mavi çizgi, ilk köşede "<ad>: <kişi sayısı>"; içinde alarmı
+    süren kişi olan alan kalın kırmızı), iskeletler ve kişi üstü etiketler (`safety_tags`): ince gri "Kişi", süresi
+    dolan kural için sarı kutu ve ilerleme çubuğu, alarm veren iz için kalın kırmızı kutu ve süre. Alarmlı iz bu karede
+    gözlenmese de (tanıma bir kare kaçırdı) son bilinen kutusu (`r.boxes`) çizilir. Alan dışındaki kişiye etiket ve
+    iskelet çizilmez."""
     if r is None:
         return frame
     h, w = frame.shape[:2]
     s = max(0.6, w / 960)
     th = max(1, round(2 * s))
+    tags = safety_tags(profile, r)
+    for at in _area_tags(profile, r, tags):
+        pts = np.array([(int(x * w), int(y * h)) for x, y in at.points], np.int32)
+        col, ink = (RED, WHITE) if at.alarm else (AREA, DARK)
+        cv2.polylines(frame, [pts], True, col, th * 3 if at.alarm else 1, cv2.LINE_8)
+        size = int(16 * s)
+        tw, tht = text_size(at.text, size)
+        lw, lh = tw + int(8 * s), tht + int(6 * s)
+        x0, y0 = int(pts[0][0]), int(pts[0][1])
+        x0 = max(0, min(x0, w - lw))                             # yazı karenin içinde kalsın
+        ty = y0 - lh if y0 - lh >= 0 else y0                     # köşenin üstünde yer yoksa altında
+        cv2.rectangle(frame, (x0, ty), (x0 + lw, ty + lh), col, -1)
+        put_text(frame, at.text, (x0 + int(4 * s), ty + int(2 * s)), size, ink)
+    shown = _in_areas(profile, r)
     for t in r.tracks:
-        kp = r.poses.get(t.id)
+        kp = r.poses.get(t.id) if t.id in shown else None
         if kp is not None:
             for a, b in _SKELETON:
                 if kp[a, 2] >= KP_CONF and kp[b, 2] >= KP_CONF:
                     cv2.line(frame, (int(kp[a, 0]), int(kp[a, 1])), (int(kp[b, 0]), int(kp[b, 1])), CYAN, th,
                              cv2.LINE_AA)
-    for tag in safety_tags(profile, r):
+    for tag in tags:
         col, ink = _TAG_STYLE[tag.state]
         x1, y1, x2, y2 = (int(tag.box[0] * w), int(tag.box[1] * h), int(tag.box[2] * w), int(tag.box[3] * h))
         cv2.rectangle(frame, (x1, y1), (x2, y2), col, {"person": 1, "counting": th * 2, "alarm": th * 3}[tag.state],

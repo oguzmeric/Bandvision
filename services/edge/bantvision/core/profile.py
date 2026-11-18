@@ -61,14 +61,85 @@ class SafetyRule:
     seconds: float = 3.0
 
 
+SAFETY_RULES = ("handsUp", "lying", "phone")       # sözleşmedeki güvenlik kural adları (çekirdek tür eşlemesi: safety.py)
+MAX_SAFETY_AREAS = 16
+AREA_NAME_MAX = 40
+AREA_POINTS = (3, 12)                               # köşe sayısı (en az, en çok)
+_AREA_KEYS = {"name", "points", "rules"}
+
+
+def _unit(v: Any) -> bool:
+    """0–1 aralığında sayı (mantıksal değer sayılmaz; NaN karşılaştırmada düşer)."""
+    return not isinstance(v, bool) and isinstance(v, int | float) and 0.0 <= v <= 1.0
+
+
+@dataclass
+class SafetyArea:
+    """Güvenlik analiz alanı (sözleşme `safety.areas` öğesi; algoritma §4.11): ad (kırpılmış, 1–40 karakter), 3–12 köşe
+    (normalize 0–1) ve bu alanda açık kurallar (`SAFETY_RULES` alt kümesi, boş değil, tekrarsız)."""
+    name: str
+    points: list[tuple[float, float]]
+    rules: list[str]
+
+    @classmethod
+    def from_dict(cls, d: Any) -> SafetyArea:
+        """Sözleşme biçimindeki alan; aykırısı Türkçe iletili `ValueError` (canlı API bunu 422 yapar)."""
+        if not isinstance(d, dict):
+            raise ValueError("alan bir nesne olmalı.")  # noqa: TRY004 — tüm aykırılıklar tek tür (API 422)
+        extra = set(d) - _AREA_KEYS
+        if extra:
+            raise ValueError(f"alanda bilinmeyen ayar: {', '.join(sorted(map(str, extra)))}.")
+        name = d.get("name")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= AREA_NAME_MAX:
+            raise ValueError(f"alan adı 1–{AREA_NAME_MAX} karakter olmalı.")
+        lo, hi = AREA_POINTS
+        pts = d.get("points")
+        if not isinstance(pts, list) or not lo <= len(pts) <= hi:
+            raise ValueError(f"alan {lo}–{hi} köşeli bir çokgen olmalı.")
+        if not all(isinstance(p, list | tuple) and len(p) == 2 and _unit(p[0]) and _unit(p[1]) for p in pts):
+            raise ValueError("alan köşeleri 0–1 arasında [x, y] olmalı.")
+        rules = d.get("rules")
+        if (not isinstance(rules, list) or not rules or not all(isinstance(r, str) and r in SAFETY_RULES for r in rules)
+                or len(set(rules)) != len(rules)):
+            raise ValueError("alan kuralları eller yukarı, yerde yatma ve telefon kullanımından en az biri olmalı "
+                             "(handsUp, lying, phone; tekrarsız).")
+        return cls(name.strip(), [(float(x), float(y)) for x, y in pts], list(rules))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "points": [[x, y] for x, y in self.points], "rules": list(self.rules)}
+
+
+def parse_areas(raw: Any) -> list[SafetyArea]:
+    """`safety.areas` listesi (en çok `MAX_SAFETY_AREAS`); aykırısı "<n>. alan: …" iletili `ValueError`."""
+    if not isinstance(raw, list) or len(raw) > MAX_SAFETY_AREAS:
+        raise ValueError(f"analiz alanları en çok {MAX_SAFETY_AREAS} alandan oluşan bir liste olmalı.")
+    out: list[SafetyArea] = []
+    for i, a in enumerate(raw, 1):
+        try:
+            out.append(SafetyArea.from_dict(a))
+        except ValueError as e:
+            raise ValueError(f"{i}. {e}") from None
+    return out
+
+
 @dataclass
 class SafetyConfig:
     """Poz güvenlik alarmı (countMode = "safety"): eller yukarı 3–5 sn, yerde yatma 5–30 sn, telefon kullanımı 10–600 sn
-    (varsayılan kapalı; docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md), olay resmi gönderimi."""
+    (varsayılan kapalı; docs/superpowers/specs/2026-11-16-telefon-alarmi-design.md), olay resmi gönderimi, analiz
+    alanları (boş = bütün kare; docs/superpowers/specs/2026-11-17-alarm-penceresi-design.md §11)."""
     handsUp: SafetyRule = field(default_factory=lambda: SafetyRule(True, 3.0))
     lying: SafetyRule = field(default_factory=lambda: SafetyRule(True, 10.0))
     phone: SafetyRule = field(default_factory=lambda: SafetyRule(False, 15.0))
     sendImage: bool = False
+    areas: list[SafetyArea] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Sözleşme biçimi; boş `areas` yazılmaz."""
+        d: dict[str, Any] = {"handsUp": asdict(self.handsUp), "lying": asdict(self.lying), "phone": asdict(self.phone),
+                             "sendImage": self.sendImage}
+        if self.areas:
+            d["areas"] = [a.to_dict() for a in self.areas]
+        return d
 
 
 @dataclass
@@ -196,7 +267,8 @@ class Profile:
                                  float(sf.get("lying", {}).get("seconds", 10.0))),
                 phone=SafetyRule(bool(sf.get("phone", {}).get("enabled", False)),
                                  float(sf.get("phone", {}).get("seconds", SafetyConfig().phone.seconds))),
-                sendImage=bool(sf.get("sendImage", False)))
+                sendImage=bool(sf.get("sendImage", False)),
+                areas=parse_areas(sf["areas"]) if "areas" in sf else [])
         if "fire" in d:
             p.fire = FireConfig.from_dict(d["fire"])
         if d.get("countLine"):
@@ -242,7 +314,7 @@ class Profile:
         if self.staffColors:
             d["staffColors"] = [{"L": L, "a": a, "b": b} for L, a, b in self.staffColors]
         if self.countMode == "safety":
-            d["safety"] = asdict(self.safety)
+            d["safety"] = self.safety.to_dict()
         if self.countMode == "fire":
             d["fire"] = self.fire.to_dict()
         if self.roiPolygon:

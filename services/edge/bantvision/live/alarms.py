@@ -4,10 +4,11 @@ alarm-clips/<id>.webm (yalnızca bu bilgisayarda, 7 gün; kayıt dosyası en ço
 
 Kayıt: {id, sessionId, camera, type ("hands_up"|"lying"|"phone"|"fire"|"smoke"|"test"), startedAt, firedAt, endedAt, acked,
 notify ("disabled"|"queued"|"sent"|"failed"|"suppressed"), image, clip, clipStartedAt, clipPending, clipFailed,
-falseAlarm, box}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
+falseAlarm, box, area}. `clip`: olay kaydı (video) var mı; `clipStartedAt`: kaydın ilk karesinin duvar saati; `clipPending`: kayıt
 yakalanıyor/yazılıyor (panel "Kayıt hazırlanıyor…" der); `clipFailed`: kayıt alınamadı (görüntü yok, kuyruk dolu,
 kodlayıcı/disk hatası ya da yazılırken sunucu kapandı); `falseAlarm`: kullanıcı "Yanlış alarm" dedi (kayıt onaylanmış
-da sayılır; geri alınabilir). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
+da sayılır; geri alınabilir); `area`: alarmın güvenlik analiz alanının adı (alan yoksa, deneme ve yangın/duman
+alarmında null). Eski kayıtlarda eksik alanlar varsayılanla dolar. Tüm yazmalar kilit altında ve atomik.
 
 Zor örnek: yanlış alarm işaretlenen `fire`/`smoke` alarmının çizimsiz karesi, resmi ve kaydı `hard-negatives/<id>/`
 altına kopyalanır (`hard_negatives.HardNegatives`; işaret geri alınınca silinir, kayıt sonradan yazılırsa o an
@@ -42,7 +43,8 @@ _DEFAULTS: dict[str, Any] = {"sessionId": None, "camera": "", "type": "", "start
                              "acked": False, "notify": "disabled", "image": False, "clip": False,
                              "clipStartedAt": None, "clipPending": False, "clipFailed": False,
                              "falseAlarm": False, "sourceId": None, "channelId": None,
-                             "box": None}
+                             "box": None, "area": None}
+AREA_NAME_MAX = 40                  # alan adı sınırı (profil sözleşmesi `safety.areas[].name`)
 MAX_CLIPS = 500                     # en çok bu kadar olay kaydı dosyası (≈1–3 MB); fazlası en eskiden silinir
 TEMP_CLIP_MAX_AGE_S = 3600.0        # yazılırken yarım kalmış (çökme) geçici kayıt dosyası bu kadar eskiyse silinir
 _TEMP_CLIP = ".tmp.webm"
@@ -62,6 +64,14 @@ def _valid_box(raw: Any) -> list[float] | None:
     return [x1, y1, x2, y2]
 
 
+def _valid_area(raw: Any) -> str | None:
+    """Alarmın analiz alanı adı: kırpılmış 1–`AREA_NAME_MAX` karakterlik metin; değilse None."""
+    if not isinstance(raw, str):
+        return None
+    name = raw.strip()
+    return name if 1 <= len(name) <= AREA_NAME_MAX else None
+
+
 def _record(item: Any) -> dict[str, Any] | None:
     """Diskten gelen kayıt: geçerliyse eksik alanları varsayılanla tamamlanmış hali, değilse None."""
     if not (isinstance(item, dict) and isinstance(item.get("id"), str) and _ID.fullmatch(item["id"])):
@@ -72,6 +82,7 @@ def _record(item: Any) -> dict[str, Any] | None:
     for k, v in _DEFAULTS.items():
         item.setdefault(k, v)
     item["box"] = _valid_box(item["box"])
+    item["area"] = _valid_area(item["area"])
     return item
 
 
@@ -131,17 +142,18 @@ class AlarmStore:
     def add(self, session_id: str | None, camera: str, kind: str, started_at: float, fired_at: float,
             jpeg: bytes | None, notify: str, clip_pending: bool = False, source_id: str | None = None,
             channel_id: str | None = None, raw_jpeg: bytes | None = None,
-            box: Sequence[float] | None = None) -> dict[str, Any]:
+            box: Sequence[float] | None = None, area: str | None = None) -> dict[str, Any]:
         """Yeni alarm kaydı. `clip_pending`: oturum olay kaydı yakalayacak (panel hemen "Kayıt hazırlanıyor…" der).
         `source_id` / `channel_id`: alarmın kamerası (kayıttan izlemeye geçiş; eski kayıtlarda ve oturumsuz deneme
         alarmında None). `raw_jpeg`: çizimsiz alarm karesi (yalnız yangın/duman) `<id>.raw.jpg` olarak yazılır; kayıtta
-        alanı yoktur, yazılamazsa yalnız uyarı. `box`: alarmı tetikleyen kutu (normalize x1,y1,x2,y2; geçersizse/yoksa None)."""
+        alanı yoktur, yazılamazsa yalnız uyarı. `box`: alarmı tetikleyen kutu (normalize x1,y1,x2,y2; geçersizse/yoksa None).
+        `area`: alarmın güvenlik analiz alanının adı (geçersizse/yoksa None)."""
         a = {"id": uuid.uuid4().hex, "sessionId": session_id, "camera": camera, "type": kind,
              "startedAt": started_at, "firedAt": fired_at, "endedAt": None, "acked": False, "notify": notify,
              "image": jpeg is not None, "clip": False, "clipStartedAt": None,
              "clipPending": clip_pending, "clipFailed": False, "falseAlarm": False,
              "sourceId": source_id, "channelId": channel_id,
-             "box": _valid_box(list(box) if box is not None else None)}
+             "box": _valid_box(list(box) if box is not None else None), "area": _valid_area(area)}
         with self._lock:
             if jpeg is not None:
                 try:

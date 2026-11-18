@@ -88,6 +88,37 @@ final class SafetyProfileTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(SafetyConfig.self, from: data), cfg)
     }
 
+    /// Analiz alanları (sözleşme `safety.areas`): iPhone okur ve geri yazar (ad, köşeler, kurallar kaybolmaz); işlemez.
+    func testAreasDecodeAndRoundTrip() throws {
+        let json = #"{"handsUp":{"enabled":true,"seconds":3},"areas":[{"name":"Masa 3","points":[[0.1,0.1],[0.5,0.1],[0.5,0.5]],"rules":["phone"]},{"name":"Kasa","points":[[0,0],[0.2,0],[0.2,0.2],[0,0.2]],"rules":["handsUp","lying"]}]}"#
+        let cfg = try Self.decodeBlock(json)
+        XCTAssertEqual(cfg.areas, [
+            SafetyConfig.Area(name: "Masa 3", points: [[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]], rules: ["phone"]),
+            SafetyConfig.Area(name: "Kasa", points: [[0, 0], [0.2, 0], [0.2, 0.2], [0, 0.2]], rules: ["handsUp", "lying"]),
+        ])
+        let back = try JSONDecoder().decode(SafetyConfig.self, from: JSONEncoder().encode(cfg))
+        XCTAssertEqual(back, cfg)
+        // profilin içinde de kaydedilip geri okununca korunur
+        var dict = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(ProductProfile.generic())) as? [String: Any])
+        dict["countMode"] = "safety"
+        dict["safety"] = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        let p = try JSONDecoder().decode(ProductProfile.self, from: JSONSerialization.data(withJSONObject: dict))
+        XCTAssertEqual(p.safety?.areas, cfg.areas)
+        XCTAssertEqual(try JSONDecoder().decode(ProductProfile.self, from: JSONEncoder().encode(p)), p)
+        XCTAssertTrue(String(decoding: try JSONEncoder().encode(p), as: UTF8.self).contains("\"areas\""))
+    }
+
+    /// Eski profilde `areas` yok: boş liste (bütün kare); boş liste JSON'a yazılmaz (Python ile aynı)
+    func testMissingAreasDecodeEmptyAndEmptyIsNotWritten() throws {
+        XCTAssertEqual(try Self.decodeBlock(Self.block).areas, [])
+        XCTAssertEqual(Self.contractDefaults.areas, [])
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(Self.contractDefaults)) as? [String: Any])
+        XCTAssertNil(obj["areas"])
+        XCTAssertNotNil(obj["handsUp"])
+        XCTAssertNotNil(obj["phone"])
+        XCTAssertEqual(try Self.decodeBlock(#"{"areas":[]}"#).areas, [])
+    }
+
     /// Sabit liste denetimi (sözleşmedeki `countMode` sıralaması elle yazılmıştır); şema dosyasını okumaz.
     func testCountModeRawValues() {
         XCTAssertEqual(CountMode.allCases.map(\.rawValue), ["blob", "linescan", "detect", "safety", "fire"])
