@@ -967,14 +967,15 @@ test("sekme başlığı: onaylanmamış alarm varken her saniye yanıp söner, a
   await expect.poll(() => calls.acks).toEqual(["c1"]);
 });
 
-test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken yeni alarm bildirilir, tıklayınca pencere açılır; sesli uyarı en çok 10 sn'de bir", async ({ page }) => {
-  // tarayıcının Notification ve AudioContext'i sahte: izin, gösterilen bildirimler ve bipler sayılır
+test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken yeni alarm bildirilir, tıklayınca pencere açılır; sesli uyarı yeni kritik alarmda çalar", async ({ page }) => {
+  // tarayıcının Notification'ı ve ses oynatıcısı (HTMLMediaElement.play) sahte: izin, gösterilen bildirimler ve çalınan sesler sayılır
   await page.addInitScript(() => {
     const w = window as unknown as Record<string, unknown>;
     const notes: Array<{ title: string; body?: string; tag?: string }> = [];
     w.__notes = notes;
     w.__asked = 0;
-    w.__tones = 0;
+    const plays: string[] = [];
+    w.__plays = plays;
     const kept = () => { try { return sessionStorage.getItem("__izin"); } catch { return null; } };
     class FakeNotification {
       static permission = kept() ?? "default";                         // gerçek tarayıcı gibi izin yenilemede kalır
@@ -988,17 +989,11 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
       constructor(title: string, opts: NotificationOptions = {}) { notes.push({ title, body: opts.body, tag: opts.tag }); w.__last = this; }
       close() { /* sahte */ }
     }
-    const param = { value: 0, setValueAtTime() { /* sahte */ }, exponentialRampToValueAtTime() { /* sahte */ } };
-    class FakeAudio {
-      state = "running"; currentTime = 0; destination = {};
-      resume() { return Promise.resolve(); }
-      createGain() { return { gain: param, connect: (x: unknown) => x }; }
-      createOscillator() {
-        return { type: "", frequency: param, connect: (x: unknown) => x, start: () => { w.__tones = (w.__tones as number) + 1; }, stop: () => undefined };
-      }
-    }
+    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+      plays.push(new URL(this.src, location.href).pathname);
+      return Promise.resolve();
+    };
     Object.defineProperty(window, "Notification", { value: FakeNotification, configurable: true, writable: true });
-    Object.defineProperty(window, "AudioContext", { value: FakeAudio, configurable: true, writable: true });
   });
   await login(page);
   const list: FakeAlarm[] = [];
@@ -1013,9 +1008,9 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   await expect(desktop).toBeChecked();
   expect(await page.evaluate(() => (window as unknown as { __asked: number }).__asked)).toBe(1);   // izin istendi
   await expect(section.getByRole("status")).toContainText("Masaüstü bildirimi açık");
-  await sound.check();                                                        // açılınca bir kez çalar (deneme)
-  const tones = () => page.evaluate(() => (window as unknown as { __tones: number }).__tones);
-  await expect.poll(tones).toBe(2);                                           // iki tonlu tek bip
+  await sound.check();
+  const plays = () => page.evaluate(() => (window as unknown as { __plays: string[] }).__plays);
+  expect(await plays()).toEqual([]);                                          // açmak ses çalmaz (Dinle var)
   const prefCookies = async () => (await page.context().cookies()).filter((c) => c.name.startsWith("bv_alarm_"))
     .map((c) => `${c.name}=${c.value}`).sort();
   expect(await prefCookies()).toEqual(["bv_alarm_desktop=1", "bv_alarm_sound=1"]);   // çerez: port değişse de kalır
@@ -1023,7 +1018,7 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   await expect(desktop).toBeChecked();
   await expect(sound).toBeChecked();
 
-  // sekme arka planda: yeni alarm işletim sistemi bildirimiyle gelir (başlık tür, gövde kamera · saat), bip çalar
+  // sekme arka planda: yeni alarm işletim sistemi bildirimiyle gelir (başlık tür, gövde kamera · saat), kişi sesi çalar
   await page.evaluate(() => Object.defineProperty(document, "hidden", { configurable: true, get: () => true }));
   const notes = () => page.evaluate(() => (window as unknown as { __notes: Array<{ title: string; body: string; tag: string }> }).__notes);
   const now = Date.now() / 1000;
@@ -1034,18 +1029,19 @@ test("Bu tarayıcıda: masaüstü bildirimi izin ister; sekme arka plandayken ye
   expect(note.title).toBe("Eller yukarı");
   expect(note.body).toMatch(/^Tezgah kamerası · \d{2}:\d{2}:\d{2}$/);
   expect(note.tag).toBe("n1");
-  await expect.poll(tones).toBe(2);                                           // alarmın bibi
-  // pencere küçültülür; bildirime tıklayınca sekme öne gelir ve pencere o alarmda açılır
+  await expect.poll(async () => (await plays())[0]).toBe("/sounds/alarm-03.wav");   // kişi alarmları: Hızlı siren
+  // pencere küçültülür (ses susar); bildirime tıklayınca sekme öne gelir ve pencere o alarmda açılır (çalmaz)
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();
   await expect(modalOf(page)).toHaveCount(0);
   await page.evaluate(() => (window as unknown as { __last: { onclick: () => void } }).__last.onclick());
   await expect(modalOf(page).getByTestId("alarm-title")).toHaveText("ELLER YUKARI");
-  // 10 sn içinde ikinci alarm: bildirim gelir ama bip çalmaz
+  const heard = (await plays()).length;
+  // ikinci kritik alarm: bildirim gelir, ses yeniden çalar
   list.push({ id: "n2", sessionId: null, camera: "Kasa", type: "lying", startedAt: now - 10, firedAt: now + 1,
               endedAt: null, acked: false, notify: "disabled", image: false });
   await expect.poll(async () => (await notes()).length).toBe(2);
   expect((await notes())[1].title).toBe("Yerde yatan kişi");
-  expect(await tones()).toBe(2);
+  await expect.poll(async () => (await plays()).length).toBeGreaterThan(heard);
   // kapatılınca ayar silinir
   await page.evaluate(() => Object.defineProperty(document, "hidden", { configurable: true, get: () => false }));
   await modalOf(page).getByRole("button", { name: "Küçült" }).click();

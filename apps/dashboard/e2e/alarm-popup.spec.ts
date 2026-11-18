@@ -662,3 +662,154 @@ test("alarm in a named area shows Alan in the window info row and on the corner 
   await expect(modal.getByTestId("alarm-area")).toHaveCount(0);
   await expect(modal).not.toContainText("Alan:");
 });
+
+/**
+ * Alarm sesleri: `HTMLMediaElement.prototype.play` sahte (gerçek ses çalmaz, her çağrı dosya yolu, düzey ve zamanıyla
+ * kaydedilir). "spy": asıl play() de çağrılır (tarayıcı dosyayı ister); "resolve": yalnız kayıt; "reject": tarayıcının
+ * otomatik oynatma engeli gibi NotAllowedError ile reddeder.
+ */
+async function stubPlay(page: Page, mode: "spy" | "resolve" | "reject" = "resolve") {
+  await page.addInitScript((m) => {
+    const w = window as unknown as { __plays: Array<{ path: string; volume: number; at: number }> };
+    w.__plays = [];
+    const original = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+      w.__plays.push({ path: new URL(this.src, location.href).pathname, volume: this.volume, at: performance.now() });
+      if (m === "reject") return Promise.reject(new DOMException("play() izin verilmedi", "NotAllowedError"));
+      return m === "spy" ? original.call(this) : Promise.resolve();
+    };
+  }, mode);
+}
+
+const playsOf = (page: Page) => page.evaluate(() =>
+  (window as unknown as { __plays: Array<{ path: string; volume: number; at: number }> }).__plays);
+
+/** "Sesli uyarı"yı bu tarayıcıda açar (Bildirimler sayfasındaki onay kutusunun yazdığı çerez) */
+const soundOn = (page: Page) => page.evaluate(() => { document.cookie = "bv_alarm_sound=1; Path=/; SameSite=Lax"; });
+
+const soundCookies = async (page: Page) => Object.fromEntries((await page.context().cookies())
+  .filter((c) => c.name.startsWith("bv_alarm_sound_") || c.name === "bv_alarm_volume").map((c) => [c.name, c.value]));
+
+test("sound settings: three group choices with defaults, Dinle plays the chosen file at the set volume, kept in cookies", async ({ page }) => {
+  await stubPlay(page, "spy");
+  await login(page);
+  const section = page.getByRole("region", { name: "Bu tarayıcıda" });
+  const fire = section.getByRole("group", { name: "Yangın/duman" });
+  const person = section.getByRole("group", { name: "Kişi alarmları" });
+  const phone = section.getByRole("group", { name: "Telefon kullanımı" });
+  await expect(fire.getByRole("combobox", { name: "Yangın/duman sesi" })).toHaveValue("alarm-02");
+  await expect(person.getByRole("combobox", { name: "Kişi alarmları sesi" })).toHaveValue("alarm-03");
+  await expect(phone.getByRole("combobox", { name: "Telefon kullanımı sesi" })).toHaveValue("alarm-01");
+  await expect(person).toContainText("eller yukarı, yerde yatan, deneme");
+  // on ses, spec'teki adlarla
+  await expect(fire.getByRole("option")).toHaveText(["Klasik bip", "Siren", "Hızlı siren", "Çan", "Uyarı düdüğü", "Nabız",
+    "Yükselen ton", "İkili korna", "Sonar", "Yumuşak gong"]);
+  const volume = section.getByRole("slider", { name: "Ses düzeyi" });
+  await expect(volume).toHaveValue("80");
+  await expect(section.getByTestId("sound-volume")).toHaveText("%80");
+  expect(await soundCookies(page)).toEqual({});                               // yalnız değiştirilince yazılır
+
+  // Dinle: seçili dosya gerçekten istenir (panelle gelir) ve düzeyle çalınır
+  const req = page.waitForResponse((r) => r.url().endsWith("/sounds/alarm-02.wav"));
+  await fire.getByRole("button", { name: "Dinle" }).click();
+  const res = await req;
+  expect(res.status()).toBeLessThan(300);
+  expect(res.headers()["content-type"]).toMatch(/audio\/(?:x-)?wav/);
+  expect(await playsOf(page)).toEqual([expect.objectContaining({ path: "/sounds/alarm-02.wav", volume: 0.8 })]);
+
+  // seçim ve düzey çereze yazılır; Dinle yeni seçimi yeni düzeyle çalar; yenileyince kalır
+  await fire.getByRole("combobox").selectOption({ label: "Çan" });
+  await volume.fill("40");
+  await expect(section.getByTestId("sound-volume")).toHaveText("%40");
+  expect(await soundCookies(page)).toEqual({ bv_alarm_sound_fire: "alarm-04", bv_alarm_volume: "0.4" });
+  await fire.getByRole("button", { name: "Dinle" }).click();
+  await expect.poll(async () => (await playsOf(page)).at(-1)).toEqual(expect.objectContaining({ path: "/sounds/alarm-04.wav", volume: 0.4 }));
+  await phone.getByRole("combobox").selectOption("alarm-09");
+  await phone.getByRole("button", { name: "Dinle" }).click();
+  await expect.poll(async () => (await playsOf(page)).at(-1)?.path).toBe("/sounds/alarm-09.wav");
+  await page.reload();
+  await expect(fire.getByRole("combobox")).toHaveValue("alarm-04");
+  await expect(person.getByRole("combobox")).toHaveValue("alarm-03");
+  await expect(phone.getByRole("combobox")).toHaveValue("alarm-09");
+  await expect(volume).toHaveValue("40");
+});
+
+test("critical alarm with sound on repeats its group sound every 3 s; Gördüm stops it", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak" }));
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+  await expect.poll(async () => (await playsOf(page)).length, { timeout: 6_000 }).toBe(2);
+  const plays = await playsOf(page);
+  expect(plays.map((p) => p.path)).toEqual(["/sounds/alarm-02.wav", "/sounds/alarm-02.wav"]);   // yangın: Siren
+  expect(plays[0].volume).toBe(0.8);
+  expect(plays[1].at - plays[0].at).toBeGreaterThan(2_500);
+  expect(plays[1].at - plays[0].at).toBeLessThan(4_500);
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  const n = (await playsOf(page)).length;
+  await page.waitForTimeout(3_500);
+  expect((await playsOf(page)).length).toBe(n);
+});
+
+test("person alarm plays the chosen person sound; Küçült stops it and reopening from the bar stays quiet", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  await page.evaluate(() => { document.cookie = "bv_alarm_sound_person=alarm-08; Path=/"; document.cookie = "bv_alarm_volume=0.5; Path=/"; });
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  list.push(alarm({ id: "h1", type: "hands_up", camera: "Kasa" }));
+  const modal = modalOf(page);
+  await expect(modal).toBeVisible();
+  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+  expect(await playsOf(page)).toEqual([expect.objectContaining({ path: "/sounds/alarm-08.wav", volume: 0.5 })]);
+  await modal.getByRole("button", { name: "Küçült" }).click();
+  await expect(modal).toHaveCount(0);
+  await page.getByRole("button", { name: "Alarmları göster" }).click();
+  await expect(modal).toBeVisible();
+  await page.waitForTimeout(3_500);
+  expect((await playsOf(page)).length).toBe(1);
+});
+
+test("phone warning plays the phone sound once", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  await expect(toastsOf(page).getByTestId("alarm-toast")).toHaveCount(1);
+  await expect.poll(async () => (await playsOf(page)).map((p) => p.path)).toEqual(["/sounds/alarm-01.wav"]);   // Klasik bip
+  await page.waitForTimeout(3_500);
+  expect((await playsOf(page)).length).toBe(1);
+});
+
+test("sound off: alarms play nothing", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  list.push(alarm({ id: "f1", type: "smoke", camera: "Depo" }), alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  await expect(modalOf(page)).toBeVisible();
+  await page.waitForTimeout(3_500);
+  expect(await playsOf(page)).toEqual([]);
+});
+
+test("blocked sound shows the click hint in the bar; a click clears it", async ({ page }) => {
+  await stubPlay(page, "reject");
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+  const hint = page.getByTestId("alarm-banner").getByTestId("sound-blocked");
+  await expect(hint).toHaveText("Alarm sesi için sayfaya bir kez tıklayın");
+  await page.getByRole("heading", { name: "Bildirimler" }).click();
+  await expect(hint).toHaveCount(0);
+});

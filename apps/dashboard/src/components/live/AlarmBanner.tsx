@@ -15,13 +15,15 @@ import { useAlarmCenter } from "./AlarmCenter";
  * köşe kartı gizlense de alarm burada sayılır; "Alarmları göster" pencereyi pencerenin sırasındaki ilk alarmda açar.
  * Şerit çoğu zaman tek alarm kanalıdır (Telegram varsayılan kapalı): alarm akışı koparsa (oturum süresi doldu, analiz
  * sunucusu yok, analiz sunucusu panelin anahtarını ya da adresini reddetti) eski liste sessizce kalmaz, sarı uyarı satırı çıkar.
+ * Tarayıcı alarm sesini engellediyse (sayfayla henüz etkileşim yok) "Alarm sesi için sayfaya bir kez tıklayın" yazar; ilk
+ * tıklama ya da tuşla kalkar.
  */
 export default function AlarmBanner() {
   const center = useAlarmCenter();
   const pathname = usePathname();
   const search = useSearchParams().toString();
   if (!center) return null;
-  const { alarms, problem, unwatched, ackFailed, openFirst } = center;
+  const { alarms, problem, unwatched, ackFailed, soundBlocked, openFirst } = center;
 
   const next = pathname + (search ? `?${search}` : "");
   const refused = problem && refusalText(problem);
@@ -42,11 +44,16 @@ export default function AlarmBanner() {
   // en son gelen alarm (sunucu sırasından bağımsız: en büyük alarm anı)
   const last = alarms.reduce<(typeof alarms)[number] | undefined>((x, a) => (!x || a.firedAt > x.firedAt ? a : x), undefined);
 
-  if (alarms.length === 0 && !warning && unwatched.length === 0) return null;
+  if (alarms.length === 0 && !warning && unwatched.length === 0 && !soundBlocked) return null;
   return (
     // Yapışkan: canlı sayfada aşağı kaydırıp görüntüyü izlerken de alarm görünür; zemin düz (içerik arkadan görünmez)
     <div data-testid="alarm-banner" className="sticky top-0 z-40 -mx-5 mb-2 grid gap-1.5 bg-white px-5 py-2 md:-mx-9 md:px-9">
       {warning}
+      {soundBlocked && (
+        <p role="status" data-testid="sound-blocked" className="rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] font-medium text-warn-ink">
+          Alarm sesi için sayfaya bir kez tıklayın
+        </p>
+      )}
       {unwatched.map((u) => (
         <p key={u.id} role="status" data-testid="watch-warning"
            className="flex flex-wrap items-center gap-x-3 rounded-[2px] border border-warn-line bg-warn-50 px-3 py-1.5 text-[13px] text-warn-ink">

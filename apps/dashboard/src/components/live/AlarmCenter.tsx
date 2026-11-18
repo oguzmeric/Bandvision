@@ -1,9 +1,10 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { desktopReady, playBeep, readPref } from "@/lib/attention";
+import { desktopReady, playAlarmSound, readPref, readSound, readVolume, stopAlarmSounds } from "@/lib/attention";
 import { ALARM_LABELS, api, isWatchMode, safetyHealth, toggleFalseAlarm, WATCH_WARN_AFTER_S, watchStatus, type Alarm, type LiveSession } from "@/lib/live";
 import { alarmSeverity, sortAlarms } from "@/lib/alarmPopup.mjs";
+import { SOUND_REPEAT_MS, soundGroup, type SoundGroup } from "@/lib/alarmSounds.mjs";
 import { problemOf, type Problem } from "@/lib/views";
 import AlarmToast from "./AlarmToast";
 import AlarmViewer from "./AlarmViewer";
@@ -42,6 +43,8 @@ interface AlarmCenterValue {
   liveSessionIds: ReadonlySet<string>;
   /** "Gördüm"ü kaydedilemeyen alarm */
   ackFailed: string | null;
+  /** Tarayıcı alarm sesini engelledi (sayfayla henüz etkileşim yok): çubuk "sayfaya bir kez tıklayın" der */
+  soundBlocked: boolean;
   ack: (a: Alarm) => Promise<boolean>;
   markFalse: (a: Alarm) => Promise<boolean>;
   /** Alarm penceresini bu alarmda açar (çubuktaki "Alarmları göster", köşedeki "+N uyarı daha", masaüstü bildirimi) */
@@ -84,9 +87,11 @@ function saveIds(key: string, ids: Set<string>): void {
  * kameraları (5 sn'de bir), alarm penceresi, köşe kartları ve dikkat çekme. Bu sekmede henüz gösterilmemiş onaylanmamış
  * alarmlar arasında kritik varsa ortadaki pencere en yeni kritikte açılır; yalnız uyarı (telefon) geldiyse pencere açılmaz,
  * uyarı sağ altta köşe kartında görünür (kartlar yalnız pencere kapalıyken çizilir; × ile gizlenen kart gizli kalır). Her
- * yeni alarmda ayar açıksa sesli uyarı ve (sekme arka plandaysa) masaüstü bildirimi. Alarm varken sekme başlığı yanıp söner;
- * onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma tercihinde sabit). Üstteki çubuk
- * (`AlarmBanner`) bu verinin görünümüdür.
+ * yeni alarmda (sekme arka plandaysa) masaüstü bildirimi. "Sesli uyarı" açıksa: yeni kritik alarm pencereyi açınca türünün
+ * grubuna seçilen ses pencere açık ve onaylanmamış kritik alarm varken 3 sn'de bir çalar (Gördüm, Yanlış alarm, Küçült ya da
+ * pencerenin kapanması susturur; pencere elle yeniden açılınca çalmaz); yalnız uyarı geldiyse ses bir kez çalar. Alarm
+ * varken sekme başlığı yanıp söner; onaylanmamış kritik alarm varken ekranın kenarı kırmızı yanıp söner (hareket azaltma
+ * tercihinde sabit). Üstteki çubuk (`AlarmBanner`) bu verinin görünümüdür.
  */
 export default function AlarmCenter({ children }: { children: React.ReactNode }) {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
@@ -94,6 +99,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   const [ackFailed, setAckFailed] = useState<string | null>(null);
   const [unwatched, setUnwatched] = useState<Unwatched[]>([]);
   const [sessions, setSessions] = useState<LiveSession[]>([]);
+  /** Yeni kritik alarm pencereyi açtı ve henüz susturulmadı (Gördüm / Yanlış alarm / Küçült / pencere kapandı) */
+  const [ringing, setRinging] = useState(false);
+  const ringingRef = useRef(false);
+  useEffect(() => { ringingRef.current = ringing; }, [ringing]);
+  const [soundBlocked, setSoundBlocked] = useState(false);
   /** Açık alarm penceresi: gösterilen alarm ve listedeki yeri (alarm onaylanınca aynı yerdeki sonrakine geçilir) */
   const [viewer, setViewer] = useState<{ id: string; index: number } | null>(null);
   /** × ile gizlenen köşe kartları (bu sekmede, sayfa yenilense de; alarm çubukta ve pencerenin listesinde kalır). Sunucu
@@ -189,6 +199,11 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     return () => { alive = false; clearTimeout(timer); };
   }, []);
 
+  /** Grubun seçili sesini ayarlı düzeyde çalar; tarayıcı engellerse çubukta "sayfaya bir kez tıklayın" çıkar */
+  const play = useCallback(async (group: SoundGroup) => {
+    setSoundBlocked(!(await playAlarmSound(readSound(group), readVolume())));
+  }, []);
+
   /** Pencereyi bu alarmda açar; listedeki yeri, onaylanınca aynı yerdeki sonrakine geçmek için tutulur */
   const open = useCallback((id: string) => {
     setViewer({ id, index: Math.max(0, latest.current.findIndex((a) => a.id === id)) });
@@ -218,8 +233,12 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     for (const a of fresh) seen.add(a.id);
     saveIds(SHOWN_KEY, seen);
     const newest = sortAlarms(fresh)[0];                // kritikler önde, grup içinde en yeni
-    if (alarmSeverity(newest.type) === "critical") setViewer({ id: newest.id, index: ordered.indexOf(newest) });
-    if (readPref("sound")) playBeep();
+    if (alarmSeverity(newest.type) === "critical") {
+      setViewer({ id: newest.id, index: ordered.indexOf(newest) });
+      setRinging(true);                                 // ses aşağıdaki tekrar etkisinde (ayar açıksa)
+    } else if (!ringingRef.current && readPref("sound")) {
+      void play(soundGroup(newest.type));               // yalnız uyarı: bir kez
+    }
     if (document.hidden && desktopReady()) {
       for (const a of fresh.slice(0, MAX_NOTIFICATIONS)) {
         try {
@@ -233,7 +252,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
         }
       }
     }
-  }, [alarms, ordered, open]);
+  }, [alarms, ordered, open, play]);
 
   // Sekme başlığı: onaylanmamış alarm varken her saniye "ALARM — <kamera>" ↔ sayfa başlığı (emoji yok); alarm bitince geri
   const flashCamera = alarms[0]?.camera ?? null;
@@ -257,6 +276,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
 
   const ack = useCallback(async (a: Alarm) => {
     setAckFailed(null);
+    setRinging(false);                                  // Gördüm sesi susturur (kaydedilemese de: operatör gördü)
     seq.current += 1;
     try {
       await api(`alarms/${a.id}/ack`, { method: "POST" });
@@ -271,6 +291,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
   }, []);
 
   const markFalse = useCallback(async (a: Alarm) => {
+    setRinging(false);
     seq.current += 1;
     try {
       await toggleFalseAlarm(a);
@@ -283,7 +304,7 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     }
   }, []);
 
-  const close = useCallback(() => setViewer(null), []);
+  const close = useCallback(() => { setViewer(null); setRinging(false); }, []);
   const hide = useCallback((id: string) => setHidden((h) => new Set(h).add(id)), []);
   /** Pencereyi pencerenin sırasındaki ilk alarmda açar (çubuktaki "Alarmları göster"; sıranın tek kaynağı burası) */
   const openFirst = useCallback(() => {
@@ -291,12 +312,37 @@ export default function AlarmCenter({ children }: { children: React.ReactNode })
     if (first) open(first.id);
   }, [open]);
   const refresh = useCallback(() => refreshRef.current(), []);
-  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, openFirst, refresh }),
-    [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, ack, markFalse, open, openFirst, refresh]);
+  const value = useMemo(() => ({ alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, soundBlocked, ack, markFalse, open, openFirst, refresh }),
+    [alarms, problem, unwatched, sessions, liveSessionIds, ackFailed, soundBlocked, ack, markFalse, open, openFirst, refresh]);
   const showing = viewer === null ? null
     : ordered.some((a) => a.id === viewer.id) ? viewer.id
     : ordered.length > 0 ? ordered[Math.min(viewer.index, ordered.length - 1)].id
     : null;
+
+  // Pencere kapandı (Küçült, Esc, alarm kalmadı): susturulur; elle yeniden açılınca çalmaz
+  useEffect(() => { if (showing === null) setRinging(false); }, [showing]);
+  /** Çalan kritik alarmın ses grubu: gösterilen alarm kritikse onunki, değilse en yeni kritiğinki; çalmıyorsa null */
+  const ringGroup: SoundGroup | null = !ringing || showing === null ? null : (() => {
+    const a = ordered.find((x) => x.id === showing && alarmSeverity(x.type) === "critical")
+      ?? ordered.find((x) => alarmSeverity(x.type) === "critical");
+    return a ? soundGroup(a.type) : null;
+  })();
+  useEffect(() => {
+    if (ringGroup === null) return;
+    const tick = () => { if (readPref("sound")) void play(ringGroup); };
+    tick();
+    const t = setInterval(tick, SOUND_REPEAT_MS);
+    return () => { clearInterval(t); stopAlarmSounds(); };   // susturunca çalan ses de hemen kesilir
+  }, [ringGroup, play]);
+
+  // Engellenen ses: sayfaya ilk tıklama / tuş tarayıcıda sesi açar, uyarı kalkar (sonraki çalma artık engellenmez)
+  useEffect(() => {
+    if (!soundBlocked) return;
+    const clear = () => setSoundBlocked(false);
+    window.addEventListener("pointerdown", clear, true);
+    window.addEventListener("keydown", clear, true);
+    return () => { window.removeEventListener("pointerdown", clear, true); window.removeEventListener("keydown", clear, true); };
+  }, [soundBlocked]);
 
   return (
     <Ctx.Provider value={value}>
