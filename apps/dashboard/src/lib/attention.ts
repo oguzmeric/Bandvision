@@ -7,7 +7,7 @@
  * Sekme başlığının yanıp sönmesi her zaman açıktır (ayar yok).
  */
 
-import { DEFAULT_VOLUME, parseSound, parseVolume, soundFile, type SoundGroup } from "./alarmSounds.mjs";
+import { DEFAULT_VOLUME, MIN_VOLUME, parseSound, parseVolume, soundFile, type SoundGroup } from "./alarmSounds.mjs";
 
 export type AttentionPref = "desktop" | "sound";
 
@@ -93,25 +93,30 @@ export function writeSound(group: SoundGroup, id: string): void {
   setValue(SOUND_COOKIE(group), parseSound(group, id));
 }
 
-/** Ses düzeyi 0–1 (geçersiz ya da eksikse 0,8) */
+/** Ses düzeyi 0,1–1 (geçersiz ya da eksikse 0,8; 0,1'in altı 0,1) */
 export function readVolume(): number {
   return parseVolume(readValue(VOLUME_COOKIE));
 }
 
 export function writeVolume(v: number): void {
-  setValue(VOLUME_COOKIE, String(Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : DEFAULT_VOLUME));
+  setValue(VOLUME_COOKIE, String(Number.isFinite(v) ? Math.min(1, Math.max(MIN_VOLUME, v)) : DEFAULT_VOLUME));
 }
 
 /** Ses başına tek oynatıcı: tekrarlarda dosya yeniden indirilmez, aynı ses üst üste binmez (baştan çalar) */
 const players = new Map<string, HTMLAudioElement>();
 
 /**
- * Alarm sesini çalar. Tarayıcı sesi engellerse (sayfayla hiç etkileşim olmadan otomatik oynatma kuralı) ya da dosya
- * çalınamazsa `false` döner; çağıran "sayfaya bir kez tıklayın" uyarısını gösterir.
+ * Alarm sesini çalar. "blocked": tarayıcı sesi engelledi (NotAllowedError: sayfayla henüz etkileşim yok, otomatik oynatma
+ * kuralı); çağıran "sayfaya bir kez tıklayın" uyarısını gösterir. "failed": dosya çalınamadı (bilinmeyen ses,
+ * NotSupportedError, ağ); günlüğe düşer, tıklamak çözmez. Çalma başlamadan susturulursa (AbortError: Gördüm / Küçült
+ * pause'u) "played" sayılır: hata değildir.
  */
-export async function playAlarmSound(id: string, volume: number): Promise<boolean> {
+export async function playAlarmSound(id: string, volume: number): Promise<"played" | "blocked" | "failed"> {
   const file = soundFile(id);
-  if (file === null || typeof Audio === "undefined") return false;
+  if (file === null || typeof Audio === "undefined") {
+    console.warn(`Alarm sesi çalınamadı (${id}): ses dosyası yok`);
+    return "failed";
+  }
   try {
     let a = players.get(id);
     if (!a) {
@@ -121,10 +126,13 @@ export async function playAlarmSound(id: string, volume: number): Promise<boolea
     a.volume = Math.min(1, Math.max(0, volume));
     a.currentTime = 0;
     await a.play();
-    return true;
+    return "played";
   } catch (e) {
-    // AbortError: çalma başlamadan susturuldu (pause; Gördüm / Küçült) — engel değil
-    return e instanceof DOMException && e.name === "AbortError";
+    const name = e instanceof DOMException ? e.name : "";
+    if (name === "NotAllowedError") return "blocked";
+    if (name === "AbortError") return "played";
+    console.warn(`Alarm sesi çalınamadı (${id}):`, e);
+    return "failed";
   }
 }
 

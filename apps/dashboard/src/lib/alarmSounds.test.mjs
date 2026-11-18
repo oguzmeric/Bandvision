@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SOUND, DEFAULT_VOLUME, SOUND_GROUPS, SOUNDS, parseSound, parseVolume, soundFile, soundGroup } from "./alarmSounds.mjs";
+import { DEFAULT_SOUND, DEFAULT_VOLUME, MIN_VOLUME, SOUND_GROUPS, SOUNDS, parseSound, parseVolume, soundFile, soundGroup } from "./alarmSounds.mjs";
 
 const NAMES = ["Klasik bip", "Siren", "Hızlı siren", "Çan", "Uyarı düdüğü", "Nabız", "Yükselen ton", "İkili korna",
   "Sonar", "Yumuşak gong"];
@@ -39,10 +39,13 @@ test("parseSound: bilinen kimlik kalır; eksik/geçersiz → grubun varsayılan�
   assert.equal(parseSound("phone", "../x"), "alarm-01");
 });
 
-test("parseVolume: 0–1 arası sayı kalır; eksik/geçersiz/aralık dışı → 0,8", () => {
+test("parseVolume: 0,1–1 arası sayı kalır; 0,1'in altı 0,1'e çekilir; eksik/geçersiz/aralık dışı → 0,8", () => {
   assert.equal(parseVolume("0.35"), 0.35);
   assert.equal(parseVolume("1"), 1);
-  assert.equal(parseVolume("0"), 0);
+  assert.equal(parseVolume("0.1"), 0.1);
+  assert.equal(parseVolume("0"), 0.1);                 // elle değiştirilmiş çerez: alarm sessize düşmez
+  assert.equal(parseVolume("0.05"), 0.1);
+  assert.equal(MIN_VOLUME, 0.1);
   for (const raw of [null, "", "abc", "-0.1", "1.5", "NaN", "Infinity"]) assert.equal(parseVolume(raw), 0.8, String(raw));
 });
 

@@ -20,6 +20,8 @@ export const SOUND_GROUPS = Object.freeze([
 /** Grupların varsayılan sesi: Siren, Hızlı siren, Klasik bip */
 export const DEFAULT_SOUND = Object.freeze({ fire: "alarm-02", person: "alarm-03", phone: "alarm-01" });
 export const DEFAULT_VOLUME = 0.8;
+/** En düşük ses düzeyi (%10): elle değiştirilmiş çerez alarmı sessize düşürmez */
+export const MIN_VOLUME = 0.1;
 /** Kritik alarmın sesi pencere açıkken bu aralıkla yeniden çalar */
 export const SOUND_REPEAT_MS = 3000;
 
@@ -40,9 +42,9 @@ export function parseSound(group, raw) {
   return typeof raw === "string" && soundFile(raw) !== null ? raw : DEFAULT_SOUND[group];
 }
 
-/** Saklanan ses düzeyi: 0–1 arası sayı kalır, eksik/geçersiz/aralık dışı → varsayılan */
+/** Saklanan ses düzeyi: 0–1 arası sayı kalır (0,1'in altı 0,1'e çekilir), eksik/geçersiz/aralık dışı → varsayılan */
 export function parseVolume(raw) {
   if (typeof raw !== "string" || raw.trim() === "") return DEFAULT_VOLUME;
   const v = Number(raw);
-  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : DEFAULT_VOLUME;
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? Math.max(MIN_VOLUME, v) : DEFAULT_VOLUME;
 }

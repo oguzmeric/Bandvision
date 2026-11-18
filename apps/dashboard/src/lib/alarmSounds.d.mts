@@ -5,6 +5,7 @@ export const SOUNDS: ReadonlyArray<AlarmSound>;
 export const SOUND_GROUPS: ReadonlyArray<{ id: SoundGroup; name: string; hint: string }>;
 export const DEFAULT_SOUND: Readonly<Record<SoundGroup, string>>;
 export const DEFAULT_VOLUME: number;
+export const MIN_VOLUME: number;
 export const SOUND_REPEAT_MS: number;
 
 export function soundGroup(type: string): SoundGroup;

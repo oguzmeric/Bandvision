@@ -666,9 +666,10 @@ test("alarm in a named area shows Alan in the window info row and on the corner 
 /**
  * Alarm sesleri: `HTMLMediaElement.prototype.play` sahte (gerçek ses çalmaz, her çağrı dosya yolu, düzey ve zamanıyla
  * kaydedilir). "spy": asıl play() de çağrılır (tarayıcı dosyayı ister); "resolve": yalnız kayıt; "reject": tarayıcının
- * otomatik oynatma engeli gibi NotAllowedError ile reddeder.
+ * otomatik oynatma engeli gibi NotAllowedError ile reddeder; "abort": çalma başlamadan kesildi (AbortError);
+ * "unsupported": dosya çalınamadı (NotSupportedError).
  */
-async function stubPlay(page: Page, mode: "spy" | "resolve" | "reject" = "resolve") {
+async function stubPlay(page: Page, mode: "spy" | "resolve" | "reject" | "abort" | "unsupported" = "resolve") {
   await page.addInitScript((m) => {
     const w = window as unknown as { __plays: Array<{ path: string; volume: number; at: number }> };
     w.__plays = [];
@@ -676,6 +677,8 @@ async function stubPlay(page: Page, mode: "spy" | "resolve" | "reject" = "resolv
     HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
       w.__plays.push({ path: new URL(this.src, location.href).pathname, volume: this.volume, at: performance.now() });
       if (m === "reject") return Promise.reject(new DOMException("play() izin verilmedi", "NotAllowedError"));
+      if (m === "abort") return Promise.reject(new DOMException("play() kesildi", "AbortError"));
+      if (m === "unsupported") return Promise.reject(new DOMException("kaynak çalınamadı", "NotSupportedError"));
       return m === "spy" ? original.call(this) : Promise.resolve();
     };
   }, mode);
@@ -812,4 +815,91 @@ test("blocked sound shows the click hint in the bar; a click clears it", async (
   await expect(hint).toHaveText("Alarm sesi için sayfaya bir kez tıklayın");
   await page.getByRole("heading", { name: "Bildirimler" }).click();
   await expect(hint).toHaveCount(0);
+});
+
+for (const mode of ["abort", "unsupported"] as const) {
+  test(`sound play error other than permission (${mode}) shows no click hint`, async ({ page }) => {
+    const warnings: string[] = [];
+    page.on("console", (m) => { if (m.type() === "warning") warnings.push(m.text()); });
+    await stubPlay(page, mode);
+    await login(page);
+    await soundOn(page);
+    const list: FakeAlarm[] = [];
+    await fake(page, list);
+    list.push(alarm({ id: "p1", type: "phone", camera: "Kasa" }));
+    await expect(toastsOf(page).getByTestId("alarm-toast")).toHaveCount(1);
+    await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+    await page.waitForTimeout(500);
+    await expect(page.getByTestId("sound-blocked")).toHaveCount(0);
+    // çalınamayan dosya günlüğe düşer; kesilen çalma (susturma) hata değildir
+    if (mode === "unsupported") expect(warnings.some((w) => w.includes("alarm-01"))).toBe(true);
+    else expect(warnings.some((w) => w.includes("alarm-01"))).toBe(false);
+  });
+}
+
+test("two criticals: Gördüm on the first keeps the sound (next alarm's group), Gördüm on the second stops it", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "h1", type: "hands_up", camera: "Kasa", firedAt: now - 1 }),
+            alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }),
+            alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now }));
+  const modal = modalOf(page);
+  await expect(modal).toHaveAttribute("data-kind", "hands_up");             // en yeni kritik
+  await expect.poll(async () => (await playsOf(page))[0]?.path).toBe("/sounds/alarm-03.wav");
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(modal).toHaveAttribute("data-kind", "fire");
+  // sıradaki kritik hâlâ çalar: hemen yangın sesi, sonra 3 sn arayla
+  await expect.poll(async () => (await playsOf(page)).filter((p) => p.path === "/sounds/alarm-02.wav").length).toBe(1);
+  await expect.poll(async () => (await playsOf(page)).filter((p) => p.path === "/sounds/alarm-02.wav").length,
+    { timeout: 6_000 }).toBe(2);
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(modal).toHaveAttribute("data-kind", "phone");                // pencere açık kalır (uyarı)
+  const n = (await playsOf(page)).length;
+  await page.waitForTimeout(3_500);
+  expect((await playsOf(page)).length).toBe(n);
+});
+
+test("Gördüm on a phone warning picked from the queue does not stop the critical sound", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }),
+            alarm({ id: "p1", type: "phone", camera: "Kasa", firedAt: now - 1 }));
+  const modal = modalOf(page);
+  await expect(modal).toHaveAttribute("data-kind", "fire");
+  await expect.poll(async () => (await playsOf(page)).length).toBe(1);
+  await modal.getByTestId("queue-item").filter({ hasText: "Telefon kullanımı" }).click();
+  await expect(modal).toHaveAttribute("data-kind", "phone");
+  await modal.getByRole("button", { name: "Gördüm", exact: true }).click();
+  await expect(modal).toHaveAttribute("data-kind", "fire");
+  const n = (await playsOf(page)).length;
+  await expect.poll(async () => (await playsOf(page)).length, { timeout: 4_500 }).toBeGreaterThan(n);
+  expect((await playsOf(page)).every((p) => p.path === "/sounds/alarm-02.wav")).toBe(true);
+});
+
+test("a new critical of the same group restarts the sound at once", async ({ page }) => {
+  await stubPlay(page);
+  await login(page);
+  await soundOn(page);
+  const list: FakeAlarm[] = [];
+  await fake(page, list);
+  const now = Date.now() / 1000;
+  list.push(alarm({ id: "f1", type: "fire", camera: "Mutfak", firedAt: now - 5 }));
+  const modal = modalOf(page);
+  await expect(modal).toHaveAttribute("data-kind", "fire");
+  await expect.poll(async () => (await playsOf(page)).length, { timeout: 6_000 }).toBe(2);   // 0 sn ve 3 sn
+  list.push(alarm({ id: "s1", type: "smoke", camera: "Depo", firedAt: now }));             // aynı grup (yangın/duman)
+  await expect(modal).toHaveAttribute("data-kind", "smoke");
+  await expect.poll(async () => (await playsOf(page)).length, { timeout: 2_500 }).toBe(3);
+  const plays = await playsOf(page);
+  // yeni alarm 3 sn'lik sırayı beklemez: sonraki tekrar 6. sn'de olurdu, yeni ses 3. sn'den hemen sonra (yoklamayla) çalar
+  expect(plays[2].at - plays[1].at).toBeLessThan(2_700);
+  expect(plays.every((p) => p.path === "/sounds/alarm-02.wav")).toBe(true);
 });

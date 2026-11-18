@@ -75,7 +75,9 @@ export default function AttentionSettings() {
   async function listen(group: SoundGroup) {
     setMsg(null);
     // "Sesli uyarı" kapalıyken de dinlenebilir (seçim yapmak için); tıklama tarayıcıda sesi açar
-    if (!(await playAlarmSound(choice[group], volume))) setMsg({ ok: false, text: "Ses çalınamadı. Tarayıcının bu site için sesi kapatılmış olabilir." });
+    const result = await playAlarmSound(choice[group], volume);
+    if (result === "blocked") setMsg({ ok: false, text: "Tarayıcı sesi engelledi. Tarayıcının bu site için ses iznini açın." });
+    else if (result === "failed") setMsg({ ok: false, text: "Ses dosyası çalınamadı. Sayfayı yenileyip yeniden deneyin." });
   }
 
   return (
